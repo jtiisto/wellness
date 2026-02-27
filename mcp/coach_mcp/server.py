@@ -1,0 +1,1659 @@
+"""Coach MCP Server implementation.
+
+Provides access to workout plans (read-write) and logs (read-only)
+through the Model Context Protocol for LLM workout planning and analysis.
+"""
+
+import json
+import os
+import sqlite3
+from contextlib import contextmanager
+from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+try:
+    from fastmcp import FastMCP
+except ImportError:
+    raise ImportError(
+        "FastMCP is required for MCP server functionality. "
+        "Install with: pip install fastmcp"
+    )
+
+from .config import MCPConfig
+from .exercise_registry import ExerciseRegistry, resolve_plan_exercises
+
+# Default DB path: ../../data/coach.db relative to this file's directory
+_DEFAULT_DB_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "coach.db"
+
+
+class SQLiteConnection:
+    """SQLite connection context manager with configurable read/write mode."""
+
+    def __init__(self, db_path: Path, read_only: bool = True):
+        self.db_path = db_path
+        self.read_only = read_only
+        self.conn = None
+
+    def __enter__(self):
+        """Open SQLite connection."""
+        if self.read_only:
+            self.conn = sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True)
+        else:
+            self.conn = sqlite3.connect(self.db_path)
+        self.conn.row_factory = sqlite3.Row
+        self.conn.execute("PRAGMA foreign_keys = ON")
+        return self.conn
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Close connection safely."""
+        if self.conn:
+            self.conn.close()
+
+
+class DatabaseManager:
+    """Manages database connections and operations."""
+
+    def __init__(self, config: MCPConfig):
+        self.config = config
+
+    def get_connection(self, read_only: bool = True):
+        """Get database connection."""
+        return SQLiteConnection(self.config.db_path, read_only=read_only)
+
+    def execute_query(
+        self, query: str, params: Optional[List[Any]] = None, read_only: bool = True
+    ) -> List[Dict[str, Any]]:
+        """Execute a query and return results."""
+        try:
+            with self.get_connection(read_only=read_only) as conn:
+                cursor = conn.cursor()
+                cursor.execute(query, params or [])
+                if not read_only:
+                    conn.commit()
+                results = [dict(row) for row in cursor.fetchall()]
+                return results
+        except sqlite3.Error as e:
+            raise ValueError(f"Database error: {str(e)}")
+
+    def execute_write(
+        self, query: str, params: Optional[List[Any]] = None
+    ) -> int:
+        """Execute a write query and return rows affected."""
+        try:
+            with self.get_connection(read_only=False) as conn:
+                cursor = conn.cursor()
+                cursor.execute(query, params or [])
+                conn.commit()
+                return cursor.rowcount
+        except sqlite3.Error as e:
+            raise ValueError(f"Database error: {str(e)}")
+
+    @contextmanager
+    def transaction(self):
+        """Get a cursor for multi-statement transactions."""
+        with self.get_connection(read_only=False) as conn:
+            cursor = conn.cursor()
+            try:
+                yield cursor
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+
+
+def get_utc_now() -> str:
+    """Return current UTC time as ISO-8601 string."""
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+# ==================== Plan Storage Helpers ====================
+
+
+def _store_plan_to_db(cursor, date_str, plan, modified_by="mcp"):
+    """Store a plan dict into normalized tables. Returns session_id."""
+    now = get_utc_now()
+
+    # Delete existing session for this date (CASCADE cleans blocks, exercises, checklist)
+    cursor.execute("DELETE FROM workout_sessions WHERE date = ?", [date_str])
+
+    # Insert workout_sessions row
+    cursor.execute("""
+        INSERT INTO workout_sessions
+        (date, day_name, location, phase, duration_min, last_modified, modified_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, [
+        date_str,
+        plan.get("day_name", "Workout"),
+        plan.get("location"),
+        plan.get("phase"),
+        plan.get("total_duration_min"),
+        now,
+        modified_by,
+    ])
+    session_id = cursor.lastrowid
+
+    # Insert blocks and exercises
+    for i, block in enumerate(plan.get("blocks", [])):
+        cursor.execute("""
+            INSERT INTO session_blocks
+            (session_id, position, block_type, title, duration_min, rest_guidance, rounds)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, [
+            session_id, i,
+            block.get("block_type", ""),
+            block.get("title"),
+            block.get("duration_min"),
+            block.get("rest_guidance", ""),
+            block.get("rounds"),
+        ])
+        block_id = cursor.lastrowid
+
+        for j, ex in enumerate(block.get("exercises", [])):
+            exercise_key = ex.get("id", f"{block.get('block_type', 'ex')}_{i}_{j}")
+            cursor.execute("""
+                INSERT INTO planned_exercises
+                (session_id, block_id, exercise_key, position, name, exercise_type,
+                 target_sets, target_reps, target_duration_min, target_duration_sec,
+                 rounds, work_duration_sec, rest_duration_sec,
+                 guidance_note, hide_weight, show_time, extra, canonical_slug)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, [
+                session_id, block_id, exercise_key, j,
+                ex.get("name", "Unknown"),
+                ex.get("type", "strength"),
+                ex.get("target_sets"),
+                ex.get("target_reps"),
+                ex.get("target_duration_min"),
+                ex.get("target_duration_sec"),
+                ex.get("rounds"),
+                ex.get("work_duration_sec"),
+                ex.get("rest_duration_sec"),
+                ex.get("guidance_note"),
+                1 if ex.get("hide_weight") else 0,
+                1 if ex.get("show_time") else 0,
+                json.dumps(ex["extra"]) if ex.get("extra") else None,
+                ex.get("canonical_slug"),
+            ])
+            exercise_id = cursor.lastrowid
+
+            # Checklist items
+            if ex.get("type") == "checklist":
+                for k, item in enumerate(ex.get("items", [])):
+                    cursor.execute("""
+                        INSERT INTO checklist_items (exercise_id, position, item_text)
+                        VALUES (?, ?, ?)
+                    """, [exercise_id, k, item])
+
+    return session_id
+
+
+def _assemble_plan_from_db(cursor, session_id):
+    """Assemble a plan dict from relational tables."""
+    cursor.execute("SELECT * FROM workout_sessions WHERE id = ?", [session_id])
+    session = cursor.fetchone()
+    if not session:
+        return None
+
+    cursor.execute("""
+        SELECT * FROM session_blocks WHERE session_id = ? ORDER BY position
+    """, [session_id])
+    block_rows = cursor.fetchall()
+
+    blocks = []
+    for br in block_rows:
+        cursor.execute("""
+            SELECT * FROM planned_exercises WHERE block_id = ? ORDER BY position
+        """, [br["id"]])
+        ex_rows = cursor.fetchall()
+
+        exercises = []
+        for er in ex_rows:
+            exercise = {
+                "id": er["exercise_key"],
+                "name": er["name"],
+                "type": er["exercise_type"],
+            }
+            if er["target_sets"] is not None:
+                exercise["target_sets"] = er["target_sets"]
+            if er["target_reps"] is not None:
+                exercise["target_reps"] = er["target_reps"]
+            if er["target_duration_min"] is not None:
+                exercise["target_duration_min"] = er["target_duration_min"]
+            if er["target_duration_sec"] is not None:
+                exercise["target_duration_sec"] = er["target_duration_sec"]
+            if er["rounds"] is not None:
+                exercise["rounds"] = er["rounds"]
+            if er["work_duration_sec"] is not None:
+                exercise["work_duration_sec"] = er["work_duration_sec"]
+            if er["rest_duration_sec"] is not None:
+                exercise["rest_duration_sec"] = er["rest_duration_sec"]
+            if er["guidance_note"]:
+                exercise["guidance_note"] = er["guidance_note"]
+            if er["hide_weight"]:
+                exercise["hide_weight"] = True
+            if er["show_time"]:
+                exercise["show_time"] = True
+
+            if er["canonical_slug"]:
+                exercise["canonical_slug"] = er["canonical_slug"]
+
+            if er["exercise_type"] == "checklist":
+                cursor.execute("""
+                    SELECT item_text FROM checklist_items
+                    WHERE exercise_id = ? ORDER BY position
+                """, [er["id"]])
+                exercise["items"] = [r["item_text"] for r in cursor.fetchall()]
+
+            exercises.append(exercise)
+
+        blocks.append({
+            "block_index": br["position"],
+            "block_type": br["block_type"],
+            "title": br["title"],
+            "duration_min": br["duration_min"],
+            "rest_guidance": br["rest_guidance"] or "",
+            "rounds": br["rounds"],
+            "exercises": exercises,
+        })
+
+    return {
+        "day_name": session["day_name"],
+        "location": session["location"],
+        "phase": session["phase"],
+        "total_duration_min": session["duration_min"],
+        "blocks": blocks,
+    }
+
+
+def _needs_transform(plan):
+    """Check if block plan has raw LLM exercises that need transformation."""
+    for block in plan.get("blocks", []):
+        for ex in block.get("exercises", []):
+            if "id" not in ex or "type" not in ex:
+                return True
+    # Cardio blocks with instructions (no exercises) also need transform
+    for block in plan.get("blocks", []):
+        if "instructions" in block and "exercises" not in block:
+            return True
+    return False
+
+
+def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
+    """Create and configure the Coach MCP server."""
+    if config is None:
+        db_path = Path(os.environ.get("COACH_DB_PATH", str(_DEFAULT_DB_PATH)))
+        config = MCPConfig.from_db_path(db_path)
+
+    config.validate()
+    db_manager = DatabaseManager(config)
+    mcp = FastMCP("Coach Workout Manager")
+
+    # Initialize exercise registry
+    registry = ExerciseRegistry()
+    with db_manager.get_connection(read_only=True) as conn:
+        registry.load(conn.cursor())
+
+    @mcp.tool()
+    def get_workout_plan(
+        start_date: str,
+        end_date: str
+    ) -> List[Dict[str, Any]]:
+        """WHEN TO USE: When you need to see what workouts are scheduled.
+
+        Retrieves workout plans for the specified date range.
+
+        Args:
+            start_date: Start date (YYYY-MM-DD)
+            end_date: End date (YYYY-MM-DD)
+
+        Returns:
+            List of plans with date and full plan structure including blocks and exercises
+        """
+        try:
+            results = db_manager.execute_query("""
+                SELECT id, date, last_modified FROM workout_sessions
+                WHERE date >= ? AND date <= ?
+                ORDER BY date
+            """, [start_date, end_date])
+
+            plans = []
+            for row in results:
+                with db_manager.get_connection(read_only=True) as conn:
+                    cursor = conn.cursor()
+                    plan_data = _assemble_plan_from_db(cursor, row["id"])
+
+                plans.append({
+                    "date": row["date"],
+                    "last_modified": row["last_modified"],
+                    "plan": plan_data
+                })
+
+            return plans
+        except Exception as e:
+            raise ValueError(f"Failed to get workout plans: {str(e)}")
+
+    @mcp.tool()
+    def get_workout_logs(
+        start_date: str,
+        end_date: str
+    ) -> List[Dict[str, Any]]:
+        """WHEN TO USE: When analyzing workout history or performance trends.
+
+        Retrieves completed workout logs for the specified date range.
+        This is READ-ONLY - logs are created by the user through the PWA.
+
+        Args:
+            start_date: Start date (YYYY-MM-DD)
+            end_date: End date (YYYY-MM-DD)
+
+        Returns:
+            List of logs with date and exercise completion data
+        """
+        try:
+            results = db_manager.execute_query("""
+                SELECT * FROM workout_session_logs
+                WHERE date >= ? AND date <= ?
+                ORDER BY date
+            """, [start_date, end_date])
+
+            logs = []
+            for row in results:
+                with db_manager.get_connection(read_only=True) as conn:
+                    cursor = conn.cursor()
+                    log_data = _assemble_log_from_db(cursor, row["id"])
+
+                logs.append({
+                    "date": row["date"],
+                    "last_modified": row["last_modified"],
+                    "log": log_data
+                })
+
+            return logs
+        except Exception as e:
+            raise ValueError(f"Failed to get workout logs: {str(e)}")
+
+    @mcp.tool()
+    def set_workout_plan(
+        date: str,
+        plan: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """WHEN TO USE: When creating or updating a workout plan for a specific date.
+
+        Creates or replaces the workout plan for the given date. Plans must use
+        block-based format with warmup/strength/cardio blocks containing exercises.
+
+        Args:
+            date: Target date (YYYY-MM-DD)
+            plan: Plan object with ``blocks`` array. Can be raw LLM format
+                  (exercises without id/type) or pre-transformed format.
+
+                Block format:
+                {
+                    "day_name": "Upper Body Strength",
+                    "location": "Gym",
+                    "phase": "Building",
+                    "blocks": [
+                        {
+                            "block_type": "warmup",
+                            "title": "Warmup",
+                            "exercises": [
+                                {"name": "Arm Circles", "reps": 10}
+                            ]
+                        },
+                        {
+                            "block_type": "strength",
+                            "title": "Main Lifts",
+                            "rest_guidance": "Rest 2-3 min",
+                            "exercises": [
+                                {"name": "Bench Press", "sets": 4, "reps": "6-8"}
+                            ]
+                        }
+                    ]
+                }
+
+        Returns:
+            Success confirmation with the saved plan
+        """
+        # Validate date format
+        try:
+            datetime.strptime(date, "%Y-%m-%d")
+        except ValueError:
+            raise ValueError(f"Invalid date format: {date}. Use YYYY-MM-DD")
+
+        # Validate plan structure
+        if not isinstance(plan, dict):
+            raise ValueError("Plan must be a dictionary")
+
+        if "blocks" not in plan:
+            raise ValueError("Plan must have 'blocks'")
+
+        if not isinstance(plan["blocks"], list):
+            raise ValueError("Plan blocks must be a list")
+
+        # Validate blocks
+        valid_block_types = ["warmup", "strength", "cardio", "circuit", "accessory", "power"]
+        for i, block in enumerate(plan["blocks"]):
+            if "block_type" not in block:
+                raise ValueError(f"Block {i} missing 'block_type' field")
+            if not isinstance(block["block_type"], str):
+                raise ValueError(f"Block {i} 'block_type' must be a string")
+            if block["block_type"] not in valid_block_types:
+                raise ValueError(
+                    f"Block {i} has invalid block_type: {block['block_type']}. "
+                    f"Must be one of: {valid_block_types}"
+                )
+            if "exercises" not in block and "instructions" not in block:
+                raise ValueError(f"Block {i} must have either 'exercises' or 'instructions'")
+
+        # Transform raw LLM format if needed
+        if _needs_transform(plan):
+            plan = _transform_block_plan(plan)
+
+        # Ensure day_name exists
+        if "day_name" not in plan:
+            plan["day_name"] = plan.get("theme", "Workout")
+
+        # Validate exercises in blocks
+        valid_types = ["strength", "duration", "checklist", "weighted_time", "interval", "circuit"]
+        for block in plan.get("blocks", []):
+            for i, exercise in enumerate(block.get("exercises", [])):
+                if "id" not in exercise:
+                    raise ValueError(f"Exercise {i} missing 'id' field")
+                if "name" not in exercise:
+                    raise ValueError(f"Exercise {i} missing 'name' field")
+                if "type" not in exercise:
+                    raise ValueError(f"Exercise {i} missing 'type' field")
+                if exercise["type"] not in valid_types:
+                    raise ValueError(
+                        f"Exercise {i} has invalid type: {exercise['type']}. "
+                        f"Must be one of: {valid_types}"
+                    )
+
+        try:
+            with db_manager.transaction() as cursor:
+                # Resolve exercise names to canonical slugs
+                resolution_report = resolve_plan_exercises(registry, plan, cursor)
+
+                _store_plan_to_db(cursor, date, plan, "mcp")
+
+                # Assemble the saved plan for response
+                cursor.execute("SELECT id FROM workout_sessions WHERE date = ?", [date])
+                session = cursor.fetchone()
+                saved_plan = _assemble_plan_from_db(cursor, session["id"])
+
+            return {
+                "success": True,
+                "date": date,
+                "last_modified": get_utc_now(),
+                "plan": saved_plan,
+                "exercise_resolution": resolution_report,
+                "message": f"Workout plan for {date} saved successfully"
+            }
+        except Exception as e:
+            raise ValueError(f"Failed to save workout plan: {str(e)}")
+
+    @mcp.tool()
+    def get_workout_summary(days: int = 30) -> Dict[str, Any]:
+        """WHEN TO USE: When you want a quick overview of workout activity.
+
+        Provides summary statistics about workout plans and completed logs.
+
+        Args:
+            days: Number of recent days to analyze (max 365, default: 30)
+
+        Returns:
+            Summary including planned vs completed workouts, exercise counts, etc.
+        """
+        if days > 365:
+            raise ValueError("Days cannot exceed 365")
+
+        try:
+            start_date = (date.today() - timedelta(days=days)).isoformat()
+            end_date = date.today().isoformat()
+
+            # Count planned workouts
+            plans_result = db_manager.execute_query("""
+                SELECT COUNT(*) as count FROM workout_sessions
+                WHERE date >= ? AND date <= ?
+            """, [start_date, end_date])
+            planned_count = plans_result[0]["count"] if plans_result else 0
+
+            # Count completed workouts
+            logs_result = db_manager.execute_query("""
+                SELECT COUNT(*) as count FROM workout_session_logs
+                WHERE date >= ? AND date <= ?
+            """, [start_date, end_date])
+            completed_count = logs_result[0]["count"] if logs_result else 0
+
+            # Exercise type breakdown from recent plans
+            exercise_types_result = db_manager.execute_query("""
+                SELECT pe.exercise_type, COUNT(*) as count
+                FROM planned_exercises pe
+                JOIN workout_sessions ws ON pe.session_id = ws.id
+                WHERE ws.date >= ? AND ws.date <= ?
+                GROUP BY pe.exercise_type
+                ORDER BY count DESC
+                LIMIT 7
+            """, [start_date, end_date])
+
+            exercise_types = {}
+            for row in exercise_types_result:
+                exercise_types[row["exercise_type"]] = row["count"]
+
+            # Recent plan dates
+            recent_dates_result = db_manager.execute_query("""
+                SELECT date FROM workout_sessions
+                WHERE date >= ? AND date <= ?
+                ORDER BY date DESC
+                LIMIT 7
+            """, [start_date, end_date])
+
+            completion_rate = round(completed_count / planned_count * 100, 1) if planned_count > 0 else 0
+
+            return {
+                "analysis_period_days": days,
+                "planned_workouts": planned_count,
+                "completed_workouts": completed_count,
+                "completion_rate_percent": completion_rate,
+                "exercise_types_in_recent_plans": exercise_types,
+                "recent_plan_dates": [row["date"] for row in recent_dates_result]
+            }
+        except Exception as e:
+            raise ValueError(f"Failed to generate summary: {str(e)}")
+
+    @mcp.tool()
+    def list_scheduled_dates(
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None
+    ) -> List[str]:
+        """WHEN TO USE: When you need to see which dates have plans scheduled.
+
+        Returns a list of dates that have workout plans.
+
+        Args:
+            start_date: Start date (YYYY-MM-DD), defaults to today
+            end_date: End date (YYYY-MM-DD), defaults to 6 weeks from today
+
+        Returns:
+            List of dates (YYYY-MM-DD) that have plans
+        """
+        try:
+            if not start_date:
+                start_date = date.today().isoformat()
+            if not end_date:
+                end_date = (date.today() + timedelta(weeks=6)).isoformat()
+
+            results = db_manager.execute_query("""
+                SELECT date FROM workout_sessions
+                WHERE date >= ? AND date <= ?
+                ORDER BY date
+            """, [start_date, end_date])
+
+            return [row["date"] for row in results]
+        except Exception as e:
+            raise ValueError(f"Failed to list scheduled dates: {str(e)}")
+
+    @mcp.tool()
+    def ingest_training_program(
+        plans: Dict[str, Dict[str, Any]],
+        transform_blocks: bool = True
+    ) -> Dict[str, Any]:
+        """WHEN TO USE: When loading a complete training program with multiple workout dates.
+
+        Bulk ingests multiple workout plans at once.
+
+        Args:
+            plans: Dictionary mapping dates (YYYY-MM-DD) to plan objects with blocks.
+            transform_blocks: If True, transforms raw LLM block format.
+                            Set to False if plans are already transformed.
+
+        Returns:
+            Summary of ingestion results with success/failure counts
+        """
+        results = {"success": [], "failed": [], "total": len(plans)}
+
+        for date_str, plan_data in sorted(plans.items()):
+            try:
+                # Validate date format
+                datetime.strptime(date_str, "%Y-%m-%d")
+
+                # Transform if needed
+                if transform_blocks and "blocks" in plan_data and _needs_transform(plan_data):
+                    plan = _transform_block_plan(plan_data)
+                else:
+                    plan = plan_data
+
+                # Ensure day_name exists
+                if "day_name" not in plan:
+                    plan["day_name"] = plan_data.get("theme", "Workout")
+
+                if "blocks" not in plan or not plan["blocks"]:
+                    raise ValueError("Plan must have blocks")
+
+                # Check that blocks have exercises
+                has_exercises = False
+                for block in plan["blocks"]:
+                    if block.get("exercises"):
+                        has_exercises = True
+                        break
+                if not has_exercises:
+                    raise ValueError("Plan must have exercises")
+
+                with db_manager.transaction() as cursor:
+                    resolve_plan_exercises(registry, plan, cursor)
+                    _store_plan_to_db(cursor, date_str, plan, "mcp")
+                results["success"].append(date_str)
+
+            except Exception as e:
+                results["failed"].append({"date": date_str, "error": str(e)})
+
+        return {
+            "message": f"Ingested {len(results['success'])} of {results['total']} plans",
+            "success_count": len(results["success"]),
+            "failed_count": len(results["failed"]),
+            "success_dates": results["success"],
+            "failed": results["failed"]
+        }
+
+    @mcp.tool()
+    def update_exercise(
+        date: str,
+        exercise_id: str,
+        updates: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """WHEN TO USE: When modifying a specific exercise within an existing plan.
+
+        Updates fields of a specific exercise without replacing the entire plan.
+
+        Args:
+            date: Date of the plan (YYYY-MM-DD)
+            exercise_id: Exercise key (e.g., "ex_1", "warmup_0")
+            updates: Dictionary of fields to update. Can include:
+                     name, type, target_sets, target_reps, target_duration_min,
+                     guidance_note, items, hide_weight, show_time
+
+        Returns:
+            Updated exercise and confirmation
+        """
+        # Map update keys to column names
+        column_map = {
+            "name": "name",
+            "type": "exercise_type",
+            "target_sets": "target_sets",
+            "target_reps": "target_reps",
+            "target_duration_min": "target_duration_min",
+            "target_duration_sec": "target_duration_sec",
+            "rounds": "rounds",
+            "work_duration_sec": "work_duration_sec",
+            "rest_duration_sec": "rest_duration_sec",
+            "guidance_note": "guidance_note",
+            "hide_weight": "hide_weight",
+            "show_time": "show_time",
+        }
+
+        try:
+            with db_manager.transaction() as cursor:
+                # Find the exercise
+                cursor.execute("""
+                    SELECT pe.id, pe.session_id FROM planned_exercises pe
+                    JOIN workout_sessions ws ON pe.session_id = ws.id
+                    WHERE ws.date = ? AND pe.exercise_key = ?
+                """, [date, exercise_id])
+                row = cursor.fetchone()
+
+                if not row:
+                    raise ValueError(f"Exercise '{exercise_id}' not found in plan for {date}")
+
+                pe_id = row["id"]
+                session_id = row["session_id"]
+
+                # Build UPDATE statement for mapped columns
+                set_clauses = []
+                params = []
+                for key, value in updates.items():
+                    if key == "items":
+                        continue  # handled separately
+                    col = column_map.get(key)
+                    if col:
+                        if key in ("hide_weight", "show_time"):
+                            value = 1 if value else 0
+                        set_clauses.append(f"{col} = ?")
+                        params.append(value)
+
+                # If name is changing, resolve new canonical slug
+                if "name" in updates:
+                    from .exercise_registry import generate_slug, _infer_equipment, _get_utc_now as _reg_utc_now
+                    new_name = updates["name"]
+                    slug, match_type = registry.resolve(new_name)
+                    if match_type == "new":
+                        slug = generate_slug(new_name)
+                        now_reg = _reg_utc_now()
+                        cursor.execute("""
+                            INSERT OR IGNORE INTO exercises (slug, name, equipment, category, created_at, source)
+                            VALUES (?, ?, ?, ?, ?, ?)
+                        """, [slug, new_name, None, None, now_reg, "auto"])
+                        registry.add(slug, new_name, None, None)
+                    set_clauses.append("canonical_slug = ?")
+                    params.append(slug)
+
+                if set_clauses:
+                    params.append(pe_id)
+                    cursor.execute(
+                        f"UPDATE planned_exercises SET {', '.join(set_clauses)} WHERE id = ?",
+                        params
+                    )
+
+                # Update checklist items if provided
+                if "items" in updates:
+                    cursor.execute("DELETE FROM checklist_items WHERE exercise_id = ?", [pe_id])
+                    for k, item in enumerate(updates["items"]):
+                        cursor.execute("""
+                            INSERT INTO checklist_items (exercise_id, position, item_text)
+                            VALUES (?, ?, ?)
+                        """, [pe_id, k, item])
+
+                # Update session last_modified
+                now = get_utc_now()
+                cursor.execute("""
+                    UPDATE workout_sessions SET last_modified = ?, modified_by = ?
+                    WHERE id = ?
+                """, [now, "mcp", session_id])
+
+                # Assemble updated exercise for response
+                updated = _assemble_plan_from_db(cursor, session_id)
+                updated_exercise = None
+                for block in updated.get("blocks", []):
+                    for ex in block.get("exercises", []):
+                        if ex["id"] == exercise_id:
+                            updated_exercise = ex
+                            break
+
+            return {
+                "success": True,
+                "date": date,
+                "exercise_id": exercise_id,
+                "updated_exercise": updated_exercise,
+                "message": f"Exercise '{exercise_id}' updated successfully"
+            }
+        except Exception as e:
+            raise ValueError(f"Failed to update exercise: {str(e)}")
+
+    @mcp.tool()
+    def add_exercise(
+        date: str,
+        exercise: Dict[str, Any],
+        block_position: int = 0,
+        position: Optional[int] = None
+    ) -> Dict[str, Any]:
+        """WHEN TO USE: When adding a new exercise to an existing workout plan.
+
+        Adds a new exercise to a specific block in the plan.
+
+        Args:
+            date: Date of the plan (YYYY-MM-DD)
+            exercise: Exercise object with required fields (id, name, type)
+            block_position: Which block to add to (0-indexed). Default: 0.
+            position: Index within the block (0 = beginning). None = append to end.
+
+        Returns:
+            Confirmation with updated exercise count
+        """
+        # Validate exercise
+        required = ["id", "name", "type"]
+        for field in required:
+            if field not in exercise:
+                raise ValueError(f"Exercise missing required field: {field}")
+
+        valid_types = ["strength", "duration", "checklist", "weighted_time", "interval", "circuit"]
+        if exercise["type"] not in valid_types:
+            raise ValueError(f"Invalid exercise type: {exercise['type']}")
+
+        try:
+            with db_manager.transaction() as cursor:
+                # Get session
+                cursor.execute("""
+                    SELECT id FROM workout_sessions WHERE date = ?
+                """, [date])
+                session = cursor.fetchone()
+                if not session:
+                    raise ValueError(f"No plan found for date: {date}")
+                session_id = session["id"]
+
+                # Check for duplicate exercise key
+                cursor.execute("""
+                    SELECT id FROM planned_exercises
+                    WHERE session_id = ? AND exercise_key = ?
+                """, [session_id, exercise["id"]])
+                if cursor.fetchone():
+                    raise ValueError(f"Exercise ID '{exercise['id']}' already exists in plan")
+
+                # Find the target block
+                cursor.execute("""
+                    SELECT id FROM session_blocks
+                    WHERE session_id = ? AND position = ?
+                """, [session_id, block_position])
+                block = cursor.fetchone()
+                if not block:
+                    raise ValueError(f"Block at position {block_position} not found")
+                block_id = block["id"]
+
+                # Determine position
+                if position is None:
+                    cursor.execute("""
+                        SELECT COALESCE(MAX(position), -1) + 1 as next_pos
+                        FROM planned_exercises WHERE block_id = ?
+                    """, [block_id])
+                    position = cursor.fetchone()["next_pos"]
+                else:
+                    # Shift existing exercises at >= position
+                    cursor.execute("""
+                        UPDATE planned_exercises SET position = position + 1
+                        WHERE block_id = ? AND position >= ?
+                    """, [block_id, position])
+
+                # Resolve canonical slug for the new exercise
+                from .exercise_registry import generate_slug, _infer_equipment, _get_utc_now as _reg_utc_now
+                slug, match_type = registry.resolve(exercise["name"])
+                if match_type == "new":
+                    slug = generate_slug(exercise["name"])
+                    equip = _infer_equipment(exercise)
+                    now_reg = _reg_utc_now()
+                    cursor.execute("""
+                        INSERT OR IGNORE INTO exercises (slug, name, equipment, category, created_at, source)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    """, [slug, exercise["name"], equip, None, now_reg, "auto"])
+                    registry.add(slug, exercise["name"], equip, None)
+
+                # Insert exercise
+                cursor.execute("""
+                    INSERT INTO planned_exercises
+                    (session_id, block_id, exercise_key, position, name, exercise_type,
+                     target_sets, target_reps, target_duration_min, target_duration_sec,
+                     rounds, work_duration_sec, rest_duration_sec,
+                     guidance_note, hide_weight, show_time, canonical_slug)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, [
+                    session_id, block_id, exercise["id"], position,
+                    exercise["name"], exercise["type"],
+                    exercise.get("target_sets"),
+                    exercise.get("target_reps"),
+                    exercise.get("target_duration_min"),
+                    exercise.get("target_duration_sec"),
+                    exercise.get("rounds"),
+                    exercise.get("work_duration_sec"),
+                    exercise.get("rest_duration_sec"),
+                    exercise.get("guidance_note"),
+                    1 if exercise.get("hide_weight") else 0,
+                    1 if exercise.get("show_time") else 0,
+                    slug,
+                ])
+                exercise_id = cursor.lastrowid
+
+                # Checklist items
+                if exercise.get("type") == "checklist":
+                    for k, item in enumerate(exercise.get("items", [])):
+                        cursor.execute("""
+                            INSERT INTO checklist_items (exercise_id, position, item_text)
+                            VALUES (?, ?, ?)
+                        """, [exercise_id, k, item])
+
+                # Update session last_modified
+                now = get_utc_now()
+                cursor.execute("""
+                    UPDATE workout_sessions SET last_modified = ?, modified_by = ?
+                    WHERE id = ?
+                """, [now, "mcp", session_id])
+
+                # Count total exercises
+                cursor.execute("""
+                    SELECT COUNT(*) as count FROM planned_exercises
+                    WHERE session_id = ?
+                """, [session_id])
+                total = cursor.fetchone()["count"]
+
+            return {
+                "success": True,
+                "date": date,
+                "added_exercise": exercise,
+                "total_exercises": total,
+                "message": f"Exercise '{exercise['id']}' added successfully"
+            }
+        except Exception as e:
+            raise ValueError(f"Failed to add exercise: {str(e)}")
+
+    @mcp.tool()
+    def remove_exercise(
+        date: str,
+        exercise_id: str
+    ) -> Dict[str, Any]:
+        """WHEN TO USE: When removing an exercise from an existing workout plan.
+
+        Removes an exercise by ID from the specified plan. CASCADE handles
+        cleanup of associated checklist_items.
+
+        Args:
+            date: Date of the plan (YYYY-MM-DD)
+            exercise_id: Exercise key to remove
+
+        Returns:
+            Confirmation with updated exercise count
+        """
+        try:
+            with db_manager.transaction() as cursor:
+                # Find the exercise
+                cursor.execute("""
+                    SELECT pe.id, pe.session_id FROM planned_exercises pe
+                    JOIN workout_sessions ws ON pe.session_id = ws.id
+                    WHERE ws.date = ? AND pe.exercise_key = ?
+                """, [date, exercise_id])
+                row = cursor.fetchone()
+
+                if not row:
+                    raise ValueError(f"Exercise '{exercise_id}' not found in plan for {date}")
+
+                session_id = row["session_id"]
+
+                # Delete exercise (CASCADE handles checklist_items)
+                cursor.execute("DELETE FROM planned_exercises WHERE id = ?", [row["id"]])
+
+                # Update session last_modified
+                now = get_utc_now()
+                cursor.execute("""
+                    UPDATE workout_sessions SET last_modified = ?, modified_by = ?
+                    WHERE id = ?
+                """, [now, "mcp", session_id])
+
+                # Count remaining exercises
+                cursor.execute("""
+                    SELECT COUNT(*) as count FROM planned_exercises
+                    WHERE session_id = ?
+                """, [session_id])
+                remaining = cursor.fetchone()["count"]
+
+            return {
+                "success": True,
+                "date": date,
+                "removed_exercise_id": exercise_id,
+                "remaining_exercises": remaining,
+                "message": f"Exercise '{exercise_id}' removed successfully"
+            }
+        except Exception as e:
+            raise ValueError(f"Failed to remove exercise: {str(e)}")
+
+    @mcp.tool()
+    def delete_workout_plan(date: str) -> Dict[str, Any]:
+        """WHEN TO USE: When removing a workout plan entirely for a specific date.
+
+        Deletes the entire workout plan for the specified date.
+        CASCADE handles cleanup of blocks, exercises, and checklist items.
+
+        Args:
+            date: Date of the plan to delete (YYYY-MM-DD)
+
+        Returns:
+            Confirmation of deletion
+        """
+        try:
+            # Validate date format
+            datetime.strptime(date, "%Y-%m-%d")
+
+            # Check if plan exists
+            results = db_manager.execute_query(
+                "SELECT id FROM workout_sessions WHERE date = ?", [date]
+            )
+            if not results:
+                raise ValueError(f"No plan found for date: {date}")
+
+            # Delete (CASCADE handles blocks, exercises, checklist items)
+            db_manager.execute_write(
+                "DELETE FROM workout_sessions WHERE date = ?", [date]
+            )
+
+            return {
+                "success": True,
+                "date": date,
+                "message": f"Workout plan for {date} deleted successfully"
+            }
+        except Exception as e:
+            raise ValueError(f"Failed to delete workout plan: {str(e)}")
+
+    @mcp.tool()
+    def update_plan_metadata(
+        date: str,
+        updates: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """WHEN TO USE: When updating plan metadata without changing exercises.
+
+        Updates plan-level fields like day_name, location, phase.
+
+        Args:
+            date: Date of the plan (YYYY-MM-DD)
+            updates: Fields to update: day_name, location, phase, total_duration_min
+
+        Returns:
+            Updated plan metadata
+        """
+        column_map = {
+            "day_name": "day_name",
+            "location": "location",
+            "phase": "phase",
+            "total_duration_min": "duration_min",
+        }
+
+        allowed_fields = set(column_map.keys())
+        invalid_fields = set(updates.keys()) - allowed_fields
+        if invalid_fields:
+            raise ValueError(f"Invalid metadata fields: {invalid_fields}. Allowed: {allowed_fields}")
+
+        try:
+            with db_manager.transaction() as cursor:
+                cursor.execute("SELECT id FROM workout_sessions WHERE date = ?", [date])
+                session = cursor.fetchone()
+                if not session:
+                    raise ValueError(f"No plan found for date: {date}")
+
+                session_id = session["id"]
+
+                # Build UPDATE
+                set_clauses = []
+                params = []
+                for key, value in updates.items():
+                    col = column_map[key]
+                    set_clauses.append(f"{col} = ?")
+                    params.append(value)
+
+                now = get_utc_now()
+                set_clauses.append("last_modified = ?")
+                params.append(now)
+                set_clauses.append("modified_by = ?")
+                params.append("mcp")
+                params.append(session_id)
+
+                cursor.execute(
+                    f"UPDATE workout_sessions SET {', '.join(set_clauses)} WHERE id = ?",
+                    params
+                )
+
+                # Get exercise count
+                cursor.execute("""
+                    SELECT COUNT(*) as count FROM planned_exercises
+                    WHERE session_id = ?
+                """, [session_id])
+                exercise_count = cursor.fetchone()["count"]
+
+                # Get updated metadata
+                cursor.execute("SELECT * FROM workout_sessions WHERE id = ?", [session_id])
+                updated = cursor.fetchone()
+
+            return {
+                "success": True,
+                "date": date,
+                "updated_fields": list(updates.keys()),
+                "plan_metadata": {
+                    "day_name": updated["day_name"],
+                    "location": updated["location"],
+                    "phase": updated["phase"],
+                    "total_duration_min": updated["duration_min"],
+                    "exercise_count": exercise_count
+                },
+                "message": "Plan metadata updated successfully"
+            }
+        except Exception as e:
+            raise ValueError(f"Failed to update plan metadata: {str(e)}")
+
+    @mcp.tool()
+    def search_exercises(
+        query: str,
+        equipment: Optional[str] = None,
+        category: Optional[str] = None,
+        limit: int = 20
+    ) -> List[Dict[str, Any]]:
+        """WHEN TO USE: When searching for exercises in the registry by name, equipment, or category.
+
+        Searches the canonical exercise registry by name (fuzzy), optionally
+        filtering by equipment or category. Returns matches with usage count.
+
+        Args:
+            query: Search term for exercise name
+            equipment: Filter by equipment (e.g., "kettlebell", "bodyweight", "dumbbell")
+            category: Filter by category (e.g., "mobility", "cardio")
+            limit: Max results to return (default 20)
+
+        Returns:
+            List of matching exercises with slug, name, equipment, category, and usage count
+        """
+        try:
+            # Build SQL query with optional filters
+            conditions = ["1=1"]
+            params = []
+
+            if equipment:
+                conditions.append("e.equipment = ?")
+                params.append(equipment)
+            if category:
+                conditions.append("e.category = ?")
+                params.append(category)
+
+            where_clause = " AND ".join(conditions)
+
+            results = db_manager.execute_query(f"""
+                SELECT e.slug, e.name, e.equipment, e.category,
+                       COUNT(pe.id) as usage_count
+                FROM exercises e
+                LEFT JOIN planned_exercises pe ON pe.canonical_slug = e.slug
+                WHERE {where_clause}
+                GROUP BY e.slug
+                ORDER BY e.name
+            """, params)
+
+            # Apply fuzzy name filtering in Python
+            if query.strip():
+                from difflib import SequenceMatcher
+                query_lower = query.lower()
+                scored = []
+                for row in results:
+                    name_lower = row["name"].lower()
+                    # Substring match gets high priority
+                    if query_lower in name_lower:
+                        score = 100
+                    else:
+                        score = SequenceMatcher(None, query_lower, name_lower).ratio() * 100
+                    if score >= 50:
+                        scored.append((score, row))
+                scored.sort(key=lambda x: (-x[0], x[1]["name"]))
+                results = [row for _, row in scored[:limit]]
+            else:
+                results = results[:limit]
+
+            return results
+        except Exception as e:
+            raise ValueError(f"Failed to search exercises: {str(e)}")
+
+    @mcp.tool()
+    def get_exercise_history(
+        exercise_slug: str,
+        limit: int = 30
+    ) -> Dict[str, Any]:
+        """WHEN TO USE: When you want to see all logged sessions for a specific exercise across all dates.
+
+        Returns workout log history for a canonical exercise. Self-contained —
+        no plan join needed. Includes set details grouped by date.
+
+        Args:
+            exercise_slug: Canonical exercise slug (e.g., "kb_goblet_squat")
+            limit: Max sessions to return (default 30)
+
+        Returns:
+            Exercise info and list of logged sessions with set data
+        """
+        try:
+            # Get exercise info
+            exercise_info = db_manager.execute_query(
+                "SELECT * FROM exercises WHERE slug = ?", [exercise_slug]
+            )
+            if not exercise_info:
+                raise ValueError(f"Exercise not found: {exercise_slug}")
+
+            info = exercise_info[0]
+
+            # Get all logged sessions for this exercise
+            sessions = db_manager.execute_query("""
+                SELECT
+                    wsl.date,
+                    el.completed,
+                    el.user_note,
+                    el.duration_min,
+                    el.avg_hr,
+                    el.max_hr,
+                    el.id as exercise_log_id
+                FROM exercise_logs el
+                JOIN workout_session_logs wsl ON el.session_log_id = wsl.id
+                WHERE el.canonical_slug = ?
+                ORDER BY wsl.date DESC
+                LIMIT ?
+            """, [exercise_slug, limit])
+
+            # For each session, get set data
+            history = []
+            for session in sessions:
+                sets = db_manager.execute_query("""
+                    SELECT set_num, weight, reps, rpe, unit, duration_sec, completed
+                    FROM set_logs
+                    WHERE exercise_log_id = ?
+                    ORDER BY set_num
+                """, [session["exercise_log_id"]])
+
+                entry = {
+                    "date": session["date"],
+                    "completed": bool(session["completed"]),
+                }
+                if session["user_note"]:
+                    entry["user_note"] = session["user_note"]
+                if session["duration_min"] is not None:
+                    entry["duration_min"] = session["duration_min"]
+                if session["avg_hr"] is not None:
+                    entry["avg_hr"] = session["avg_hr"]
+                if session["max_hr"] is not None:
+                    entry["max_hr"] = session["max_hr"]
+                if sets:
+                    entry["sets"] = sets
+
+                history.append(entry)
+
+            return {
+                "exercise": {
+                    "slug": info["slug"],
+                    "name": info["name"],
+                    "equipment": info["equipment"],
+                    "category": info["category"],
+                },
+                "total_sessions": len(history),
+                "history": history,
+            }
+        except Exception as e:
+            raise ValueError(f"Failed to get exercise history: {str(e)}")
+
+    @mcp.resource("file://exercise_registry_summary")
+    def exercise_registry_summary() -> str:
+        """Summary of all exercises in the registry, grouped by equipment."""
+        try:
+            results = db_manager.execute_query("""
+                SELECT e.slug, e.name, e.equipment, e.category,
+                       COUNT(pe.id) as usage_count
+                FROM exercises e
+                LEFT JOIN planned_exercises pe ON pe.canonical_slug = e.slug
+                GROUP BY e.slug
+                ORDER BY e.equipment, e.name
+            """)
+
+            if not results:
+                return "# Exercise Registry\n\nNo exercises registered yet."
+
+            lines = ["# Exercise Registry", ""]
+            current_equip = None
+            for row in results:
+                equip = row["equipment"] or "unclassified"
+                if equip != current_equip:
+                    current_equip = equip
+                    lines.append(f"## {equip.title()}")
+                    lines.append("")
+
+                cat_str = f" [{row['category']}]" if row["category"] else ""
+                usage_str = f" (used {row['usage_count']}x)" if row["usage_count"] else ""
+                lines.append(f"- **{row['name']}** (`{row['slug']}`){cat_str}{usage_str}")
+
+            lines.append("")
+            lines.append(f"Total: {len(results)} exercises")
+            return "\n".join(lines)
+        except Exception as e:
+            return f"Error loading registry: {str(e)}"
+
+    @mcp.resource("file://coach_plan_guide")
+    def coach_plan_guide() -> str:
+        """Complete guide to creating workout plans."""
+        return _get_coach_plan_guide()
+
+    return mcp
+
+
+# ==================== Log Assembly Helper ====================
+
+
+def _assemble_log_from_db(cursor, session_log_id):
+    """Assemble log dict from relational tables."""
+    cursor.execute("SELECT * FROM workout_session_logs WHERE id = ?", [session_log_id])
+    log_row = cursor.fetchone()
+    if not log_row:
+        return {}
+
+    log = {}
+
+    # Session feedback
+    feedback = {}
+    if log_row["pain_discomfort"]:
+        feedback["pain_discomfort"] = log_row["pain_discomfort"]
+    if log_row["general_notes"]:
+        feedback["general_notes"] = log_row["general_notes"]
+    log["session_feedback"] = feedback
+
+    # Exercise logs
+    cursor.execute("SELECT * FROM exercise_logs WHERE session_log_id = ?", [session_log_id])
+    for el in cursor.fetchall():
+        entry = {}
+        if el["completed"]:
+            entry["completed"] = True
+        if el["user_note"]:
+            entry["user_note"] = el["user_note"]
+        if el["duration_min"] is not None:
+            entry["duration_min"] = el["duration_min"]
+        if el["avg_hr"] is not None:
+            entry["avg_hr"] = el["avg_hr"]
+        if el["max_hr"] is not None:
+            entry["max_hr"] = el["max_hr"]
+
+        # Sets
+        cursor.execute("""
+            SELECT * FROM set_logs WHERE exercise_log_id = ? ORDER BY set_num
+        """, [el["id"]])
+        sets = cursor.fetchall()
+        if sets:
+            entry["sets"] = []
+            for s in sets:
+                set_dict = {"set_num": s["set_num"]}
+                if s["weight"] is not None:
+                    set_dict["weight"] = s["weight"]
+                if s["reps"] is not None:
+                    set_dict["reps"] = s["reps"]
+                if s["rpe"] is not None:
+                    set_dict["rpe"] = s["rpe"]
+                if s["unit"]:
+                    set_dict["unit"] = s["unit"]
+                if s["duration_sec"] is not None:
+                    set_dict["duration_sec"] = s["duration_sec"]
+                if s["completed"]:
+                    set_dict["completed"] = True
+                entry["sets"].append(set_dict)
+
+        # Checklist items
+        cursor.execute("""
+            SELECT item_text FROM checklist_log_items WHERE exercise_log_id = ?
+        """, [el["id"]])
+        items = cursor.fetchall()
+        if items:
+            entry["completed_items"] = [r["item_text"] for r in items]
+
+        log[el["exercise_key"]] = entry
+
+    return log
+
+
+# ==================== Transform Functions ====================
+
+
+def _is_bodyweight_or_band(name: str) -> bool:
+    """Check if an exercise is bodyweight or band-based (no meaningful weight)."""
+    keywords = [
+        "push-up", "pushup", "push up", "bodyweight", "band pull",
+        "banded", "jump squat", "plank", "dead hang", "wall sit",
+        "glute bridge",
+    ]
+    lower = name.lower()
+    return any(kw in lower for kw in keywords)
+
+
+def _transform_block_to_exercises(block: dict, block_index: int) -> list:
+    """Transform a block into a list of exercises with proper IDs and types."""
+    exercises = []
+    block_type = block.get("block_type", "")
+    title = block.get("title", "")
+    rest_guidance = block.get("rest_guidance", "")
+    duration = block.get("duration_min", 0)
+
+    # Handle warmup blocks specially - aggregate into single checklist
+    if block_type == "warmup" and "exercises" in block:
+        items = []
+        for ex in block["exercises"]:
+            name = ex.get("name", "Unknown")
+            reps = ex.get("reps", "")
+            if reps:
+                items.append(f"{name} x{reps}" if isinstance(reps, int) else f"{name} {reps}")
+            else:
+                items.append(name)
+
+        exercise = {
+            "id": f"warmup_{block_index}",
+            "name": title or "Warmup",
+            "type": "checklist",
+            "items": items
+        }
+        exercises.append(exercise)
+
+    # Handle blocks with exercises list (non-warmup)
+    elif "exercises" in block:
+        block_rounds = block.get("rounds")
+
+        for i, ex in enumerate(block["exercises"]):
+            exercise_id = f"{block_type}_{block_index}_{i+1}"
+
+            # Determine exercise type based on block type
+            if block_type in ["circuit", "power"]:
+                ex_type = "circuit"
+            elif block_type in ["strength", "accessory"]:
+                ex_type = "strength"
+            else:
+                ex_type = "strength"
+
+            exercise = {
+                "id": exercise_id,
+                "name": ex.get("name", "Unknown"),
+                "type": ex_type,
+            }
+
+            if ex.get("sets"):
+                exercise["target_sets"] = ex["sets"] if isinstance(ex["sets"], int) else 3
+            elif block_rounds:
+                exercise["target_sets"] = block_rounds
+            if ex.get("reps"):
+                reps_str = str(ex["reps"])
+                exercise["target_reps"] = reps_str
+                if "sec" in reps_str.lower():
+                    exercise["show_time"] = True
+
+            # Hide weight for bodyweight/band exercises
+            equipment = ex.get("equipment")
+            if equipment:
+                if equipment in ("bodyweight", "band"):
+                    exercise["hide_weight"] = True
+            elif _is_bodyweight_or_band(ex.get("name", "")):
+                exercise["hide_weight"] = True
+
+            # Build guidance note
+            notes = []
+            if ex.get("tempo"):
+                notes.append(f"Tempo {ex['tempo']}")
+            if ex.get("load_guide"):
+                notes.append(ex["load_guide"])
+            if ex.get("notes"):
+                notes.append(ex["notes"])
+            if rest_guidance and block_type == "strength":
+                notes.append(rest_guidance)
+
+            if notes:
+                exercise["guidance_note"] = ". ".join(notes)
+
+            exercises.append(exercise)
+
+    # Handle blocks with instructions (cardio blocks)
+    elif "instructions" in block:
+        exercise_id = f"{block_type}_{block_index}_1"
+        instructions_text = " ".join(block["instructions"])
+
+        if "VO2" in instructions_text or "HARD" in instructions_text:
+            ex_type = "interval"
+            name = "VO2 Max Intervals"
+        else:
+            ex_type = "duration"
+            name = title or "Zone 2 Cardio"
+
+        exercise = {
+            "id": exercise_id,
+            "name": name,
+            "type": ex_type,
+            "target_duration_min": duration,
+            "guidance_note": " | ".join(block["instructions"])
+        }
+        exercises.append(exercise)
+
+    return exercises
+
+
+def _transform_block_plan(plan_data: dict) -> dict:
+    """Transform block-based plan to include blocks with transformed exercises."""
+    blocks = []
+
+    for i, block in enumerate(plan_data.get("blocks", [])):
+        block_exercises = _transform_block_to_exercises(block, i)
+
+        transformed_block = {
+            "block_index": i,
+            "block_type": block.get("block_type", ""),
+            "title": block.get("title", ""),
+            "duration_min": block.get("duration_min"),
+            "rest_guidance": block.get("rest_guidance", ""),
+            "rounds": block.get("rounds"),
+            "exercises": block_exercises
+        }
+        blocks.append(transformed_block)
+
+    return {
+        "day_name": plan_data.get("theme", plan_data.get("day_name", "Workout")),
+        "location": plan_data.get("location", "Home"),
+        "phase": plan_data.get("phase", "Foundation"),
+        "total_duration_min": plan_data.get("total_duration_min", 60),
+        "blocks": blocks,
+    }
+
+
+def _get_coach_plan_guide() -> str:
+    """Get comprehensive guide for creating workout plans."""
+    return """
+# Coach Workout Plan Guide
+
+## Quick Start
+1. Use `list_scheduled_dates` to see what's already planned
+2. Use `get_workout_plan` to see existing plan structures
+3. Use `set_workout_plan` to create new plans (block format required)
+4. Use `get_workout_logs` to analyze past performance
+
+## Plan Structure
+
+Each workout plan uses block-based format:
+- `blocks`: Array of typed groups (warmup, strength, cardio, circuit, accessory, power)
+- Each block contains exercises appropriate to its type
+
+## Block Types
+
+### warmup
+Exercises are aggregated into a single checklist.
+
+### strength / accessory
+Individual exercises with sets/reps.
+
+### circuit / power
+Exercises with rounds (from block-level `rounds` field).
+
+### cardio
+Can use `instructions` array or `exercises` list.
+
+## Exercise Types
+
+### strength
+```json
+{"id": "ex_1", "name": "KB Goblet Squat", "type": "strength",
+ "target_sets": 3, "target_reps": "10", "guidance_note": "Tempo 3-1-1"}
+```
+
+### duration
+```json
+{"id": "cardio_1", "name": "Zone 2 Bike", "type": "duration",
+ "target_duration_min": 15, "guidance_note": "HR 135-148"}
+```
+
+### checklist
+```json
+{"id": "warmup_0", "name": "Stability Start", "type": "checklist",
+ "items": ["Cat-Cow x10", "Bird-Dog x5/side"]}
+```
+
+### weighted_time
+```json
+{"id": "ex_5", "name": "Farmer's Carry", "type": "weighted_time",
+ "target_duration_sec": 60}
+```
+
+### interval
+```json
+{"id": "hiit_1", "name": "Bike Intervals", "type": "interval",
+ "rounds": 4, "work_duration_sec": 30, "rest_duration_sec": 90}
+```
+
+## Example: Block-Based Plan
+
+```json
+{
+    "day_name": "Lower Body + Conditioning",
+    "location": "Home",
+    "phase": "Foundation",
+    "blocks": [
+        {
+            "block_type": "warmup",
+            "title": "Stability Start",
+            "exercises": [
+                {"id": "warmup_0", "name": "Stability Start", "type": "checklist",
+                 "items": ["Cat-Cow x10", "Bird-Dog x5/side", "Dead Bug x10"]}
+            ]
+        },
+        {
+            "block_type": "strength",
+            "title": "Main Lifts",
+            "rest_guidance": "Rest until HR <= 130",
+            "exercises": [
+                {"id": "ex_1", "name": "KB Goblet Squat", "type": "strength",
+                 "target_sets": 3, "target_reps": "10", "guidance_note": "Tempo 3-1-1"},
+                {"id": "ex_2", "name": "DB Romanian Deadlift", "type": "strength",
+                 "target_sets": 3, "target_reps": "10"}
+            ]
+        },
+        {
+            "block_type": "cardio",
+            "title": "Zone 2 Cooldown",
+            "exercises": [
+                {"id": "cardio_1", "name": "Zone 2 Bike", "type": "duration",
+                 "target_duration_min": 15, "guidance_note": "HR 135-148"}
+            ]
+        }
+    ]
+}
+```
+
+## Exercise Registry
+
+Exercises are automatically registered with canonical slugs (e.g., `kb_goblet_squat`)
+when plans are created. This enables cross-session queries.
+
+### Available Tools
+- `search_exercises(query)` — find exercises by name, equipment, or category
+- `get_exercise_history(exercise_slug)` — view all logged sessions for an exercise
+
+### Available Resources
+- `exercise_registry_summary` — full list of registered exercises grouped by equipment
+
+### How It Works
+- When you create a plan, exercise names are automatically resolved to canonical slugs
+- Fuzzy matching handles minor name variations (e.g., "KB Goblet Squat" vs "Kettlebell Goblet Squat")
+- New exercises are auto-registered; equipment is inferred from the name
+- Use `search_exercises` to check what exercises already exist before creating plans
+
+## Best Practices
+
+1. **Block grouping**: Group exercises by type (warmup, strength, cardio)
+2. **Unique IDs**: Each exercise needs a unique `id` within the plan
+3. **Guidance Notes**: Include tempo, rest periods, HR targets
+4. **Progressive Overload**: Increase volume/intensity across phases
+5. **Consistent Names**: Use `search_exercises` to find existing exercise names
+    """.strip()
+
+
+def main():
+    """Main entry point for the Coach MCP server."""
+    try:
+        mcp = create_mcp_server()
+        mcp.run()
+    except Exception as e:
+        print(f"Failed to start MCP server: {e}")
+        raise
+
+
+if __name__ == "__main__":
+    main()

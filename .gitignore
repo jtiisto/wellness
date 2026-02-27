@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Databases
+data/*.db
+
+# Runtime
+server.log
+.server.pid
+*.log
+
+# User-specific queries (contains personal medical data)
+src/modules/user_queries.py
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store

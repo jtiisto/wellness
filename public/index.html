@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="theme-color" content="#1a1a2e">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="description" content="Personal wellness dashboard">
+    <link rel="manifest" href="/manifest.json">
+    <link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+    <title>Wellness</title>
+    <link rel="stylesheet" href="/styles.css">
+    <script type="importmap">
+    {
+        "imports": {
+            "preact": "https://esm.sh/preact@10.19.3",
+            "preact/hooks": "https://esm.sh/preact@10.19.3/hooks",
+            "@preact/signals": "https://esm.sh/@preact/signals@1.2.1?deps=preact@10.19.3",
+            "htm": "https://esm.sh/htm@3.1.1",
+            "localforage": "https://esm.sh/localforage@1.10.0",
+            "marked": "https://esm.sh/marked@15.0.7"
+        }
+    }
+    </script>
+</head>
+<body>
+    <div id="app"></div>
+    <script type="module" src="/js/app.js"></script>
+    <script>
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('/sw.js').catch(() => {});
+      }
+    </script>
+</body>
+</html>
