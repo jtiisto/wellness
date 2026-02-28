@@ -57,6 +57,7 @@ QUERIES = list(_USER_QUERIES) + [
         "id": "weekly_review",
         "label": "Weekly Performance Review",
         "description": "Week-to-week performance comparison",
+        "timeout": 600,
         "prompt_template": (
             "IMPORTANT: Always use Garmin MCP tools to sync the latest health and workout data first.\n\n"
             "Analyze my training performance over the past 7 days compared to the previous 7 days. Use:\n"

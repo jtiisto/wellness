@@ -24,7 +24,7 @@ _llm_dir: Path = None
 
 # ==================== Claude CLI Execution ====================
 
-QUERY_TIMEOUT = 180  # seconds
+QUERY_TIMEOUT = 180  # seconds (default, can be overridden per query)
 
 DEFAULT_ALLOWED_TOOLS = [
     "mcp__journal-localdb__*", "mcp__coach-localdb__*",
@@ -32,7 +32,7 @@ DEFAULT_ALLOWED_TOOLS = [
 ]
 
 
-async def execute_claude_query(prompt: str, extra_tools: list[str] | None = None) -> str:
+async def execute_claude_query(prompt: str, extra_tools: list[str] | None = None, timeout: int | None = None) -> str:
     env = os.environ.copy()
     env["CLAUDECODE"] = ""
 
@@ -55,14 +55,15 @@ async def execute_claude_query(prompt: str, extra_tools: list[str] | None = None
         env=env,
     )
 
+    effective_timeout = timeout or QUERY_TIMEOUT
     try:
         stdout, stderr = await asyncio.wait_for(
-            process.communicate(), timeout=QUERY_TIMEOUT
+            process.communicate(), timeout=effective_timeout
         )
     except asyncio.TimeoutError:
         process.kill()
         await process.communicate()
-        raise TimeoutError(f"Claude CLI timed out after {QUERY_TIMEOUT}s")
+        raise TimeoutError(f"Claude CLI timed out after {effective_timeout}s")
 
     if process.returncode != 0:
         error_text = stderr.decode("utf-8", errors="replace").strip()
@@ -76,12 +77,12 @@ async def execute_claude_query(prompt: str, extra_tools: list[str] | None = None
         return raw
 
 
-async def run_report(report_id: int, prompt: str, extra_tools: list[str] | None = None):
+async def run_report(report_id: int, prompt: str, extra_tools: list[str] | None = None, timeout: int | None = None):
     """Background task: execute Claude query and update report status."""
     db_path = str(_db_path)
     update_report_running(db_path, report_id)
     try:
-        response_text = await execute_claude_query(prompt, extra_tools)
+        response_text = await execute_claude_query(prompt, extra_tools, timeout)
         update_report_completed(db_path, report_id, response_text)
     except Exception as e:
         update_report_failed(db_path, report_id, str(e))
@@ -113,8 +114,9 @@ async def api_submit_query(req: SubmitQueryRequest):
         raise HTTPException(status_code=409, detail="A query is already in progress.")
     prompt = build_prompt(query, req.location)
     extra_tools = query.get("extra_allowed_tools")
+    timeout = query.get("timeout")
     report_id = create_report(str(_db_path), query["id"], query["label"], prompt)
-    asyncio.create_task(run_report(report_id, prompt, extra_tools))
+    asyncio.create_task(run_report(report_id, prompt, extra_tools, timeout))
     return JSONResponse(content={"id": report_id, "status": "pending"}, status_code=201)
 
 
