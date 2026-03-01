@@ -20,7 +20,7 @@ const KEYS = {
     CONFIG: 'tracker_config',
     LOGS: 'daily_logs',
     CLIENT_ID: 'client_id',
-    COLLAPSED_CATEGORIES: 'collapsed_categories'
+    EXPANDED_CATEGORIES: 'expanded_categories'
 };
 
 // ==================== Signals ====================
@@ -56,28 +56,24 @@ export const pendingConflicts = signal([]);
 // Edit state for config screen
 export const editingTracker = signal(null);
 
-// Collapsed categories state
-export const collapsedCategories = signal(new Set());
+// Expanded categories state (categories are collapsed by default)
+export const expandedCategories = signal(new Set());
 
-// ==================== Collapsed Categories ====================
+// ==================== Expanded Categories ====================
 
-export function toggleCategoryCollapsed(category) {
-    const current = new Set(collapsedCategories.value);
+export function toggleCategoryExpanded(category) {
+    const current = new Set(expandedCategories.value);
     if (current.has(category)) {
         current.delete(category);
     } else {
         current.add(category);
     }
-    collapsedCategories.value = current;
-    saveCollapsedCategories();
+    expandedCategories.value = current;
+    saveExpandedCategories();
 }
 
-export function isCategoryCollapsed(category) {
-    return collapsedCategories.value.has(category);
-}
-
-async function saveCollapsedCategories() {
-    await localforage.setItem(KEYS.COLLAPSED_CATEGORIES, Array.from(collapsedCategories.value));
+async function saveExpandedCategories() {
+    await localforage.setItem(KEYS.EXPANDED_CATEGORIES, Array.from(expandedCategories.value));
 }
 
 // ==================== Persistence ====================
@@ -97,12 +93,12 @@ export async function initializeStore() {
     try {
         isLoading.value = true;
 
-        const [metadata, config, logs, clientId, collapsed] = await Promise.all([
+        const [metadata, config, logs, clientId, expanded] = await Promise.all([
             localforage.getItem(KEYS.METADATA),
             localforage.getItem(KEYS.CONFIG),
             localforage.getItem(KEYS.LOGS),
             getClientId(),
-            localforage.getItem(KEYS.COLLAPSED_CATEGORIES)
+            localforage.getItem(KEYS.EXPANDED_CATEGORIES)
         ]);
 
         batch(() => {
@@ -116,7 +112,7 @@ export async function initializeStore() {
 
             trackerConfig.value = config || [];
             dailyLogs.value = logs || {};
-            collapsedCategories.value = new Set(collapsed || []);
+            expandedCategories.value = new Set(expanded || []);
         });
 
         updateSyncStatus();
