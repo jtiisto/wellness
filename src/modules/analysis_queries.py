@@ -5,6 +5,61 @@ try:
 except ImportError:
     _USER_QUERIES = []
 
+# ---------------------------------------------------------------------------
+# Schema hints for MCP data sources.
+# These are included in prompts so the LLM queries correct table/column names
+# on the first attempt, avoiding trial-and-error retries that cause timeouts.
+# ---------------------------------------------------------------------------
+
+_GARMIN_SCHEMA = (
+    "Schema hints for Garmin MCP (garmy-localdb):\n"
+    "- daily_health_metrics: filter by metric_date (DATE). Columns include: "
+    "sleep_duration_hours, sleep_score, sleep_score_qualifier, resting_heart_rate, "
+    "hrv_last_night_avg, hrv_weekly_avg, hrv_status, body_battery_high, body_battery_low, "
+    "skin_temp_deviation_c, training_readiness_score, training_readiness_level, "
+    "avg_stress_level, average_spo2, total_steps, total_calories, active_calories.\n"
+    "- activities: filter by activity_date (DATE). Columns include: "
+    "activity_name, activity_type, duration_seconds, avg_heart_rate, max_heart_rate, "
+    "training_load, distance_meters, calories, total_sets, total_reps, total_weight_kg.\n"
+    "- exercise_sets: join to activities on activity_id. Columns: "
+    "exercise_category, exercise_name, set_type, repetition_count, weight_grams, "
+    "duration_seconds, set_order.\n"
+    "- activity_splits: join to activities on activity_id. Columns: "
+    "lap_index, duration_seconds, distance_meters, avg_heart_rate, max_heart_rate, "
+    "avg_speed, elevation_gain.\n"
+)
+
+_COACH_SCHEMA = (
+    "Schema hints for Coach MCP (coach-localdb):\n"
+    "- workout_sessions: filter by date (TEXT, YYYY-MM-DD). Columns: "
+    "day_name, location, phase, duration_min.\n"
+    "- session_blocks: join on session_id → workout_sessions.id. Columns: "
+    "position, block_type, title, duration_min, rest_guidance, rounds.\n"
+    "- planned_exercises: join on block_id → session_blocks.id. Columns: "
+    "exercise_key, name, exercise_type, target_sets, target_reps, guidance_note.\n"
+    "- workout_session_logs: filter by date (TEXT, YYYY-MM-DD). Columns: "
+    "pain_discomfort, general_notes. Join on session_id → workout_sessions.id.\n"
+    "- exercise_logs: join on session_log_id → workout_session_logs.id. Columns: "
+    "exercise_key, completed, user_note, duration_min, avg_hr, max_hr.\n"
+    "- set_logs: join on exercise_log_id → exercise_logs.id. Columns: "
+    "set_num, weight, reps, rpe, unit, duration_sec, completed.\n"
+)
+
+_JOURNAL_SCHEMA = (
+    "Schema hints for Journal MCP (journal-localdb):\n"
+    "- entries: filter by date (TEXT, YYYY-MM-DD). Columns: "
+    "tracker_id, value (numeric), completed (0/1).\n"
+    "- trackers: join on entries.tracker_id = trackers.id. Columns: "
+    "name, category, type ('simple' or 'quantifiable').\n"
+)
+
+_PARALLEL_HINT = (
+    "IMPORTANT: After the Garmin sync, issue ALL of the data-fetching tool "
+    "calls listed below in a SINGLE response — do NOT call them one at a "
+    "time. These queries are independent and MUST be executed in parallel "
+    "to avoid timeouts.\n\n"
+)
+
 QUERIES = list(_USER_QUERIES) + [
     {
         "id": "post_workout",
@@ -12,8 +67,15 @@ QUERIES = list(_USER_QUERIES) + [
         "description": "Post-workout analysis of today's session",
         "prompt_template": (
             "IMPORTANT: Always use Garmin MCP tools to sync the latest health and workout data first.\n\n"
-            "Analyze today's workout performance. Use the Coach MCP to get today's "
-            "workout plan and logs, and Garmin MCP for heart rate and activity data from today.\n\n"
+            "Analyze today's workout performance.\n\n"
+            + _COACH_SCHEMA + "\n"
+            + _GARMIN_SCHEMA + "\n"
+            + _PARALLEL_HINT
+            + "Fetch these 2 queries in parallel in a single response:\n"
+            "1. Coach MCP: Get today's workout plan (planned_exercises) and logs "
+            "(exercise_logs, set_logs)\n"
+            "2. Garmin MCP: Get today's activities, exercise_sets, and activity_splits "
+            "for heart rate and performance data\n\n"
             "Provide your analysis as structured markdown with these sections:\n\n"
             "## Workout Summary\n"
             "Brief overview of what was done today vs what was planned.\n\n"
@@ -34,11 +96,18 @@ QUERIES = list(_USER_QUERIES) + [
         "description": "Check readiness before today's workout",
         "prompt_template": (
             "IMPORTANT: Always use Garmin MCP tools to sync the latest health and workout data first.\n\n"
-            "Assess my readiness for today's planned workout. Use:\n"
-            "- Coach MCP: Get today's planned workout\n"
-            "- Garmin MCP: Get last night's sleep data, current HRV, training readiness, "
-            "body battery, resting HR\n"
-            "- Journal MCP: Check recent entries for any noted pain, fatigue, or relevant observations\n\n"
+            "Assess my readiness for today's planned workout.\n\n"
+            + _COACH_SCHEMA + "\n"
+            + _GARMIN_SCHEMA + "\n"
+            + _JOURNAL_SCHEMA + "\n"
+            + _PARALLEL_HINT
+            + "Fetch these 3 queries in parallel in a single response:\n"
+            "1. Coach MCP: Get today's planned workout (workout_sessions, session_blocks, "
+            "planned_exercises)\n"
+            "2. Garmin MCP: Get last night's sleep data, current HRV, training readiness, "
+            "body battery, resting HR from daily_health_metrics\n"
+            "3. Journal MCP: Check recent entries (last 3 days) for any noted pain, fatigue, "
+            "or relevant observations\n\n"
             "Provide your analysis as structured markdown with these sections:\n\n"
             "## Readiness Assessment\n"
             "Overall readiness rating (Good / Moderate / Low) with supporting data points.\n\n"
@@ -57,14 +126,19 @@ QUERIES = list(_USER_QUERIES) + [
         "id": "weekly_review",
         "label": "Weekly Performance Review",
         "description": "Week-to-week performance comparison",
-        "timeout": 600,
+        "timeout": 400,
         "prompt_template": (
             "IMPORTANT: Always use Garmin MCP tools to sync the latest health and workout data first.\n\n"
-            "Analyze my training performance over the past 7 days compared to the previous 7 days. Use:\n"
-            "- Coach MCP: Get workout plans and logs for the past 14 days\n"
-            "- Garmin MCP: Get activity data, sleep trends, HRV trends, training readiness "
-            "for the past 14 days\n"
-            "- Journal MCP: Get entries from the past 14 days for supplement adherence, "
+            "Analyze my training performance over the past 7 days compared to the previous 7 days.\n\n"
+            + _COACH_SCHEMA + "\n"
+            + _GARMIN_SCHEMA + "\n"
+            + _JOURNAL_SCHEMA + "\n"
+            + _PARALLEL_HINT
+            + "Fetch these 3 queries in parallel in a single response:\n"
+            "1. Coach MCP: Get workout plans and logs for the past 14 days "
+            "(workout_sessions, planned_exercises, workout_session_logs, exercise_logs, set_logs)\n"
+            "2. Garmin MCP: Get daily_health_metrics and activities for the past 14 days\n"
+            "3. Journal MCP: Get entries from the past 14 days for supplement adherence, "
             "pain notes, and general observations\n\n"
             "Provide your analysis as structured markdown with these sections:\n\n"
             "## Training Volume\n"

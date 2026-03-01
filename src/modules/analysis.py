@@ -5,6 +5,7 @@ LLM-powered analysis reports with async execution.
 import asyncio
 import json
 import os
+import shutil
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
@@ -32,6 +33,21 @@ DEFAULT_ALLOWED_TOOLS = [
 ]
 
 
+def _find_claude_binary() -> str:
+    """Resolve the claude CLI binary path.
+
+    shutil.which works when the user's PATH is available (dev).
+    Falls back to ~/.local/bin/claude for systemd services with minimal PATH.
+    """
+    found = shutil.which("claude")
+    if found:
+        return found
+    fallback = Path.home() / ".local" / "bin" / "claude"
+    if fallback.exists():
+        return str(fallback)
+    raise FileNotFoundError("claude CLI not found in PATH or ~/.local/bin/claude")
+
+
 async def execute_claude_query(prompt: str, extra_tools: list[str] | None = None, timeout: int | None = None) -> str:
     env = os.environ.copy()
     env["CLAUDECODE"] = ""
@@ -39,7 +55,7 @@ async def execute_claude_query(prompt: str, extra_tools: list[str] | None = None
     allowed = DEFAULT_ALLOWED_TOOLS + (extra_tools or [])
 
     cmd = [
-        "claude", "-p",
+        _find_claude_binary(), "-p",
         "--dangerously-skip-permissions",
         "--allowedTools", *allowed,
         "--output-format", "json",
