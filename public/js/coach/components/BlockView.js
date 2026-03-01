@@ -8,12 +8,15 @@ import { ExerciseItem } from './ExerciseItem.js';
 const html = htm.bind(h);
 
 export function BlockView({ date, block, log, isEditable = true }) {
-    const { block_type, title, rest_guidance, exercises = [] } = block;
+    const { block_type, title, rest_guidance, rounds, exercises = [] } = block;
 
     return html`
         <div class="exercise-block" data-block-type=${block_type}>
             <div class="block-header">
                 <span class="block-title">${title || block_type}</span>
+                ${rounds && html`
+                    <span class="block-rounds">${rounds} rounds</span>
+                `}
                 ${rest_guidance && html`
                     <span class="rest-guidance">${rest_guidance}</span>
                 `}

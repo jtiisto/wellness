@@ -1193,6 +1193,13 @@ body {
     color: var(--accent-primary);
 }
 
+.coach .block-rounds {
+    font-size: var(--font-size-sm);
+    color: var(--accent-primary);
+    font-weight: 500;
+    opacity: 0.8;
+}
+
 .coach .rest-guidance {
     font-size: var(--font-size-sm);
     color: var(--accent-warning);

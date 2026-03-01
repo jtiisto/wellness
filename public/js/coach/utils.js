@@ -71,7 +71,7 @@ export function formatTarget(exercise) {
         case 'weighted_time':
             return `${exercise.target_duration_sec || 60}s`;
         case 'interval':
-            return `${exercise.rounds} rounds`;
+            return exercise.target_duration_min ? `${exercise.target_duration_min} min` : '';
         default:
             return '';
     }
