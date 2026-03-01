@@ -442,6 +442,10 @@ class StatusResponse(BaseModel):
     lastModified: Optional[str] = None
 
 
+class PlansVersionResponse(BaseModel):
+    version: Optional[str] = None
+
+
 # Router with all workout endpoints
 router = APIRouter()
 
@@ -457,6 +461,16 @@ def workout_status():
         if row:
             return StatusResponse(lastModified=row["value"])
         return StatusResponse(lastModified=None)
+
+
+@router.get("/plans-version", response_model=PlansVersionResponse)
+def plans_version():
+    """Return the latest plan modification timestamp (cheap version check)."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT MAX(last_modified) as v FROM workout_sessions")
+        row = cursor.fetchone()
+        return PlansVersionResponse(version=row["v"] if row else None)
 
 
 @router.post("/register")

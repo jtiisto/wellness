@@ -85,6 +85,7 @@ export async function initializeStore() {
         // Try to sync on startup
         if (navigator.onLine) {
             await triggerSync();
+            startPolling();
         }
     } catch (error) {
         console.error('Failed to initialize store:', error);
@@ -199,9 +200,11 @@ if (typeof window !== 'undefined') {
     window.addEventListener('online', () => {
         updateSyncStatus();
         triggerSync();
+        startPolling();
     });
     window.addEventListener('offline', () => {
         updateSyncStatus();
+        stopPolling();
     });
 
     // Re-sync when the app regains focus (e.g., user switches back from
@@ -209,8 +212,44 @@ if (typeof window !== 'undefined') {
     document.addEventListener('visibilitychange', () => {
         if (document.visibilityState === 'visible' && navigator.onLine) {
             triggerSync();
+            startPolling();
+        } else {
+            stopPolling();
         }
     });
+}
+
+// ==================== Plans Version Polling ====================
+
+const lastKnownPlansVersion = signal(null);
+let _pollIntervalId = null;
+const POLL_INTERVAL_MS = 30000;
+
+async function checkPlansVersion() {
+    if (!navigator.onLine || isSyncing.value) return;
+    try {
+        const resp = await fetch(`${API_BASE}/plans-version`);
+        if (!resp.ok) return;
+        const { version } = await resp.json();
+        if (version && version !== lastKnownPlansVersion.value) {
+            lastKnownPlansVersion.value = version;
+            await triggerSync();
+        }
+    } catch {
+        // Silently ignore — polling is best-effort
+    }
+}
+
+function startPolling() {
+    if (_pollIntervalId) return;
+    _pollIntervalId = setInterval(checkPlansVersion, POLL_INTERVAL_MS);
+}
+
+function stopPolling() {
+    if (_pollIntervalId) {
+        clearInterval(_pollIntervalId);
+        _pollIntervalId = null;
+    }
 }
 
 // ==================== Sync ====================
@@ -282,6 +321,14 @@ export async function triggerSync() {
                     ...workoutPlans.value,
                     ...data.plans
                 };
+                // Track the latest plan version for change detection
+                let maxVersion = lastKnownPlansVersion.value;
+                for (const plan of Object.values(data.plans)) {
+                    if (plan._lastModified && (!maxVersion || plan._lastModified > maxVersion)) {
+                        maxVersion = plan._lastModified;
+                    }
+                }
+                if (maxVersion) lastKnownPlansVersion.value = maxVersion;
             }
 
             // Logs: merge (server data is from other devices)

@@ -88,6 +88,7 @@ The Coach module handles workout plans (authored server-side, typically by AI) a
 1. **Client registers** (`POST /register`)
 2. **Sync pull** fetches plans (all or since last sync) and logs (30 days or since last sync) (`GET /sync?client_id=<id>&last_sync_time=<timestamp>`)
 3. **Log upload** sends completed workout logs; the server replaces any existing log for that date (`POST /sync`)
+4. **Plan change detection** via `GET /plans-version`, which returns `MAX(last_modified)` from `workout_sessions`. The client polls this endpoint every 30 seconds while visible and online, triggering a full sync when the version changes. Polling is paused when the app is backgrounded or offline.
 
 **Key design choices:**
 - Plans are read-only from the client's perspective (created via MCP or direct DB access)

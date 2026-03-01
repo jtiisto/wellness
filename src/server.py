@@ -8,7 +8,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 
 from config import get_enabled_modules, get_db_path, PUBLIC_DIR
 
@@ -123,18 +123,27 @@ def serve_manifest():
 
 @app.get("/sw.js")
 def serve_sw():
-    """Serve the service worker from root scope."""
+    """Serve the service worker with version injected for cache invalidation.
+
+    The browser compares the SW file byte-for-byte; injecting SERVER_VERSION
+    ensures every server restart produces a new SW, triggering re-install and
+    fresh precaching of all app shell assets.
+    """
     sw_path = PUBLIC_DIR / "sw.js"
-    if sw_path.exists():
-        return FileResponse(
-            sw_path,
-            media_type="application/javascript",
-            headers={
-                "Cache-Control": "no-cache, must-revalidate",
-                "Service-Worker-Allowed": "/"
-            }
-        )
-    raise HTTPException(status_code=404, detail="sw.js not found")
+    if not sw_path.exists():
+        raise HTTPException(status_code=404, detail="sw.js not found")
+
+    content = sw_path.read_text()
+    content = content.replace("$SERVER_VERSION$", SERVER_VERSION)
+
+    return Response(
+        content=content,
+        media_type="application/javascript",
+        headers={
+            "Cache-Control": "no-cache, must-revalidate",
+            "Service-Worker-Allowed": "/"
+        }
+    )
 
 
 @app.get("/icons/{file_path:path}")

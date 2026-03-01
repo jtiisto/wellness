@@ -5,7 +5,7 @@
 //   app shell   -> network-first with cache fallback
 //   navigation  -> offline fallback to cached /
 
-const CACHE_VERSION = 'wellness-v1';
+const CACHE_VERSION = '$SERVER_VERSION$';
 const CDN_CACHE = 'wellness-cdn-v1';
 
 // App shell assets to precache on install
