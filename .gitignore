@@ -25,5 +25,8 @@ src/modules/user_queries.py
 .vscode/
 .idea/
 
+# Planning docs
+plans/
+
 # OS
 .DS_Store
