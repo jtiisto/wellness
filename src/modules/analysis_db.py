@@ -25,7 +25,8 @@ def init_database(db_path: str):
             query_id TEXT NOT NULL, query_label TEXT NOT NULL,
             prompt_sent TEXT NOT NULL, response_markdown TEXT,
             status TEXT NOT NULL DEFAULT 'pending',
-            created_at TEXT NOT NULL, completed_at TEXT, error_message TEXT)""")
+            created_at TEXT NOT NULL, completed_at TEXT, error_message TEXT,
+            cli_metadata TEXT)""")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_reports_status ON reports(status)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_reports_created ON reports(created_at)")
         conn.commit()
@@ -46,10 +47,10 @@ def update_report_running(db_path, report_id):
         conn.commit()
 
 
-def update_report_completed(db_path, report_id, response_markdown):
+def update_report_completed(db_path, report_id, response_markdown, cli_metadata=None):
     with get_db(db_path) as conn:
-        conn.execute("UPDATE reports SET status='completed', response_markdown=?, completed_at=? WHERE id=?",
-                     (response_markdown, get_utc_now(), report_id))
+        conn.execute("UPDATE reports SET status='completed', response_markdown=?, completed_at=?, cli_metadata=? WHERE id=?",
+                     (response_markdown, get_utc_now(), cli_metadata, report_id))
         conn.commit()
 
 

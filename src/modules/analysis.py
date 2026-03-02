@@ -56,9 +56,10 @@ async def execute_claude_query(prompt: str, extra_tools: list[str] | None = None
 
     cmd = [
         _find_claude_binary(), "-p",
+        "--verbose",
         "--dangerously-skip-permissions",
         "--allowedTools", *allowed,
-        "--output-format", "json",
+        "--output-format", "stream-json",
         "--model", "sonnet",
         prompt,
     ]
@@ -87,11 +88,23 @@ async def execute_claude_query(prompt: str, extra_tools: list[str] | None = None
         raise RuntimeError(f"Claude CLI failed (exit {process.returncode}): {error_text}")
 
     raw = stdout.decode("utf-8", errors="replace").strip()
+
+    # Save full stream for debugging
+    debug_path = Path(_llm_dir) / ".wellness" / "data" / "last_stream.jsonl"
     try:
-        result = json.loads(raw)
-        return result.get("result", raw)
+        debug_path.write_text(raw)
+    except Exception:
+        pass
+
+    # stream-json: last line is the result object
+    lines = [l for l in raw.split("\n") if l.strip()]
+    if not lines:
+        return raw, None
+    try:
+        result = json.loads(lines[-1])
+        return result.get("result", raw), result
     except json.JSONDecodeError:
-        return raw
+        return raw, None
 
 
 async def run_report(report_id: int, prompt: str, extra_tools: list[str] | None = None, timeout: int | None = None):
@@ -99,8 +112,17 @@ async def run_report(report_id: int, prompt: str, extra_tools: list[str] | None 
     db_path = str(_db_path)
     update_report_running(db_path, report_id)
     try:
-        response_text = await execute_claude_query(prompt, extra_tools, timeout)
-        update_report_completed(db_path, report_id, response_text)
+        response_text, cli_meta = await execute_claude_query(prompt, extra_tools, timeout)
+        meta_json = None
+        if cli_meta:
+            meta_json = json.dumps({
+                "duration_ms": cli_meta.get("duration_ms"),
+                "duration_api_ms": cli_meta.get("duration_api_ms"),
+                "num_turns": cli_meta.get("num_turns"),
+                "total_cost_usd": cli_meta.get("total_cost_usd"),
+                "mcp_servers": cli_meta.get("mcp_servers"),
+            })
+        update_report_completed(db_path, report_id, response_text, meta_json)
     except Exception as e:
         update_report_failed(db_path, report_id, str(e))
 
