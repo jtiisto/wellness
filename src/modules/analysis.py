@@ -65,6 +65,7 @@ async def execute_claude_query(prompt: str, extra_tools: list[str] | None = None
 
     process = await asyncio.create_subprocess_exec(
         *cmd,
+        stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         cwd=str(_llm_dir),
