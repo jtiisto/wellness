@@ -209,13 +209,7 @@ body {
     display: flex;
     align-items: center;
     justify-content: center;
-    cursor: pointer;
     border-radius: var(--radius-full);
-    transition: background-color 0.2s;
-}
-
-.sync-indicator:hover {
-    background-color: var(--bg-tertiary);
 }
 
 .sync-dot {

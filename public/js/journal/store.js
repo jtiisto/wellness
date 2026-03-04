@@ -8,6 +8,7 @@ import { getToday, getUtcNow, generateId } from '../shared/utils.js';
 import { compareTimestamps, isWithinLastNDays } from './utils.js';
 import { showNotification } from '../shared/notifications.js';
 import { log as debugLog } from '../shared/debug-log.js';
+import { SyncScheduler } from '../shared/sync-scheduler.js';
 
 // Configure LocalForage
 localforage.config({
@@ -117,6 +118,12 @@ export async function initializeStore() {
         });
 
         updateSyncStatus();
+
+        // Start auto-sync scheduler
+        if (navigator.onLine) {
+            scheduler.requestSync();
+        }
+        scheduler.start();
     } catch (error) {
         console.error('Failed to initialize store:', error);
     } finally {
@@ -160,6 +167,7 @@ export function addTracker(tracker) {
     trackerConfig.value = [...trackerConfig.value, trackerWithVersion];
     markTrackerDirty(tracker.id);
     saveConfig();
+    scheduler.scheduleUpload();
 }
 
 export function updateTracker(trackerId, updates) {
@@ -176,6 +184,7 @@ export function updateTracker(trackerId, updates) {
     });
     markTrackerDirty(trackerId);
     saveConfig();
+    scheduler.scheduleUpload();
 }
 
 export function deleteTracker(trackerId) {
@@ -193,6 +202,7 @@ export function deleteTracker(trackerId) {
     });
     markTrackerDirty(trackerId);
     saveConfig();
+    scheduler.scheduleUpload();
 }
 
 // Actually remove deleted trackers after successful sync
@@ -226,6 +236,7 @@ export function updateEntry(date, trackerId, data) {
     dailyLogs.value = logs;
     markEntryDirty(entryKey);
     saveLogs();
+    scheduler.scheduleUpload();
 }
 
 export function getEntry(date, trackerId) {
@@ -388,6 +399,15 @@ function detectLocalConflicts(serverChanges) {
     return conflicts;
 }
 
+// ==================== Auto-Sync Scheduler ====================
+
+export const scheduler = new SyncScheduler({
+    name: 'journal',
+    syncFn: triggerSync,
+    getIsSyncing: () => isSyncing.value,
+    getHasDirtyData: () => syncMetadata.value.dirtyTrackers.length > 0 || syncMetadata.value.dirtyEntries.length > 0
+});
+
 // ==================== Sync Logic ====================
 
 const API_BASE = '/api/journal/sync';
@@ -490,13 +510,7 @@ export async function triggerSync() {
         console.error('Sync failed:', error);
         debugLog('journal-sync', 'sync error', { error: error.message });
         syncStatus.value = 'red';
-        showNotification({
-            type: 'error',
-            title: 'Sync Failed',
-            message: error.message,
-            duration: 5000
-        });
-        return { success: false, reason: error.message };
+        return { success: false, reason: error.message, error };
     } finally {
         isSyncing.value = false;
     }
@@ -1153,6 +1167,7 @@ export async function forceSync() {
             Object.values(acceptedDays).reduce((sum, d) => sum + Object.keys(d).length, 0);
 
         debugLog('journal-sync', 'force sync complete', { uploaded, accepted, conflicts });
+        scheduler.resetRetry();
         return { success: true, uploaded, accepted, conflicts };
 
     } catch (error) {

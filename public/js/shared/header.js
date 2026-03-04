@@ -8,19 +8,18 @@ import htm from 'htm';
 
 const html = htm.bind(h);
 
-export function SyncIndicator({ status, syncing, onClick, conflictCount = 0 }) {
+export function SyncIndicator({ status, syncing, conflictCount = 0 }) {
     const getTooltip = () => {
         if (syncing) return 'Syncing...';
-        if (status === 'yellow') return `${conflictCount} conflicts to resolve`;
-        if (status === 'red') return 'Pending changes - click to sync';
+        if (status === 'yellow') return `${conflictCount} conflict${conflictCount !== 1 ? 's' : ''} to resolve`;
+        if (status === 'red') return 'Pending changes';
         if (status === 'green') return 'Synced';
-        return 'Click to sync';
+        return 'Offline';
     };
 
     return html`
         <div
             class="sync-indicator ${syncing ? 'syncing' : ''} ${conflictCount > 0 ? 'has-conflicts' : ''}"
-            onClick=${onClick}
             title=${getTooltip()}
         >
             <div class="sync-dot ${status}"></div>

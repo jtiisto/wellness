@@ -6,7 +6,7 @@ import { h } from 'preact';
 import { useState, useEffect } from 'preact/hooks';
 import { effect } from '@preact/signals';
 import htm from 'htm';
-import { currentView, initializeStore, triggerSync } from './store.js';
+import { currentView, initializeStore } from './store.js';
 import { Header } from './components/Header.js';
 import { TrackerList } from './components/TrackerList.js';
 import { ConfigScreen } from './components/ConfigScreen.js';
@@ -29,7 +29,6 @@ export default function JournalView() {
         initializeStore()
             .then(() => {
                 setLoading(false);
-                triggerSync();
             })
             .catch(err => {
                 console.error('Journal init error:', err);

@@ -7,6 +7,7 @@ import localforage from 'localforage';
 import { getToday, getUtcNow, generateId, deepClone } from '../shared/utils.js';
 import { showNotification } from '../shared/notifications.js';
 import { log as debugLog } from '../shared/debug-log.js';
+import { SyncScheduler } from '../shared/sync-scheduler.js';
 
 const API_BASE = '/api/coach';
 
@@ -87,11 +88,11 @@ export async function initializeStore() {
 
         updateSyncStatus();
 
-        // Try to sync on startup
+        // Start auto-sync scheduler
         if (navigator.onLine) {
-            await triggerSync();
-            startPolling();
+            scheduler.requestSync();
         }
+        scheduler.start();
     } catch (error) {
         console.error('Failed to initialize store:', error);
         showNotification({
@@ -137,6 +138,7 @@ export function updateLog(date, exerciseId, data) {
     workoutLogs.value = logs;
     markDateDirty(date);
     saveLogs();
+    scheduler.scheduleUpload();
 }
 
 export function updateSessionFeedback(date, feedback) {
@@ -159,6 +161,7 @@ export function updateSessionFeedback(date, feedback) {
     workoutLogs.value = logs;
     markDateDirty(date);
     saveLogs();
+    scheduler.scheduleUpload();
 }
 
 function markDateDirty(date) {
@@ -201,66 +204,38 @@ function updateSyncStatus() {
     }
 }
 
-// Listen for online/offline events
-if (typeof window !== 'undefined') {
-    window.addEventListener('online', () => {
-        updateSyncStatus();
-        triggerSync();
-        startPolling();
-    });
-    window.addEventListener('offline', () => {
-        updateSyncStatus();
-        stopPolling();
-    });
+// ==================== Auto-Sync Scheduler ====================
 
-    // Re-sync when the app regains focus (e.g., user switches back from
-    // another tab/app after plans were updated via MCP on the backend)
-    document.addEventListener('visibilitychange', () => {
-        if (document.visibilityState === 'visible' && navigator.onLine) {
-            triggerSync();
-            startPolling();
-        } else {
-            stopPolling();
-        }
-    });
-}
+let lastKnownPlansVersion = null;
 
-// ==================== Plans Version Polling ====================
-
-const lastKnownPlansVersion = signal(null);
-let _pollIntervalId = null;
-const POLL_INTERVAL_MS = 30000;
-
-async function checkPlansVersion() {
-    if (!navigator.onLine || isSyncing.value) return;
+async function pollCheckFn() {
+    // Lightweight check: only trigger full sync if plans version changed or we have dirty data
+    if (syncMetadata.value.dirtyDates.length > 0) return true;
     try {
         const resp = await fetch(`${API_BASE}/plans-version`);
-        if (!resp.ok) return;
+        if (!resp.ok) return false;
         const { version } = await resp.json();
-        if (version && version !== lastKnownPlansVersion.value) {
-            lastKnownPlansVersion.value = version;
-            await triggerSync();
+        if (version && version !== lastKnownPlansVersion) {
+            lastKnownPlansVersion = version;
+            return true;
         }
+        return false;
     } catch {
-        // Silently ignore — polling is best-effort
+        return false;
     }
 }
 
-function startPolling() {
-    if (_pollIntervalId) return;
-    _pollIntervalId = setInterval(checkPlansVersion, POLL_INTERVAL_MS);
-}
-
-function stopPolling() {
-    if (_pollIntervalId) {
-        clearInterval(_pollIntervalId);
-        _pollIntervalId = null;
-    }
-}
+export const scheduler = new SyncScheduler({
+    name: 'coach',
+    syncFn: triggerSync,
+    getIsSyncing: () => isSyncing.value,
+    getHasDirtyData: () => syncMetadata.value.dirtyDates.length > 0,
+    pollCheckFn
+});
 
 // ==================== Sync ====================
 
-export async function triggerSync() {
+async function triggerSync() {
     if (!navigator.onLine) {
         syncStatus.value = 'gray';
         return { success: false, reason: 'offline' };
@@ -337,13 +312,13 @@ export async function triggerSync() {
                     ...data.plans
                 };
                 // Track the latest plan version for change detection
-                let maxVersion = lastKnownPlansVersion.value;
+                let maxVersion = lastKnownPlansVersion;
                 for (const plan of Object.values(data.plans)) {
                     if (plan._lastModified && (!maxVersion || plan._lastModified > maxVersion)) {
                         maxVersion = plan._lastModified;
                     }
                 }
-                if (maxVersion) lastKnownPlansVersion.value = maxVersion;
+                if (maxVersion) lastKnownPlansVersion = maxVersion;
             }
 
             // Logs: merge (server data is from other devices)
@@ -394,12 +369,7 @@ export async function triggerSync() {
         console.error('Sync failed:', error);
         debugLog('coach-sync', 'sync error', { error: error.message });
         syncStatus.value = 'red';
-        showNotification({
-            type: 'error',
-            title: 'Sync Failed',
-            message: error.message
-        });
-        return { success: false, reason: error.message };
+        return { success: false, reason: error.message, error };
     } finally {
         isSyncing.value = false;
     }
@@ -487,13 +457,13 @@ export async function forceSync() {
             workoutPlans.value = { ...data.plans };
 
             // Track latest plan version for polling
-            let maxVersion = lastKnownPlansVersion.value;
+            let maxVersion = lastKnownPlansVersion;
             for (const plan of Object.values(data.plans)) {
                 if (plan._lastModified && (!maxVersion || plan._lastModified > maxVersion)) {
                     maxVersion = plan._lastModified;
                 }
             }
-            if (maxVersion) lastKnownPlansVersion.value = maxVersion;
+            if (maxVersion) lastKnownPlansVersion = maxVersion;
 
             // Logs: merged result
             workoutLogs.value = mergedLogs;
@@ -515,6 +485,7 @@ export async function forceSync() {
         syncStatus.value = 'green';
 
         debugLog('coach-sync', 'force sync complete', { uploaded, accepted, skipped });
+        scheduler.resetRetry();
         return { success: true, uploaded, accepted, skipped };
 
     } catch (error) {

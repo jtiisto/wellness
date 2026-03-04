@@ -9,7 +9,6 @@ import {
     currentView,
     syncStatus,
     isSyncing,
-    triggerSync,
     pendingConflicts
 } from '../store.js';
 
@@ -31,15 +30,6 @@ export function Header() {
         return dispose;
     }, []);
 
-    const handleSyncClick = async () => {
-        if (status === 'yellow' && conflictCount > 0) {
-            // Go to conflict resolver if there are conflicts
-            currentView.value = 'conflicts';
-        } else if (!syncing) {
-            await triggerSync();
-        }
-    };
-
     const handleConfigClick = () => {
         if (view === 'conflicts') {
             currentView.value = 'home';
@@ -58,10 +48,10 @@ export function Header() {
 
     const getSyncTooltip = () => {
         if (syncing) return 'Syncing...';
-        if (status === 'yellow') return `${conflictCount} conflicts to resolve`;
-        if (status === 'red') return 'Pending changes - click to sync';
+        if (status === 'yellow') return `${conflictCount} conflict${conflictCount !== 1 ? 's' : ''} to resolve`;
+        if (status === 'red') return 'Pending changes';
         if (status === 'green') return 'Synced';
-        return 'Click to sync';
+        return 'Offline';
     };
 
     return html`
@@ -72,7 +62,6 @@ export function Header() {
             <div class="header-actions">
                 <div
                     class="sync-indicator ${syncing ? 'syncing' : ''} ${status === 'yellow' ? 'has-conflicts' : ''}"
-                    onClick=${handleSyncClick}
                     title=${getSyncTooltip()}
                 >
                     <div class="sync-dot ${status}"></div>

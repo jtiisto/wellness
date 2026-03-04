@@ -15,8 +15,7 @@ import {
     workoutLogs,
     syncStatus,
     isSyncing,
-    initializeStore,
-    triggerSync
+    initializeStore
 } from './store.js';
 import { getToday } from '../shared/utils.js';
 import { Header, SyncIndicator } from '../shared/header.js';
@@ -63,7 +62,6 @@ export default function CoachView() {
                 <${SyncIndicator}
                     status=${status}
                     syncing=${syncing}
-                    onClick=${() => triggerSync()}
                 />
             <//>
             <${CalendarPicker} plans=${plans} logs=${logs} />
