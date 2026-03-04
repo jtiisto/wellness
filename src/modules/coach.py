@@ -16,6 +16,10 @@ from pydantic import BaseModel
 # Module-level DB path, set by create_router()
 _db_path: Path = None
 
+# Sync window: only send plans/logs within this many days to clients.
+# Server retains all data permanently.
+SYNC_WINDOW_DAYS = 60
+
 
 @contextmanager
 def get_db():
@@ -437,6 +441,7 @@ class WorkoutSyncResponse(BaseModel):
     plans: dict[str, Any]
     logs: dict[str, Any]
     serverTime: str
+    earliestDate: str
 
 class StatusResponse(BaseModel):
     lastModified: Optional[str] = None
@@ -501,6 +506,8 @@ def workout_sync_get(
             UPDATE clients SET last_seen_at = ? WHERE id = ?
         """, (now, client_id))
 
+        cutoff = (datetime.now() - timedelta(days=SYNC_WINDOW_DAYS)).strftime("%Y-%m-%d")
+
         if last_sync_time:
             cursor.execute("""
                 SELECT * FROM workout_sessions
@@ -508,7 +515,11 @@ def workout_sync_get(
                 ORDER BY date
             """, (last_sync_time,))
         else:
-            cursor.execute("SELECT * FROM workout_sessions ORDER BY date")
+            cursor.execute("""
+                SELECT * FROM workout_sessions
+                WHERE date >= ?
+                ORDER BY date
+            """, (cutoff,))
 
         session_rows = cursor.fetchall()
         plans = {}
@@ -524,12 +535,11 @@ def workout_sync_get(
                 ORDER BY date
             """, (last_sync_time,))
         else:
-            thirty_days_ago = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
             cursor.execute("""
                 SELECT * FROM workout_session_logs
                 WHERE date >= ?
                 ORDER BY date
-            """, (thirty_days_ago,))
+            """, (cutoff,))
 
         log_rows = cursor.fetchall()
         logs = {}
@@ -539,7 +549,7 @@ def workout_sync_get(
             logs[row["date"]] = log
 
         conn.commit()
-        return WorkoutSyncResponse(plans=plans, logs=logs, serverTime=now)
+        return WorkoutSyncResponse(plans=plans, logs=logs, serverTime=now, earliestDate=cutoff)
 
 
 @router.post("/sync")

@@ -30,3 +30,4 @@ plans/
 
 # OS
 .DS_Store
+bin/backup-databases.sh

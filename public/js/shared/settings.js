@@ -2,17 +2,75 @@
  * Settings Menu - Slide-up modal with app utilities
  */
 import { h } from 'preact';
+import { useState } from 'preact/hooks';
 import htm from 'htm';
 import { downloadDebugLog } from './debug-log.js';
+import { exportAllData } from './data-export.js';
+import { forceSync } from './force-sync.js';
+import { showNotification } from './notifications.js';
 
 const html = htm.bind(h);
 
 export function SettingsMenu({ isOpen, onClose }) {
+    const [isForceSyncing, setIsForceSyncing] = useState(false);
+
     if (!isOpen) return null;
 
     function handleDownloadLog() {
         downloadDebugLog();
         onClose();
+    }
+
+    function handleExportData() {
+        exportAllData();
+        onClose();
+    }
+
+    async function handleForceSync() {
+        if (!navigator.onLine) {
+            showNotification({
+                type: 'error',
+                title: 'Offline',
+                message: 'Force sync requires an internet connection.'
+            });
+            return;
+        }
+
+        if (!confirm('This will reconcile all data with the server. Continue?')) return;
+
+        setIsForceSyncing(true);
+        try {
+            const results = await forceSync();
+
+            const parts = [];
+            if (results.coach?.success) {
+                parts.push(`Coach: ${results.coach.uploaded} uploaded, ${results.coach.accepted} accepted`);
+            } else if (results.coach) {
+                parts.push(`Coach: failed`);
+            }
+            if (results.journal?.success) {
+                parts.push(`Journal: ${results.journal.uploaded} uploaded, ${results.journal.accepted} accepted`);
+            } else if (results.journal) {
+                parts.push(`Journal: failed`);
+            }
+
+            const anySuccess = results.coach?.success || results.journal?.success;
+            showNotification({
+                type: anySuccess ? 'success' : 'error',
+                title: 'Force Sync Complete',
+                message: parts.join('. ') || 'No modules synced.',
+                duration: 5000
+            });
+        } catch (error) {
+            showNotification({
+                type: 'error',
+                title: 'Force Sync Failed',
+                message: error.message
+            });
+        } finally {
+            setIsForceSyncing(false);
+            onClose();
+        }
     }
 
     return html`
@@ -35,6 +93,22 @@ export function SettingsMenu({ isOpen, onClose }) {
                             <line x1="12" y1="15" x2="12" y2="3"/>
                         </svg>
                         Save Debug Log
+                    </button>
+                    <button class="settings-item" onClick=${handleExportData}>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20">
+                            <path d="M12 3v12m0 0l-4-4m4 4l4-4"/>
+                            <path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/>
+                        </svg>
+                        Export All Data
+                    </button>
+                    <button class="settings-item" onClick=${handleForceSync} disabled=${isForceSyncing}>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20">
+                            <path d="M21.5 2v6h-6"/>
+                            <path d="M2.5 22v-6h6"/>
+                            <path d="M2 11.5a10 10 0 0 1 18.8-4.3L21.5 8"/>
+                            <path d="M22 12.5a10 10 0 0 1-18.8 4.3L2.5 16"/>
+                        </svg>
+                        ${isForceSyncing ? 'Syncing...' : 'Force Sync'}
                     </button>
                 </div>
             </div>

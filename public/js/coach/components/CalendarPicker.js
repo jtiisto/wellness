@@ -6,7 +6,7 @@ import { useState, useEffect, useRef } from 'preact/hooks';
 import { effect } from '@preact/signals';
 import htm from 'htm';
 
-import { selectedDate } from '../store.js';
+import { selectedDate, earliestDate } from '../store.js';
 import { getToday, parseLocalDate, formatDateLocal } from '../../shared/utils.js';
 import { isToday, isPast } from '../utils.js';
 
@@ -115,16 +115,21 @@ export function CalendarPicker({ plans, logs }) {
     }, [isOpen]);
 
     const handleDateSelect = (dateStr) => {
+        if (earliestDate.value && dateStr < earliestDate.value) return;
         selectedDate.value = dateStr;
         setIsOpen(false);
     };
 
     const handlePrevMonth = () => {
         setViewDate(prev => {
-            if (prev.month === 0) {
-                return { year: prev.year - 1, month: 11 };
+            const newMonth = prev.month === 0 ? 11 : prev.month - 1;
+            const newYear = prev.month === 0 ? prev.year - 1 : prev.year;
+            if (earliestDate.value) {
+                const lastDayOfMonth = new Date(newYear, newMonth + 1, 0);
+                const lastDateStr = `${newYear}-${String(newMonth + 1).padStart(2, '0')}-${String(lastDayOfMonth.getDate()).padStart(2, '0')}`;
+                if (lastDateStr < earliestDate.value) return prev;
             }
-            return { year: prev.year, month: prev.month - 1 };
+            return { year: newYear, month: newMonth };
         });
     };
 
@@ -163,13 +168,15 @@ export function CalendarPicker({ plans, logs }) {
         for (let i = startPadding - 1; i >= 0; i--) {
             const day = prevMonthDays - i;
             const dateStr = `${prevYear}-${String(prevMonth + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-            days.push({ day, dateStr, isOtherMonth: true });
+            const isDisabled = earliestDate.value && dateStr < earliestDate.value;
+            days.push({ day, dateStr, isOtherMonth: true, isDisabled });
         }
 
         // Current month
         for (let day = 1; day <= totalDays; day++) {
             const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-            days.push({ day, dateStr, isOtherMonth: false });
+            const isDisabled = earliestDate.value && dateStr < earliestDate.value;
+            days.push({ day, dateStr, isOtherMonth: false, isDisabled });
         }
 
         // Next month padding
@@ -179,7 +186,8 @@ export function CalendarPicker({ plans, logs }) {
 
         for (let day = 1; day <= remaining; day++) {
             const dateStr = `${nextYear}-${String(nextMonth + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-            days.push({ day, dateStr, isOtherMonth: true });
+            const isDisabled = earliestDate.value && dateStr < earliestDate.value;
+            days.push({ day, dateStr, isOtherMonth: true, isDisabled });
         }
 
         return days;
@@ -218,7 +226,7 @@ export function CalendarPicker({ plans, logs }) {
                     </div>
 
                     <div class="calendar-days">
-                        ${calendarDays.map(({ day, dateStr, isOtherMonth }) => {
+                        ${calendarDays.map(({ day, dateStr, isOtherMonth, isDisabled }) => {
                             const dayStatus = getWorkoutStatus(dateStr, plans, logs);
                             const isSelected = dateStr === current;
                             const isTodayDate = dateStr === today;
@@ -228,11 +236,12 @@ export function CalendarPicker({ plans, logs }) {
                             if (isSelected) className += ' selected';
                             if (isTodayDate) className += ' today';
                             if (dayStatus) className += ` status-${dayStatus}`;
+                            if (isDisabled) className += ' disabled';
 
                             return html`
                                 <button
                                     class=${className}
-                                    onClick=${() => handleDateSelect(dateStr)}
+                                    onClick=${isDisabled ? undefined : () => handleDateSelect(dateStr)}
                                 >
                                     ${day}
                                 </button>

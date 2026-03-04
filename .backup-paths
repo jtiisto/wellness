@@ -1,0 +1,3 @@
+# Gitignored files to back up to Google Drive after each commit
+src/modules/user_queries.py
+plans/

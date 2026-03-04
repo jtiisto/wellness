@@ -938,3 +938,229 @@ export function getDirtyDays() {
     }
     return Array.from(days);
 }
+
+// ==================== Force Sync ====================
+
+export async function forceSync() {
+    if (!navigator.onLine) {
+        return { success: false, error: 'offline' };
+    }
+    if (isSyncing.value) {
+        return { success: false, error: 'sync already in progress' };
+    }
+
+    isSyncing.value = true;
+
+    try {
+        const clientId = syncMetadata.value.clientId;
+        debugLog('journal-sync', 'force sync start', { clientId });
+
+        // Phase 1: Download full server state
+        const response = await fetch(`${API_BASE}/full`);
+        if (!response.ok) throw new Error('Failed to download server data');
+        const serverData = await response.json();
+
+        // Phase 2a: Compare tracker configs by timestamp
+        const uploadConfig = [];
+        const acceptedConfig = [];
+        const serverConfigMap = new Map((serverData.config || []).map(t => [t.id, t]));
+        const localConfigMap = new Map(trackerConfig.value.map(t => [t.id, t]));
+        const allTrackerIds = new Set([...serverConfigMap.keys(), ...localConfigMap.keys()]);
+
+        for (const id of allTrackerIds) {
+            const local = localConfigMap.get(id);
+            const server = serverConfigMap.get(id);
+
+            if (local && server) {
+                const localTs = local._lastModifiedAt || '';
+                const serverTs = server._lastModifiedAt || '';
+                if (localTs > serverTs) {
+                    uploadConfig.push({ ...local, _baseVersion: server._version || 0 });
+                } else if (serverTs > localTs) {
+                    acceptedConfig.push(server);
+                }
+            } else if (local) {
+                uploadConfig.push({ ...local, _baseVersion: 0 });
+            } else {
+                acceptedConfig.push(server);
+            }
+        }
+
+        // Phase 2b: Compare daily entries by timestamp
+        const uploadDays = {};
+        const acceptedDays = {};
+        const allDates = new Set([
+            ...Object.keys(dailyLogs.value),
+            ...Object.keys(serverData.days || {})
+        ]);
+
+        for (const date of allDates) {
+            const localDay = dailyLogs.value[date] || {};
+            const serverDay = (serverData.days || {})[date] || {};
+            const trackerIds = new Set([...Object.keys(localDay), ...Object.keys(serverDay)]);
+
+            for (const trackerId of trackerIds) {
+                const localEntry = localDay[trackerId];
+                const serverEntry = serverDay[trackerId];
+
+                if (localEntry && serverEntry) {
+                    const localTs = localEntry._lastModifiedAt || '';
+                    const serverTs = serverEntry._lastModifiedAt || '';
+                    if (localTs > serverTs) {
+                        if (!uploadDays[date]) uploadDays[date] = {};
+                        uploadDays[date][trackerId] = {
+                            value: localEntry.value,
+                            completed: localEntry.completed,
+                            _baseVersion: serverEntry._version || 0
+                        };
+                    } else if (serverTs > localTs) {
+                        if (!acceptedDays[date]) acceptedDays[date] = {};
+                        acceptedDays[date][trackerId] = serverEntry;
+                    }
+                } else if (localEntry) {
+                    if (!uploadDays[date]) uploadDays[date] = {};
+                    uploadDays[date][trackerId] = {
+                        value: localEntry.value,
+                        completed: localEntry.completed,
+                        _baseVersion: 0
+                    };
+                } else {
+                    if (!acceptedDays[date]) acceptedDays[date] = {};
+                    acceptedDays[date][trackerId] = serverEntry;
+                }
+            }
+        }
+
+        // Phase 3: Upload client-winning records
+        let conflicts = 0;
+        let appliedVersions = { config: null, days: null };
+
+        if (uploadConfig.length > 0 || Object.keys(uploadDays).length > 0) {
+            const uploadResponse = await fetch(`${API_BASE}/update`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    clientId,
+                    config: uploadConfig,
+                    days: uploadDays
+                })
+            });
+            if (!uploadResponse.ok) throw new Error('Failed to upload data');
+            const result = await uploadResponse.json();
+
+            // Handle TOCTOU conflicts — accept server version
+            if (!result.success && result.conflicts) {
+                conflicts = result.conflicts.length;
+                for (const c of result.conflicts) {
+                    if (c.entityType === 'tracker') {
+                        acceptedConfig.push(c.serverData);
+                    } else {
+                        const [date, trackerId] = c.entityId.split('|');
+                        if (!acceptedDays[date]) acceptedDays[date] = {};
+                        acceptedDays[date][trackerId] = c.serverData;
+                    }
+                }
+            }
+
+            appliedVersions.config = result.appliedConfig || null;
+            appliedVersions.days = result.appliedDays || null;
+        }
+
+        // Apply everything locally
+        batch(() => {
+            // Update uploaded trackers with server-assigned versions
+            let updatedConfig = trackerConfig.value.map(t => {
+                const applied = appliedVersions.config?.find(a => a.id === t.id);
+                if (applied) {
+                    return { ...t, _version: applied._version, _baseVersion: applied._version };
+                }
+                return t;
+            });
+
+            // Apply server-winning trackers
+            for (const serverTracker of acceptedConfig) {
+                const idx = updatedConfig.findIndex(t => t.id === serverTracker.id);
+                const withBase = { ...serverTracker, _baseVersion: serverTracker._version };
+                if (idx >= 0) {
+                    updatedConfig[idx] = withBase;
+                } else {
+                    updatedConfig.push(withBase);
+                }
+            }
+
+            // Handle deleted trackers from server
+            if (serverData.deletedTrackers) {
+                updatedConfig = updatedConfig.filter(t =>
+                    !serverData.deletedTrackers.includes(t.id)
+                );
+            }
+
+            trackerConfig.value = updatedConfig;
+
+            // Update uploaded entries with server-assigned versions
+            const logs = { ...dailyLogs.value };
+            if (appliedVersions.days) {
+                for (const [date, entries] of Object.entries(appliedVersions.days)) {
+                    if (!logs[date]) continue;
+                    for (const [trackerId, applied] of Object.entries(entries)) {
+                        if (logs[date][trackerId]) {
+                            logs[date][trackerId] = {
+                                ...logs[date][trackerId],
+                                _version: applied._version,
+                                _baseVersion: applied._version,
+                                _baseValue: logs[date][trackerId].value,
+                                _baseCompleted: logs[date][trackerId].completed
+                            };
+                        }
+                    }
+                }
+            }
+
+            // Apply server-winning entries
+            for (const [date, entries] of Object.entries(acceptedDays)) {
+                if (!logs[date]) logs[date] = {};
+                for (const [trackerId, serverEntry] of Object.entries(entries)) {
+                    logs[date][trackerId] = {
+                        ...serverEntry,
+                        _baseVersion: serverEntry._version,
+                        _baseValue: serverEntry.value,
+                        _baseCompleted: serverEntry.completed
+                    };
+                }
+            }
+
+            dailyLogs.value = logs;
+
+            // Reset sync metadata
+            syncMetadata.value = {
+                ...syncMetadata.value,
+                dirtyTrackers: [],
+                dirtyEntries: [],
+                dirtyConfig: false,
+                lastServerSyncTime: serverData.serverTime || getUtcNow()
+            };
+        });
+
+        // Clear conflicts, prune deleted trackers, save
+        pendingConflicts.value = [];
+        pruneDeletedTrackers();
+        await Promise.all([saveConfig(), saveLogs(), saveMetadata()]);
+        updateSyncStatus();
+
+        const uploaded = uploadConfig.length +
+            Object.values(uploadDays).reduce((sum, d) => sum + Object.keys(d).length, 0);
+        const accepted = acceptedConfig.length +
+            Object.values(acceptedDays).reduce((sum, d) => sum + Object.keys(d).length, 0);
+
+        debugLog('journal-sync', 'force sync complete', { uploaded, accepted, conflicts });
+        return { success: true, uploaded, accepted, conflicts };
+
+    } catch (error) {
+        console.error('Force sync failed:', error);
+        debugLog('journal-sync', 'force sync error', { error: error.message });
+        syncStatus.value = 'red';
+        return { success: false, error: error.message };
+    } finally {
+        isSyncing.value = false;
+    }
+}

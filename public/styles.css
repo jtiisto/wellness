@@ -1737,6 +1737,11 @@ body {
     background-color: white;
 }
 
+.coach .calendar-day.disabled {
+    opacity: 0.25;
+    pointer-events: none;
+}
+
 .coach .calendar-footer {
     margin-top: var(--spacing-md);
     text-align: center;

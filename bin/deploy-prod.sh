@@ -95,10 +95,11 @@ sync_dir() {
     if [ -d "$src" ]; then
         echo "  Syncing $name..."
         mkdir -p "$dest"
-        rsync -a --delete \
+        rsync -a --delete --filter='protect */' \
             --exclude='__pycache__' \
             --exclude='*.pyc' \
             --exclude='*.pyo' \
+            --exclude='*.db' \
             "$src/" "$dest/"
     fi
 }

@@ -83,6 +83,9 @@ class TestSettingsModule:
     def test_imports_download_debug_log(self):
         assert "downloadDebugLog" in self.source
 
+    def test_imports_export_all_data(self):
+        assert "exportAllData" in self.source
+
     def test_exports_settings_menu(self):
         assert "export function SettingsMenu(" in self.source
 
@@ -99,6 +102,10 @@ class TestSettingsModule:
     def test_has_debug_log_button(self):
         """Should have a button to save the debug log."""
         assert "Save Debug Log" in self.source
+
+    def test_has_export_data_button(self):
+        """Should have a button to export all data."""
+        assert "Export All Data" in self.source
 
 
 # ==================== Coach store instrumentation ====================
@@ -182,6 +189,80 @@ class TestJournalStoreInstrumentation:
         assert "debugLog('journal-sync', 'sync error'" in self.source
 
 
+# ==================== data-export.js ====================
+
+class TestDataExportModule:
+    """Tests for public/js/shared/data-export.js structure."""
+
+    @pytest.fixture(autouse=True)
+    def load_source(self):
+        self.source = (SHARED_DIR / "data-export.js").read_text()
+
+    def test_file_exists(self):
+        assert (SHARED_DIR / "data-export.js").is_file()
+
+    def test_uses_localforage_create_instance(self):
+        """Should use createInstance for read-only access to existing stores."""
+        assert "localforage.createInstance" in self.source
+
+    def test_journal_store_config(self):
+        """Should match the JournalApp store name."""
+        assert "JournalApp" in self.source
+        assert "journal_data" in self.source
+
+    def test_coach_store_config(self):
+        """Should match the CoachApp store name."""
+        assert "CoachApp" in self.source
+        assert "coach_data" in self.source
+
+    def test_exports_export_all_data(self):
+        assert "export async function exportAllData(" in self.source
+
+    def test_reads_journal_keys(self):
+        """Should read all 5 journal store keys."""
+        for key in ['tracker_config', 'daily_logs', 'app_metadata', 'client_id', 'expanded_categories']:
+            assert key in self.source, f"Missing journal key: {key}"
+
+    def test_reads_coach_keys(self):
+        """Should read all 4 coach store keys."""
+        for key in ['workout_plans', 'workout_logs', 'coach_metadata', 'coach_client_id']:
+            assert key in self.source, f"Missing coach key: {key}"
+
+    def test_reads_app_state(self):
+        """Should read the active module from localStorage."""
+        assert "wellness_active_module" in self.source
+
+    def test_does_not_read_debug_log(self):
+        """Debug log should NOT be included in the data export."""
+        assert "DebugLog" not in self.source
+        assert "debug_log" not in self.source
+
+    def test_has_export_version(self):
+        """Should include a version field for forward compatibility."""
+        assert "version" in self.source
+
+    def test_parallel_reads(self):
+        """Should read all stores in parallel with Promise.all."""
+        assert "Promise.all" in self.source
+
+    def test_downloads_json(self):
+        """Should trigger a JSON file download."""
+        assert "application/json" in self.source
+        assert "Blob" in self.source
+
+    def test_filename_format(self):
+        """Filename should use wellness-export prefix."""
+        assert "wellness-export-" in self.source
+
+    def test_error_handling(self):
+        """Should catch errors and return a result object."""
+        assert "catch" in self.source
+
+    def test_read_only(self):
+        """Should never write to any store — only getItem, no setItem."""
+        assert "setItem" not in self.source
+
+
 # ==================== App shell integration ====================
 
 class TestAppShellIntegration:
@@ -261,6 +342,9 @@ class TestDebugLogStaticServing:
         (shared_dir / "settings.js").write_text(
             "export function SettingsMenu() {}\n"
         )
+        (shared_dir / "data-export.js").write_text(
+            "export async function exportAllData() {}\n"
+        )
 
     def test_debug_log_js_served(self, client):
         resp = client.get("/js/shared/debug-log.js")
@@ -280,3 +364,12 @@ class TestDebugLogStaticServing:
     def test_settings_has_settings_menu_export(self, client):
         resp = client.get("/js/shared/settings.js")
         assert "SettingsMenu" in resp.text
+
+    def test_data_export_js_served(self, client):
+        resp = client.get("/js/shared/data-export.js")
+        assert resp.status_code == 200
+        assert "javascript" in resp.headers["content-type"]
+
+    def test_data_export_has_export_function(self, client):
+        resp = client.get("/js/shared/data-export.js")
+        assert "exportAllData" in resp.text

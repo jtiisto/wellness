@@ -43,6 +43,9 @@ export const syncMetadata = signal({
     dirtyDates: []  // Array of dates with unsaved logs
 });
 
+// Server-driven sync window boundary (set on each sync response)
+export const earliestDate = signal(null);
+
 // UI state
 export const syncStatus = signal('gray');  // 'green' | 'red' | 'gray'
 export const migraineProtocolActive = signal(false);
@@ -77,6 +80,7 @@ export async function initializeStore() {
                 lastServerSyncTime: metadata?.lastServerSyncTime || null,
                 dirtyDates: metadata?.dirtyDates || []
             };
+            earliestDate.value = metadata?.earliestDate || null;
             workoutPlans.value = plans || {};
             workoutLogs.value = logs || {};
         });
@@ -180,7 +184,8 @@ async function saveLogs() {
 async function saveMetadata() {
     await localforage.setItem(KEYS.METADATA, {
         lastServerSyncTime: syncMetadata.value.lastServerSyncTime,
-        dirtyDates: syncMetadata.value.dirtyDates
+        dirtyDates: syncMetadata.value.dirtyDates,
+        earliestDate: earliestDate.value
     });
 }
 
@@ -353,11 +358,30 @@ export async function triggerSync() {
                 workoutLogs.value = currentLogs;
             }
 
-            // Update sync time
+            // Update sync time and earliest date
+            if (data.earliestDate) {
+                earliestDate.value = data.earliestDate;
+            }
             syncMetadata.value = {
                 ...syncMetadata.value,
                 lastServerSyncTime: data.serverTime
             };
+
+            // Prune plans and logs older than the server's sync window
+            if (earliestDate.value) {
+                const cutoff = earliestDate.value;
+                const prunedPlans = {};
+                for (const [date, plan] of Object.entries(workoutPlans.value)) {
+                    if (date >= cutoff) prunedPlans[date] = plan;
+                }
+                workoutPlans.value = prunedPlans;
+
+                const prunedLogs = {};
+                for (const [date, log] of Object.entries(workoutLogs.value)) {
+                    if (date >= cutoff) prunedLogs[date] = log;
+                }
+                workoutLogs.value = prunedLogs;
+            }
         });
 
         await Promise.all([savePlans(), saveLogs(), saveMetadata()]);
@@ -376,6 +400,128 @@ export async function triggerSync() {
             message: error.message
         });
         return { success: false, reason: error.message };
+    } finally {
+        isSyncing.value = false;
+    }
+}
+
+// ==================== Force Sync ====================
+
+export async function forceSync() {
+    if (!navigator.onLine) {
+        return { success: false, error: 'offline' };
+    }
+    if (isSyncing.value) {
+        return { success: false, error: 'sync already in progress' };
+    }
+
+    isSyncing.value = true;
+
+    try {
+        const clientId = syncMetadata.value.clientId;
+        debugLog('coach-sync', 'force sync start', { clientId });
+
+        // Phase 1: Download full server state (no last_sync_time)
+        const response = await fetch(`${API_BASE}/sync?client_id=${clientId}`);
+        if (!response.ok) throw new Error('Failed to download server data');
+        const data = await response.json();
+
+        // Phase 2: Compare logs by timestamp
+        const uploadLogs = {};
+        const mergedLogs = {};
+        let uploaded = 0, accepted = 0, skipped = 0;
+
+        const allDates = new Set([
+            ...Object.keys(workoutLogs.value),
+            ...Object.keys(data.logs)
+        ]);
+
+        for (const date of allDates) {
+            const localLog = workoutLogs.value[date];
+            const serverLog = data.logs[date];
+
+            // Skip local-only logs outside server's sync window
+            if (!serverLog && data.earliestDate && date < data.earliestDate) {
+                mergedLogs[date] = localLog;
+                skipped++;
+                continue;
+            }
+
+            if (localLog && serverLog) {
+                const localTs = localLog._lastModifiedAt || '';
+                const serverTs = serverLog._lastModified || '';
+                if (localTs > serverTs) {
+                    uploadLogs[date] = localLog;
+                    mergedLogs[date] = localLog;
+                    uploaded++;
+                } else if (serverTs > localTs) {
+                    mergedLogs[date] = serverLog;
+                    accepted++;
+                } else {
+                    mergedLogs[date] = localLog;
+                    skipped++;
+                }
+            } else if (localLog) {
+                uploadLogs[date] = localLog;
+                mergedLogs[date] = localLog;
+                uploaded++;
+            } else {
+                mergedLogs[date] = serverLog;
+                accepted++;
+            }
+        }
+
+        // Phase 3: Upload client-winning logs
+        if (Object.keys(uploadLogs).length > 0) {
+            const uploadResponse = await fetch(`${API_BASE}/sync`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ clientId, logs: uploadLogs })
+            });
+            if (!uploadResponse.ok) throw new Error('Failed to upload logs');
+        }
+
+        // Apply merged state locally
+        batch(() => {
+            // Plans: server-authoritative
+            workoutPlans.value = { ...data.plans };
+
+            // Track latest plan version for polling
+            let maxVersion = lastKnownPlansVersion.value;
+            for (const plan of Object.values(data.plans)) {
+                if (plan._lastModified && (!maxVersion || plan._lastModified > maxVersion)) {
+                    maxVersion = plan._lastModified;
+                }
+            }
+            if (maxVersion) lastKnownPlansVersion.value = maxVersion;
+
+            // Logs: merged result
+            workoutLogs.value = mergedLogs;
+
+            // Update earliest date from server
+            if (data.earliestDate) {
+                earliestDate.value = data.earliestDate;
+            }
+
+            // Reset sync metadata
+            syncMetadata.value = {
+                ...syncMetadata.value,
+                dirtyDates: [],
+                lastServerSyncTime: data.serverTime
+            };
+        });
+
+        await Promise.all([savePlans(), saveLogs(), saveMetadata()]);
+        syncStatus.value = 'green';
+
+        debugLog('coach-sync', 'force sync complete', { uploaded, accepted, skipped });
+        return { success: true, uploaded, accepted, skipped };
+
+    } catch (error) {
+        console.error('Force sync failed:', error);
+        debugLog('coach-sync', 'force sync error', { error: error.message });
+        syncStatus.value = 'red';
+        return { success: false, error: error.message };
     } finally {
         isSyncing.value = false;
     }
