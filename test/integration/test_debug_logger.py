@@ -1,0 +1,282 @@
+"""Integration tests for the client-side debug logger feature.
+
+Validates that:
+- debug-log.js and settings.js exist with correct structure
+- Coach and journal stores import and call debugLog
+- App shell integrates the settings menu
+- CSS includes settings styles
+"""
+import re
+from pathlib import Path
+
+import pytest
+
+PUBLIC_DIR = Path(__file__).parent.parent.parent / "public"
+JS_DIR = PUBLIC_DIR / "js"
+SHARED_DIR = JS_DIR / "shared"
+
+
+# ==================== debug-log.js ====================
+
+class TestDebugLogModule:
+    """Tests for public/js/shared/debug-log.js structure."""
+
+    @pytest.fixture(autouse=True)
+    def load_source(self):
+        self.source = (SHARED_DIR / "debug-log.js").read_text()
+
+    def test_file_exists(self):
+        assert (SHARED_DIR / "debug-log.js").is_file()
+
+    def test_uses_localforage_create_instance(self):
+        """Should use createInstance to avoid conflicts with other stores."""
+        assert "localforage.createInstance" in self.source
+
+    def test_store_name_is_debug_log(self):
+        """Store should use 'debug_log' storeName."""
+        assert "debug_log" in self.source
+
+    def test_exports_log_function(self):
+        assert "export async function log(" in self.source
+
+    def test_exports_get_debug_log(self):
+        assert "export async function getDebugLog(" in self.source
+
+    def test_exports_download_debug_log(self):
+        assert "export async function downloadDebugLog(" in self.source
+
+    def test_has_ttl_pruning(self):
+        """Entries older than TTL should be pruned on write."""
+        assert "TTL_MS" in self.source or "TTL" in self.source
+        # Check for filtering logic
+        assert ".filter(" in self.source
+
+    def test_has_max_entries_cap(self):
+        """Should cap entries at a maximum."""
+        assert "MAX_ENTRIES" in self.source or "500" in self.source
+
+    def test_log_never_throws(self):
+        """log() should catch errors to avoid breaking the app."""
+        assert "catch" in self.source
+
+    def test_download_creates_blob(self):
+        """Download should create a Blob for file download."""
+        assert "Blob" in self.source
+
+    def test_download_filename_format(self):
+        """Download filename should include 'debug-log' prefix."""
+        assert "debug-log-" in self.source
+
+
+# ==================== settings.js ====================
+
+class TestSettingsModule:
+    """Tests for public/js/shared/settings.js structure."""
+
+    @pytest.fixture(autouse=True)
+    def load_source(self):
+        self.source = (SHARED_DIR / "settings.js").read_text()
+
+    def test_file_exists(self):
+        assert (SHARED_DIR / "settings.js").is_file()
+
+    def test_imports_download_debug_log(self):
+        assert "downloadDebugLog" in self.source
+
+    def test_exports_settings_menu(self):
+        assert "export function SettingsMenu(" in self.source
+
+    def test_uses_modal_overlay(self):
+        """Should reuse existing modal-overlay styling."""
+        assert "modal-overlay" in self.source
+
+    def test_uses_modal_content(self):
+        assert "modal-content" in self.source
+
+    def test_has_close_button(self):
+        assert "onClose" in self.source
+
+    def test_has_debug_log_button(self):
+        """Should have a button to save the debug log."""
+        assert "Save Debug Log" in self.source
+
+
+# ==================== Coach store instrumentation ====================
+
+class TestCoachStoreInstrumentation:
+    """Tests that coach/store.js has debug log instrumentation."""
+
+    @pytest.fixture(autouse=True)
+    def load_source(self):
+        self.source = (JS_DIR / "coach" / "store.js").read_text()
+
+    def test_imports_debug_log(self):
+        assert "from '../shared/debug-log.js'" in self.source
+
+    def test_imports_as_debug_log(self):
+        """Should import log as debugLog to avoid name collision."""
+        assert "log as debugLog" in self.source
+
+    def test_logs_sync_start(self):
+        assert "debugLog('coach-sync', 'sync start'" in self.source
+
+    def test_logs_upload_attempt(self):
+        assert "debugLog('coach-sync', 'upload attempt'" in self.source
+
+    def test_logs_upload_failure(self):
+        assert "debugLog('coach-sync', 'upload failure'" in self.source
+
+    def test_logs_upload_success(self):
+        assert "debugLog('coach-sync', 'upload success'" in self.source
+
+    def test_logs_download_attempt(self):
+        assert "debugLog('coach-sync', 'download attempt'" in self.source
+
+    def test_logs_download_success(self):
+        assert "debugLog('coach-sync', 'download success'" in self.source
+
+    def test_logs_server_data_applied(self):
+        assert "debugLog('coach-sync', 'server data applied'" in self.source
+
+    def test_logs_sync_error(self):
+        assert "debugLog('coach-sync', 'sync error'" in self.source
+
+
+# ==================== Journal store instrumentation ====================
+
+class TestJournalStoreInstrumentation:
+    """Tests that journal/store.js has debug log instrumentation."""
+
+    @pytest.fixture(autouse=True)
+    def load_source(self):
+        self.source = (JS_DIR / "journal" / "store.js").read_text()
+
+    def test_imports_debug_log(self):
+        assert "from '../shared/debug-log.js'" in self.source
+
+    def test_imports_as_debug_log(self):
+        assert "log as debugLog" in self.source
+
+    def test_logs_sync_start(self):
+        assert "debugLog('journal-sync', 'sync start'" in self.source
+
+    def test_logs_delta_sync(self):
+        assert "debugLog('journal-sync', 'delta sync'" in self.source
+
+    def test_logs_full_sync(self):
+        assert "debugLog('journal-sync', 'full sync" in self.source
+
+    def test_logs_server_data_received(self):
+        assert "debugLog('journal-sync', 'server data received'" in self.source
+
+    def test_logs_conflict_detection(self):
+        assert "debugLog('journal-sync', 'conflict detection'" in self.source
+
+    def test_logs_auto_merge(self):
+        assert "debugLog('journal-sync', 'auto-merge applied'" in self.source
+
+    def test_logs_upload_attempt(self):
+        assert "debugLog('journal-sync', 'upload attempt'" in self.source
+
+    def test_logs_sync_error(self):
+        assert "debugLog('journal-sync', 'sync error'" in self.source
+
+
+# ==================== App shell integration ====================
+
+class TestAppShellIntegration:
+    """Tests that app.js integrates the settings menu."""
+
+    @pytest.fixture(autouse=True)
+    def load_source(self):
+        self.source = (JS_DIR / "app.js").read_text()
+
+    def test_imports_settings_menu(self):
+        assert "import { SettingsMenu }" in self.source
+
+    def test_has_settings_signal(self):
+        assert "settingsOpen" in self.source
+
+    def test_has_settings_icon(self):
+        """Should have a gear/settings icon in ICONS map."""
+        assert "settings:" in self.source
+
+    def test_has_settings_button_in_navbar(self):
+        assert "settings-btn" in self.source
+
+    def test_renders_settings_menu(self):
+        assert "SettingsMenu" in self.source
+
+
+# ==================== CSS ====================
+
+class TestSettingsCss:
+    """Tests that styles.css includes settings menu styles."""
+
+    @pytest.fixture(autouse=True)
+    def load_source(self):
+        self.source = (PUBLIC_DIR / "styles.css").read_text()
+
+    def test_has_settings_btn_style(self):
+        assert ".settings-btn" in self.source
+
+    def test_settings_btn_fixed_width(self):
+        """Settings button should not flex-grow with module buttons."""
+        # Find the settings-btn rule and check for flex: 0
+        match = re.search(r'\.settings-btn\s*\{[^}]+\}', self.source)
+        assert match is not None
+        assert "flex: 0" in match.group()
+
+    def test_has_settings_menu_style(self):
+        assert ".settings-menu" in self.source
+
+    def test_has_settings_list_style(self):
+        assert ".settings-list" in self.source
+
+    def test_has_settings_item_style(self):
+        assert ".settings-item" in self.source
+
+    def test_settings_item_has_tap_target(self):
+        """Settings items should meet minimum tap target size."""
+        match = re.search(r'\.settings-item\s*\{[^}]+\}', self.source)
+        assert match is not None
+        assert "tap-target" in match.group() or "44px" in match.group()
+
+
+# ==================== Static file serving ====================
+
+class TestDebugLogStaticServing:
+    """Tests that the new JS files are served correctly."""
+
+    @pytest.fixture(autouse=True)
+    def setup_test_files(self, test_app, tmp_path):
+        """Add new shared JS files to the test public directory."""
+        shared_dir = tmp_path / "public" / "js" / "shared"
+        shared_dir.mkdir(parents=True, exist_ok=True)
+        (shared_dir / "debug-log.js").write_text(
+            "export async function log() {}\n"
+            "export async function getDebugLog() { return []; }\n"
+            "export async function downloadDebugLog() {}\n"
+        )
+        (shared_dir / "settings.js").write_text(
+            "export function SettingsMenu() {}\n"
+        )
+
+    def test_debug_log_js_served(self, client):
+        resp = client.get("/js/shared/debug-log.js")
+        assert resp.status_code == 200
+        assert "javascript" in resp.headers["content-type"]
+
+    def test_settings_js_served(self, client):
+        resp = client.get("/js/shared/settings.js")
+        assert resp.status_code == 200
+        assert "javascript" in resp.headers["content-type"]
+
+    def test_debug_log_has_log_export(self, client):
+        resp = client.get("/js/shared/debug-log.js")
+        assert "export" in resp.text
+        assert "log" in resp.text
+
+    def test_settings_has_settings_menu_export(self, client):
+        resp = client.get("/js/shared/settings.js")
+        assert "SettingsMenu" in resp.text

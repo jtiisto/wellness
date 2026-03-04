@@ -1993,3 +1993,41 @@ body {
 
 /* Analysis Utility classes */
 .analysis .mt-md { margin-top: var(--spacing-md); }
+
+/* ==================== Settings Menu ==================== */
+
+.settings-btn {
+    flex: 0 0 auto;
+    width: 56px;
+}
+
+.settings-menu {
+    max-height: 50vh;
+}
+
+.settings-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-sm);
+}
+
+.settings-item {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-md);
+    width: 100%;
+    padding: var(--spacing-md);
+    min-height: var(--tap-target);
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    color: var(--text-primary);
+    font-size: var(--font-size-md);
+    font-family: inherit;
+    cursor: pointer;
+    transition: background-color 0.2s;
+}
+
+.settings-item:hover {
+    background: var(--bg-tertiary);
+}

@@ -6,6 +6,7 @@ import { signal, batch } from '@preact/signals';
 import localforage from 'localforage';
 import { getToday, getUtcNow, generateId, deepClone } from '../shared/utils.js';
 import { showNotification } from '../shared/notifications.js';
+import { log as debugLog } from '../shared/debug-log.js';
 
 const API_BASE = '/api/coach';
 
@@ -269,6 +270,7 @@ export async function triggerSync() {
     try {
         const meta = syncMetadata.value;
         const clientId = meta.clientId;
+        debugLog('coach-sync', 'sync start', { clientId, dirtyDates: meta.dirtyDates.length, lastServerSyncTime: meta.lastServerSyncTime });
 
         // Step 1: Upload dirty logs first
         if (meta.dirtyDates.length > 0) {
@@ -278,6 +280,8 @@ export async function triggerSync() {
                     logsToUpload[date] = workoutLogs.value[date];
                 }
             });
+
+            debugLog('coach-sync', 'upload attempt', { dates: meta.dirtyDates, logCount: Object.keys(logsToUpload).length });
 
             const uploadResponse = await fetch(`${API_BASE}/sync`, {
                 method: 'POST',
@@ -289,8 +293,11 @@ export async function triggerSync() {
             });
 
             if (!uploadResponse.ok) {
+                debugLog('coach-sync', 'upload failure', { status: uploadResponse.status });
                 throw new Error('Failed to upload logs');
             }
+
+            debugLog('coach-sync', 'upload success');
 
             // Clear dirty state after successful upload
             syncMetadata.value = {
@@ -306,12 +313,15 @@ export async function triggerSync() {
             params.append('last_sync_time', meta.lastServerSyncTime);
         }
 
+        debugLog('coach-sync', 'download attempt', { params: params.toString() });
+
         const downloadResponse = await fetch(`${API_BASE}/sync?${params}`);
         if (!downloadResponse.ok) {
             throw new Error('Failed to download data');
         }
 
         const data = await downloadResponse.json();
+        debugLog('coach-sync', 'download success', { plans: Object.keys(data.plans).length, logs: Object.keys(data.logs).length, serverTime: data.serverTime });
 
         // Step 3: Apply server data
         batch(() => {
@@ -351,12 +361,14 @@ export async function triggerSync() {
         });
 
         await Promise.all([savePlans(), saveLogs(), saveMetadata()]);
+        debugLog('coach-sync', 'server data applied', { plansUpdated: Object.keys(data.plans).length, logsMerged: Object.keys(data.logs).length });
 
         syncStatus.value = 'green';
         return { success: true };
 
     } catch (error) {
         console.error('Sync failed:', error);
+        debugLog('coach-sync', 'sync error', { error: error.message });
         syncStatus.value = 'red';
         showNotification({
             type: 'error',

@@ -7,6 +7,7 @@ import localforage from 'localforage';
 import { getToday, getUtcNow, generateId } from '../shared/utils.js';
 import { compareTimestamps, isWithinLastNDays } from './utils.js';
 import { showNotification } from '../shared/notifications.js';
+import { log as debugLog } from '../shared/debug-log.js';
 
 // Configure LocalForage
 localforage.config({
@@ -403,10 +404,12 @@ export async function triggerSync() {
     try {
         const meta = syncMetadata.value;
         const clientId = meta.clientId;
+        debugLog('journal-sync', 'sync start', { clientId, dirtyTrackers: meta.dirtyTrackers.length, dirtyEntries: meta.dirtyEntries.length, lastServerSyncTime: meta.lastServerSyncTime });
 
         // Step 2: Fetch server changes
         let serverData;
         if (meta.lastServerSyncTime) {
+            debugLog('journal-sync', 'delta sync', { since: meta.lastServerSyncTime });
             // Delta sync - only get changes since last sync
             const deltaResponse = await fetch(
                 `${API_BASE}/delta?since=${encodeURIComponent(meta.lastServerSyncTime)}&client_id=${clientId}`
@@ -416,6 +419,7 @@ export async function triggerSync() {
             }
             serverData = await deltaResponse.json();
         } else {
+            debugLog('journal-sync', 'full sync (first time)');
             // Full sync for first time
             const fullResponse = await fetch(`${API_BASE}/full`);
             if (!fullResponse.ok) {
@@ -424,14 +428,19 @@ export async function triggerSync() {
             serverData = await fullResponse.json();
         }
 
+        debugLog('journal-sync', 'server data received', { configCount: serverData.config ? Object.keys(serverData.config).length : 0, daysCount: serverData.days ? Object.keys(serverData.days).length : 0 });
+
         // Step 3: Detect conflicts locally
         const localConflicts = detectLocalConflicts(serverData);
         const autoResolvable = localConflicts.filter(c => c.autoResolvable);
         const needsUserInput = localConflicts.filter(c => !c.autoResolvable);
 
+        debugLog('journal-sync', 'conflict detection', { autoResolvable: autoResolvable.length, needsUserInput: needsUserInput.length });
+
         // Step 4: Apply auto-resolvable conflicts
         if (autoResolvable.length > 0) {
             applyAutoMergedConflicts(autoResolvable);
+            debugLog('journal-sync', 'auto-merge applied', { count: autoResolvable.length });
             showNotification({
                 type: 'info',
                 title: 'Data Merged',
@@ -465,10 +474,13 @@ export async function triggerSync() {
         // Step 7: Upload local changes
         const hasLocalChanges = meta.dirtyTrackers.length > 0 || meta.dirtyEntries.length > 0;
         if (hasLocalChanges) {
+            debugLog('journal-sync', 'upload attempt', { dirtyTrackers: meta.dirtyTrackers.length, dirtyEntries: meta.dirtyEntries.length });
             const uploadResult = await uploadToServer();
             if (!uploadResult.success) {
+                debugLog('journal-sync', 'upload failure', { reason: uploadResult.reason });
                 return uploadResult;
             }
+            debugLog('journal-sync', 'upload success');
         }
 
         syncStatus.value = 'green';
@@ -476,6 +488,7 @@ export async function triggerSync() {
 
     } catch (error) {
         console.error('Sync failed:', error);
+        debugLog('journal-sync', 'sync error', { error: error.message });
         syncStatus.value = 'red';
         showNotification({
             type: 'error',
