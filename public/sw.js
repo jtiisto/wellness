@@ -18,6 +18,11 @@ const APP_SHELL_URLS = [
   '/js/shared/header.js',
   '/js/shared/notifications.js',
   '/js/shared/utils.js',
+  '/js/shared/settings.js',
+  '/js/shared/sync-scheduler.js',
+  '/js/shared/debug-log.js',
+  '/js/shared/force-sync.js',
+  '/js/shared/data-export.js',
   // Journal module
   '/js/journal/JournalView.js',
   '/js/journal/store.js',
