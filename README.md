@@ -5,13 +5,13 @@ A personal health and fitness dashboard that unifies daily habit tracking, worko
 ## Modules
 
 ### Journal
-Daily habit and health tracking with multi-device sync. Track supplements, habits, metrics, and any custom data points. Features conflict-aware synchronization with per-record versioning so multiple devices stay in sync without data loss.
+Daily habit and health tracking with multi-device sync. Track supplements, habits, metrics, and any custom data points. Features conflict-aware synchronization with per-record versioning so multiple devices stay in sync without data loss. Sync runs automatically via a shared scheduler that responds to edits, network changes, and page visibility.
 
 ### Coach
-Workout planning and logging. Supports structured workout plans with blocks (warmup, strength, cardio), set-level tracking (weight, reps, RPE), and multiple exercise types including strength, cardio, duration, and checklists. Plans are managed server-side; logs sync from clients using last-write-wins.
+Workout planning and logging. Supports structured workout plans with blocks (warmup, strength, cardio), set-level tracking (weight, reps, RPE), and multiple exercise types including strength, cardio, duration, and checklists. Plans are managed server-side; logs sync from clients using last-write-wins. Automatic sync with debounced uploads and periodic polling for plan changes.
 
 ### Analysis
-LLM-powered health insights. Submits structured prompts to Claude Code CLI with access to all data via MCP servers. Includes pre-built queries for post-workout analysis, pre-workout readiness checks, and weekly performance reviews. Custom queries can be added in `src/modules/user_queries.py` (gitignored) for personal or sensitive analysis like migraine trigger assessments. Reports are generated asynchronously and rendered as markdown.
+LLM-powered health insights. Submits structured prompts to Claude Code CLI with access to all data via MCP servers. Includes pre-built queries for post-workout analysis, pre-workout readiness checks, and weekly performance reviews. Custom queries can be added in `src/modules/user_queries.py` (gitignored) for personal or sensitive analysis like migraine trigger assessments. Reports are generated asynchronously using stream-json output and rendered as markdown, with CLI execution metadata (cost, duration, turns) tracked per report.
 
 ## Tech Stack
 
@@ -45,13 +45,17 @@ wellness/
 │   └── modules/            # Journal, Coach, Analysis routers
 ├── public/                 # PWA frontend (no build step)
 │   ├── js/                 # Preact components per module
+│   │   └── shared/         # Sync scheduler, settings, debug log, data export
 │   ├── styles.css          # Dark theme, responsive layout
 │   ├── sw.js               # Service worker for offline
 │   └── manifest.json       # PWA manifest
 ├── mcp/                    # MCP servers for AI data access
 │   ├── journal_mcp/        # Read-only journal queries
 │   └── coach_mcp/          # Read/write workout data
-├── test/                   # Pytest suite (unit, integration, e2e)
+├── test/                   # Pytest suite
+│   ├── unit/               # Unit tests
+│   ├── integration/        # Integration tests
+│   └── e2e_browser/        # Playwright E2E browser tests
 ├── bin/                    # Server control & deployment scripts
 ├── data/                   # SQLite databases (runtime)
 └── requirements.txt

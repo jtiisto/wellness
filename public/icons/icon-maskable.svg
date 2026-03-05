@@ -1,9 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <!-- Background fills entire canvas for maskable safe zone -->
-  <rect width="512" height="512" fill="#1a1a2e"/>
-  <!-- Content scaled to ~80% and centered for maskable safe area -->
-  <rect x="102" y="102" width="128" height="128" rx="18" fill="#e94560"/>
-  <rect x="282" y="102" width="128" height="128" rx="18" fill="#0f3460"/>
-  <rect x="102" y="282" width="128" height="128" rx="18" fill="#0f3460"/>
-  <rect x="282" y="282" width="128" height="128" rx="18" fill="#e94560" opacity="0.5"/>
-</svg>

@@ -18,7 +18,13 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 2. Start the server
+### 2. Install Playwright browsers (for E2E tests)
+
+```bash
+playwright install chromium
+```
+
+### 3. Start the server
 
 ```bash
 ./bin/server.sh start
@@ -26,14 +32,15 @@ pip install -r requirements.txt
 
 The server starts on port 9000. Open `http://localhost:9000` in a browser or add it to your phone's home screen as a PWA.
 
-### 3. Run tests
+### 4. Run tests
 
 ```bash
-pytest                  # All tests
-pytest test/journal/    # Journal tests only
-pytest -m unit          # Unit tests only
-pytest -m integration   # Integration tests only
-pytest -m e2e           # End-to-end tests only
+pytest                      # All tests (except E2E browser)
+pytest test/journal/        # Journal tests only
+pytest -m unit              # Unit tests only
+pytest -m integration       # Integration tests only
+pytest -m e2e               # End-to-end tests only
+pytest test/e2e_browser/    # Playwright E2E browser tests
 ```
 
 ## Production Deployment

@@ -68,11 +68,11 @@ class TestServeJs:
 
 
 class TestServeIcons:
-    def test_returns_svg_icon(self, client):
-        """GET /icons/icon.svg should return SVG."""
-        resp = client.get("/icons/icon.svg")
+    def test_returns_png_icon(self, client):
+        """GET /icons/icon-192.png should return PNG."""
+        resp = client.get("/icons/icon-192.png")
         assert resp.status_code == 200
-        assert "svg" in resp.headers["content-type"]
+        assert "png" in resp.headers["content-type"]
 
     def test_missing_icon_returns_404(self, client):
         """Missing icon files should return 404."""
@@ -81,7 +81,7 @@ class TestServeIcons:
 
     def test_immutable_cache(self, client):
         """Icons should have immutable cache header."""
-        resp = client.get("/icons/icon.svg")
+        resp = client.get("/icons/icon-192.png")
         assert "immutable" in resp.headers.get("cache-control", "")
 
 

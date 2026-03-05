@@ -41,7 +41,7 @@ Wellness is a modular, self-hosted health application with three independent mod
 
 **Module isolation.** Each module has its own database, API prefix, frontend state, and sync logic. Modules share only the FastAPI process, static file serving, and frontend shell (tab navigation). A module can be disabled without affecting others via `HEALTH_DISABLED_MODULES`.
 
-**Offline-first.** The Journal and Coach frontends persist all data locally in IndexedDB via LocalForage. The app works fully offline; sync happens opportunistically when the server is reachable.
+**Offline-first.** The Journal and Coach frontends persist all data locally in IndexedDB via LocalForage. The app works fully offline; sync happens automatically when the server is reachable.
 
 **No build step.** The frontend uses Preact with HTM (tagged template literals) instead of JSX. ES6 modules are loaded directly by the browser with no bundler, transpiler, or build pipeline.
 
@@ -49,9 +49,20 @@ Wellness is a modular, self-hosted health application with three independent mod
 
 **AI as a service, not a dependency.** The Analysis module is the only component that depends on external AI. It invokes Claude Code CLI as a subprocess, meaning the rest of the app functions without any AI infrastructure.
 
-## Sync Protocols
+## Sync
 
-The Journal and Coach modules use different synchronization strategies optimized for their data characteristics.
+Both Journal and Coach modules use a shared `SyncScheduler` class (`public/js/shared/sync-scheduler.js`) that handles automatic synchronization. Each module creates its own scheduler instance with module-specific sync functions and state getters.
+
+### SyncScheduler
+
+The scheduler triggers sync automatically based on:
+
+- **Edit debounce** — When local data changes, sync is scheduled after a 2.5s debounce window to batch rapid edits
+- **Periodic polling** — Every 30s, checks for server-side changes (Coach polls `/plans-version`; Journal syncs if dirty)
+- **Network restore** — Syncs immediately when the browser comes back online
+- **Page visibility** — Re-syncs when the app regains focus after being backgrounded
+
+Error handling uses exponential backoff (5s base, 120s max). Network errors retry silently; server errors show toast notifications. The scheduler pauses when the app is backgrounded or offline.
 
 ### Journal: Version-Based Conflict Detection
 
@@ -64,11 +75,14 @@ The Journal tracks fine-grained daily data (supplements taken, habits checked) a
 3. **Subsequent syncs** fetch only records modified since last sync (`GET /sync/delta?since=<timestamp>&client_id=<id>`)
 4. **Client uploads** changed records with `_baseVersion` indicating the version the edit was based on (`POST /sync/update`)
 5. **Conflict detection:** If `server_version > client_base_version`, the record is returned as a conflict instead of being applied
-6. **Conflict resolution:** User chooses client or server version via the UI (`POST /sync/resolve-conflict`)
+6. **Auto-merge:** Non-overlapping field changes are merged automatically (e.g., local value change + server completed change)
+7. **Conflict resolution:** Overlapping changes require user choice via the UI (`POST /sync/resolve-conflict`)
+
+**Sync status:** green (clean), red (dirty data), yellow (unresolved conflicts), gray (never synced).
 
 **Key design choices:**
 - Per-record versioning (each tracker and each entry has its own integer version)
-- Conflicts are explicit - the user must choose which version to keep
+- Conflicts are explicit - the user must choose which version to keep (unless auto-mergeable)
 - Soft deletes via `_deleted` flag preserve version history
 - Conflict audit trail stored in `sync_conflicts` table
 
@@ -88,7 +102,9 @@ The Coach module handles workout plans (authored server-side, typically by AI) a
 1. **Client registers** (`POST /register`)
 2. **Sync pull** fetches plans (all or since last sync) and logs (30 days or since last sync) (`GET /sync?client_id=<id>&last_sync_time=<timestamp>`)
 3. **Log upload** sends completed workout logs; the server replaces any existing log for that date (`POST /sync`)
-4. **Plan change detection** via `GET /plans-version`, which returns `MAX(last_modified)` from `workout_sessions`. The client polls this endpoint every 30 seconds while visible and online, triggering a full sync when the version changes. Polling is paused when the app is backgrounded or offline.
+4. **Plan change detection** via `GET /plans-version`, which returns `MAX(last_modified)` from `workout_sessions`. The scheduler polls this endpoint every 30 seconds, triggering a full sync when the version changes.
+
+**Sync status:** green (clean), red (dirty logs), gray (offline).
 
 **Key design choices:**
 - Plans are read-only from the client's perspective (created via MCP or direct DB access)
@@ -113,6 +129,10 @@ set_logs              (id, exercise_log_id, set_num, weight, reps, rpe, unit, du
 checklist_log_items   (id, exercise_log_id, item_text)
 ```
 
+### Force Sync
+
+Both modules support force sync (accessible from the settings menu) which performs a full bidirectional reconciliation by timestamp comparison. Force sync reports per-module counts of uploaded and accepted records. The Journal module accepts server versions on conflict during force sync rather than prompting the user.
+
 ### Analysis: No Sync
 
 The Analysis module has no client-side state and no sync protocol. The frontend submits a query, polls for completion, and displays the result. All state lives on the server.
@@ -123,6 +143,17 @@ The Analysis module has no client-side state and no sync protocol. The frontend 
 3. Frontend polls `GET /reports/pending` until the report completes
 4. Claude Code CLI runs with MCP tool access, generating a markdown report
 5. Report is stored in `analysis.db` and displayed in the UI
+
+## Shared Frontend Utilities
+
+The `public/js/shared/` directory contains cross-module utilities:
+
+- **`sync-scheduler.js`** — `SyncScheduler` class used by both Journal and Coach stores (see above)
+- **`settings.js`** — Settings modal with debug log download, data export, and force sync
+- **`debug-log.js`** — Fire-and-forget logging to IndexedDB (max 500 entries, 1-hour TTL) for sync troubleshooting
+- **`data-export.js`** — Exports all LocalForage data (journal, coach, app state) as a timestamped JSON file
+- **`force-sync.js`** — Orchestrates force sync across both modules and aggregates results
+- **`header.js`** — Shared app header with sync status indicator and settings gear
 
 ## Technical Stack
 
@@ -162,10 +193,12 @@ Both servers run over stdio transport when invoked by Claude Code CLI. They can 
 The Analysis module bridges the web app with Claude Code CLI:
 
 1. Pre-configured query templates define the prompt and allowed MCP tools
-2. `asyncio.create_subprocess_exec` launches `claude -p` with `--dangerously-skip-permissions` and scoped `--allowedTools`
+2. `asyncio.create_subprocess_exec` launches `claude -p` with `--verbose --output-format stream-json --model sonnet`
 3. The CLI runs in a configurable working directory where MCP servers are configured
-4. Output is parsed from JSON format and stored as markdown
-5. Queries time out after 180 seconds
+4. Output is parsed from the stream-json format; the final result object contains both the response text and execution metadata
+5. CLI metadata (`duration_ms`, `duration_api_ms`, `num_turns`, `total_cost_usd`, `mcp_servers`) is stored alongside the report in `analysis.db`
+6. The full stream is saved to `.wellness/data/last_stream.jsonl` for debugging
+7. Queries time out after 180 seconds
 
 Default allowed tools for analysis queries: `mcp__journal-localdb__*`, `mcp__coach-localdb__*`, `mcp__garmy-localdb__*`, `Read`, `Glob`, `Grep`. Individual queries can grant additional tools via `extra_allowed_tools`.
 
@@ -225,11 +258,16 @@ Custom queries appear in the Analysis UI alongside built-in queries. The server 
 
 ## Testing
 
-**Pytest** with `pytest-asyncio` for async test support. Tests are organized by module with unit, integration, and e2e markers.
+**Pytest** with `pytest-asyncio` for async test support. Tests are organized by module:
+
+- **Unit tests** (`test/unit/`, `test/*/unit/`) — Isolated function and class tests
+- **Integration tests** (`test/integration/`, `test/*/integration/`) — API and cross-component tests with temp databases
+- **E2E browser tests** (`test/e2e_browser/`) — Playwright tests that run against a real server with seeded databases, covering navigation, sync, offline behavior, and responsive layout
 
 Key testing patterns:
 - Each test gets isolated temporary databases via fixtures
 - `test_app` fixture creates a FastAPI app with temp DB paths
 - `client` fixture wraps it in a `TestClient`
 - Analysis tests mock the Claude CLI subprocess
+- E2E tests start a real uvicorn server on a dynamic port with seeded journal and coach data
 - Cross-module integration tests verify module discovery and coexistence

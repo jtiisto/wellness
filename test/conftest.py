@@ -68,7 +68,6 @@ def test_app(tmp_path, tmp_journal_db, tmp_coach_db, tmp_analysis_db, monkeypatc
 
     icons_dir = public_dir / "icons"
     icons_dir.mkdir()
-    (icons_dir / "icon.svg").write_text('<svg xmlns="http://www.w3.org/2000/svg"><circle r="10"/></svg>')
     # Create a minimal PNG (1x1 pixel)
     import struct, zlib
     def _make_png():
