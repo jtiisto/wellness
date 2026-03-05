@@ -39,7 +39,7 @@ Wellness is a modular, self-hosted health application with three independent mod
 
 ## Design Principles
 
-**Module isolation.** Each module has its own database, API prefix, frontend state, and sync logic. Modules share only the FastAPI process, static file serving, and frontend shell (tab navigation). A module can be disabled without affecting others via `HEALTH_DISABLED_MODULES`.
+**Module isolation.** Each module has its own database, API prefix, frontend state, and sync logic. Modules share only the FastAPI process, static file serving, and frontend shell (tab navigation). A module can be disabled without affecting others via `WELLNESS_DISABLED_MODULES`.
 
 **Offline-first.** The Journal and Coach frontends persist all data locally in IndexedDB via LocalForage. The app works fully offline; sync happens automatically when the server is reachable.
 

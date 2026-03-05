@@ -45,14 +45,14 @@ class TestListModules:
 
 class TestDisabledModules:
     def test_disabled_modules_env_var(self, client, monkeypatch):
-        """HEALTH_DISABLED_MODULES should disable modules.
+        """WELLNESS_DISABLED_MODULES should disable modules.
 
         Note: This test verifies the config function behavior.
         The actual app module registration happens at import time,
         so we test the config function directly.
         """
         from config import get_enabled_modules, MODULES
-        monkeypatch.setenv("HEALTH_DISABLED_MODULES", "journal")
+        monkeypatch.setenv("WELLNESS_DISABLED_MODULES", "journal")
         enabled = get_enabled_modules()
         ids = [m["id"] for m in enabled]
         assert "journal" not in ids
@@ -62,7 +62,7 @@ class TestDisabledModules:
     def test_disable_multiple_modules(self, monkeypatch):
         """Should be able to disable multiple modules."""
         from config import get_enabled_modules
-        monkeypatch.setenv("HEALTH_DISABLED_MODULES", "journal,analysis")
+        monkeypatch.setenv("WELLNESS_DISABLED_MODULES", "journal,analysis")
         enabled = get_enabled_modules()
         ids = [m["id"] for m in enabled]
         assert "journal" not in ids
@@ -70,8 +70,8 @@ class TestDisabledModules:
         assert "coach" in ids
 
     def test_empty_disabled_modules(self, monkeypatch):
-        """Empty HEALTH_DISABLED_MODULES should enable all modules."""
+        """Empty WELLNESS_DISABLED_MODULES should enable all modules."""
         from config import get_enabled_modules
-        monkeypatch.setenv("HEALTH_DISABLED_MODULES", "")
+        monkeypatch.setenv("WELLNESS_DISABLED_MODULES", "")
         enabled = get_enabled_modules()
         assert len(enabled) == 3

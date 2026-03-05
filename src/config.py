@@ -38,8 +38,8 @@ MODULES = [
 
 def get_enabled_modules():
     """Return list of enabled modules. All enabled by default.
-    Disable via HEALTH_DISABLED_MODULES=journal,analysis env var."""
-    disabled = set(os.environ.get("HEALTH_DISABLED_MODULES", "").split(","))
+    Disable via WELLNESS_DISABLED_MODULES=journal,analysis env var."""
+    disabled = set(os.environ.get("WELLNESS_DISABLED_MODULES", "").split(","))
     return [m for m in MODULES if m["id"] not in disabled]
 
 

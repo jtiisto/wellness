@@ -83,7 +83,7 @@ wellness/
 Modules can be disabled via environment variable:
 
 ```bash
-HEALTH_DISABLED_MODULES=analysis ./bin/server.sh start
+WELLNESS_DISABLED_MODULES=analysis ./bin/server.sh start
 ```
 
 Database paths are configurable per module:
