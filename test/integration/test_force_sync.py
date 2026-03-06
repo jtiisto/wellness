@@ -3,7 +3,7 @@
 Validates that:
 - force-sync.js orchestrator exists with correct structure
 - Coach and journal stores export forceSync with proper instrumentation
-- Settings menu integrates the Force Sync button
+- Tools menu integrates the Force Sync button
 """
 from pathlib import Path
 
@@ -174,14 +174,14 @@ class TestJournalForceSync:
         assert "pruneDeletedTrackers" in self.source
 
 
-# ==================== Settings menu ====================
+# ==================== Tools menu ====================
 
-class TestSettingsForceSync:
-    """Tests that settings.js integrates the Force Sync button."""
+class TestToolsMenuForceSync:
+    """Tests that tools-menu.js integrates the Force Sync button."""
 
     @pytest.fixture(autouse=True)
     def load_source(self):
-        self.source = (SHARED_DIR / "settings.js").read_text()
+        self.source = (SHARED_DIR / "tools-menu.js").read_text()
 
     def test_imports_force_sync(self):
         assert "forceSync" in self.source

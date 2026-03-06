@@ -48,10 +48,10 @@ def test_initial_module_default(app_page):
     assert active in ["Journal", "Coach"]
 
 
-def test_settings_opens_and_closes(app_page):
-    """Settings gear opens and closes the settings menu."""
+def test_tools_opens_and_closes(app_page):
+    """Tools button opens and closes the tools menu."""
     shell = AppShellPage(app_page)
-    shell.open_settings()
-    assert app_page.locator(".settings-menu").is_visible()
-    shell.close_settings()
-    assert not app_page.locator(".settings-menu").is_visible()
+    shell.open_tools()
+    assert app_page.locator(".tools-menu").is_visible()
+    shell.close_tools()
+    assert not app_page.locator(".tools-menu").is_visible()

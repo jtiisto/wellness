@@ -79,7 +79,7 @@ export function TrackerList() {
                     <div class="empty-state">
                         <div class="empty-state-icon">\u{1F4DD}</div>
                         <p>No trackers configured yet.</p>
-                        <p>Tap the settings icon to add your first tracker.</p>
+                        <p>Tap the settings icon in the header to add your first tracker.</p>
                     </div>
                 </div>
             </div>

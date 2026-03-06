@@ -2013,24 +2013,24 @@ body {
 /* Analysis Utility classes */
 .analysis .mt-md { margin-top: var(--spacing-md); }
 
-/* ==================== Settings Menu ==================== */
+/* ==================== Tools Menu ==================== */
 
-.settings-btn {
+.tools-btn {
     flex: 0 0 auto;
     width: 56px;
 }
 
-.settings-menu {
+.tools-menu {
     max-height: 50vh;
 }
 
-.settings-list {
+.tools-list {
     display: flex;
     flex-direction: column;
     gap: var(--spacing-sm);
 }
 
-.settings-item {
+.tools-item {
     display: flex;
     align-items: center;
     gap: var(--spacing-md);
@@ -2047,6 +2047,6 @@ body {
     transition: background-color 0.2s;
 }
 
-.settings-item:hover {
+.tools-item:hover {
     background: var(--bg-tertiary);
 }

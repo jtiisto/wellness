@@ -5,7 +5,7 @@ import { h, render } from 'preact';
 import { signal, effect } from '@preact/signals';
 import htm from 'htm';
 import { Notifications } from './shared/notifications.js';
-import { SettingsMenu } from './shared/settings.js';
+import { ToolsMenu } from './shared/tools-menu.js';
 
 const html = htm.bind(h);
 
@@ -18,7 +18,7 @@ const moduleComponents = signal({});
 
 // ==================== Icons (inline SVG) ====================
 
-const settingsOpen = signal(false);
+const toolsOpen = signal(false);
 
 const ICONS = {
     book: html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="22" height="22">
@@ -43,9 +43,8 @@ const ICONS = {
         <rect x="3" y="14" width="7" height="7"/>
         <rect x="14" y="14" width="7" height="7"/>
     </svg>`,
-    settings: html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="22" height="22">
-        <circle cx="12" cy="12" r="3"/>
-        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+    tools: html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="22" height="22">
+        <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
     </svg>`,
 };
 
@@ -118,12 +117,12 @@ function NavBar() {
                     <span class="nav-label">${m.name}</span>
                 </button>
             `)}
-            <button class="nav-btn settings-btn"
-                onClick=${() => { settingsOpen.value = true; }}
-                title="Settings"
+            <button class="nav-btn tools-btn"
+                onClick=${() => { toolsOpen.value = true; }}
+                title="Tools"
             >
-                <span class="nav-icon">${ICONS.settings}</span>
-                <span class="nav-label">Settings</span>
+                <span class="nav-icon">${ICONS.tools}</span>
+                <span class="nav-label">Tools</span>
             </button>
         </nav>
     `;
@@ -151,7 +150,7 @@ function App() {
             <main class="module-content"><${ModuleContent}/></main>
             <${NavBar}/>
             <${Notifications}/>
-            <${SettingsMenu} isOpen=${settingsOpen.value} onClose=${() => { settingsOpen.value = false; }}/>
+            <${ToolsMenu} isOpen=${toolsOpen.value} onClose=${() => { toolsOpen.value = false; }}/>
         </div>
     `;
 }

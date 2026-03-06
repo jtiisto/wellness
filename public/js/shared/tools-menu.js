@@ -1,5 +1,5 @@
 /**
- * Settings Menu - Slide-up modal with app utilities
+ * Tools Menu - Slide-up modal with app utilities
  */
 import { h } from 'preact';
 import { useState } from 'preact/hooks';
@@ -11,7 +11,7 @@ import { showNotification } from './notifications.js';
 
 const html = htm.bind(h);
 
-export function SettingsMenu({ isOpen, onClose }) {
+export function ToolsMenu({ isOpen, onClose }) {
     const [isForceSyncing, setIsForceSyncing] = useState(false);
 
     if (!isOpen) return null;
@@ -75,9 +75,9 @@ export function SettingsMenu({ isOpen, onClose }) {
 
     return html`
         <div class="modal-overlay" onClick=${onClose}>
-            <div class="modal-content settings-menu" onClick=${e => e.stopPropagation()}>
+            <div class="modal-content tools-menu" onClick=${e => e.stopPropagation()}>
                 <div class="modal-header">
-                    <span class="modal-title">Settings</span>
+                    <span class="modal-title">Tools</span>
                     <button class="close-btn" onClick=${onClose}>
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20">
                             <line x1="18" y1="6" x2="6" y2="18"/>
@@ -85,8 +85,8 @@ export function SettingsMenu({ isOpen, onClose }) {
                         </svg>
                     </button>
                 </div>
-                <div class="settings-list">
-                    <button class="settings-item" onClick=${handleDownloadLog}>
+                <div class="tools-list">
+                    <button class="tools-item" onClick=${handleDownloadLog}>
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20">
                             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
                             <polyline points="7 10 12 15 17 10"/>
@@ -94,14 +94,14 @@ export function SettingsMenu({ isOpen, onClose }) {
                         </svg>
                         Save Debug Log
                     </button>
-                    <button class="settings-item" onClick=${handleExportData}>
+                    <button class="tools-item" onClick=${handleExportData}>
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20">
                             <path d="M12 3v12m0 0l-4-4m4 4l4-4"/>
                             <path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/>
                         </svg>
                         Export All Data
                     </button>
-                    <button class="settings-item" onClick=${handleForceSync} disabled=${isForceSyncing}>
+                    <button class="tools-item" onClick=${handleForceSync} disabled=${isForceSyncing}>
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20">
                             <path d="M21.5 2v6h-6"/>
                             <path d="M2.5 22v-6h6"/>

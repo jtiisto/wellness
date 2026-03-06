@@ -1,10 +1,10 @@
 """Integration tests for the client-side debug logger feature.
 
 Validates that:
-- debug-log.js and settings.js exist with correct structure
+- debug-log.js and tools-menu.js exist with correct structure
 - Coach and journal stores import and call debugLog
-- App shell integrates the settings menu
-- CSS includes settings styles
+- App shell integrates the tools menu
+- CSS includes tools menu styles
 """
 import re
 from pathlib import Path
@@ -68,17 +68,17 @@ class TestDebugLogModule:
         assert "debug-log-" in self.source
 
 
-# ==================== settings.js ====================
+# ==================== tools-menu.js ====================
 
-class TestSettingsModule:
-    """Tests for public/js/shared/settings.js structure."""
+class TestToolsMenuModule:
+    """Tests for public/js/shared/tools-menu.js structure."""
 
     @pytest.fixture(autouse=True)
     def load_source(self):
-        self.source = (SHARED_DIR / "settings.js").read_text()
+        self.source = (SHARED_DIR / "tools-menu.js").read_text()
 
     def test_file_exists(self):
-        assert (SHARED_DIR / "settings.js").is_file()
+        assert (SHARED_DIR / "tools-menu.js").is_file()
 
     def test_imports_download_debug_log(self):
         assert "downloadDebugLog" in self.source
@@ -86,8 +86,8 @@ class TestSettingsModule:
     def test_imports_export_all_data(self):
         assert "exportAllData" in self.source
 
-    def test_exports_settings_menu(self):
-        assert "export function SettingsMenu(" in self.source
+    def test_exports_tools_menu(self):
+        assert "export function ToolsMenu(" in self.source
 
     def test_uses_modal_overlay(self):
         """Should reuse existing modal-overlay styling."""
@@ -266,60 +266,59 @@ class TestDataExportModule:
 # ==================== App shell integration ====================
 
 class TestAppShellIntegration:
-    """Tests that app.js integrates the settings menu."""
+    """Tests that app.js integrates the tools menu."""
 
     @pytest.fixture(autouse=True)
     def load_source(self):
         self.source = (JS_DIR / "app.js").read_text()
 
-    def test_imports_settings_menu(self):
-        assert "import { SettingsMenu }" in self.source
+    def test_imports_tools_menu(self):
+        assert "import { ToolsMenu }" in self.source
 
-    def test_has_settings_signal(self):
-        assert "settingsOpen" in self.source
+    def test_has_tools_signal(self):
+        assert "toolsOpen" in self.source
 
-    def test_has_settings_icon(self):
-        """Should have a gear/settings icon in ICONS map."""
-        assert "settings:" in self.source
+    def test_has_tools_icon(self):
+        """Should have a wrench/tools icon in ICONS map."""
+        assert "tools:" in self.source
 
-    def test_has_settings_button_in_navbar(self):
-        assert "settings-btn" in self.source
+    def test_has_tools_button_in_navbar(self):
+        assert "tools-btn" in self.source
 
-    def test_renders_settings_menu(self):
-        assert "SettingsMenu" in self.source
+    def test_renders_tools_menu(self):
+        assert "ToolsMenu" in self.source
 
 
 # ==================== CSS ====================
 
-class TestSettingsCss:
-    """Tests that styles.css includes settings menu styles."""
+class TestToolsCss:
+    """Tests that styles.css includes tools menu styles."""
 
     @pytest.fixture(autouse=True)
     def load_source(self):
         self.source = (PUBLIC_DIR / "styles.css").read_text()
 
-    def test_has_settings_btn_style(self):
-        assert ".settings-btn" in self.source
+    def test_has_tools_btn_style(self):
+        assert ".tools-btn" in self.source
 
-    def test_settings_btn_fixed_width(self):
-        """Settings button should not flex-grow with module buttons."""
-        # Find the settings-btn rule and check for flex: 0
-        match = re.search(r'\.settings-btn\s*\{[^}]+\}', self.source)
+    def test_tools_btn_fixed_width(self):
+        """Tools button should not flex-grow with module buttons."""
+        match = re.search(r'\.tools-btn\s*\{[^}]+\}', self.source)
         assert match is not None
         assert "flex: 0" in match.group()
 
-    def test_has_settings_menu_style(self):
-        assert ".settings-menu" in self.source
+    def test_has_tools_menu_style(self):
+        assert ".tools-menu" in self.source
 
-    def test_has_settings_list_style(self):
-        assert ".settings-list" in self.source
+    def test_has_tools_list_style(self):
+        assert ".tools-list" in self.source
 
-    def test_has_settings_item_style(self):
-        assert ".settings-item" in self.source
+    def test_has_tools_item_style(self):
+        assert ".tools-item" in self.source
 
-    def test_settings_item_has_tap_target(self):
-        """Settings items should meet minimum tap target size."""
-        match = re.search(r'\.settings-item\s*\{[^}]+\}', self.source)
+    def test_tools_item_has_tap_target(self):
+        """Tools items should meet minimum tap target size."""
+        match = re.search(r'\.tools-item\s*\{[^}]+\}', self.source)
         assert match is not None
         assert "tap-target" in match.group() or "44px" in match.group()
 
@@ -339,8 +338,8 @@ class TestDebugLogStaticServing:
             "export async function getDebugLog() { return []; }\n"
             "export async function downloadDebugLog() {}\n"
         )
-        (shared_dir / "settings.js").write_text(
-            "export function SettingsMenu() {}\n"
+        (shared_dir / "tools-menu.js").write_text(
+            "export function ToolsMenu() {}\n"
         )
         (shared_dir / "data-export.js").write_text(
             "export async function exportAllData() {}\n"
@@ -351,8 +350,8 @@ class TestDebugLogStaticServing:
         assert resp.status_code == 200
         assert "javascript" in resp.headers["content-type"]
 
-    def test_settings_js_served(self, client):
-        resp = client.get("/js/shared/settings.js")
+    def test_tools_menu_js_served(self, client):
+        resp = client.get("/js/shared/tools-menu.js")
         assert resp.status_code == 200
         assert "javascript" in resp.headers["content-type"]
 
@@ -361,9 +360,9 @@ class TestDebugLogStaticServing:
         assert "export" in resp.text
         assert "log" in resp.text
 
-    def test_settings_has_settings_menu_export(self, client):
-        resp = client.get("/js/shared/settings.js")
-        assert "SettingsMenu" in resp.text
+    def test_tools_menu_has_export(self, client):
+        resp = client.get("/js/shared/tools-menu.js")
+        assert "ToolsMenu" in resp.text
 
     def test_data_export_js_served(self, client):
         resp = client.get("/js/shared/data-export.js")
