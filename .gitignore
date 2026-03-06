@@ -31,3 +31,5 @@ plans/
 # OS
 .DS_Store
 bin/backup-databases.sh
+bin/backup-gitignored.sh
+.backup-paths
