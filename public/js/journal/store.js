@@ -410,7 +410,7 @@ export const scheduler = new SyncScheduler({
 
 // ==================== Sync Logic ====================
 
-const API_BASE = '/api/journal/sync';
+const API_BASE = '/wellness/api/journal/sync';
 
 export async function triggerSync() {
     // Step 1: Network check

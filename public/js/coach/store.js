@@ -9,7 +9,7 @@ import { showNotification } from '../shared/notifications.js';
 import { log as debugLog } from '../shared/debug-log.js';
 import { SyncScheduler } from '../shared/sync-scheduler.js';
 
-const API_BASE = '/api/coach';
+const API_BASE = '/wellness/api/coach';
 
 // Configure LocalForage
 localforage.config({

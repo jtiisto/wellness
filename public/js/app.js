@@ -52,7 +52,7 @@ const ICONS = {
 
 async function loadModules() {
     try {
-        const res = await fetch('/api/modules');
+        const res = await fetch('/wellness/api/modules');
         modules.value = await res.json();
         if (!activeModuleId.value || !modules.value.find(m => m.id === activeModuleId.value)) {
             activeModuleId.value = modules.value[0]?.id || null;

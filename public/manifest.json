@@ -1,16 +1,18 @@
 {
+    "id": "/wellness",
     "name": "Wellness",
     "short_name": "Wellness",
     "description": "Personal wellness dashboard",
-    "start_url": "/",
+    "start_url": "/wellness/",
+    "scope": "/wellness/",
     "display": "standalone",
     "background_color": "#1a1a2e",
     "theme_color": "#1a1a2e",
     "orientation": "portrait",
     "icons": [
-        { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
-        { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
-        { "src": "/icons/icon-maskable-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
-        { "src": "/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+        { "src": "/wellness/icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+        { "src": "/wellness/icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+        { "src": "/wellness/icons/icon-maskable-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
+        { "src": "/wellness/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
     ]
 }

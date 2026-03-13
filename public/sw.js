@@ -7,52 +7,53 @@
 
 const CACHE_VERSION = '$SERVER_VERSION$';
 const CDN_CACHE = 'wellness-cdn-v1';
+const B = '$BASE_PATH$';
 
 // App shell assets to precache on install
 const APP_SHELL_URLS = [
-  '/',
-  '/styles.css',
-  '/manifest.json',
+  B + '/',
+  B + '/styles.css',
+  B + '/manifest.json',
   // Shared
-  '/js/app.js',
-  '/js/shared/header.js',
-  '/js/shared/notifications.js',
-  '/js/shared/utils.js',
-  '/js/shared/tools-menu.js',
-  '/js/shared/sync-scheduler.js',
-  '/js/shared/debug-log.js',
-  '/js/shared/force-sync.js',
-  '/js/shared/data-export.js',
+  B + '/js/app.js',
+  B + '/js/shared/header.js',
+  B + '/js/shared/notifications.js',
+  B + '/js/shared/utils.js',
+  B + '/js/shared/tools-menu.js',
+  B + '/js/shared/sync-scheduler.js',
+  B + '/js/shared/debug-log.js',
+  B + '/js/shared/force-sync.js',
+  B + '/js/shared/data-export.js',
   // Journal module
-  '/js/journal/JournalView.js',
-  '/js/journal/store.js',
-  '/js/journal/utils.js',
-  '/js/journal/components/ConfigScreen.js',
-  '/js/journal/components/ConflictResolver.js',
-  '/js/journal/components/Header.js',
-  '/js/journal/components/TrackerItem.js',
-  '/js/journal/components/TrackerList.js',
+  B + '/js/journal/JournalView.js',
+  B + '/js/journal/store.js',
+  B + '/js/journal/utils.js',
+  B + '/js/journal/components/ConfigScreen.js',
+  B + '/js/journal/components/ConflictResolver.js',
+  B + '/js/journal/components/Header.js',
+  B + '/js/journal/components/TrackerItem.js',
+  B + '/js/journal/components/TrackerList.js',
   // Coach module
-  '/js/coach/CoachView.js',
-  '/js/coach/store.js',
-  '/js/coach/utils.js',
-  '/js/coach/components/BlockView.js',
-  '/js/coach/components/CalendarPicker.js',
-  '/js/coach/components/CardioEntry.js',
-  '/js/coach/components/ChecklistEntry.js',
-  '/js/coach/components/DateSelector.js',
-  '/js/coach/components/ExerciseItem.js',
-  '/js/coach/components/SessionFeedback.js',
-  '/js/coach/components/SetEntry.js',
-  '/js/coach/components/WorkoutView.js',
+  B + '/js/coach/CoachView.js',
+  B + '/js/coach/store.js',
+  B + '/js/coach/utils.js',
+  B + '/js/coach/components/BlockView.js',
+  B + '/js/coach/components/CalendarPicker.js',
+  B + '/js/coach/components/CardioEntry.js',
+  B + '/js/coach/components/ChecklistEntry.js',
+  B + '/js/coach/components/DateSelector.js',
+  B + '/js/coach/components/ExerciseItem.js',
+  B + '/js/coach/components/SessionFeedback.js',
+  B + '/js/coach/components/SetEntry.js',
+  B + '/js/coach/components/WorkoutView.js',
   // Analysis module
-  '/js/analysis/AnalysisView.js',
-  '/js/analysis/store.js',
-  '/js/analysis/utils.js',
-  '/js/analysis/components/HistoryView.js',
-  '/js/analysis/components/ProgressView.js',
-  '/js/analysis/components/QueryList.js',
-  '/js/analysis/components/ReportView.js',
+  B + '/js/analysis/AnalysisView.js',
+  B + '/js/analysis/store.js',
+  B + '/js/analysis/utils.js',
+  B + '/js/analysis/components/HistoryView.js',
+  B + '/js/analysis/components/ProgressView.js',
+  B + '/js/analysis/components/QueryList.js',
+  B + '/js/analysis/components/ReportView.js',
 ];
 
 // Third-party CDN dependencies to precache
@@ -102,7 +103,7 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(request.url);
 
   // API requests: network-only (LocalForage handles offline data)
-  if (url.pathname.startsWith('/api/')) {
+  if (url.pathname.startsWith(B + '/api/') || url.pathname.startsWith('/api/')) {
     return; // Let the browser handle it normally (network-only)
   }
 
@@ -167,7 +168,7 @@ async function networkFirstAppShell(request) {
     // Navigation requests that miss both network and cache: serve the cached
     // index page so the client-side router can handle the route offline.
     if (request.mode === 'navigate') {
-      const fallback = await cache.match('/');
+      const fallback = await cache.match(B + '/');
       if (fallback) {
         return fallback;
       }

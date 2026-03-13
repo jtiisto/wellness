@@ -14,7 +14,7 @@ export const isLoading = signal(true);
 
 // API helper
 async function api(path, options = {}) {
-    const res = await fetch(`/api/analysis${path}`, {
+    const res = await fetch(`/wellness/api/analysis${path}`, {
         headers: { 'Content-Type': 'application/json' },
         ...options
     });
