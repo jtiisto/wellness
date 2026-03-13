@@ -85,9 +85,13 @@ sudo tailscale serve --https 9443 --set-path /wellness --bg http://localhost:900
 sudo tailscale serve --https 9443 --set-path /share --bg http://localhost:9100
 ```
 
-Or use the setup script from the Share project: `sudo /path/to/share/bin/setup-tailscale.sh`
+**3. Verify the configuration:**
 
-**3. Access the apps:**
+```bash
+sudo tailscale serve status
+```
+
+**4. Access the apps:**
 
 ```
 https://<tailscale-hostname>:9443/wellness/
