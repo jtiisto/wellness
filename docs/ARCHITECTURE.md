@@ -161,6 +161,8 @@ The `public/js/shared/` directory contains cross-module utilities:
 
 **FastAPI** serves as the unified web framework. Each module contributes an `APIRouter` via a factory function (`create_router(db_path)`) that initializes its database and returns the router. The main `server.py` mounts them at `/api/journal`, `/api/coach`, and `/api/analysis`.
 
+**Path-based routing.** The app runs under a `/wellness` URL prefix (`BASE_PATH` in `server.py`). All frontend paths are prefixed (e.g., `/wellness/api/journal/sync`), while backend routes stay at root (`/api/journal/sync`). A `StripPrefixMiddleware` ASGI wrapper strips the prefix from incoming requests, enabling the app to work both behind Tailscale `serve --set-path /wellness` (which also strips the prefix) and via direct access at `localhost:9000/wellness/`. The server injects `$BASE_PATH$` into `sw.js` at serve time for service worker path matching.
+
 **SQLite** is used directly (no ORM) with one database file per module. This keeps modules fully isolated at the data layer and simplifies deployment (no database server required). Foreign key constraints are enforced via `PRAGMA foreign_keys = ON` in the Coach module where relational integrity matters.
 
 **Uvicorn** runs the ASGI application. The server control script (`bin/server.sh`) manages the process via PID files and port detection.

@@ -30,7 +30,9 @@ playwright install chromium
 ./bin/server.sh start
 ```
 
-The server starts on port 9000. Open `http://localhost:9000` in a browser or add it to your phone's home screen as a PWA.
+The server starts on port 9000. Open `http://localhost:9000/wellness/` in a browser or add it to your phone's home screen as a PWA.
+
+The `/wellness` prefix is baked into all frontend paths and handled by the `StripPrefixMiddleware` in the server, so it works with or without a reverse proxy.
 
 ### 4. Run tests
 
@@ -62,6 +64,47 @@ source venv/bin/activate
 pip install -r requirements.txt
 ./bin/server.sh start
 ```
+
+### Tailscale Setup (with Share)
+
+Wellness and [Share](https://github.com/jtiisto/share) are designed to run side-by-side on the same Tailscale hostname using path-based routing. Both PWAs get non-overlapping scopes (`/wellness/` and `/share/`) so Chrome on Android treats them as separate installable apps.
+
+**1. Start both servers:**
+
+```bash
+# Wellness — port 9000
+./bin/server.sh start
+
+# Share — port 9100 (separate project)
+```
+
+**2. Configure Tailscale path-based routing:**
+
+```bash
+sudo tailscale serve --https 9443 --set-path /wellness --bg http://localhost:9000
+sudo tailscale serve --https 9443 --set-path /share --bg http://localhost:9100
+```
+
+Or use the setup script from the Share project: `sudo /path/to/share/bin/setup-tailscale.sh`
+
+**3. Access the apps:**
+
+```
+https://<tailscale-hostname>:9443/wellness/
+https://<tailscale-hostname>:9443/share/
+```
+
+On Android, "Add to Home Screen" installs each as an independent PWA.
+
+### Without Tailscale
+
+The app works without Tailscale for local development and testing:
+
+```
+http://localhost:9000/wellness/
+```
+
+The `StripPrefixMiddleware` in `server.py` strips the `/wellness` prefix from incoming requests so backend routes stay at root (`/api/journal/sync`, `/api/coach/sync`, etc.) while the frontend uses prefixed paths (`/wellness/api/journal/sync`). This means the same server works both behind Tailscale (which also strips the prefix) and via direct access.
 
 ### LLM directory configuration
 
@@ -201,6 +244,16 @@ Both MCP servers accept environment variables to override database paths:
 - Check if port 9000 is already in use: `lsof -i :9000`
 - Check logs: `./bin/server.sh logs`
 - Try the test port: `./bin/server.sh --test start` (uses port 9001)
+
+### PWA shows wrong app or "already installed"
+
+Chrome on Android identifies PWAs by scope on the same origin. If Wellness and Share don't have non-overlapping scopes, Chrome may conflate them. Both apps must be on subpaths (`/wellness/` and `/share/`) — never at root (`/`). Check `manifest.json` for correct `scope`, `start_url`, and `id` fields.
+
+### Tailscale routing not working
+
+- Verify config: `sudo tailscale serve status`
+- Both apps must be running on their respective ports before configuring Tailscale
+- Tailscale `--set-path` strips the prefix before forwarding — the apps handle this via `StripPrefixMiddleware`
 
 ### MCP server errors
 

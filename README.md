@@ -33,7 +33,7 @@ pip install -r requirements.txt
 ./bin/server.sh start
 ```
 
-The app runs at `http://localhost:9000` and works as a PWA on mobile devices.
+The app runs at `http://localhost:9000/wellness/` and works as a PWA on mobile devices. See [Installation Guide](docs/INSTALLATION.md) for Tailscale and production setup.
 
 ## Project Structure
 
