@@ -51,8 +51,8 @@ def test_app(tmp_path, tmp_journal_db, tmp_coach_db, tmp_analysis_db, monkeypatc
     public_dir.mkdir()
     (public_dir / "index.html").write_text(
         '<html><head>'
-        '<link rel="stylesheet" href="/styles.css">'
-        '<script src="/js/app.js"></script>'
+        '<link rel="stylesheet" href="/wellness/styles.css">'
+        '<script src="/wellness/js/app.js"></script>'
         '</head><body><title>Health</title>Test</body></html>'
     )
     (public_dir / "styles.css").write_text("body { margin: 0; } :root { --bg-primary: #111; }")
@@ -64,7 +64,7 @@ def test_app(tmp_path, tmp_journal_db, tmp_coach_db, tmp_analysis_db, monkeypatc
     manifest.write_text('{"name":"Wellness","start_url":"/","display":"standalone"}')
 
     sw = public_dir / "sw.js"
-    sw.write_text("// service worker stub\nself.addEventListener('fetch', () => {});")
+    sw.write_text("// service worker stub $BASE_PATH$\nself.addEventListener('fetch', () => {});")
 
     icons_dir = public_dir / "icons"
     icons_dir.mkdir()

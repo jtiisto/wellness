@@ -95,7 +95,7 @@ class TestServeServiceWorker:
     def test_service_worker_allowed_header(self, client):
         """SW should have Service-Worker-Allowed header."""
         resp = client.get("/sw.js")
-        assert resp.headers.get("Service-Worker-Allowed") == "/"
+        assert resp.headers.get("Service-Worker-Allowed") == "/wellness/"
 
     def test_cache_control(self, client):
         """SW should have no-cache header."""
