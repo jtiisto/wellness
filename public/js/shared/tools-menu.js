@@ -122,7 +122,7 @@ export function ToolsMenu({ isOpen, onClose }) {
                 </div>
                 ${buildInfo && html`
                     <div class="tools-build-info">
-                        Build: ${_formatBuildDate(buildInfo.buildDate)} (${buildInfo.commit})
+                        Build: ${_formatBuildDate(buildInfo.buildDate)}
                     </div>
                 `}
             </div>
