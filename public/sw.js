@@ -14,6 +14,7 @@ const APP_SHELL_URLS = [
   B + '/',
   B + '/styles.css',
   B + '/manifest.json',
+  B + '/version.json',
   // Shared
   B + '/js/app.js',
   B + '/js/shared/header.js',

@@ -2,7 +2,7 @@
  * Tools Menu - Slide-up modal with app utilities
  */
 import { h } from 'preact';
-import { useState } from 'preact/hooks';
+import { useState, useEffect } from 'preact/hooks';
 import htm from 'htm';
 import { downloadDebugLog } from './debug-log.js';
 import { exportAllData } from './data-export.js';
@@ -13,6 +13,15 @@ const html = htm.bind(h);
 
 export function ToolsMenu({ isOpen, onClose }) {
     const [isForceSyncing, setIsForceSyncing] = useState(false);
+    const [buildInfo, setBuildInfo] = useState(null);
+
+    useEffect(() => {
+        if (!isOpen || buildInfo) return;
+        fetch('/wellness/version.json')
+            .then(r => r.ok ? r.json() : null)
+            .then(data => { if (data) setBuildInfo(data); })
+            .catch(() => {});
+    }, [isOpen]);
 
     if (!isOpen) return null;
 
@@ -111,7 +120,22 @@ export function ToolsMenu({ isOpen, onClose }) {
                         ${isForceSyncing ? 'Syncing...' : 'Force Sync'}
                     </button>
                 </div>
+                ${buildInfo && html`
+                    <div class="tools-build-info">
+                        Build: ${_formatBuildDate(buildInfo.buildDate)} (${buildInfo.commit})
+                    </div>
+                `}
             </div>
         </div>
     `;
+}
+
+function _formatBuildDate(iso) {
+    try {
+        const d = new Date(iso);
+        return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
+            + ' ' + d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+    } catch {
+        return iso;
+    }
 }

@@ -154,6 +154,19 @@ def serve_manifest():
     raise HTTPException(status_code=404, detail="manifest.json not found")
 
 
+@_inner_app.get("/version.json")
+def serve_version():
+    """Serve the build version stamp (written by pre-commit hook)."""
+    version_path = PUBLIC_DIR / "version.json"
+    if version_path.exists():
+        return FileResponse(
+            version_path,
+            media_type="application/json",
+            headers={"Cache-Control": "no-cache, must-revalidate"}
+        )
+    raise HTTPException(status_code=404, detail="version.json not found")
+
+
 @_inner_app.get("/sw.js")
 def serve_sw():
     """Serve the service worker with version injected for cache invalidation."""

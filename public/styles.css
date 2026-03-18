@@ -2050,3 +2050,12 @@ body {
 .tools-item:hover {
     background: var(--bg-tertiary);
 }
+
+.tools-build-info {
+    margin-top: var(--spacing-sm);
+    padding-top: var(--spacing-sm);
+    border-top: 1px solid var(--border-color);
+    font-size: var(--font-size-sm);
+    color: var(--text-secondary);
+    text-align: center;
+}
