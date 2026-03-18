@@ -45,7 +45,9 @@ export const syncMetadata = signal({
     lastServerSyncTime: null,
     dirtyTrackers: [],  // Array of tracker IDs with local changes
     dirtyEntries: [],   // Array of "date|trackerId" strings with local changes
-    dirtyConfig: false  // Legacy flag for backward compatibility
+    dirtyConfig: false, // Legacy flag for backward compatibility
+    dirtyEntryGenerations: {},   // { "date|trackerId": number } — incremented on each modification
+    dirtyTrackerGenerations: {}  // { trackerId: number } — incremented on each modification
 });
 
 // Sync status indicator: 'green' | 'red' | 'yellow' | 'gray'
@@ -109,7 +111,9 @@ export async function initializeStore() {
                 lastServerSyncTime: metadata?.lastServerSyncTime || null,
                 dirtyTrackers: metadata?.dirtyTrackers || [],
                 dirtyEntries: metadata?.dirtyEntries || [],
-                dirtyConfig: metadata?.dirtyConfig || false
+                dirtyConfig: metadata?.dirtyConfig || false,
+                dirtyEntryGenerations: metadata?.dirtyEntryGenerations || {},
+                dirtyTrackerGenerations: metadata?.dirtyTrackerGenerations || {}
             };
 
             trackerConfig.value = config || [];
@@ -138,7 +142,9 @@ async function saveMetadata() {
         lastServerSyncTime: meta.lastServerSyncTime,
         dirtyTrackers: meta.dirtyTrackers,
         dirtyEntries: meta.dirtyEntries,
-        dirtyConfig: meta.dirtyConfig
+        dirtyConfig: meta.dirtyConfig,
+        dirtyEntryGenerations: meta.dirtyEntryGenerations,
+        dirtyTrackerGenerations: meta.dirtyTrackerGenerations
     });
 }
 
@@ -250,30 +256,68 @@ function markTrackerDirty(trackerId) {
     if (!meta.dirtyTrackers.includes(trackerId)) {
         meta.dirtyTrackers = [...meta.dirtyTrackers, trackerId];
         meta.dirtyConfig = true;  // Legacy compatibility
-        syncMetadata.value = meta;
-        saveMetadata();
-        updateSyncStatus();
     }
+    // Always increment generation (detects re-modifications during sync)
+    const gens = { ...meta.dirtyTrackerGenerations };
+    gens[trackerId] = (gens[trackerId] || 0) + 1;
+    meta.dirtyTrackerGenerations = gens;
+    syncMetadata.value = meta;
+    saveMetadata();
+    updateSyncStatus();
 }
 
 function markEntryDirty(entryKey) {
     const meta = { ...syncMetadata.value };
     if (!meta.dirtyEntries.includes(entryKey)) {
         meta.dirtyEntries = [...meta.dirtyEntries, entryKey];
-        syncMetadata.value = meta;
-        saveMetadata();
-        updateSyncStatus();
     }
+    // Always increment generation (detects re-modifications during sync)
+    const gens = { ...meta.dirtyEntryGenerations };
+    gens[entryKey] = (gens[entryKey] || 0) + 1;
+    meta.dirtyEntryGenerations = gens;
+    syncMetadata.value = meta;
+    saveMetadata();
+    updateSyncStatus();
 }
 
-function clearDirtyState(appliedTrackerIds = [], appliedEntryKeys = []) {
+function clearDirtyState(appliedTrackerIds = [], appliedEntryKeys = [],
+                         snapshotTrackerGens = null, snapshotEntryGens = null) {
     const meta = { ...syncMetadata.value };
 
-    // Only clear trackers that were successfully applied
-    meta.dirtyTrackers = meta.dirtyTrackers.filter(id => !appliedTrackerIds.includes(id));
+    // Only clear trackers that were applied AND not re-modified during sync
+    const appliedTrackerSet = new Set(appliedTrackerIds);
+    meta.dirtyTrackers = meta.dirtyTrackers.filter(id => {
+        if (!appliedTrackerSet.has(id)) return true;
+        if (snapshotTrackerGens && meta.dirtyTrackerGenerations[id] !== snapshotTrackerGens[id]) {
+            return true; // re-modified during sync, keep dirty
+        }
+        return false;
+    });
 
-    // Only clear entries that were successfully applied
-    meta.dirtyEntries = meta.dirtyEntries.filter(key => !appliedEntryKeys.includes(key));
+    // Only clear entries that were applied AND not re-modified during sync
+    const appliedEntrySet = new Set(appliedEntryKeys);
+    meta.dirtyEntries = meta.dirtyEntries.filter(key => {
+        if (!appliedEntrySet.has(key)) return true;
+        if (snapshotEntryGens && meta.dirtyEntryGenerations[key] !== snapshotEntryGens[key]) {
+            return true; // re-modified during sync, keep dirty
+        }
+        return false;
+    });
+
+    // Clean up generation counters for items that were actually cleared
+    const trackerGens = { ...meta.dirtyTrackerGenerations };
+    const remainingTrackers = new Set(meta.dirtyTrackers);
+    for (const id of appliedTrackerIds) {
+        if (!remainingTrackers.has(id)) delete trackerGens[id];
+    }
+    meta.dirtyTrackerGenerations = trackerGens;
+
+    const entryGens = { ...meta.dirtyEntryGenerations };
+    const remainingEntries = new Set(meta.dirtyEntries);
+    for (const key of appliedEntryKeys) {
+        if (!remainingEntries.has(key)) delete entryGens[key];
+    }
+    meta.dirtyEntryGenerations = entryGens;
 
     meta.dirtyConfig = meta.dirtyTrackers.length > 0;
 
@@ -552,13 +596,18 @@ async function applyServerChanges(serverData, conflicts) {
         conflicts.filter(c => c.type === 'entry').map(c => c.id)
     );
 
+    // Also skip locally dirty entries — they have pending changes that
+    // shouldn't be overwritten by (potentially stale) server data.
+    const dirtyTrackerIds = new Set(syncMetadata.value.dirtyTrackers);
+    const dirtyEntryKeys = new Set(syncMetadata.value.dirtyEntries);
+
     batch(() => {
         // Apply non-conflicting tracker changes
         const serverTrackerIds = new Set((serverData.config || []).map(t => t.id));
         const updatedConfig = [...trackerConfig.value];
 
         for (const serverTracker of (serverData.config || [])) {
-            if (conflictTrackerIds.has(serverTracker.id)) continue;
+            if (conflictTrackerIds.has(serverTracker.id) || dirtyTrackerIds.has(serverTracker.id)) continue;
 
             const localIndex = updatedConfig.findIndex(t => t.id === serverTracker.id);
             const trackerWithBase = {
@@ -573,9 +622,10 @@ async function applyServerChanges(serverData, conflicts) {
             }
         }
 
-        // Handle deleted trackers from server
+        // Handle deleted trackers from server (skip locally dirty ones)
         if (serverData.deletedTrackers) {
             for (const deletedId of serverData.deletedTrackers) {
+                if (dirtyTrackerIds.has(deletedId)) continue;
                 const idx = updatedConfig.findIndex(t => t.id === deletedId);
                 if (idx >= 0) {
                     updatedConfig.splice(idx, 1);
@@ -595,7 +645,7 @@ async function applyServerChanges(serverData, conflicts) {
 
             for (const [trackerId, serverEntry] of Object.entries(serverEntries)) {
                 const entryKey = `${date}|${trackerId}`;
-                if (conflictEntryKeys.has(entryKey)) continue;
+                if (conflictEntryKeys.has(entryKey) || dirtyEntryKeys.has(entryKey)) continue;
 
                 logs[date][trackerId] = {
                     ...serverEntry,
@@ -620,6 +670,10 @@ async function applyServerChanges(serverData, conflicts) {
 
 async function uploadToServer() {
     const meta = syncMetadata.value;
+
+    // Snapshot generations to detect re-modifications during upload
+    const snapshotEntryGens = { ...meta.dirtyEntryGenerations };
+    const snapshotTrackerGens = { ...meta.dirtyTrackerGenerations };
 
     // Construct payload with version info
     const payload = {
@@ -751,8 +805,8 @@ async function uploadToServer() {
         dailyLogs.value = logs;
     }
 
-    // Clear dirty state for applied items
-    clearDirtyState(appliedTrackerIds, appliedEntryKeys);
+    // Clear dirty state for applied items (only if not re-modified during sync)
+    clearDirtyState(appliedTrackerIds, appliedEntryKeys, snapshotTrackerGens, snapshotEntryGens);
 
     // Update sync time
     syncMetadata.value = {
@@ -788,10 +842,13 @@ export async function resolveConflict(conflict, resolution) {
                     return t;
                 });
 
-                // Remove from dirty list
+                // Remove from dirty list and clean up generation counter
+                const tGens = { ...(syncMetadata.value.dirtyTrackerGenerations || {}) };
+                delete tGens[conflict.id];
                 syncMetadata.value = {
                     ...syncMetadata.value,
-                    dirtyTrackers: meta.dirtyTrackers.filter(id => id !== conflict.id)
+                    dirtyTrackers: meta.dirtyTrackers.filter(id => id !== conflict.id),
+                    dirtyTrackerGenerations: tGens
                 };
 
             } else if (conflict.type === 'entry') {
@@ -807,10 +864,13 @@ export async function resolveConflict(conflict, resolution) {
                 };
                 dailyLogs.value = logs;
 
-                // Remove from dirty list
+                // Remove from dirty list and clean up generation counter
+                const eGens = { ...(syncMetadata.value.dirtyEntryGenerations || {}) };
+                delete eGens[conflict.id];
                 syncMetadata.value = {
                     ...syncMetadata.value,
-                    dirtyEntries: meta.dirtyEntries.filter(key => key !== conflict.id)
+                    dirtyEntries: meta.dirtyEntries.filter(key => key !== conflict.id),
+                    dirtyEntryGenerations: eGens
                 };
             }
 
@@ -845,9 +905,12 @@ export async function resolveConflict(conflict, resolution) {
                     return t;
                 });
 
+                const tGens2 = { ...(syncMetadata.value.dirtyTrackerGenerations || {}) };
+                delete tGens2[conflict.id];
                 syncMetadata.value = {
                     ...syncMetadata.value,
-                    dirtyTrackers: meta.dirtyTrackers.filter(id => id !== conflict.id)
+                    dirtyTrackers: meta.dirtyTrackers.filter(id => id !== conflict.id),
+                    dirtyTrackerGenerations: tGens2
                 };
 
             } else if (conflict.type === 'entry') {
@@ -863,9 +926,12 @@ export async function resolveConflict(conflict, resolution) {
                 }
                 dailyLogs.value = logs;
 
+                const eGens2 = { ...(syncMetadata.value.dirtyEntryGenerations || {}) };
+                delete eGens2[conflict.id];
                 syncMetadata.value = {
                     ...syncMetadata.value,
-                    dirtyEntries: meta.dirtyEntries.filter(key => key !== conflict.id)
+                    dirtyEntries: meta.dirtyEntries.filter(key => key !== conflict.id),
+                    dirtyEntryGenerations: eGens2
                 };
             }
         }
@@ -1151,6 +1217,8 @@ export async function forceSync() {
                 dirtyTrackers: [],
                 dirtyEntries: [],
                 dirtyConfig: false,
+                dirtyEntryGenerations: {},
+                dirtyTrackerGenerations: {},
                 lastServerSyncTime: serverData.serverTime || getUtcNow()
             };
         });

@@ -37,6 +37,7 @@ export class SyncScheduler {
         this._pollTimer = null;
         this._retryTimer = null;
         this._retryAttempt = 0;
+        this._pendingSync = false;
         this._started = false;
 
         this._onOnline = this._onOnline.bind(this);
@@ -92,7 +93,13 @@ export class SyncScheduler {
     // --- Internal ---
 
     async _executeSync(trigger) {
-        if (!navigator.onLine || this._getIsSyncing()) return;
+        if (!navigator.onLine) return;
+
+        // If already syncing, remember we were asked so we follow up after
+        if (this._getIsSyncing()) {
+            this._pendingSync = true;
+            return;
+        }
 
         debugLog(`${this._name}-scheduler`, 'sync triggered', { trigger, retryAttempt: this._retryAttempt });
 
@@ -115,6 +122,12 @@ export class SyncScheduler {
             }
         } catch (error) {
             this._handleError(error);
+        } finally {
+            // After sync completes, check if new dirty data accumulated during sync
+            if (this._pendingSync || this._getHasDirtyData()) {
+                this._pendingSync = false;
+                this.scheduleUpload();
+            }
         }
     }
 
