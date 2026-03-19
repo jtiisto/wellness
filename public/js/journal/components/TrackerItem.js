@@ -83,7 +83,7 @@ export function TrackerItem({ tracker }) {
                         <input
                             type="number"
                             value=${value ?? ''}
-                            onChange=${handleValueChange}
+                            onInput=${handleValueChange}
                             disabled=${!editable}
                             min="0"
                             step="any"
