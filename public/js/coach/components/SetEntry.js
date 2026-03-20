@@ -44,6 +44,7 @@ export function SetEntry({ date, exerciseId, targetSets, sets, showTime = false,
                             type="number"
                             class="set-input weight"
                             placeholder="lbs"
+                            step="0.5"
                             value=${data.weight ?? ''}
                             onInput=${(e) => handleSetChange(index, 'weight', e.target.value ? Number(e.target.value) : null)}
                             disabled=${!isEditable}
