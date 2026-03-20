@@ -83,8 +83,12 @@ class TestCoachForceSync:
         """Should overwrite local plans with server plans."""
         assert "data.plans" in self.source
 
-    def test_resets_dirty_dates(self):
-        assert "dirtyDates: []" in self.source
+    def test_clears_dirty_dates_via_generation_check(self):
+        assert "clearAppliedDirtyDates" in self.source
+
+    def test_snapshots_generations_before_sync(self):
+        assert "snapshotGens" in self.source
+        assert "dirtyDateGenerations" in self.source
 
     def test_uses_earliest_date(self):
         """Should use earliestDate from response, not hardcoded window."""

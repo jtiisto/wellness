@@ -128,7 +128,12 @@ def seeded_coach_db(app_server):
     today = datetime.now().strftime("%Y-%m-%d")
     yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
 
-    # Clear existing data to avoid UNIQUE constraint on repeated runs
+    # Clear existing data to avoid UNIQUE constraint on repeated runs.
+    # Order respects FK constraints: children before parents.
+    conn.execute("DELETE FROM checklist_log_items")
+    conn.execute("DELETE FROM set_logs")
+    conn.execute("DELETE FROM exercise_logs")
+    conn.execute("DELETE FROM workout_session_logs")
     conn.execute("DELETE FROM checklist_items")
     conn.execute("DELETE FROM planned_exercises")
     conn.execute("DELETE FROM session_blocks")

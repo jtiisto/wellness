@@ -41,7 +41,8 @@ export const workoutLogs = signal({});   // { "2026-02-02": {...log...} }
 export const syncMetadata = signal({
     clientId: null,
     lastServerSyncTime: null,
-    dirtyDates: []  // Array of dates with unsaved logs
+    dirtyDates: [],  // Array of dates with unsaved logs
+    dirtyDateGenerations: {}  // { "YYYY-MM-DD": number } — incremented on each modification
 });
 
 // Server-driven sync window boundary (set on each sync response)
@@ -79,7 +80,8 @@ export async function initializeStore() {
             syncMetadata.value = {
                 clientId,
                 lastServerSyncTime: metadata?.lastServerSyncTime || null,
-                dirtyDates: metadata?.dirtyDates || []
+                dirtyDates: metadata?.dirtyDates || [],
+                dirtyDateGenerations: metadata?.dirtyDateGenerations || {}
             };
             earliestDate.value = metadata?.earliestDate || null;
             workoutPlans.value = plans || {};
@@ -168,10 +170,39 @@ function markDateDirty(date) {
     const meta = { ...syncMetadata.value };
     if (!meta.dirtyDates.includes(date)) {
         meta.dirtyDates = [...meta.dirtyDates, date];
-        syncMetadata.value = meta;
-        saveMetadata();
-        updateSyncStatus();
     }
+    // Always increment generation (detects re-modifications during sync)
+    const gens = { ...meta.dirtyDateGenerations };
+    gens[date] = (gens[date] || 0) + 1;
+    meta.dirtyDateGenerations = gens;
+    syncMetadata.value = meta;
+    saveMetadata();
+    updateSyncStatus();
+}
+
+function clearAppliedDirtyDates(appliedDates, snapshotGens) {
+    const meta = { ...syncMetadata.value };
+    const appliedSet = new Set(appliedDates);
+
+    meta.dirtyDates = meta.dirtyDates.filter(date => {
+        if (!appliedSet.has(date)) return true;  // not applied, keep dirty
+        if (snapshotGens && meta.dirtyDateGenerations[date] !== snapshotGens[date]) {
+            return true;  // re-modified during sync, keep dirty
+        }
+        return false;  // applied and not re-modified, clear
+    });
+
+    // Clean up generation counters for dates actually cleared
+    const gens = { ...meta.dirtyDateGenerations };
+    const remaining = new Set(meta.dirtyDates);
+    for (const date of appliedDates) {
+        if (!remaining.has(date)) delete gens[date];
+    }
+    meta.dirtyDateGenerations = gens;
+
+    syncMetadata.value = meta;
+    saveMetadata();
+    updateSyncStatus();
 }
 
 // ==================== Persistence ====================
@@ -188,6 +219,7 @@ async function saveMetadata() {
     await localforage.setItem(KEYS.METADATA, {
         lastServerSyncTime: syncMetadata.value.lastServerSyncTime,
         dirtyDates: syncMetadata.value.dirtyDates,
+        dirtyDateGenerations: syncMetadata.value.dirtyDateGenerations,
         earliestDate: earliestDate.value
     });
 }
@@ -252,6 +284,10 @@ async function triggerSync() {
         const clientId = meta.clientId;
         debugLog('coach-sync', 'sync start', { clientId, dirtyDates: meta.dirtyDates.length, lastServerSyncTime: meta.lastServerSyncTime });
 
+        // Snapshot generations to detect re-modifications during sync
+        const snapshotGens = { ...meta.dirtyDateGenerations };
+        let uploadedDates = [];
+
         // Step 1: Upload dirty logs first
         if (meta.dirtyDates.length > 0) {
             const logsToUpload = {};
@@ -278,13 +314,7 @@ async function triggerSync() {
             }
 
             debugLog('coach-sync', 'upload success');
-
-            // Clear dirty state after successful upload
-            syncMetadata.value = {
-                ...meta,
-                dirtyDates: []
-            };
-            await saveMetadata();
+            uploadedDates = [...meta.dirtyDates];
         }
 
         // Step 2: Download new plans and logs
@@ -322,11 +352,13 @@ async function triggerSync() {
             }
 
             // Logs: merge (server data is from other devices)
+            // Skip dates that are still dirty (uploaded dates stay dirty until
+            // generation check below; re-modified dates stay dirty permanently)
             if (Object.keys(data.logs).length > 0) {
+                const currentDirty = new Set(syncMetadata.value.dirtyDates);
                 const currentLogs = { ...workoutLogs.value };
                 for (const [date, serverLog] of Object.entries(data.logs)) {
-                    // Only apply if we don't have local changes
-                    if (!syncMetadata.value.dirtyDates.includes(date)) {
+                    if (!currentDirty.has(date)) {
                         currentLogs[date] = serverLog;
                     }
                 }
@@ -359,6 +391,11 @@ async function triggerSync() {
             }
         });
 
+        // Clear dirty state only for uploaded dates whose generation hasn't changed
+        if (uploadedDates.length > 0) {
+            clearAppliedDirtyDates(uploadedDates, snapshotGens);
+        }
+
         await Promise.all([savePlans(), saveLogs(), saveMetadata()]);
         debugLog('coach-sync', 'server data applied', { plansUpdated: Object.keys(data.plans).length, logsMerged: Object.keys(data.logs).length });
 
@@ -390,6 +427,9 @@ export async function forceSync() {
     try {
         const clientId = syncMetadata.value.clientId;
         debugLog('coach-sync', 'force sync start', { clientId });
+
+        // Snapshot generations to detect re-modifications during sync
+        const snapshotGens = { ...syncMetadata.value.dirtyDateGenerations };
 
         // Phase 1: Download full server state (no last_sync_time)
         const response = await fetch(`${API_BASE}/sync?client_id=${clientId}`);
@@ -442,7 +482,8 @@ export async function forceSync() {
         }
 
         // Phase 3: Upload client-winning logs
-        if (Object.keys(uploadLogs).length > 0) {
+        const uploadedDates = Object.keys(uploadLogs);
+        if (uploadedDates.length > 0) {
             const uploadResponse = await fetch(`${API_BASE}/sync`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -473,13 +514,15 @@ export async function forceSync() {
                 earliestDate.value = data.earliestDate;
             }
 
-            // Reset sync metadata
             syncMetadata.value = {
                 ...syncMetadata.value,
-                dirtyDates: [],
                 lastServerSyncTime: data.serverTime
             };
         });
+
+        // Clear dirty state only for dates whose generation hasn't changed
+        const allApplied = [...new Set([...uploadedDates, ...Object.keys(data.logs)])];
+        clearAppliedDirtyDates(allApplied, snapshotGens);
 
         await Promise.all([savePlans(), saveLogs(), saveMetadata()]);
         syncStatus.value = 'green';
