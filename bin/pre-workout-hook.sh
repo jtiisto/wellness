@@ -11,14 +11,7 @@
 #   - Stdout = flat JSON object with string/number/boolean/null values
 #   - Stderr is ignored (use it for logging/debug output)
 #
-# Replace the hardcoded values below with real data collection
-# (e.g., query the garmy database, call an API, etc.)
+# Replace this with real data collection (e.g., query the garmy
+# database, call an API, etc.)
 
-cat <<'EOF'
-{
-  "training_readiness": 70,
-  "hrv_status": "balanced",
-  "body_battery": 85,
-  "sleep_score": 82
-}
-EOF
+echo "{\"timestamp\": \"$(date -Iseconds)\"}"

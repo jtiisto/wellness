@@ -10,14 +10,6 @@
 #   - Stdout = flat JSON object with string/number/boolean/null values
 #   - Stderr is ignored (use it for logging/debug output)
 #
-# Replace the hardcoded values below with real data collection.
+# Replace this with real data collection.
 
-cat <<'EOF'
-{
-  "avg_heart_rate": 142,
-  "max_heart_rate": 178,
-  "calories_burned": 480,
-  "training_effect_aerobic": 3.2,
-  "training_effect_anaerobic": 2.1
-}
-EOF
+echo "{\"timestamp\": \"$(date -Iseconds)\"}"

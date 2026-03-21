@@ -131,15 +131,23 @@ sync_dir "$PROJECT_ROOT/mcp" "$PROD_DIR/mcp" "mcp/"
 # Copy data files
 sync_dir "$PROJECT_ROOT/data" "$PROD_DIR/data" "data/"
 
-# Copy bin scripts (excluding deploy script)
+# Copy bin scripts (excluding deploy script).
+# Hook scripts are copied with --no-clobber to preserve production customizations.
 echo "  Syncing bin/..."
 mkdir -p "$PROD_DIR/bin"
 for script in "$PROJECT_ROOT/bin/"*; do
     script_name="$(basename "$script")"
-    if [ "$script_name" != "deploy-prod.sh" ]; then
-        cp "$script" "$PROD_DIR/bin/"
-        chmod +x "$PROD_DIR/bin/$script_name"
+    if [ "$script_name" = "deploy-prod.sh" ]; then
+        continue
     fi
+    if [[ "$script_name" == *-workout-hook.sh ]]; then
+        if [ -f "$PROD_DIR/bin/$script_name" ]; then
+            echo "    Skipping $script_name (already exists in production)"
+            continue
+        fi
+    fi
+    cp "$script" "$PROD_DIR/bin/"
+    chmod +x "$PROD_DIR/bin/$script_name"
 done
 
 # Copy requirements.txt
