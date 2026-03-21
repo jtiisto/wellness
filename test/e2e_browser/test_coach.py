@@ -41,6 +41,7 @@ def test_exercise_expand(coach_page, app_page):
 
 def test_log_workout_set(coach_page, app_page):
     """Filling weight and reps in a set row saves the values."""
+    coach_page.start_workout()
     coach_page.expand_exercise("KB Goblet Squat")
     app_page.wait_for_timeout(300)
     coach_page.fill_set_weight(0, 24)
@@ -53,11 +54,44 @@ def test_log_workout_set(coach_page, app_page):
 
 def test_session_feedback(coach_page, app_page):
     """Filling feedback textareas saves the text."""
+    coach_page.start_workout()
     coach_page.fill_feedback("Pain / Discomfort", "Left knee slight ache")
     coach_page.fill_feedback("General Notes", "Good session overall")
     pain_val = app_page.locator(".feedback-field").filter(
         has_text="Pain / Discomfort").locator("textarea").input_value()
     assert pain_val == "Left knee slight ache"
+
+
+def test_start_gate_blocks_input(coach_page, app_page):
+    """Exercises are read-only before Start Workout is clicked."""
+    assert coach_page.is_start_gate_active()
+    # The view should have read-only class applied
+    assert app_page.locator(".workout-view.read-only").is_visible()
+
+
+def test_start_gate_unlocks_on_click(coach_page, app_page):
+    """Clicking Start Workout removes the gate and enables input."""
+    assert coach_page.is_start_gate_active()
+    coach_page.start_workout()
+    assert not coach_page.is_start_gate_active()
+    assert not app_page.locator(".workout-view.read-only").is_visible()
+
+
+def test_start_gate_unlocks_on_failure(coach_page, app_page):
+    """Start Workout unlocks exercises even if the server call fails.
+
+    Intercept the POST to force a failure; the gate should still open
+    because any click (success or failure) satisfies the gate condition.
+    """
+    assert coach_page.is_start_gate_active()
+
+    # Block the start endpoint to force a failure
+    app_page.route("**/api/coach/workout/*/start", lambda route: route.abort())
+    coach_page.start_workout()
+    app_page.unroute_all(behavior="ignoreErrors")
+
+    # Gate should be unlocked despite failure
+    assert not coach_page.is_start_gate_active()
 
 
 def test_empty_state_no_plan(app_page, app_server):

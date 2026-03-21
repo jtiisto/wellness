@@ -47,3 +47,36 @@ class CoachPage:
 
     def is_empty_state(self):
         return self.page.locator(".empty-state").is_visible()
+
+    def is_start_gate_active(self):
+        """Check if the start gate banner is showing (exercises read-only)."""
+        banner = self.page.locator(".read-only-banner")
+        if not banner.is_visible():
+            return False
+        return "Start Workout" in (banner.text_content() or "")
+
+    def start_workout(self):
+        """Expand the header and click Start Workout to unlock exercises."""
+        # Expand the collapsible header
+        toggle = self.page.locator(".workout-header-toggle")
+        toggle.click()
+        self.page.wait_for_timeout(300)
+        # Click Start Workout
+        start_btn = self.page.locator(".hook-btn--start")
+        start_btn.click()
+        # Wait for the gate to unlock
+        self.page.wait_for_timeout(500)
+
+    def end_workout(self):
+        """Click End Workout (header must already be expanded)."""
+        end_btn = self.page.locator(".hook-btn--end")
+        end_btn.click()
+        self.page.wait_for_timeout(500)
+
+    def is_workout_started(self):
+        """Check if Start Workout button shows the fired (green) state."""
+        btn = self.page.locator(".hook-btn--start")
+        if not btn.is_visible():
+            return False
+        classes = btn.get_attribute("class") or ""
+        return "--fired" in classes

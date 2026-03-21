@@ -64,7 +64,8 @@ def test_edit_during_sync_preserves_data(coach_sync_page, app_server):
     page = coach.page
     today = coach._seed_info["dates"][0]
 
-    # Expand exercise and enter first set
+    # Start workout to unlock exercise entry, then enter first set
+    coach.start_workout()
     coach.expand_exercise("KB Goblet Squat")
     page.wait_for_timeout(300)
     coach.fill_set_weight(0, 24)
@@ -123,6 +124,8 @@ def test_re_edit_same_set_during_sync_keeps_latest(coach_sync_page, app_server):
     page = coach.page
     today = coach._seed_info["dates"][0]
 
+    # Start workout to unlock exercise entry
+    coach.start_workout()
     coach.expand_exercise("KB Goblet Squat")
     page.wait_for_timeout(300)
 

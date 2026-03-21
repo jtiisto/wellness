@@ -53,11 +53,6 @@ def app_server(tmp_path_factory):
         "JOURNAL_DB_PATH": str(db_dir / "journal.db"),
         "COACH_DB_PATH": str(db_dir / "coach.db"),
         "ANALYSIS_DB_PATH": str(db_dir / "analysis.db"),
-        # Disable workout hooks in E2E tests so the start gate doesn't
-        # block exercise entry. Point to nonexistent paths so
-        # _is_hook_available() returns False.
-        "PRE_WORKOUT_HOOK": "/nonexistent/pre-workout-hook.sh",
-        "POST_WORKOUT_HOOK": "/nonexistent/post-workout-hook.sh",
     }
 
     for k, v in env_vars.items():
