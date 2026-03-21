@@ -1187,6 +1187,124 @@ body {
     opacity: 0.7;
 }
 
+/* Collapsible Workout Header */
+.coach .workout-header-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.coach .workout-header--collapsible .workout-header-toggle {
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    user-select: none;
+}
+
+.coach .workout-header--collapsible .workout-day-name {
+    margin-bottom: 0;
+}
+
+.coach .workout-header-chevron {
+    flex-shrink: 0;
+    width: 20px;
+    height: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-secondary);
+    font-size: var(--font-size-sm);
+    transition: transform 0.25s ease;
+}
+
+.coach .workout-header-chevron::before {
+    content: '\25B8'; /* ▸ */
+}
+
+.coach .workout-header-chevron--open {
+    transform: rotate(90deg);
+}
+
+/* Collapsible body with smooth height transition */
+.coach .workout-header-body {
+    display: grid;
+    grid-template-rows: 0fr;
+    transition: grid-template-rows 0.25s ease;
+}
+
+.coach .workout-header-body--open {
+    grid-template-rows: 1fr;
+}
+
+.coach .workout-header-body-inner {
+    overflow: hidden;
+}
+
+.coach .workout-header-body--open .workout-header-body-inner {
+    padding-top: var(--spacing-sm);
+}
+
+/* Workout Controls (hook buttons) */
+.coach .workout-controls {
+    display: flex;
+    gap: var(--spacing-md);
+    margin-top: var(--spacing-sm);
+}
+
+.coach .hook-btn-group {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-xs);
+}
+
+.coach .hook-btn {
+    padding: var(--spacing-xs) var(--spacing-md);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    font-size: var(--font-size-sm);
+    font-family: inherit;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background-color 0.2s, border-color 0.2s, color 0.2s, opacity 0.2s;
+    background: var(--bg-card);
+    color: var(--text-primary);
+}
+
+.coach .hook-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+/* Fired (success) state — green */
+.coach .hook-btn.hook-btn--fired {
+    background: #16a34a;
+    border-color: #16a34a;
+    color: #fff;
+}
+
+/* Failed state — red */
+.coach .hook-btn.hook-btn--failed {
+    background: #dc2626;
+    border-color: #dc2626;
+    color: #fff;
+}
+
+/* Undo link */
+.coach .hook-undo {
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    font-size: var(--font-size-xs, 0.75rem);
+    cursor: pointer;
+    padding: var(--spacing-xs);
+    text-decoration: underline;
+    font-family: inherit;
+    transition: color 0.15s;
+}
+
+.coach .hook-undo:hover {
+    color: var(--text-primary);
+}
+
 /* Exercise Block */
 .coach .exercise-block {
     margin-bottom: var(--spacing-lg);

@@ -8,7 +8,7 @@ A personal health and fitness dashboard that unifies daily habit tracking, worko
 Daily habit and health tracking with multi-device sync. Track supplements, habits, metrics, and any custom data points. Features conflict-aware synchronization with per-record versioning so multiple devices stay in sync without data loss. Sync runs automatically via a shared scheduler that responds to edits, network changes, and page visibility.
 
 ### Coach
-Workout planning and logging. Supports structured workout plans with blocks (warmup, strength, cardio), set-level tracking (weight, reps, RPE), and multiple exercise types including strength, cardio, duration, and checklists. Plans are managed server-side; logs sync from clients using last-write-wins. Automatic sync with debounced uploads and periodic polling for plan changes.
+Workout planning and logging. Supports structured workout plans with blocks (warmup, strength, cardio), set-level tracking (weight, reps, RPE), and multiple exercise types including strength, cardio, duration, and checklists. Plans are managed server-side; logs sync from clients using last-write-wins. Automatic sync with debounced uploads and periodic polling for plan changes. Configurable pre/post-workout hooks fire shell scripts to capture stats (e.g., Garmin training readiness) before exercise overwrites them.
 
 ### Analysis
 LLM-powered health insights. Submits structured prompts to Claude Code CLI with access to all data via MCP servers. Includes pre-built queries for post-workout analysis, pre-workout readiness checks, and weekly performance reviews. Custom queries can be added in `src/modules/user_queries.py` (gitignored) for personal or sensitive analysis like migraine trigger assessments. Reports are generated asynchronously using stream-json output and rendered as markdown, with CLI execution metadata (cost, duration, turns) tracked per report.
@@ -56,7 +56,7 @@ wellness/
 │   ├── unit/               # Unit tests
 │   ├── integration/        # Integration tests
 │   └── e2e_browser/        # Playwright E2E browser tests
-├── bin/                    # Server control & deployment scripts
+├── bin/                    # Server control, deployment, and hook scripts
 ├── data/                   # SQLite databases (runtime)
 └── requirements.txt
 ```
@@ -93,3 +93,12 @@ JOURNAL_DB_PATH=/custom/path/journal.db
 COACH_DB_PATH=/custom/path/coach.db
 ANALYSIS_DB_PATH=/custom/path/analysis.db
 ```
+
+Workout hooks fire shell scripts before/after workouts to capture stats:
+
+```bash
+PRE_WORKOUT_HOOK=/path/to/pre-workout-hook.sh
+POST_WORKOUT_HOOK=/path/to/post-workout-hook.sh
+```
+
+Example scripts are included in `bin/`. If no env var is set, the defaults in `bin/` are used when present. See [Installation Guide](docs/INSTALLATION.md) for details.

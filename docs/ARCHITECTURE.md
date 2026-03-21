@@ -129,6 +129,55 @@ set_logs              (id, exercise_log_id, set_num, weight, reps, rpe, unit, du
 checklist_log_items   (id, exercise_log_id, item_text)
 ```
 
+**Data model (hooks):**
+```
+workout_hook_results  (id, session_id, hook_type, fired_at, exit_code)
+                      UNIQUE(session_id, hook_type)
+workout_hook_data     (id, result_id, key, value)
+                      UNIQUE(result_id, key)
+```
+
+### Workout Hooks
+
+The Coach module supports configurable pre/post-workout hooks — shell scripts that fire when the user taps Start/End Workout. Hook script paths are resolved via `PRE_WORKOUT_HOOK` / `POST_WORKOUT_HOOK` env vars, falling back to example scripts in `bin/`.
+
+**Execution flow:**
+
+1. Client sends `POST /api/coach/hook/fire` with `{session_id, hook_type}`
+2. Server upserts a `workout_hook_results` row (exit_code = NULL, indicating pending)
+3. Server spawns the script via `asyncio.create_subprocess_exec` and returns immediately
+4. Client shows the button as "fired" (green) based on the HTTP 200, not script completion
+5. When the script finishes: exit code is stored; stdout is parsed as JSON and key/value pairs are stored in `workout_hook_data`
+6. Undo deletes the result row (cascade deletes data); retry upserts and re-fires
+
+**API endpoints:**
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/coach/workout/{session_id}/start` | Notify server that workout is starting |
+| `POST` | `/api/coach/workout/{session_id}/end` | Notify server that workout has ended |
+| `DELETE` | `/api/coach/workout/{session_id}/start` | Undo a workout start |
+| `DELETE` | `/api/coach/workout/{session_id}/end` | Undo a workout end |
+| `GET` | `/api/coach/workout/{session_id}/status` | Get workout status for a session |
+| `GET` | `/api/coach/workout/config` | Get available workout actions |
+
+The API is modeled around user actions (start/end workout), not the underlying hook mechanism. The frontend doesn't need to know that hooks exist — it just tells the server the workout is starting or ending, and the server decides what to do.
+
+**Frontend behavior:**
+
+The workout day header becomes collapsible when workout actions are available. Expanding it reveals Start/End Workout buttons. The Start button locks (no undo) once exercise data is entered. When no actions are configured, the header displays normally with no collapsible behavior.
+
+**Exercise entry gating:**
+
+When a Start Workout action is configured, exercises are read-only until the user taps Start at least once. This ensures pre-workout hooks (e.g., Garmin stats snapshot) aren't forgotten. The gate unlocks when any of these conditions is true:
+
+1. The user clicked Start (any outcome — success, failure, or pending counts)
+2. Exercise data already exists in the log (crash recovery / returning to a workout in progress)
+3. The status fetch failed (offline fallback — never lock the user out)
+4. No Start action is configured (no gate, behaves as before)
+
+This means the pre-workout hook won't fire when offline, which is intentional: the hook captures live pre-workout stats that aren't available without server connectivity.
+
 ### Force Sync
 
 Both modules support force sync (accessible from the settings menu) which performs a full bidirectional reconciliation by timestamp comparison. Force sync reports per-module counts of uploaded and accepted records. The Journal module accepts server versions on conflict during force sync rather than prompting the user.

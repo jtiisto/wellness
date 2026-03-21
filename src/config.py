@@ -47,3 +47,14 @@ def get_db_path(module):
     """Resolve DB path for a module: env var > default."""
     env = os.environ.get(module["db_env"])
     return Path(env) if env else module["db_default"]
+
+
+def get_hook_path(hook_type):
+    """Resolve hook script path: env var > default example script.
+    hook_type is 'pre' or 'post'."""
+    env_var = f"{hook_type.upper()}_WORKOUT_HOOK"
+    env = os.environ.get(env_var)
+    if env:
+        return Path(env)
+    default = PROJECT_ROOT / "bin" / f"{hook_type}-workout-hook.sh"
+    return default if default.exists() else None

@@ -2,8 +2,11 @@
 Coach API Router - extracted from coach/src/server.py
 Workout plan management and log synchronization (last-write-wins).
 """
+import asyncio
 import json
+import logging
 import sqlite3
+import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from contextlib import contextmanager
@@ -11,6 +14,10 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
+
+from config import get_hook_path
+
+logger = logging.getLogger(__name__)
 
 
 # Module-level DB path, set by create_router()
@@ -206,6 +213,27 @@ def init_database():
         )
     """)
 
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS workout_hook_results (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id  INTEGER NOT NULL REFERENCES workout_sessions(id) ON DELETE CASCADE,
+            hook_type   TEXT NOT NULL,
+            fired_at    TEXT NOT NULL,
+            exit_code   INTEGER,
+            UNIQUE(session_id, hook_type)
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS workout_hook_data (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            result_id   INTEGER NOT NULL REFERENCES workout_hook_results(id) ON DELETE CASCADE,
+            key         TEXT NOT NULL,
+            value       TEXT,
+            UNIQUE(result_id, key)
+        )
+    """)
+
     conn.commit()
     conn.close()
 
@@ -286,6 +314,7 @@ def _assemble_plan(conn, session_row):
         })
 
     return {
+        "session_id": session_row["id"],
         "day_name": session_row["day_name"],
         "location": session_row["location"],
         "phase": session_row["phase"],
@@ -451,6 +480,28 @@ class PlansVersionResponse(BaseModel):
     version: Optional[str] = None
 
 
+class WorkoutActionResponse(BaseModel):
+    status: str
+    result_id: int
+
+
+class WorkoutPhaseData(BaseModel):
+    fired_at: str
+    exit_code: Optional[int] = None
+    data: dict[str, Any] = {}
+
+
+class WorkoutStatusResponse(BaseModel):
+    start: Optional[WorkoutPhaseData] = None
+    end: Optional[WorkoutPhaseData] = None
+    actions_available: dict[str, bool]
+
+
+class WorkoutConfigResponse(BaseModel):
+    start: bool
+    end: bool
+
+
 # Router with all workout endpoints
 router = APIRouter()
 
@@ -583,6 +634,189 @@ def workout_sync_post(payload: WorkoutSyncPayload):
             "appliedLogs": applied_logs,
             "serverTime": now
         }
+
+
+async def _run_hook(result_id: int, script_path: Path):
+    """Run a hook script asynchronously and store results in the database."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            str(script_path),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate()
+        exit_code = proc.returncode
+
+        with get_db() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE workout_hook_results SET exit_code = ? WHERE id = ?",
+                (exit_code, result_id),
+            )
+
+            # Parse stdout as JSON and store key/value pairs
+            if exit_code == 0 and stdout:
+                try:
+                    data = json.loads(stdout.decode())
+                    if isinstance(data, dict):
+                        # Clear old data for retry/upsert
+                        cursor.execute(
+                            "DELETE FROM workout_hook_data WHERE result_id = ?",
+                            (result_id,),
+                        )
+                        for key, value in data.items():
+                            cursor.execute(
+                                "INSERT INTO workout_hook_data (result_id, key, value) VALUES (?, ?, ?)",
+                                (result_id, key, json.dumps(value) if not isinstance(value, str) else value),
+                            )
+                    else:
+                        logger.warning("Hook %d output is not a JSON object", result_id)
+                except (json.JSONDecodeError, UnicodeDecodeError) as e:
+                    logger.warning("Hook %d produced invalid JSON: %s", result_id, e)
+
+            conn.commit()
+
+    except FileNotFoundError:
+        logger.error("Hook script not found: %s", script_path)
+        with get_db() as conn:
+            conn.execute(
+                "UPDATE workout_hook_results SET exit_code = ? WHERE id = ?",
+                (-1, result_id),
+            )
+            conn.commit()
+    except Exception:
+        logger.exception("Hook %d failed unexpectedly", result_id)
+        with get_db() as conn:
+            conn.execute(
+                "UPDATE workout_hook_results SET exit_code = ? WHERE id = ?",
+                (-1, result_id),
+            )
+            conn.commit()
+
+
+async def _start_or_end_workout(session_id: int, hook_type: str, action_label: str):
+    """Shared logic for start/end workout endpoints."""
+    script_path = get_hook_path(hook_type)
+    if not script_path or not script_path.exists():
+        raise HTTPException(status_code=400, detail=f"No {action_label} action configured")
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT id FROM workout_sessions WHERE id = ?", (session_id,))
+        if not cursor.fetchone():
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        now = get_utc_now()
+
+        cursor.execute(
+            """INSERT INTO workout_hook_results (session_id, hook_type, fired_at, exit_code)
+               VALUES (?, ?, ?, NULL)
+               ON CONFLICT(session_id, hook_type) DO UPDATE
+               SET fired_at = excluded.fired_at, exit_code = NULL""",
+            (session_id, hook_type, now),
+        )
+        result_id = cursor.lastrowid
+        if result_id == 0:
+            cursor.execute(
+                "SELECT id FROM workout_hook_results WHERE session_id = ? AND hook_type = ?",
+                (session_id, hook_type),
+            )
+            result_id = cursor.fetchone()["id"]
+            cursor.execute("DELETE FROM workout_hook_data WHERE result_id = ?", (result_id,))
+
+        conn.commit()
+
+    asyncio.create_task(_run_hook(result_id, script_path))
+
+    return WorkoutActionResponse(status=action_label, result_id=result_id)
+
+
+def _undo_workout_action(session_id: int, hook_type: str):
+    """Shared logic for undoing start/end workout."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "DELETE FROM workout_hook_results WHERE session_id = ? AND hook_type = ?",
+            (session_id, hook_type),
+        )
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Nothing to undo")
+        conn.commit()
+
+    return {"status": "deleted"}
+
+
+@router.post("/workout/{session_id}/start", response_model=WorkoutActionResponse)
+async def start_workout(session_id: int):
+    """Notify the server that a workout is starting."""
+    return await _start_or_end_workout(session_id, "pre", "started")
+
+
+@router.post("/workout/{session_id}/end", response_model=WorkoutActionResponse)
+async def end_workout(session_id: int):
+    """Notify the server that a workout has ended."""
+    return await _start_or_end_workout(session_id, "post", "ended")
+
+
+@router.delete("/workout/{session_id}/start")
+def undo_start_workout(session_id: int):
+    """Undo a workout start notification."""
+    return _undo_workout_action(session_id, "pre")
+
+
+@router.delete("/workout/{session_id}/end")
+def undo_end_workout(session_id: int):
+    """Undo a workout end notification."""
+    return _undo_workout_action(session_id, "post")
+
+
+@router.get("/workout/config", response_model=WorkoutConfigResponse)
+def get_workout_config():
+    """Get available workout actions."""
+    return WorkoutConfigResponse(
+        start=_is_hook_available("pre"),
+        end=_is_hook_available("post"),
+    )
+
+
+@router.get("/workout/{session_id}/status", response_model=WorkoutStatusResponse)
+def get_workout_status(session_id: int):
+    """Get workout status for a session."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+
+        result = {"start": None, "end": None}
+        for hook_type, key in (("pre", "start"), ("post", "end")):
+            cursor.execute(
+                "SELECT * FROM workout_hook_results WHERE session_id = ? AND hook_type = ?",
+                (session_id, hook_type),
+            )
+            row = cursor.fetchone()
+            if row:
+                cursor.execute(
+                    "SELECT key, value FROM workout_hook_data WHERE result_id = ?",
+                    (row["id"],),
+                )
+                data = {r["key"]: r["value"] for r in cursor.fetchall()}
+                result[key] = WorkoutPhaseData(
+                    fired_at=row["fired_at"],
+                    exit_code=row["exit_code"],
+                    data=data,
+                )
+
+        actions_available = {
+            "start": _is_hook_available("pre"),
+            "end": _is_hook_available("post"),
+        }
+
+        return WorkoutStatusResponse(**result, actions_available=actions_available)
+
+
+def _is_hook_available(hook_type: str) -> bool:
+    """Check whether a hook script is configured and exists."""
+    path = get_hook_path(hook_type)
+    return path is not None and path.exists()
 
 
 def create_router(db_path: Path) -> APIRouter:

@@ -110,6 +110,38 @@ http://localhost:9000/wellness/
 
 The `StripPrefixMiddleware` in `server.py` strips the `/wellness` prefix from incoming requests so backend routes stay at root (`/api/journal/sync`, `/api/coach/sync`, etc.) while the frontend uses prefixed paths (`/wellness/api/journal/sync`). This means the same server works both behind Tailscale (which also strips the prefix) and via direct access.
 
+### Workout hooks
+
+The Coach module supports pre- and post-workout hooks — shell scripts that fire when you tap Start/End Workout in the UI. The primary use case is capturing stats (training readiness, HRV, body battery) before exercise overwrites them on your fitness device.
+
+**Configuration:**
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PRE_WORKOUT_HOOK` | `bin/pre-workout-hook.sh` (if exists) | Script to run before a workout |
+| `POST_WORKOUT_HOOK` | `bin/post-workout-hook.sh` (if exists) | Script to run after a workout |
+
+If no env var is set, the server falls back to the example scripts in `bin/`. If neither exists, the hook buttons are hidden in the UI.
+
+**Script contract:**
+
+- Exit code 0 = success, non-zero = failure
+- Stdout = flat JSON object with string/number/boolean/null values (optional)
+- Stderr is ignored (use it for logging)
+
+Example output:
+
+```json
+{
+  "training_readiness": 70,
+  "hrv_status": "balanced",
+  "body_battery": 85,
+  "sleep_score": 82
+}
+```
+
+Hook results (exit code + parsed key/value data) are stored in `coach.db` and linked to the workout session. The example scripts in `bin/` output hardcoded sample data — replace them with real data collection (e.g., query the garmy database, call an API).
+
 ### LLM directory configuration
 
 The Analysis module invokes Claude Code CLI in a specific working directory so it has access to MCP server configurations. This directory is resolved in order:
