@@ -5,6 +5,7 @@ import { h } from 'preact';
 import htm from 'htm';
 
 import { updateLog } from '../store.js';
+import { NumericInput } from '../../shared/numeric-input.js';
 
 const html = htm.bind(h);
 
@@ -18,33 +19,30 @@ export function CardioEntry({ date, exerciseId, targetMin, data, isEditable = tr
         <div class="cardio-entry">
             <div class="cardio-field">
                 <label>Duration (min)</label>
-                <input
-                    type="number"
+                <${NumericInput}
                     placeholder=${targetMin || ''}
-                    value=${data.duration_min ?? ''}
-                    onInput=${(e) => handleChange('duration_min', e.target.value ? Number(e.target.value) : null)}
+                    value=${data.duration_min}
+                    onValueChange=${(v) => handleChange('duration_min', v)}
                     disabled=${!isEditable}
                 />
             </div>
 
             <div class="cardio-field">
                 <label>Avg HR</label>
-                <input
-                    type="number"
+                <${NumericInput}
                     placeholder="bpm"
-                    value=${data.avg_hr ?? ''}
-                    onInput=${(e) => handleChange('avg_hr', e.target.value ? Number(e.target.value) : null)}
+                    value=${data.avg_hr}
+                    onValueChange=${(v) => handleChange('avg_hr', v)}
                     disabled=${!isEditable}
                 />
             </div>
 
             <div class="cardio-field">
                 <label>Max HR</label>
-                <input
-                    type="number"
+                <${NumericInput}
                     placeholder="bpm"
-                    value=${data.max_hr ?? ''}
-                    onInput=${(e) => handleChange('max_hr', e.target.value ? Number(e.target.value) : null)}
+                    value=${data.max_hr}
+                    onValueChange=${(v) => handleChange('max_hr', v)}
                     disabled=${!isEditable}
                 />
             </div>

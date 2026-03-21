@@ -6,6 +6,7 @@ import { useState, useEffect } from 'preact/hooks';
 import { effect } from '@preact/signals';
 import htm from 'htm';
 import { selectedDate, dailyLogs, updateEntry, isDayEditable } from '../store.js';
+import { NumericInput } from '../../shared/numeric-input.js';
 
 const html = htm.bind(h);
 
@@ -45,12 +46,6 @@ export function TrackerItem({ tracker }) {
         updateEntry(date, tracker.id, updateData);
     };
 
-    const handleValueChange = (e) => {
-        if (!editable || !completed) return;
-        const newValue = e.target.value === '' ? null : Number(e.target.value);
-        updateEntry(date, tracker.id, { value: newValue });
-    };
-
     const handleSliderChange = (e) => {
         if (!editable || !completed) return;
         updateEntry(date, tracker.id, { value: Number(e.target.value) });
@@ -80,10 +75,12 @@ export function TrackerItem({ tracker }) {
                 </div>
                 ${tracker.type === 'quantifiable' && html`
                     <div class="tracker-value-input">
-                        <input
-                            type="number"
-                            value=${value ?? ''}
-                            onInput=${handleValueChange}
+                        <${NumericInput}
+                            value=${value}
+                            onValueChange=${(v) => {
+                                if (!editable || !completed) return;
+                                updateEntry(date, tracker.id, { value: v });
+                            }}
                             disabled=${!editable}
                             min="0"
                             step="any"
