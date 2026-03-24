@@ -12,19 +12,18 @@ import { TrackerItem } from './TrackerItem.js';
 
 const html = htm.bind(h);
 
-function DateSelector({ selected, dirtyConfig, hasConflicts, onDateSelect }) {
+function DateSelector({ selected, hasDirtyTrackers, hasConflicts, onDateSelect }) {
     const days = getLastNDays(5);
     const today = getToday();
 
     const handleDateClick = (date) => {
-        // Disable past dates if config is dirty or there are conflicts
-        if ((dirtyConfig || hasConflicts) && date !== today) {
+        if ((hasDirtyTrackers || hasConflicts) && date !== today) {
             return;
         }
         onDateSelect(date);
     };
 
-    const isDisabled = (date) => (dirtyConfig || hasConflicts) && date !== today;
+    const isDisabled = (date) => (hasDirtyTrackers || hasConflicts) && date !== today;
 
     return html`
         <div class="date-selector">
@@ -45,7 +44,7 @@ function DateSelector({ selected, dirtyConfig, hasConflicts, onDateSelect }) {
 export function TrackerList() {
     const [config, setConfig] = useState(trackerConfig.value);
     const [date, setDate] = useState(selectedDate.value);
-    const [dirtyConfig, setDirtyConfig] = useState(syncMetadata.value.dirtyConfig);
+    const [hasDirtyTrackers, setHasDirtyTrackers] = useState(syncMetadata.value.dirtyTrackers.length > 0);
     const [hasConflicts, setHasConflicts] = useState(pendingConflicts.value.length > 0);
     const [expanded, setExpanded] = useState(new Set(expandedCategories.value));
 
@@ -53,7 +52,7 @@ export function TrackerList() {
         const dispose = effect(() => {
             setConfig([...trackerConfig.value]);
             setDate(selectedDate.value);
-            setDirtyConfig(syncMetadata.value.dirtyConfig);
+            setHasDirtyTrackers(syncMetadata.value.dirtyTrackers.length > 0);
             setHasConflicts(pendingConflicts.value.length > 0);
             setExpanded(new Set(expandedCategories.value));
         });
@@ -74,7 +73,7 @@ export function TrackerList() {
     if (config.length === 0) {
         return html`
             <div>
-                <${DateSelector} selected=${date} dirtyConfig=${dirtyConfig} hasConflicts=${hasConflicts} onDateSelect=${handleDateSelect} />
+                <${DateSelector} selected=${date} hasDirtyTrackers=${hasDirtyTrackers} hasConflicts=${hasConflicts} onDateSelect=${handleDateSelect} />
                 <div class="main-content">
                     <div class="empty-state">
                         <div class="empty-state-icon">\u{1F4DD}</div>
@@ -89,7 +88,7 @@ export function TrackerList() {
     if (visibleTrackers.length === 0) {
         return html`
             <div>
-                <${DateSelector} selected=${date} dirtyConfig=${dirtyConfig} hasConflicts=${hasConflicts} onDateSelect=${handleDateSelect} />
+                <${DateSelector} selected=${date} hasDirtyTrackers=${hasDirtyTrackers} hasConflicts=${hasConflicts} onDateSelect=${handleDateSelect} />
                 <div class="main-content">
                     <div class="empty-state">
                         <div class="empty-state-icon">\u{1F4C5}</div>
@@ -102,7 +101,7 @@ export function TrackerList() {
 
     return html`
         <div>
-            <${DateSelector} selected=${date} dirtyConfig=${dirtyConfig} hasConflicts=${hasConflicts} onDateSelect=${handleDateSelect} />
+            <${DateSelector} selected=${date} hasDirtyTrackers=${hasDirtyTrackers} hasConflicts=${hasConflicts} onDateSelect=${handleDateSelect} />
             <div class="main-content">
                 ${categories.map(category => {
                     const isCollapsed = !expanded.has(category);

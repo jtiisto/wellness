@@ -45,7 +45,6 @@ export const syncMetadata = signal({
     lastServerSyncTime: null,
     dirtyTrackers: [],  // Array of tracker IDs with local changes
     dirtyEntries: [],   // Array of "date|trackerId" strings with local changes
-    dirtyConfig: false, // Legacy flag for backward compatibility
     dirtyEntryGenerations: {},   // { "date|trackerId": number } — incremented on each modification
     dirtyTrackerGenerations: {}  // { trackerId: number } — incremented on each modification
 });
@@ -111,7 +110,6 @@ export async function initializeStore() {
                 lastServerSyncTime: metadata?.lastServerSyncTime || null,
                 dirtyTrackers: metadata?.dirtyTrackers || [],
                 dirtyEntries: metadata?.dirtyEntries || [],
-                dirtyConfig: metadata?.dirtyConfig || false,
                 dirtyEntryGenerations: metadata?.dirtyEntryGenerations || {},
                 dirtyTrackerGenerations: metadata?.dirtyTrackerGenerations || {}
             };
@@ -142,7 +140,6 @@ async function saveMetadata() {
         lastServerSyncTime: meta.lastServerSyncTime,
         dirtyTrackers: meta.dirtyTrackers,
         dirtyEntries: meta.dirtyEntries,
-        dirtyConfig: meta.dirtyConfig,
         dirtyEntryGenerations: meta.dirtyEntryGenerations,
         dirtyTrackerGenerations: meta.dirtyTrackerGenerations
     });
@@ -255,7 +252,6 @@ function markTrackerDirty(trackerId) {
     const meta = { ...syncMetadata.value };
     if (!meta.dirtyTrackers.includes(trackerId)) {
         meta.dirtyTrackers = [...meta.dirtyTrackers, trackerId];
-        meta.dirtyConfig = true;  // Legacy compatibility
     }
     // Always increment generation (detects re-modifications during sync)
     const gens = { ...meta.dirtyTrackerGenerations };
@@ -318,8 +314,6 @@ function clearDirtyState(appliedTrackerIds = [], appliedEntryKeys = [],
         if (!remainingEntries.has(key)) delete entryGens[key];
     }
     meta.dirtyEntryGenerations = entryGens;
-
-    meta.dirtyConfig = meta.dirtyTrackers.length > 0;
 
     syncMetadata.value = meta;
     saveMetadata();
@@ -1000,23 +994,12 @@ export function isDayEditable(dateStr) {
     if (pendingConflicts.value.length > 0) {
         return false;
     }
-    // If config is dirty, only today is editable (legacy behavior)
-    return !syncMetadata.value.dirtyConfig;
+    // If trackers have unsynced changes, only today is editable
+    return syncMetadata.value.dirtyTrackers.length === 0;
 }
 
 export function hasConflicts() {
     return pendingConflicts.value.length > 0;
-}
-
-// Legacy support for dirtyDays
-export function getDirtyDays() {
-    const meta = syncMetadata.value;
-    const days = new Set();
-    for (const entryKey of meta.dirtyEntries) {
-        const [date] = entryKey.split('|');
-        days.add(date);
-    }
-    return Array.from(days);
 }
 
 // ==================== Force Sync ====================
@@ -1216,7 +1199,6 @@ export async function forceSync() {
                 ...syncMetadata.value,
                 dirtyTrackers: [],
                 dirtyEntries: [],
-                dirtyConfig: false,
                 dirtyEntryGenerations: {},
                 dirtyTrackerGenerations: {},
                 lastServerSyncTime: serverData.serverTime || getUtcNow()

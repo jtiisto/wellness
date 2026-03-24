@@ -4,13 +4,15 @@ Conflict-aware versioning sync engine for personal journal trackers.
 """
 import json
 import sqlite3
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
-from contextlib import contextmanager
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict
+
+from modules.db import get_db as _shared_get_db, get_utc_now, register_client as _db_register_client
 
 
 # Module-level DB path, set by create_router()
@@ -19,13 +21,9 @@ _db_path: Path = None
 
 @contextmanager
 def get_db():
-    """Context manager for database connections."""
-    conn = sqlite3.connect(_db_path)
-    conn.row_factory = sqlite3.Row
-    try:
+    """Module-scoped wrapper that binds the module's DB path."""
+    with _shared_get_db(_db_path) as conn:
         yield conn
-    finally:
-        conn.close()
 
 
 def init_database():
@@ -129,11 +127,6 @@ def init_database():
         conn.commit()
 
 
-def get_utc_now() -> str:
-    """Return current UTC time as ISO-8601 string."""
-    return datetime.utcnow().isoformat() + "Z"
-
-
 # Pydantic models
 class TrackerEntry(BaseModel):
     value: Optional[float] = None
@@ -216,12 +209,7 @@ def sync_status():
 def register_client(client_id: str, client_name: Optional[str] = None):
     """Register or update a client."""
     with get_db() as conn:
-        cursor = conn.cursor()
-        now = get_utc_now()
-        cursor.execute("""
-            INSERT OR REPLACE INTO clients (id, name, last_seen_at)
-            VALUES (?, ?, ?)
-        """, (client_id, client_name or f"Client-{client_id[:8]}", now))
+        _db_register_client(conn, client_id, client_name)
         conn.commit()
         return {"status": "ok", "clientId": client_id}
 
@@ -354,10 +342,7 @@ def sync_update(payload: SyncPayload):
     with get_db() as conn:
         cursor = conn.cursor()
 
-        cursor.execute("""
-            INSERT OR REPLACE INTO clients (id, name, last_seen_at)
-            VALUES (?, ?, ?)
-        """, (client_id, f"Client-{client_id[:8]}", now))
+        _db_register_client(conn, client_id, now=now)
 
         try:
             for item in payload.config:

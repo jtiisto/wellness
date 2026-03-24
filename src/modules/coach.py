@@ -7,15 +7,16 @@ import json
 import logging
 import sqlite3
 import subprocess
-from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from contextlib import contextmanager
+from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from config import get_hook_path
+from modules.db import get_db as _shared_get_db, get_utc_now, register_client as _db_register_client
 
 logger = logging.getLogger(__name__)
 
@@ -30,14 +31,9 @@ SYNC_WINDOW_DAYS = 60
 
 @contextmanager
 def get_db():
-    """Context manager for database connections."""
-    conn = sqlite3.connect(_db_path)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    try:
+    """Module-scoped wrapper that binds the module's DB path with foreign keys enabled."""
+    with _shared_get_db(_db_path, foreign_keys=True) as conn:
         yield conn
-    finally:
-        conn.close()
 
 
 def init_database():
@@ -236,11 +232,6 @@ def init_database():
 
     conn.commit()
     conn.close()
-
-
-def get_utc_now() -> str:
-    """Return current UTC time as ISO-8601 string."""
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 # ==================== Plan/Log Assembly Helpers ====================
@@ -533,12 +524,7 @@ def plans_version():
 def register_client(client_id: str, client_name: Optional[str] = None):
     """Register or update a client."""
     with get_db() as conn:
-        cursor = conn.cursor()
-        now = get_utc_now()
-        cursor.execute("""
-            INSERT OR REPLACE INTO clients (id, name, last_seen_at)
-            VALUES (?, ?, ?)
-        """, (client_id, client_name or f"Client-{client_id[:8]}", now))
+        _db_register_client(conn, client_id, client_name)
         conn.commit()
         return {"status": "ok", "clientId": client_id}
 
@@ -611,10 +597,7 @@ def workout_sync_post(payload: WorkoutSyncPayload):
         now = get_utc_now()
         client_id = payload.clientId
 
-        cursor.execute("""
-            INSERT OR REPLACE INTO clients (id, name, last_seen_at)
-            VALUES (?, ?, ?)
-        """, (client_id, f"Client-{client_id[:8]}", now))
+        _db_register_client(conn, client_id, now=now)
 
         applied_logs = []
 

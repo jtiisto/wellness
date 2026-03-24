@@ -590,8 +590,8 @@ body {
     min-height: 0;
 }
 
-/* Date Selector */
-.journal .date-selector {
+/* Date Selector (shared by journal and coach) */
+.date-selector {
     display: flex;
     gap: var(--spacing-xs);
     padding: var(--spacing-md);
@@ -601,7 +601,7 @@ body {
     -webkit-overflow-scrolling: touch;
 }
 
-.journal .date-item {
+.date-item {
     flex: 0 0 auto;
     min-width: var(--tap-target);
     padding: var(--spacing-sm) var(--spacing-md);
@@ -615,15 +615,31 @@ body {
     border: 2px solid transparent;
 }
 
-.journal .date-item:hover {
+.date-item:hover {
     background-color: var(--bg-tertiary);
 }
 
-.journal .date-item.selected {
+.date-item.selected {
     background-color: var(--accent-primary);
     color: white;
 }
 
+.date-day {
+    font-size: var(--font-size-sm);
+    color: var(--text-secondary);
+    text-transform: uppercase;
+}
+
+.date-item.selected .date-day {
+    color: rgba(255, 255, 255, 0.8);
+}
+
+.date-num {
+    font-size: var(--font-size-lg);
+    font-weight: 600;
+}
+
+/* Journal-specific: disabled state when trackers are unsynced */
 .journal .date-item.disabled {
     opacity: 0.5;
     cursor: not-allowed;
@@ -639,21 +655,6 @@ body {
     height: 8px;
     background-color: var(--sync-red);
     border-radius: var(--radius-full);
-}
-
-.journal .date-day {
-    font-size: var(--font-size-sm);
-    color: var(--text-secondary);
-    text-transform: uppercase;
-}
-
-.journal .date-item.selected .date-day {
-    color: rgba(255, 255, 255, 0.8);
-}
-
-.journal .date-num {
-    font-size: var(--font-size-lg);
-    font-weight: 600;
 }
 
 /* Main Content */
@@ -1082,40 +1083,7 @@ body {
 
 /* ========== Coach Module ========== */
 
-/* Date Selector */
-.coach .date-selector {
-    display: flex;
-    gap: var(--spacing-xs);
-    padding: var(--spacing-md);
-    overflow-x: auto;
-    background-color: var(--bg-secondary);
-    border-bottom: 1px solid var(--border-color);
-    -webkit-overflow-scrolling: touch;
-}
-
-.coach .date-item {
-    flex: 0 0 auto;
-    min-width: var(--tap-target);
-    padding: var(--spacing-sm) var(--spacing-md);
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: var(--spacing-xs);
-    border-radius: var(--radius-md);
-    cursor: pointer;
-    transition: background-color 0.2s;
-    border: 2px solid transparent;
-}
-
-.coach .date-item:hover {
-    background-color: var(--bg-tertiary);
-}
-
-.coach .date-item.selected {
-    background-color: var(--accent-primary);
-    color: white;
-}
-
+/* Coach-specific: plan/log indicators on date items */
 .coach .date-item.has-plan {
     border-color: var(--accent-success);
 }
@@ -1132,21 +1100,6 @@ body {
     height: 6px;
     background-color: var(--accent-success);
     border-radius: var(--radius-full);
-}
-
-.coach .date-day {
-    font-size: var(--font-size-sm);
-    color: var(--text-secondary);
-    text-transform: uppercase;
-}
-
-.coach .date-item.selected .date-day {
-    color: rgba(255, 255, 255, 0.8);
-}
-
-.coach .date-num {
-    font-size: var(--font-size-lg);
-    font-weight: 600;
 }
 
 /* Main Content */

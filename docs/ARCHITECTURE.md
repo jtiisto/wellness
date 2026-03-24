@@ -143,10 +143,10 @@ The Coach module supports configurable pre/post-workout hooks — shell scripts 
 
 **Execution flow:**
 
-1. Client sends `POST /api/coach/hook/fire` with `{session_id, hook_type}`
+1. Client sends `POST /api/coach/workout/{session_id}/start` (or `/end`)
 2. Server upserts a `workout_hook_results` row (exit_code = NULL, indicating pending)
-3. Server spawns the script via `asyncio.create_subprocess_exec` and returns immediately
-4. Client shows the button as "fired" (green) based on the HTTP 200, not script completion
+3. Server spawns the hook script via `asyncio.create_subprocess_exec` and returns immediately
+4. Client shows the button as green based on the HTTP 200, not script completion
 5. When the script finishes: exit code is stored; stdout is parsed as JSON and key/value pairs are stored in `workout_hook_data`
 6. Undo deletes the result row (cascade deletes data); retry upserts and re-fires
 

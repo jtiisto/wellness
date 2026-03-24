@@ -1,21 +1,6 @@
 import sqlite3
-from contextlib import contextmanager
-from datetime import datetime, timezone
 
-
-def get_utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-
-
-@contextmanager
-def get_db(db_path: str):
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    try:
-        yield conn
-    finally:
-        conn.close()
+from modules.db import get_db, get_utc_now
 
 
 def init_database(db_path: str):
