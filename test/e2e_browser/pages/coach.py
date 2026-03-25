@@ -49,11 +49,8 @@ class CoachPage:
         return self.page.locator(".empty-state").is_visible()
 
     def is_start_gate_active(self):
-        """Check if the start gate banner is showing (exercises read-only)."""
-        banner = self.page.locator(".read-only-banner")
-        if not banner.is_visible():
-            return False
-        return "Start Workout" in (banner.text_content() or "")
+        """Check if the start gate is active (exercises read-only)."""
+        return self.page.locator(".workout-view.read-only").is_visible()
 
     def start_workout(self):
         """Expand the header and click Start Workout to unlock exercises."""

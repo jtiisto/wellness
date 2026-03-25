@@ -241,7 +241,7 @@ export function WorkoutView({ date, plan, log, isEditable = true }) {
     // Banner text for non-editable views only (past/future)
     const readOnlyReason = !isEditable
         ? (isFutureDate ? 'Viewing scheduled workout (read-only)' : 'Viewing past workout (read-only)')
-        : (!startGateSatisfied ? 'Tap Start Workout to begin logging' : null);
+        : null;
 
     return html`
         <div class="workout-view ${!effectiveEditable ? 'read-only' : ''}">

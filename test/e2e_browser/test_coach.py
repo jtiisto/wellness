@@ -65,8 +65,6 @@ def test_session_feedback(coach_page, app_page):
 def test_start_gate_blocks_input(coach_page, app_page):
     """Exercises are read-only before Start Workout is clicked."""
     assert coach_page.is_start_gate_active()
-    # The view should have read-only class applied
-    assert app_page.locator(".workout-view.read-only").is_visible()
 
 
 def test_start_gate_unlocks_on_click(coach_page, app_page):
@@ -74,7 +72,6 @@ def test_start_gate_unlocks_on_click(coach_page, app_page):
     assert coach_page.is_start_gate_active()
     coach_page.start_workout()
     assert not coach_page.is_start_gate_active()
-    assert not app_page.locator(".workout-view.read-only").is_visible()
 
 
 def test_start_gate_unlocks_on_failure(coach_page, app_page):
