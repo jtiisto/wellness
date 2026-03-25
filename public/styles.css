@@ -1128,6 +1128,7 @@ body {
     gap: var(--spacing-md);
     color: var(--text-secondary);
     font-size: var(--font-size-sm);
+    padding-top: var(--spacing-xs);
 }
 
 .coach .workout-meta-item {
@@ -1159,13 +1160,13 @@ body {
 
 .coach .workout-header-chevron {
     flex-shrink: 0;
-    width: 20px;
-    height: 20px;
+    width: 32px;
+    height: 32px;
     display: flex;
     align-items: center;
     justify-content: center;
     color: var(--text-secondary);
-    font-size: var(--font-size-sm);
+    font-size: var(--font-size-lg);
     transition: transform 0.25s ease;
 }
 

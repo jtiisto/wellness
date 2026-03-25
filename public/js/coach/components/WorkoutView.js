@@ -238,10 +238,10 @@ export function WorkoutView({ date, plan, log, isEditable = true }) {
         `;
     }
 
-    // Banner text depends on why the view is read-only
+    // Banner text for non-editable views only (past/future)
     const readOnlyReason = !isEditable
         ? (isFutureDate ? 'Viewing scheduled workout (read-only)' : 'Viewing past workout (read-only)')
-        : (!startGateSatisfied ? 'Tap Start Workout to begin logging' : null);
+        : null;
 
     return html`
         <div class="workout-view ${!effectiveEditable ? 'read-only' : ''}">
@@ -263,22 +263,22 @@ export function WorkoutView({ date, plan, log, isEditable = true }) {
                         <span class="workout-header-chevron ${expanded ? 'workout-header-chevron--open' : ''}"></span>
                     `}
                 </div>
+                <div class="workout-meta">
+                    ${plan.location && html`
+                        <span class="workout-meta-item">
+                            <span class="icon">📍</span>
+                            ${plan.location}
+                        </span>
+                    `}
+                    ${plan.phase && html`
+                        <span class="workout-meta-item">
+                            <span class="icon">📊</span>
+                            ${plan.phase}
+                        </span>
+                    `}
+                </div>
                 <div class="workout-header-body ${(expanded || !showControls) ? 'workout-header-body--open' : ''}">
                     <div class="workout-header-body-inner">
-                        <div class="workout-meta">
-                            ${plan.location && html`
-                                <span class="workout-meta-item">
-                                    <span class="icon">📍</span>
-                                    ${plan.location}
-                                </span>
-                            `}
-                            ${plan.phase && html`
-                                <span class="workout-meta-item">
-                                    <span class="icon">📊</span>
-                                    ${plan.phase}
-                                </span>
-                            `}
-                        </div>
                         ${showControls && html`
                             <div class="workout-controls">
                                 ${actionsAvailable.start && renderActionButton('start', startState)}
