@@ -260,7 +260,7 @@ export function WorkoutView({ date, plan, log, isEditable = true }) {
                 >
                     <h2 class="workout-day-name">${plan.day_name || 'Workout'}</h2>
                     ${showControls && html`
-                        <span class="workout-header-chevron ${expanded ? 'workout-header-chevron--open' : ''}"></span>
+                        <span class="workout-header-chevron ${expanded ? 'workout-header-chevron--open' : ''}">▼</span>
                     `}
                 </div>
                 <div class="workout-meta">

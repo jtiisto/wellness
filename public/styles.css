@@ -1166,16 +1166,13 @@ body {
     align-items: center;
     justify-content: center;
     color: var(--text-secondary);
-    font-size: var(--font-size-lg);
-    transition: transform 0.25s ease;
-}
-
-.coach .workout-header-chevron::before {
-    content: '\25B8'; /* ▸ */
+    font-size: var(--font-size-sm);
+    transition: transform 0.2s ease;
+    transform: rotate(-90deg);
 }
 
 .coach .workout-header-chevron--open {
-    transform: rotate(90deg);
+    transform: rotate(0deg);
 }
 
 /* Collapsible body with smooth height transition */
@@ -1366,11 +1363,12 @@ body {
 .coach .exercise-chevron {
     color: var(--text-muted);
     font-size: var(--font-size-sm);
-    transition: transform 0.2s;
+    transition: transform 0.2s ease;
+    transform: rotate(-90deg);
 }
 
 .coach .exercise-item.expanded .exercise-chevron {
-    transform: rotate(180deg);
+    transform: rotate(0deg);
 }
 
 .coach .exercise-body {

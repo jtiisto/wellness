@@ -105,7 +105,7 @@ export function ExerciseItem({ date, exercise, logData, isEditable = true }) {
                     <span class="exercise-pill">${p}</span>
                 `)}
                 <span class="exercise-target">${target}</span>
-                <span class="exercise-chevron">${expanded ? '▲' : '▼'}</span>
+                <span class="exercise-chevron">▼</span>
             </div>
 
             ${expanded && html`
