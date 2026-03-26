@@ -126,7 +126,7 @@ sync_dir "$PROJECT_ROOT/src" "$PROD_DIR/src" "src/"
 sync_dir "$PROJECT_ROOT/public" "$PROD_DIR/public" "public/"
 
 # Copy MCP tools
-sync_dir "$PROJECT_ROOT/mcp" "$PROD_DIR/mcp" "mcp/"
+sync_dir "$PROJECT_ROOT/mcp_servers" "$PROD_DIR/mcp_servers" "mcp_servers/"
 
 # Copy data files
 sync_dir "$PROJECT_ROOT/data" "$PROD_DIR/data" "data/"

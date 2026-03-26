@@ -235,7 +235,7 @@ Each module follows a consistent pattern:
 Two **FastMCP** servers expose wellness data to LLMs:
 
 - **Journal MCP** - Strictly read-only. Opens SQLite in read-only mode (`?mode=ro`). Validates all queries to ensure only SELECT/WITH statements run. Auto-applies row limits.
-- **Coach MCP** - Read-only for queries and logs. Write access for workout plan management (creating/updating plans). Uses a mode-switching connection manager.
+- **Coach MCP** - Read-only for queries and logs. Write access for workout plan management (creating/updating plans). Uses a mode-switching connection manager. Workout logs include pre/post workout stats (readiness metrics, recovery data) when available.
 
 Both servers run over stdio transport when invoked by Claude Code CLI. They can also be configured for HTTP/SSE transport.
 

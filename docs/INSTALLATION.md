@@ -156,8 +156,8 @@ The Analysis module invokes Claude Code CLI in a specific working directory so i
 
 The application includes two MCP servers that provide AI tools with structured access to wellness data:
 
-- **Journal MCP** (`mcp/journal_mcp/`) - Read-only SQL access to journal tracking data
-- **Coach MCP** (`mcp/coach_mcp/`) - Read/write access to workout plans, read-only access to logs
+- **Journal MCP** (`mcp_servers/journal_mcp/`) - Read-only SQL access to journal tracking data
+- **Coach MCP** (`mcp_servers/coach_mcp/`) - Read/write access to workout plans, read-only access to logs
 
 Both servers use the FastMCP framework and communicate over stdio transport.
 
@@ -255,7 +255,7 @@ All queries are validated to be read-only (SELECT/WITH only). A row limit is aut
 | `get_workout_plan` | Get a specific day's plan with exercises |
 | `get_workout_plans_range` | Plans for a date range |
 | `get_workout_log` | Get a specific day's log with sets |
-| `get_workout_logs_range` | Logs for a date range |
+| `get_workout_logs_range` | Logs for a date range (includes pre/post workout stats) |
 | `get_exercise_history` | Historical logs for a specific exercise |
 | `save_workout_plan` | Create or update a workout plan (write) |
 | `lookup_exercise` | Search the exercise registry |

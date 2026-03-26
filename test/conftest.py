@@ -16,9 +16,11 @@ from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 
-# Add wellness/src to path for imports
+# Add wellness/src and wellness/mcp_servers to path for imports
 _SRC_DIR = Path(__file__).parent.parent / "src"
+_MCP_DIR = Path(__file__).parent.parent / "mcp_servers"
 sys.path.insert(0, str(_SRC_DIR))
+sys.path.insert(0, str(_MCP_DIR))
 
 
 @pytest.fixture(scope="function")

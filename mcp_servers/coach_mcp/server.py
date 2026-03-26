@@ -348,7 +348,9 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
             end_date: End date (YYYY-MM-DD)
 
         Returns:
-            List of logs with date and exercise completion data
+            List of logs with date, exercise completion data, and
+            pre/post workout stats (readiness metrics, recovery data, etc.)
+            when available
         """
         try:
             results = db_manager.execute_query("""
@@ -361,7 +363,9 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
             for row in results:
                 with db_manager.get_connection(read_only=True) as conn:
                     cursor = conn.cursor()
-                    log_data = _assemble_log_from_db(cursor, row["id"])
+                    log_data = _assemble_log_from_db(
+                        cursor, row["id"], session_id=row["session_id"]
+                    )
 
                 logs.append({
                     "date": row["date"],
@@ -1300,7 +1304,44 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
 # ==================== Log Assembly Helper ====================
 
 
-def _assemble_log_from_db(cursor, session_log_id):
+def _get_workout_stats(cursor, session_id):
+    """Fetch pre/post workout stats for a session from hook result tables.
+
+    Returns a dict with 'pre' and/or 'post' keys, each containing
+    fired_at timestamp, status, and collected data key/value pairs.
+    Returns None if no stats exist for the session.
+    """
+    stats = {}
+    for hook_type, label in (("pre", "pre"), ("post", "post")):
+        cursor.execute(
+            "SELECT id, fired_at, exit_code FROM workout_hook_results "
+            "WHERE session_id = ? AND hook_type = ?",
+            (session_id, hook_type),
+        )
+        row = cursor.fetchone()
+        if not row:
+            continue
+
+        entry = {"fired_at": row["fired_at"]}
+        if row["exit_code"] is not None:
+            entry["status"] = "ok" if row["exit_code"] == 0 else "error"
+        else:
+            entry["status"] = "pending"
+
+        cursor.execute(
+            "SELECT key, value FROM workout_hook_data WHERE result_id = ?",
+            (row["id"],),
+        )
+        data = {r["key"]: r["value"] for r in cursor.fetchall()}
+        if data:
+            entry["data"] = data
+
+        stats[label] = entry
+
+    return stats if stats else None
+
+
+def _assemble_log_from_db(cursor, session_log_id, session_id=None):
     """Assemble log dict from relational tables."""
     cursor.execute("SELECT * FROM workout_session_logs WHERE id = ?", [session_log_id])
     log_row = cursor.fetchone()
@@ -1308,6 +1349,12 @@ def _assemble_log_from_db(cursor, session_log_id):
         return {}
 
     log = {}
+
+    # Pre/post workout stats (from hook results)
+    if session_id is not None:
+        workout_stats = _get_workout_stats(cursor, session_id)
+        if workout_stats:
+            log["workout_stats"] = workout_stats
 
     # Session feedback
     feedback = {}

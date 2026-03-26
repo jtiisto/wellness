@@ -383,3 +383,178 @@ class TestHookRunnerEdgeCases:
         )
         assert cursor.fetchone()[0] == 0
         conn.close()
+
+
+# ==================== MCP Workout Stats Tests ====================
+
+
+def _insert_hook_result(db_path, session_id, hook_type, fired_at, exit_code, data=None):
+    """Insert a hook result with optional key/value data directly into the DB."""
+    conn = sqlite3.connect(db_path)
+    conn.execute("PRAGMA foreign_keys = ON")
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO workout_hook_results (session_id, hook_type, fired_at, exit_code) "
+        "VALUES (?, ?, ?, ?)",
+        (session_id, hook_type, fired_at, exit_code),
+    )
+    result_id = cursor.lastrowid
+    if data:
+        for key, value in data.items():
+            cursor.execute(
+                "INSERT INTO workout_hook_data (result_id, key, value) VALUES (?, ?, ?)",
+                (result_id, key, str(value)),
+            )
+    conn.commit()
+    conn.close()
+    return result_id
+
+
+from coach_mcp.server import _get_workout_stats, _assemble_log_from_db
+
+
+@pytest.mark.unit
+class TestMCPWorkoutStats:
+    """Tests for _get_workout_stats and _assemble_log_from_db helpers
+    used by Coach MCP get_workout_logs."""
+
+    def test_no_stats(self, test_app, coach_seeded_database, tmp_coach_db):
+        """Returns None when no hook results exist for the session."""
+        session_id = _get_session_id(tmp_coach_db)
+        conn = sqlite3.connect(tmp_coach_db)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        result = _get_workout_stats(cursor, session_id)
+        conn.close()
+        assert result is None
+
+    def test_pre_stats_only(self, test_app, coach_seeded_database, tmp_coach_db):
+        """Returns only 'pre' when only pre-workout data exists."""
+        session_id = _get_session_id(tmp_coach_db)
+        _insert_hook_result(
+            tmp_coach_db, session_id, "pre", "2026-03-25T08:00:00Z", 0,
+            {"training_readiness": 70, "hrv_status": "balanced"},
+        )
+
+        conn = sqlite3.connect(tmp_coach_db)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        result = _get_workout_stats(cursor, session_id)
+        conn.close()
+
+        assert "pre" in result
+        assert "post" not in result
+        assert result["pre"]["status"] == "ok"
+        assert result["pre"]["fired_at"] == "2026-03-25T08:00:00Z"
+        assert result["pre"]["data"]["training_readiness"] == "70"
+        assert result["pre"]["data"]["hrv_status"] == "balanced"
+
+    def test_post_stats_only(self, test_app, coach_seeded_database, tmp_coach_db):
+        """Returns only 'post' when only post-workout data exists."""
+        session_id = _get_session_id(tmp_coach_db)
+        _insert_hook_result(
+            tmp_coach_db, session_id, "post", "2026-03-25T09:30:00Z", 0,
+            {"avg_hr": 142, "calories": 480},
+        )
+
+        conn = sqlite3.connect(tmp_coach_db)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        result = _get_workout_stats(cursor, session_id)
+        conn.close()
+
+        assert "post" in result
+        assert "pre" not in result
+        assert result["post"]["data"]["avg_hr"] == "142"
+
+    def test_both_pre_and_post(self, test_app, coach_seeded_database, tmp_coach_db):
+        """Returns both pre and post when both exist."""
+        session_id = _get_session_id(tmp_coach_db)
+        _insert_hook_result(
+            tmp_coach_db, session_id, "pre", "2026-03-25T08:00:00Z", 0,
+            {"readiness": 80},
+        )
+        _insert_hook_result(
+            tmp_coach_db, session_id, "post", "2026-03-25T09:30:00Z", 0,
+            {"avg_hr": 150},
+        )
+
+        conn = sqlite3.connect(tmp_coach_db)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        result = _get_workout_stats(cursor, session_id)
+        conn.close()
+
+        assert "pre" in result
+        assert "post" in result
+        assert result["pre"]["data"]["readiness"] == "80"
+        assert result["post"]["data"]["avg_hr"] == "150"
+
+    def test_error_status(self, test_app, coach_seeded_database, tmp_coach_db):
+        """Non-zero exit code results in 'error' status."""
+        session_id = _get_session_id(tmp_coach_db)
+        _insert_hook_result(
+            tmp_coach_db, session_id, "pre", "2026-03-25T08:00:00Z", 1,
+        )
+
+        conn = sqlite3.connect(tmp_coach_db)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        result = _get_workout_stats(cursor, session_id)
+        conn.close()
+
+        assert result["pre"]["status"] == "error"
+        assert "data" not in result["pre"]
+
+    def test_pending_status(self, test_app, coach_seeded_database, tmp_coach_db):
+        """NULL exit code results in 'pending' status."""
+        session_id = _get_session_id(tmp_coach_db)
+        _insert_hook_result(
+            tmp_coach_db, session_id, "pre", "2026-03-25T08:00:00Z", None,
+        )
+
+        conn = sqlite3.connect(tmp_coach_db)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        result = _get_workout_stats(cursor, session_id)
+        conn.close()
+
+        assert result["pre"]["status"] == "pending"
+
+    def test_stats_included_in_log_assembly(self, test_app, coach_seeded_database, tmp_coach_db):
+        """_assemble_log_from_db includes workout_stats when session_id is provided."""
+        session_id = _get_session_id(tmp_coach_db)
+        _insert_hook_result(
+            tmp_coach_db, session_id, "pre", "2026-03-25T08:00:00Z", 0,
+            {"readiness": 75},
+        )
+
+        conn = sqlite3.connect(tmp_coach_db)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id FROM workout_session_logs WHERE session_id = ?",
+            (session_id,),
+        )
+        log_row = cursor.fetchone()
+        assert log_row is not None, "Expected a log linked to the seeded session"
+
+        log_data = _assemble_log_from_db(cursor, log_row["id"], session_id=session_id)
+        conn.close()
+
+        assert "workout_stats" in log_data
+        assert log_data["workout_stats"]["pre"]["data"]["readiness"] == "75"
+
+    def test_stats_omitted_without_session_id(self, test_app, coach_seeded_database, tmp_coach_db):
+        """_assemble_log_from_db omits workout_stats when session_id is None."""
+        conn = sqlite3.connect(tmp_coach_db)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM workout_session_logs LIMIT 1")
+        log_row = cursor.fetchone()
+        assert log_row is not None
+
+        log_data = _assemble_log_from_db(cursor, log_row["id"], session_id=None)
+        conn.close()
+
+        assert "workout_stats" not in log_data
