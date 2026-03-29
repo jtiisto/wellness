@@ -335,6 +335,15 @@ async function triggerSync() {
 
         // Step 3: Apply server data
         batch(() => {
+            // Remove plans the server has marked as deleted
+            if (data.deletedPlanDates?.length > 0) {
+                const plans = { ...workoutPlans.value };
+                for (const date of data.deletedPlanDates) {
+                    delete plans[date];
+                }
+                workoutPlans.value = plans;
+            }
+
             // Plans: server is authoritative, overwrite local
             if (Object.keys(data.plans).length > 0) {
                 workoutPlans.value = {

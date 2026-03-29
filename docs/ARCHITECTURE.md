@@ -103,6 +103,7 @@ The Coach module handles workout plans (authored server-side, typically by AI) a
 2. **Sync pull** fetches plans (all or since last sync) and logs (30 days or since last sync) (`GET /sync?client_id=<id>&last_sync_time=<timestamp>`)
 3. **Log upload** sends completed workout logs; the server replaces any existing log for that date (`POST /sync`)
 4. **Plan change detection** via `GET /plans-version`, which returns `MAX(last_modified)` from `workout_sessions`. The scheduler polls this endpoint every 30 seconds, triggering a full sync when the version changes.
+5. **Plan deletion propagation** — When a plan is deleted via MCP, a tombstone is written to `deleted_plans`. Incremental sync includes a `deletedPlanDates` array for tombstones newer than `last_sync_time`. The client removes those dates from local storage. Tombstones are pruned automatically when they age out of the sync window. Only future/unlogged plans can be deleted — plans with workout logs are immutable.
 
 **Sync status:** green (clean), red (dirty logs), gray (offline).
 
@@ -112,6 +113,7 @@ The Coach module handles workout plans (authored server-side, typically by AI) a
 - Relational plan structure: session -> blocks -> exercises -> checklist items
 - Relational log structure: session log -> exercise logs -> set logs
 - Canonical exercise slugs link planned exercises to logged exercises and the exercise registry
+- Plans with logs cannot be deleted — the MCP delete tool enforces this and directs the caller to use edit tools instead
 
 **Data model (plans):**
 ```
@@ -119,6 +121,7 @@ workout_sessions   (id, date, day_name, location, phase, duration_min)
 session_blocks     (id, session_id, position, block_type, title)
 planned_exercises  (id, session_id, block_id, exercise_key, name, exercise_type, targets...)
 checklist_items    (id, exercise_id, position, item_text)
+deleted_plans      (date, deleted_at)  -- tombstones for incremental sync
 ```
 
 **Data model (logs):**
@@ -235,7 +238,7 @@ Each module follows a consistent pattern:
 Two **FastMCP** servers expose wellness data to LLMs:
 
 - **Journal MCP** - Strictly read-only. Opens SQLite in read-only mode (`?mode=ro`). Validates all queries to ensure only SELECT/WITH statements run. Auto-applies row limits.
-- **Coach MCP** - Read-only for queries and logs. Write access for workout plan management (creating/updating plans). Uses a mode-switching connection manager. Workout logs include pre/post workout stats (readiness metrics, recovery data) when available.
+- **Coach MCP** - Read-only for queries and logs. Write access for workout plan management (creating/updating/deleting plans). Deleting a plan is guarded: plans with workout logs attached cannot be deleted, preserving training history integrity. Uses a mode-switching connection manager. Workout logs include pre/post workout stats (readiness metrics, recovery data) when available.
 
 Both servers run over stdio transport when invoked by Claude Code CLI. They can also be configured for HTTP/SSE transport.
 
