@@ -116,6 +116,8 @@ def _store_plan_to_db(cursor, date_str, plan, modified_by="mcp"):
 
     # Delete existing session for this date (CASCADE cleans blocks, exercises, checklist)
     cursor.execute("DELETE FROM workout_sessions WHERE date = ?", [date_str])
+    # Clear any tombstone if re-creating a plan for a previously deleted date
+    cursor.execute("DELETE FROM deleted_plans WHERE date = ?", [date_str])
 
     # Insert workout_sessions row
     cursor.execute("""
@@ -988,6 +990,9 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
     @mcp.tool()
     def delete_workout_plan(date: str) -> Dict[str, Any]:
         """WHEN TO USE: When removing a workout plan entirely for a specific date.
+        Only future/unlogged plans can be deleted. Plans with workout logs
+        attached CANNOT be deleted — this is by design to preserve training
+        history integrity.
 
         Deletes the entire workout plan for the specified date.
         CASCADE handles cleanup of blocks, exercises, and checklist items.
@@ -1009,10 +1014,35 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
             if not results:
                 raise ValueError(f"No plan found for date: {date}")
 
-            # Delete (CASCADE handles blocks, exercises, checklist items)
-            db_manager.execute_write(
-                "DELETE FROM workout_sessions WHERE date = ?", [date]
+            # Guard: refuse to delete plans that have workout logs attached.
+            # Logs represent completed training data recorded by the user and
+            # must never be orphaned. If the user wants to change a past
+            # workout, edit the plan instead of deleting it. Do NOT attempt
+            # to work around this by deleting the log first — the log is the
+            # user's training record and is immutable.
+            log_results = db_manager.execute_query(
+                "SELECT id FROM workout_session_logs WHERE date = ?", [date]
             )
+            if log_results:
+                raise ValueError(
+                    f"Cannot delete workout plan for {date}: a workout log "
+                    f"exists for this date. Logs represent the user's completed "
+                    f"training data and must be preserved. If the plan needs "
+                    f"changes, use update_exercise, add_exercise, remove_exercise, "
+                    f"or update_plan_metadata to edit it in place. Do NOT delete "
+                    f"the log to work around this restriction."
+                )
+
+            # Delete plan and insert tombstone for incremental sync
+            with db_manager.transaction() as cursor:
+                cursor.execute(
+                    "DELETE FROM workout_sessions WHERE date = ?", [date]
+                )
+                now = get_utc_now()
+                cursor.execute(
+                    "INSERT OR REPLACE INTO deleted_plans (date, deleted_at) VALUES (?, ?)",
+                    [date, now]
+                )
 
             return {
                 "success": True,

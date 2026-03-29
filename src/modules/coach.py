@@ -230,6 +230,14 @@ def init_database():
         )
     """)
 
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS deleted_plans (
+            date       TEXT PRIMARY KEY,
+            deleted_at TEXT NOT NULL
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_deleted_plans_at ON deleted_plans(deleted_at)")
+
     conn.commit()
     conn.close()
 
@@ -462,6 +470,7 @@ class WorkoutSyncResponse(BaseModel):
     logs: dict[str, Any]
     serverTime: str
     earliestDate: str
+    deletedPlanDates: list[str] = []
 
 class StatusResponse(BaseModel):
     lastModified: Optional[str] = None
@@ -585,8 +594,23 @@ def workout_sync_get(
             log["_lastModified"] = row["last_modified"]
             logs[row["date"]] = log
 
+        # Tombstones: return deleted plan dates for incremental sync
+        deleted_plan_dates = []
+        if last_sync_time:
+            cursor.execute("""
+                SELECT date FROM deleted_plans
+                WHERE deleted_at > ?
+            """, (last_sync_time,))
+            deleted_plan_dates = [row["date"] for row in cursor.fetchall()]
+
+        # Prune tombstones older than the sync window
+        cursor.execute("DELETE FROM deleted_plans WHERE deleted_at < ?", (cutoff,))
+
         conn.commit()
-        return WorkoutSyncResponse(plans=plans, logs=logs, serverTime=now, earliestDate=cutoff)
+        return WorkoutSyncResponse(
+            plans=plans, logs=logs, serverTime=now,
+            earliestDate=cutoff, deletedPlanDates=deleted_plan_dates
+        )
 
 
 @router.post("/sync")

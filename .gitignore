@@ -32,4 +32,5 @@ plans/
 .DS_Store
 bin/backup-databases.sh
 bin/backup-gitignored.sh
+bin/weight_trend_chart.py
 .backup-paths
