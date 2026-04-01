@@ -277,7 +277,7 @@ export function WorkoutView({ date, plan, log, isEditable = true }) {
                         </span>
                     `}
                 </div>
-                <div class="workout-header-body ${(expanded || !showControls) ? 'workout-header-body--open' : ''}">
+                <div class="workout-header-body ${expanded ? 'workout-header-body--open' : ''}">
                     <div class="workout-header-body-inner">
                         ${showControls && html`
                             <div class="workout-controls">
