@@ -13,6 +13,9 @@ const B = '$BASE_PATH$';
 const APP_SHELL_URLS = [
   B + '/',
   B + '/styles.css',
+  B + '/fonts/Inter-Regular.woff2',
+  B + '/fonts/Inter-Medium.woff2',
+  B + '/fonts/Inter-SemiBold.woff2',
   B + '/manifest.json',
   B + '/version.json',
   // Shared

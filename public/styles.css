@@ -1,3 +1,29 @@
+/* ==================== Font Face ==================== */
+
+@font-face {
+    font-family: 'Inter';
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+    src: url('/wellness/fonts/Inter-Regular.woff2') format('woff2');
+}
+
+@font-face {
+    font-family: 'Inter';
+    font-style: normal;
+    font-weight: 500;
+    font-display: swap;
+    src: url('/wellness/fonts/Inter-Medium.woff2') format('woff2');
+}
+
+@font-face {
+    font-family: 'Inter';
+    font-style: normal;
+    font-weight: 600;
+    font-display: swap;
+    src: url('/wellness/fonts/Inter-SemiBold.woff2') format('woff2');
+}
+
 /* ==================== Design Tokens ==================== */
 
 :root {
@@ -10,7 +36,7 @@
     --text-secondary: #a0a0a0;
     --text-muted: #6a6a6a;
 
-    --accent-primary: #e94560;
+    --accent-primary: #f59e0b;
     --accent-secondary: #0f3460;
     --accent-success: #4ade80;
     --accent-warning: #fbbf24;
@@ -34,7 +60,7 @@
     --radius-lg: 12px;
     --radius-full: 9999px;
 
-    --font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+    --font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
     --font-size-sm: 0.875rem;
     --font-size-md: 1rem;
     --font-size-lg: 1.25rem;
@@ -445,7 +471,7 @@ body {
 }
 
 .btn-primary:hover {
-    background-color: #d13a52;
+    background-color: #d97706;
 }
 
 .btn-secondary {
@@ -627,7 +653,6 @@ body {
 .date-day {
     font-size: var(--font-size-sm);
     color: var(--text-secondary);
-    text-transform: uppercase;
 }
 
 .date-item.selected .date-day {
@@ -674,13 +699,19 @@ body {
     align-items: center;
     cursor: pointer;
     gap: var(--spacing-sm);
-    padding: var(--spacing-xs) 0;
-    margin-bottom: var(--spacing-sm);
+    padding: var(--spacing-sm) var(--spacing-md);
+    background-color: var(--bg-tertiary);
+    border-radius: var(--radius-md) var(--radius-md) 0 0;
+    margin-bottom: 0;
     user-select: none;
 }
 
+.journal .category-header:last-child {
+    border-radius: var(--radius-md);
+}
+
 .journal .category-header:hover {
-    opacity: 0.8;
+    background-color: #0d2a4d;
 }
 
 .journal .category-chevron {
@@ -697,9 +728,7 @@ body {
 .journal .category-title {
     font-size: var(--font-size-md);
     font-weight: 600;
-    color: var(--text-secondary);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
+    color: var(--accent-primary);
     margin: 0;
     padding: 0;
 }
@@ -708,8 +737,14 @@ body {
 .journal .tracker-item {
     padding: var(--spacing-md);
     background-color: var(--bg-card);
-    border-radius: var(--radius-md);
-    margin-bottom: var(--spacing-sm);
+    border: 1px solid var(--border-color);
+    border-top: none;
+    border-radius: 0;
+    margin-bottom: 0;
+}
+
+.journal .tracker-item:last-child {
+    border-radius: 0 0 var(--radius-md) var(--radius-md);
 }
 
 .journal .tracker-row {
@@ -971,7 +1006,7 @@ body {
 }
 
 .journal .conflict-type.tracker {
-    background-color: rgba(233, 69, 96, 0.2);
+    background-color: rgba(245, 158, 11, 0.2);
     color: var(--accent-primary);
 }
 
@@ -1336,7 +1371,7 @@ body {
     width: 24px;
     height: 24px;
     cursor: pointer;
-    accent-color: var(--accent-success);
+    accent-color: var(--accent-primary);
 }
 
 .coach .exercise-name {
@@ -1451,7 +1486,7 @@ body {
 .coach .set-check input[type="checkbox"] {
     width: 20px;
     height: 20px;
-    accent-color: var(--accent-success);
+    accent-color: var(--accent-primary);
 }
 
 /* Cardio Entry */
@@ -1511,7 +1546,7 @@ body {
 .coach .checklist-item input[type="checkbox"] {
     width: 20px;
     height: 20px;
-    accent-color: var(--accent-success);
+    accent-color: var(--accent-primary);
     flex-shrink: 0;
 }
 
@@ -1962,7 +1997,7 @@ body {
 }
 
 .analysis .btn-primary:hover {
-    background-color: #d13a52;
+    background-color: #d97706;
 }
 
 /* Analysis Query Grid */

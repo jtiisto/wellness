@@ -28,6 +28,9 @@ src/modules/user_queries.py
 # Planning docs
 plans/
 
+# Claude Code
+CLAUDE.md
+
 # OS
 .DS_Store
 bin/backup-databases.sh
