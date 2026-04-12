@@ -1017,6 +1017,8 @@ export async function forceSync() {
 
     try {
         const clientId = syncMetadata.value.clientId;
+        const snapshotTrackerGens = { ...syncMetadata.value.dirtyTrackerGenerations };
+        const snapshotEntryGens = { ...syncMetadata.value.dirtyEntryGenerations };
         debugLog('journal-sync', 'force sync start', { clientId });
 
         // Phase 1: Download full server state
@@ -1195,16 +1197,26 @@ export async function forceSync() {
 
             dailyLogs.value = logs;
 
-            // Reset sync metadata
             syncMetadata.value = {
                 ...syncMetadata.value,
-                dirtyTrackers: [],
-                dirtyEntries: [],
-                dirtyEntryGenerations: {},
-                dirtyTrackerGenerations: {},
                 lastServerSyncTime: serverData.serverTime || getUtcNow()
             };
         });
+
+        // Clear dirty state using generation snapshots (same pattern as triggerSync)
+        const appliedTrackerIds = [
+            ...uploadConfig.map(t => t.id),
+            ...acceptedConfig.map(t => t.id),
+        ];
+        const appliedEntryKeys = [
+            ...Object.entries(uploadDays).flatMap(([date, entries]) =>
+                Object.keys(entries).map(tid => `${date}|${tid}`)
+            ),
+            ...Object.entries(acceptedDays).flatMap(([date, entries]) =>
+                Object.keys(entries).map(tid => `${date}|${tid}`)
+            ),
+        ];
+        clearDirtyState(appliedTrackerIds, appliedEntryKeys, snapshotTrackerGens, snapshotEntryGens);
 
         // Clear conflicts, prune deleted trackers, save
         pendingConflicts.value = [];
