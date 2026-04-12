@@ -125,8 +125,10 @@ def seeded_coach_db(app_server):
     conn = sqlite3.connect(db_path, timeout=10)
     conn.execute("PRAGMA foreign_keys = ON")
     now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
+    # Use local time for calendar dates — the browser uses new Date() (local)
+    # to determine "today", so seed data must match.
+    today = datetime.now().strftime("%Y-%m-%d")
+    yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
 
     # Clear existing data to avoid UNIQUE constraint on repeated runs.
     # Order respects FK constraints: children before parents.
@@ -209,7 +211,9 @@ def seeded_journal(app_server):
         "days": {},
     })
 
-    today = datetime.now(timezone.utc)
+    # Use local time for calendar dates — the browser determines "today"
+    # via new Date() (local timezone), so seed dates must match.
+    today = datetime.now()
     days = {}
     for i in range(3):
         date_str = (today - timedelta(days=i)).strftime("%Y-%m-%d")
