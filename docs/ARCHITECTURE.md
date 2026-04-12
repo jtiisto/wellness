@@ -41,7 +41,7 @@ Wellness is a modular, self-hosted health application with three independent mod
 
 **Module isolation.** Each module has its own database, API prefix, frontend state, and sync logic. Modules share only the FastAPI process, static file serving, and frontend shell (tab navigation). A module can be disabled without affecting others via `WELLNESS_DISABLED_MODULES`.
 
-**Offline-first.** The Journal and Coach frontends persist all data locally in IndexedDB via LocalForage. The app works fully offline; sync happens automatically when the server is reachable.
+**Offline-first.** The entire app works offline after at least one online visit. The service worker precaches the app shell (HTML, CSS, JS, CDN dependencies). Journal and Coach persist all data locally in IndexedDB via LocalForage. The modules list is cached in localStorage so the app shell loads offline. The Analysis module caches report history and individual reports in LocalForage for offline viewing; new queries require server connectivity and show a toast if unreachable. Sync happens automatically when the server is reachable.
 
 **No build step.** The frontend uses Preact with HTM (tagged template literals) instead of JSX. ES6 modules are loaded directly by the browser with no bundler, transpiler, or build pipeline.
 
@@ -198,9 +198,14 @@ This means the pre-workout hook won't fire when offline, which is intentional: t
 
 Both modules support force sync (accessible from the settings menu) which performs a full bidirectional reconciliation by timestamp comparison. Force sync reports per-module counts of uploaded and accepted records. The Journal module accepts server versions on conflict during force sync rather than prompting the user.
 
-### Analysis: No Sync
+### Analysis: Offline Cache (No Sync)
 
-The Analysis module has no client-side state and no sync protocol. The frontend submits a query, polls for completion, and displays the result. All state lives on the server.
+The Analysis module has no bidirectional sync protocol — all authoritative state lives on the server. However, the frontend caches data in LocalForage for offline access:
+
+- **Report history list** — cached after each successful `loadHistory()` call. When offline, the History tab shows the cached list.
+- **Individual reports** — cached after each successful `loadReport()` call (completed/failed reports only). Cached reports are viewable offline.
+- **Submitting new queries** requires server connectivity. If the server is unreachable, a toast notifies the user.
+- **Initialization** — if `loadQueries()`/`checkPending()` fail on init (server unreachable), the module opens to History view with cached data rather than showing an error.
 
 **Flow:**
 1. User selects a pre-built query from the UI

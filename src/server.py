@@ -188,6 +188,19 @@ def serve_sw():
     )
 
 
+@_inner_app.get("/fonts/{file_path:path}")
+def serve_fonts(file_path: str):
+    """Serve font files."""
+    font_path = PUBLIC_DIR / "fonts" / file_path
+    if font_path.exists() and font_path.is_file():
+        return FileResponse(
+            font_path,
+            media_type="font/woff2",
+            headers={"Cache-Control": "public, max-age=31536000, immutable"}
+        )
+    raise HTTPException(status_code=404, detail=f"Font not found: {file_path}")
+
+
 @_inner_app.get("/icons/{file_path:path}")
 def serve_icons(file_path: str):
     """Serve icon files."""

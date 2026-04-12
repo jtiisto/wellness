@@ -50,16 +50,24 @@ const ICONS = {
 
 // ==================== Module Loading ====================
 
+const MODULES_CACHE_KEY = 'wellness_modules_cache';
+
 async function loadModules() {
     try {
         const res = await fetch('/wellness/api/modules');
         modules.value = await res.json();
+        localStorage.setItem(MODULES_CACHE_KEY, JSON.stringify(modules.value));
+    } catch (err) {
+        console.error('Failed to load modules:', err);
+        // Fall back to cached modules list (offline support)
+        const cached = localStorage.getItem(MODULES_CACHE_KEY);
+        if (cached) {
+            try { modules.value = JSON.parse(cached); } catch { /* corrupt cache */ }
+        }
+    } finally {
         if (!activeModuleId.value || !modules.value.find(m => m.id === activeModuleId.value)) {
             activeModuleId.value = modules.value[0]?.id || null;
         }
-    } catch (err) {
-        console.error('Failed to load modules:', err);
-    } finally {
         loading.value = false;
     }
 }

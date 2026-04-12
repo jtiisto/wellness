@@ -11,10 +11,10 @@ import { SyncScheduler } from '../shared/sync-scheduler.js';
 
 const API_BASE = '/wellness/api/coach';
 
-// Configure LocalForage
-localforage.config({
+// Dedicated LocalForage instance — avoids collisions with other modules
+const storage = localforage.createInstance({
     name: 'CoachApp',
-    storeName: 'coach_data'
+    storeName: 'coach_data',
 });
 
 // Storage keys
@@ -55,10 +55,10 @@ export const migraineProtocolActive = signal(false);
 // ==================== Client ID ====================
 
 async function getClientId() {
-    let clientId = await localforage.getItem(KEYS.CLIENT_ID);
+    let clientId = await storage.getItem(KEYS.CLIENT_ID);
     if (!clientId) {
         clientId = generateId();
-        await localforage.setItem(KEYS.CLIENT_ID, clientId);
+        await storage.setItem(KEYS.CLIENT_ID, clientId);
     }
     return clientId;
 }
@@ -70,9 +70,9 @@ export async function initializeStore() {
 
     try {
         const [metadata, plans, logs, clientId] = await Promise.all([
-            localforage.getItem(KEYS.METADATA),
-            localforage.getItem(KEYS.PLANS),
-            localforage.getItem(KEYS.LOGS),
+            storage.getItem(KEYS.METADATA),
+            storage.getItem(KEYS.PLANS),
+            storage.getItem(KEYS.LOGS),
             getClientId()
         ]);
 
@@ -208,15 +208,15 @@ function clearAppliedDirtyDates(appliedDates, snapshotGens) {
 // ==================== Persistence ====================
 
 async function savePlans() {
-    await localforage.setItem(KEYS.PLANS, workoutPlans.value);
+    await storage.setItem(KEYS.PLANS, workoutPlans.value);
 }
 
 async function saveLogs() {
-    await localforage.setItem(KEYS.LOGS, workoutLogs.value);
+    await storage.setItem(KEYS.LOGS, workoutLogs.value);
 }
 
 async function saveMetadata() {
-    await localforage.setItem(KEYS.METADATA, {
+    await storage.setItem(KEYS.METADATA, {
         lastServerSyncTime: syncMetadata.value.lastServerSyncTime,
         dirtyDates: syncMetadata.value.dirtyDates,
         dirtyDateGenerations: syncMetadata.value.dirtyDateGenerations,

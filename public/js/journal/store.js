@@ -11,9 +11,10 @@ import { log as debugLog } from '../shared/debug-log.js';
 import { SyncScheduler } from '../shared/sync-scheduler.js';
 
 // Configure LocalForage
-localforage.config({
+// Dedicated LocalForage instance — avoids collisions with other modules
+const storage = localforage.createInstance({
     name: 'JournalApp',
-    storeName: 'journal_data'
+    storeName: 'journal_data',
 });
 
 // Storage keys
@@ -76,17 +77,17 @@ export function toggleCategoryExpanded(category) {
 }
 
 async function saveExpandedCategories() {
-    await localforage.setItem(KEYS.EXPANDED_CATEGORIES, Array.from(expandedCategories.value));
+    await storage.setItem(KEYS.EXPANDED_CATEGORIES, Array.from(expandedCategories.value));
 }
 
 // ==================== Persistence ====================
 
 // Get or create client ID
 async function getClientId() {
-    let clientId = await localforage.getItem(KEYS.CLIENT_ID);
+    let clientId = await storage.getItem(KEYS.CLIENT_ID);
     if (!clientId) {
         clientId = generateId();
-        await localforage.setItem(KEYS.CLIENT_ID, clientId);
+        await storage.setItem(KEYS.CLIENT_ID, clientId);
     }
     return clientId;
 }
@@ -97,11 +98,11 @@ export async function initializeStore() {
         isLoading.value = true;
 
         const [metadata, config, logs, clientId, expanded] = await Promise.all([
-            localforage.getItem(KEYS.METADATA),
-            localforage.getItem(KEYS.CONFIG),
-            localforage.getItem(KEYS.LOGS),
+            storage.getItem(KEYS.METADATA),
+            storage.getItem(KEYS.CONFIG),
+            storage.getItem(KEYS.LOGS),
             getClientId(),
-            localforage.getItem(KEYS.EXPANDED_CATEGORIES)
+            storage.getItem(KEYS.EXPANDED_CATEGORIES)
         ]);
 
         batch(() => {
@@ -136,7 +137,7 @@ export async function initializeStore() {
 // Save metadata to LocalForage
 async function saveMetadata() {
     const meta = syncMetadata.value;
-    await localforage.setItem(KEYS.METADATA, {
+    await storage.setItem(KEYS.METADATA, {
         lastServerSyncTime: meta.lastServerSyncTime,
         dirtyTrackers: meta.dirtyTrackers,
         dirtyEntries: meta.dirtyEntries,
@@ -147,12 +148,12 @@ async function saveMetadata() {
 
 // Save config to LocalForage
 async function saveConfig() {
-    await localforage.setItem(KEYS.CONFIG, trackerConfig.value);
+    await storage.setItem(KEYS.CONFIG, trackerConfig.value);
 }
 
 // Save logs to LocalForage
 async function saveLogs() {
-    await localforage.setItem(KEYS.LOGS, dailyLogs.value);
+    await storage.setItem(KEYS.LOGS, dailyLogs.value);
 }
 
 // ==================== Tracker Config Actions ====================

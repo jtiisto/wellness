@@ -1,8 +1,17 @@
 import { signal } from '@preact/signals';
+import localforage from 'localforage';
 import { showNotification } from '../shared/notifications.js';
 
 // Re-export for components that import from store
 export { showNotification };
+
+// Offline cache
+const cache = localforage.createInstance({
+    name: 'AnalysisApp',
+    storeName: 'analysis_cache',
+});
+const CACHE_HISTORY = 'report_history';
+const CACHE_REPORT_PREFIX = 'report_';
 
 // Navigation: 'queries' | 'loading' | 'report' | 'history'
 export const currentView = signal('queries');
@@ -67,24 +76,64 @@ export async function submitQuery(queryId, location = null) {
         currentView.value = 'loading';
         startPolling(result.id);
     } catch (err) {
-        showNotification({ type: 'error', title: 'Error', message: err.message });
+        if (err instanceof TypeError && err.message.includes('fetch')) {
+            showNotification({ type: 'error', title: 'Offline', message: 'Server unreachable — new queries unavailable offline.' });
+        } else {
+            showNotification({ type: 'error', title: 'Error', message: err.message });
+        }
     }
 }
 
 export async function loadReport(reportId) {
-    activeReport.value = await api(`/reports/${reportId}`);
+    try {
+        const report = await api(`/reports/${reportId}`);
+        activeReport.value = report;
+        // Cache completed reports for offline viewing
+        if (report.status === 'completed' || report.status === 'failed') {
+            await cache.setItem(CACHE_REPORT_PREFIX + reportId, report).catch(() => {});
+        }
+    } catch (err) {
+        // Fall back to cached report
+        const cached = await cache.getItem(CACHE_REPORT_PREFIX + reportId).catch(() => null);
+        if (cached) {
+            activeReport.value = cached;
+        } else {
+            showNotification({ type: 'error', title: 'Offline', message: 'Report not available offline.' });
+            return;
+        }
+    }
     activeReportId.value = reportId;
     currentView.value = 'report';
 }
 
 export async function loadHistory() {
-    reportHistory.value = await api('/reports');
+    try {
+        const history = await api('/reports');
+        reportHistory.value = history;
+        await cache.setItem(CACHE_HISTORY, history).catch(() => {});
+    } catch (err) {
+        // Fall back to cached history
+        const cached = await cache.getItem(CACHE_HISTORY).catch(() => null);
+        if (cached) {
+            reportHistory.value = cached;
+        }
+    }
 }
 
 export async function deleteReport(reportId) {
-    await api(`/reports/${reportId}`, { method: 'DELETE' });
-    reportHistory.value = reportHistory.value.filter(r => r.id !== reportId);
-    showNotification({ type: 'success', title: 'Deleted', message: 'Report deleted.' });
+    try {
+        await api(`/reports/${reportId}`, { method: 'DELETE' });
+        reportHistory.value = reportHistory.value.filter(r => r.id !== reportId);
+        await cache.setItem(CACHE_HISTORY, reportHistory.value).catch(() => {});
+        await cache.removeItem(CACHE_REPORT_PREFIX + reportId).catch(() => {});
+        showNotification({ type: 'success', title: 'Deleted', message: 'Report deleted.' });
+    } catch (err) {
+        if (err instanceof TypeError && err.message.includes('fetch')) {
+            showNotification({ type: 'error', title: 'Offline', message: 'Cannot delete reports while offline.' });
+        } else {
+            showNotification({ type: 'error', title: 'Error', message: err.message });
+        }
+    }
 }
 
 export async function checkPending() {
@@ -144,8 +193,20 @@ export async function initializeStore() {
         const hasPending = await checkPending();
         if (!hasPending) currentView.value = 'queries';
     } catch (err) {
-        showNotification({ type: 'error', title: 'Load Error', message: err.message });
-        currentView.value = 'queries';
+        // Server unreachable — degrade gracefully
+        if (err instanceof TypeError && err.message.includes('fetch')) {
+            // Load cached history for offline viewing
+            const cached = await cache.getItem(CACHE_HISTORY).catch(() => null);
+            if (cached) {
+                reportHistory.value = cached;
+                currentView.value = 'history';
+            } else {
+                currentView.value = 'queries';
+            }
+        } else {
+            showNotification({ type: 'error', title: 'Load Error', message: err.message });
+            currentView.value = 'queries';
+        }
     }
     isLoading.value = false;
 }
