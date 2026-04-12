@@ -288,3 +288,270 @@ class TestReadTools:
         # No args should use today..+6 weeks — should not error
         result = self.tools["list_scheduled_dates"]()
         assert isinstance(result, list)
+
+
+# ==================== Unit 3: Write Tools Integration Tests ====================
+
+
+@pytest.mark.integration
+class TestWriteTools:
+    """Tests for write coach MCP tools. Uses future dates to avoid seed collisions."""
+
+    FUTURE = "2099-01-15"
+    FUTURE2 = "2099-01-16"
+    FUTURE3 = "2099-01-17"
+
+    @pytest.fixture(autouse=True)
+    def setup_mcp(self, test_app, coach_seeded_database, tmp_coach_db):
+        self.seed = coach_seeded_database
+        config = MCPConfig(db_path=tmp_coach_db)
+        mcp = create_mcp_server(config)
+        self.tools = _extract_tools(mcp)
+
+    def _make_plan(self, **overrides):
+        """Build a minimal valid plan dict."""
+        plan = {
+            "day_name": "Test Plan",
+            "location": "Gym",
+            "phase": "Foundation",
+            "blocks": [
+                {
+                    "block_type": "strength",
+                    "title": "Main",
+                    "exercises": [
+                        {
+                            "id": "test_ex_1",
+                            "name": "Test Exercise",
+                            "type": "strength",
+                            "target_sets": 3,
+                            "target_reps": "10",
+                        }
+                    ],
+                }
+            ],
+        }
+        plan.update(overrides)
+        return plan
+
+    # --- set_workout_plan ---
+
+    def test_set_workout_plan_creates(self):
+        result = self.tools["set_workout_plan"](
+            date=self.FUTURE, plan=self._make_plan()
+        )
+        assert result["success"] is True
+        assert result["date"] == self.FUTURE
+        assert result["plan"]["day_name"] == "Test Plan"
+
+    def test_set_workout_plan_invalid_date(self):
+        with pytest.raises(ValueError, match="Invalid date format"):
+            self.tools["set_workout_plan"](
+                date="not-a-date", plan=self._make_plan()
+            )
+
+    def test_set_workout_plan_missing_blocks(self):
+        with pytest.raises(ValueError, match="must have 'blocks'"):
+            self.tools["set_workout_plan"](
+                date=self.FUTURE2, plan={"day_name": "No blocks"}
+            )
+
+    def test_set_workout_plan_invalid_block_type(self):
+        plan = self._make_plan()
+        plan["blocks"][0]["block_type"] = "yoga"
+        with pytest.raises(ValueError, match="invalid block_type"):
+            self.tools["set_workout_plan"](date=self.FUTURE2, plan=plan)
+
+    def test_set_workout_plan_block_missing_type(self):
+        plan = self._make_plan()
+        del plan["blocks"][0]["block_type"]
+        with pytest.raises(ValueError, match="missing 'block_type'"):
+            self.tools["set_workout_plan"](date=self.FUTURE2, plan=plan)
+
+    def test_set_workout_plan_auto_transform(self):
+        """Raw LLM format (no id/type on exercises) should be auto-transformed."""
+        raw_plan = {
+            "theme": "Upper Body",
+            "location": "Gym",
+            "phase": "Building",
+            "blocks": [
+                {
+                    "block_type": "warmup",
+                    "title": "Warmup",
+                    "exercises": [{"name": "Arm Circles", "reps": 10}],
+                },
+                {
+                    "block_type": "strength",
+                    "title": "Main",
+                    "exercises": [
+                        {"name": "Bench Press", "sets": 4, "reps": "6-8"},
+                    ],
+                },
+            ],
+        }
+        result = self.tools["set_workout_plan"](date=self.FUTURE2, plan=raw_plan)
+        assert result["success"] is True
+        plan = result["plan"]
+        # Should have been transformed: exercises now have id and type
+        for block in plan["blocks"]:
+            for ex in block["exercises"]:
+                assert "id" in ex
+                assert "type" in ex
+
+    def test_set_workout_plan_rejects_overwrite_with_log(self):
+        """Cannot replace a plan that has a workout log."""
+        today = self.seed["dates"][0]
+        with pytest.raises(ValueError, match="workout log exists"):
+            self.tools["set_workout_plan"](
+                date=today, plan=self._make_plan()
+            )
+
+    # --- update_exercise ---
+
+    def test_update_exercise_success(self):
+        # Create a plan first
+        self.tools["set_workout_plan"](date=self.FUTURE3, plan=self._make_plan())
+        result = self.tools["update_exercise"](
+            date=self.FUTURE3,
+            exercise_id="test_ex_1",
+            updates={"target_reps": "12", "guidance_note": "Slow tempo"},
+        )
+        assert result["success"] is True
+        assert result["updated_exercise"]["target_reps"] == "12"
+        assert result["updated_exercise"]["guidance_note"] == "Slow tempo"
+
+    def test_update_exercise_not_found(self):
+        self.tools["set_workout_plan"](date=self.FUTURE3, plan=self._make_plan())
+        with pytest.raises(ValueError, match="not found"):
+            self.tools["update_exercise"](
+                date=self.FUTURE3,
+                exercise_id="nonexistent",
+                updates={"target_reps": "5"},
+            )
+
+    # --- add_exercise ---
+
+    def test_add_exercise_success(self):
+        self.tools["set_workout_plan"](date=self.FUTURE3, plan=self._make_plan())
+        new_ex = {
+            "id": "added_ex",
+            "name": "Lateral Raise",
+            "type": "strength",
+            "target_sets": 3,
+            "target_reps": "12",
+        }
+        result = self.tools["add_exercise"](
+            date=self.FUTURE3, exercise=new_ex, block_position=0
+        )
+        assert result["success"] is True
+        assert result["total_exercises"] == 2
+
+    def test_add_exercise_duplicate_id(self):
+        self.tools["set_workout_plan"](date=self.FUTURE3, plan=self._make_plan())
+        dup_ex = {
+            "id": "test_ex_1",
+            "name": "Duplicate",
+            "type": "strength",
+        }
+        with pytest.raises(ValueError, match="already exists"):
+            self.tools["add_exercise"](
+                date=self.FUTURE3, exercise=dup_ex, block_position=0
+            )
+
+    def test_add_exercise_invalid_type(self):
+        self.tools["set_workout_plan"](date=self.FUTURE3, plan=self._make_plan())
+        bad_ex = {"id": "bad_type", "name": "Bad", "type": "yoga"}
+        with pytest.raises(ValueError, match="Invalid exercise type"):
+            self.tools["add_exercise"](
+                date=self.FUTURE3, exercise=bad_ex, block_position=0
+            )
+
+    def test_add_exercise_missing_field(self):
+        with pytest.raises(ValueError, match="missing required field"):
+            self.tools["add_exercise"](
+                date=self.FUTURE3,
+                exercise={"id": "x", "name": "X"},  # missing type
+                block_position=0,
+            )
+
+    # --- remove_exercise ---
+
+    def test_remove_exercise_success(self):
+        self.tools["set_workout_plan"](date=self.FUTURE3, plan=self._make_plan())
+        result = self.tools["remove_exercise"](
+            date=self.FUTURE3, exercise_id="test_ex_1"
+        )
+        assert result["success"] is True
+        assert result["remaining_exercises"] == 0
+
+    def test_remove_exercise_not_found(self):
+        self.tools["set_workout_plan"](date=self.FUTURE3, plan=self._make_plan())
+        with pytest.raises(ValueError, match="not found"):
+            self.tools["remove_exercise"](
+                date=self.FUTURE3, exercise_id="nonexistent"
+            )
+
+    # --- delete_workout_plan ---
+
+    def test_delete_workout_plan_success(self):
+        self.tools["set_workout_plan"](date=self.FUTURE3, plan=self._make_plan())
+        result = self.tools["delete_workout_plan"](date=self.FUTURE3)
+        assert result["success"] is True
+        # Verify it's gone
+        plans = self.tools["get_workout_plan"](
+            start_date=self.FUTURE3, end_date=self.FUTURE3
+        )
+        assert plans == []
+
+    def test_delete_workout_plan_guarded_by_log(self):
+        today = self.seed["dates"][0]
+        with pytest.raises(ValueError, match="workout log exists"):
+            self.tools["delete_workout_plan"](date=today)
+
+    def test_delete_workout_plan_not_found(self):
+        with pytest.raises(ValueError, match="No plan found"):
+            self.tools["delete_workout_plan"](date="2099-12-31")
+
+    # --- update_plan_metadata ---
+
+    def test_update_plan_metadata_success(self):
+        self.tools["set_workout_plan"](date=self.FUTURE3, plan=self._make_plan())
+        result = self.tools["update_plan_metadata"](
+            date=self.FUTURE3,
+            updates={"day_name": "Renamed", "location": "Home"},
+        )
+        assert result["success"] is True
+        assert result["plan_metadata"]["day_name"] == "Renamed"
+        assert result["plan_metadata"]["location"] == "Home"
+
+    def test_update_plan_metadata_invalid_field(self):
+        self.tools["set_workout_plan"](date=self.FUTURE3, plan=self._make_plan())
+        with pytest.raises(ValueError, match="Invalid metadata fields"):
+            self.tools["update_plan_metadata"](
+                date=self.FUTURE3, updates={"bogus": "value"}
+            )
+
+    def test_update_plan_metadata_no_plan(self):
+        with pytest.raises(ValueError, match="No plan found"):
+            self.tools["update_plan_metadata"](
+                date="2099-12-31", updates={"day_name": "X"}
+            )
+
+    # --- ingest_training_program ---
+
+    def test_ingest_training_program_success(self):
+        plans = {
+            "2099-06-01": self._make_plan(day_name="Day 1"),
+            "2099-06-02": self._make_plan(day_name="Day 2"),
+        }
+        result = self.tools["ingest_training_program"](plans=plans)
+        assert result["success_count"] == 2
+        assert result["failed_count"] == 0
+
+    def test_ingest_training_program_mixed_results(self):
+        plans = {
+            "2099-07-01": self._make_plan(day_name="Good"),
+            "bad-date": self._make_plan(day_name="Bad Date"),
+        }
+        result = self.tools["ingest_training_program"](plans=plans)
+        assert result["success_count"] == 1
+        assert result["failed_count"] == 1
