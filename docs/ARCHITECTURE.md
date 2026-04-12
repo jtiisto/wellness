@@ -95,21 +95,27 @@ entries  (date, tracker_id, value, completed, version, last_modified_by, last_mo
 
 ### Coach: Last-Write-Wins
 
-The Coach module handles workout plans (authored server-side, typically by AI) and workout logs (written by the user during a session). Plans flow one-way from server to client. Logs flow from client to server with last-write-wins semantics.
+The Coach module handles workout plans (authored server-side, typically by AI) and workout logs (written by the user during a session). Plans flow one-way from server to client. Logs flow from client to server with timestamp-guarded last-write-wins semantics.
 
 **Protocol:**
 
 1. **Client registers** (`POST /register`)
 2. **Sync pull** fetches plans (all or since last sync) and logs (30 days or since last sync) (`GET /sync?client_id=<id>&last_sync_time=<timestamp>`)
-3. **Log upload** sends completed workout logs; the server replaces any existing log for that date (`POST /sync`)
+3. **Log upload** sends completed workout logs (`POST /sync`). The server compares the incoming `_lastModifiedAt` against its stored `last_modified` — if the incoming timestamp is older, the write is rejected and the date is returned in `rejectedLogs`. Accepted logs replace the existing data (delete + insert). Before deletion, the existing log is archived to `*_archive` tables for 14-day recovery.
 4. **Plan change detection** via `GET /plans-version`, which returns `MAX(last_modified)` from `workout_sessions`. The scheduler polls this endpoint every 30 seconds, triggering a full sync when the version changes.
 5. **Plan deletion propagation** — When a plan is deleted via MCP, a tombstone is written to `deleted_plans`. Incremental sync includes a `deletedPlanDates` array for tombstones newer than `last_sync_time`. The client removes those dates from local storage. Tombstones are pruned automatically when they age out of the sync window. Only future/unlogged plans can be deleted — plans with workout logs are immutable.
+
+**Sync safety layers:**
+- **HTTP cache prevention** — `GET /sync` returns `Cache-Control: no-cache, no-store, must-revalidate`; client fetch calls use `cache: 'no-store'`. Prevents stale sync responses from being served from browser HTTP cache (e.g., after Android storage clear).
+- **Timestamp-based rejection** — `_store_log()` compares the client's `_lastModifiedAt` against the server's `last_modified`. Stale writes are rejected; the POST response includes `rejectedLogs` so the client can clear those from `dirtyDates` and download fresh data.
+- **Soft-delete archive** — Before deleting an existing log, all data (session log, exercise logs, set logs) is copied to `*_archive` tables with a `superseded_at` timestamp. Archives older than 14 days are purged during sync. This provides a recovery window for any unexpected data loss.
+- **Client upload validation** — The upload phase skips logs that contain no exercise data (only metadata/feedback or empty), preventing empty-storage scenarios from overwriting real data on the server.
 
 **Sync status:** green (clean), red (dirty logs), gray (offline).
 
 **Key design choices:**
 - Plans are read-only from the client's perspective (created via MCP or direct DB access)
-- Logs use last-write-wins because only one device logs a workout at a time
+- Logs use timestamp-guarded last-write-wins (stale writes rejected, not silently applied)
 - Relational plan structure: session -> blocks -> exercises -> checklist items
 - Relational log structure: session log -> exercise logs -> set logs
 - Canonical exercise slugs link planned exercises to logged exercises and the exercise registry
@@ -130,6 +136,13 @@ workout_session_logs  (id, session_id, date, pain_discomfort, general_notes)
 exercise_logs         (id, session_log_id, exercise_id, exercise_key, completed, user_note)
 set_logs              (id, exercise_log_id, set_num, weight, reps, rpe, unit, duration_sec)
 checklist_log_items   (id, exercise_log_id, item_text)
+```
+
+**Data model (log archives — 14-day retention):**
+```
+workout_session_logs_archive  (id, original_id, date, superseded_at, superseded_by, ...)
+exercise_logs_archive         (id, original_id, session_log_id, exercise_key, ...)
+set_logs_archive              (id, original_id, exercise_log_id, set_num, weight, reps, ...)
 ```
 
 **Data model (hooks):**

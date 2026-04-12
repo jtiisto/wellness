@@ -244,7 +244,7 @@ async function pollCheckFn() {
     // Lightweight check: only trigger full sync if plans version changed or we have dirty data
     if (syncMetadata.value.dirtyDates.length > 0) return true;
     try {
-        const resp = await fetch(`${API_BASE}/plans-version`);
+        const resp = await fetch(`${API_BASE}/plans-version`, { cache: 'no-store' });
         if (!resp.ok) return false;
         const { version } = await resp.json();
         if (version && version !== lastKnownPlansVersion) {
@@ -292,9 +292,22 @@ async function triggerSync() {
         if (meta.dirtyDates.length > 0) {
             const logsToUpload = {};
             meta.dirtyDates.forEach(date => {
-                if (workoutLogs.value[date]) {
-                    logsToUpload[date] = workoutLogs.value[date];
+                const log = workoutLogs.value[date];
+                if (!log) {
+                    debugLog('coach-sync', 'skip upload: no local data', { date });
+                    return;
                 }
+                // Guard: only upload logs that contain actual exercise data
+                const hasContent = Object.entries(log).some(([key, val]) => {
+                    if (['_lastModifiedAt', '_lastModifiedBy', 'session_feedback'].includes(key)) return false;
+                    if (typeof val !== 'object' || val === null) return false;
+                    return val.completed || val.sets?.length > 0 || val.completed_items?.length > 0 || val.duration_min != null;
+                });
+                if (!hasContent) {
+                    debugLog('coach-sync', 'skip upload: no exercise data', { date });
+                    return;
+                }
+                logsToUpload[date] = log;
             });
 
             debugLog('coach-sync', 'upload attempt', { dates: meta.dirtyDates, logCount: Object.keys(logsToUpload).length });
@@ -313,7 +326,18 @@ async function triggerSync() {
                 throw new Error('Failed to upload logs');
             }
 
-            debugLog('coach-sync', 'upload success');
+            const uploadResult = await uploadResponse.json();
+
+            // Remove rejected dates from dirtyDates — server has newer data
+            if (uploadResult.rejectedLogs?.length > 0) {
+                debugLog('coach-sync', 'server rejected stale logs', { rejected: uploadResult.rejectedLogs });
+                meta.dirtyDates = meta.dirtyDates.filter(d => !uploadResult.rejectedLogs.includes(d));
+                for (const d of uploadResult.rejectedLogs) {
+                    delete meta.dirtyDateGenerations[d];
+                }
+            }
+
+            debugLog('coach-sync', 'upload success', { applied: uploadResult.appliedLogs?.length, rejected: uploadResult.rejectedLogs?.length });
             uploadedDates = [...meta.dirtyDates];
         }
 
@@ -325,7 +349,7 @@ async function triggerSync() {
 
         debugLog('coach-sync', 'download attempt', { params: params.toString() });
 
-        const downloadResponse = await fetch(`${API_BASE}/sync?${params}`);
+        const downloadResponse = await fetch(`${API_BASE}/sync?${params}`, { cache: 'no-store' });
         if (!downloadResponse.ok) {
             throw new Error('Failed to download data');
         }
@@ -441,7 +465,7 @@ export async function forceSync() {
         const snapshotGens = { ...syncMetadata.value.dirtyDateGenerations };
 
         // Phase 1: Download full server state (no last_sync_time)
-        const response = await fetch(`${API_BASE}/sync?client_id=${clientId}`);
+        const response = await fetch(`${API_BASE}/sync?client_id=${clientId}`, { cache: 'no-store' });
         if (!response.ok) throw new Error('Failed to download server data');
         const data = await response.json();
 

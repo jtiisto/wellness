@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Response
 from pydantic import BaseModel
 
 from config import get_hook_path
@@ -238,6 +238,54 @@ def init_database():
     """)
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_deleted_plans_at ON deleted_plans(deleted_at)")
 
+    # Archive tables for soft-delete safety net (Layer 2)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS workout_session_logs_archive (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            original_id     INTEGER NOT NULL,
+            session_id      INTEGER,
+            date            TEXT NOT NULL,
+            pain_discomfort TEXT,
+            general_notes   TEXT,
+            last_modified   TEXT NOT NULL,
+            modified_by     TEXT,
+            superseded_at   TEXT NOT NULL,
+            superseded_by   TEXT
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_archive_logs_date ON workout_session_logs_archive(date)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_archive_logs_superseded ON workout_session_logs_archive(superseded_at)")
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS exercise_logs_archive (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            original_id     INTEGER NOT NULL,
+            session_log_id  INTEGER NOT NULL,
+            exercise_key    TEXT NOT NULL,
+            completed       INTEGER DEFAULT 0,
+            user_note       TEXT,
+            duration_min    REAL,
+            avg_hr          INTEGER,
+            max_hr          INTEGER,
+            canonical_slug  TEXT
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS set_logs_archive (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            original_id     INTEGER NOT NULL,
+            exercise_log_id INTEGER NOT NULL,
+            set_num         INTEGER NOT NULL,
+            weight          REAL,
+            reps            INTEGER,
+            rpe             REAL,
+            unit            TEXT DEFAULT 'lbs',
+            duration_sec    REAL,
+            completed       INTEGER DEFAULT 0
+        )
+    """)
+
     conn.commit()
     conn.close()
 
@@ -385,9 +433,103 @@ def _assemble_log(conn, log_row):
     return log
 
 
+ARCHIVE_RETENTION_DAYS = 14
+
+
+def _purge_old_archives(cursor):
+    """Remove archive rows older than the retention window."""
+    cutoff = (datetime.now() - timedelta(days=ARCHIVE_RETENTION_DAYS)).isoformat()
+    old_rows = cursor.execute(
+        "SELECT id, original_id FROM workout_session_logs_archive WHERE superseded_at < ?",
+        (cutoff,)
+    ).fetchall()
+    if not old_rows:
+        return
+    # exercise_logs_archive.session_log_id references the original session log id
+    original_ids = [row["original_id"] for row in old_rows]
+    archive_ids = [row["id"] for row in old_rows]
+    orig_ph = ",".join("?" * len(original_ids))
+    arch_ph = ",".join("?" * len(archive_ids))
+    cursor.execute(
+        f"DELETE FROM set_logs_archive WHERE exercise_log_id IN "
+        f"(SELECT original_id FROM exercise_logs_archive WHERE session_log_id IN ({orig_ph}))",
+        original_ids,
+    )
+    cursor.execute(
+        f"DELETE FROM exercise_logs_archive WHERE session_log_id IN ({orig_ph})",
+        original_ids,
+    )
+    cursor.execute(
+        f"DELETE FROM workout_session_logs_archive WHERE id IN ({arch_ph})",
+        archive_ids,
+    )
+    logger.info("Purged %d archived session logs older than %s", len(archive_ids), cutoff)
+
+
+def _archive_existing_log(cursor, date_str, superseded_by, now):
+    """Copy existing log data to archive tables before deletion."""
+    row = cursor.execute(
+        "SELECT * FROM workout_session_logs WHERE date = ?", (date_str,)
+    ).fetchone()
+    if not row:
+        return
+
+    cursor.execute("""
+        INSERT INTO workout_session_logs_archive
+        (original_id, session_id, date, pain_discomfort, general_notes,
+         last_modified, modified_by, superseded_at, superseded_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (row["id"], row["session_id"], row["date"], row["pain_discomfort"],
+          row["general_notes"], row["last_modified"], row["modified_by"],
+          now, superseded_by))
+
+    exercises = cursor.execute(
+        "SELECT * FROM exercise_logs WHERE session_log_id = ?", (row["id"],)
+    ).fetchall()
+    for ex in exercises:
+        cursor.execute("""
+            INSERT INTO exercise_logs_archive
+            (original_id, session_log_id, exercise_key, completed, user_note,
+             duration_min, avg_hr, max_hr, canonical_slug)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (ex["id"], ex["session_log_id"], ex["exercise_key"], ex["completed"],
+              ex["user_note"], ex["duration_min"], ex["avg_hr"], ex["max_hr"],
+              ex["canonical_slug"]))
+
+        sets = cursor.execute(
+            "SELECT * FROM set_logs WHERE exercise_log_id = ?", (ex["id"],)
+        ).fetchall()
+        for s in sets:
+            cursor.execute("""
+                INSERT INTO set_logs_archive
+                (original_id, exercise_log_id, set_num, weight, reps, rpe,
+                 unit, duration_sec, completed)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (s["id"], s["exercise_log_id"], s["set_num"], s["weight"],
+                  s["reps"], s["rpe"], s["unit"], s["duration_sec"], s["completed"]))
+
+
 def _store_log(conn, date_str, log_data, client_id, now):
-    """Decompose a log dict into relational tables."""
+    """Decompose a log dict into relational tables.
+
+    Returns the session_log_id on success, or None if the write was rejected
+    (incoming timestamp older than server's).
+    """
     cursor = conn.cursor()
+
+    # Layer 1: Reject stale writes by comparing timestamps
+    incoming_modified = log_data.get("_lastModifiedAt")
+    if incoming_modified:
+        existing = cursor.execute(
+            "SELECT last_modified FROM workout_session_logs WHERE date = ?",
+            (date_str,)
+        ).fetchone()
+        if existing and existing["last_modified"] > incoming_modified:
+            logger.warning(
+                "Rejecting stale log for %s: server=%s > client=%s (client=%s)",
+                date_str, existing["last_modified"], incoming_modified, client_id,
+            )
+            return None
 
     feedback = log_data.get("session_feedback", {})
     pain = feedback.get("pain_discomfort")
@@ -396,6 +538,9 @@ def _store_log(conn, date_str, log_data, client_id, now):
     cursor.execute("SELECT id FROM workout_sessions WHERE date = ?", (date_str,))
     session_row = cursor.fetchone()
     session_id = session_row["id"] if session_row else None
+
+    # Layer 2: Archive existing log before deletion
+    _archive_existing_log(cursor, date_str, client_id, now)
 
     cursor.execute("DELETE FROM workout_session_logs WHERE date = ?", (date_str,))
 
@@ -458,6 +603,8 @@ def _store_log(conn, date_str, log_data, client_id, now):
                 INSERT INTO checklist_log_items (exercise_log_id, item_text)
                 VALUES (?, ?)
             """, (exercise_log_id, item))
+
+    return session_log_id
 
 
 # Pydantic models
@@ -540,10 +687,14 @@ def register_client(client_id: str, client_name: Optional[str] = None):
 
 @router.get("/sync", response_model=WorkoutSyncResponse)
 def workout_sync_get(
+    response: Response,
     client_id: str = Query(...),
-    last_sync_time: Optional[str] = Query(None)
+    last_sync_time: Optional[str] = Query(None),
 ):
     """Fetch workout plans and logs."""
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+
     with get_db() as conn:
         cursor = conn.cursor()
 
@@ -615,7 +766,7 @@ def workout_sync_get(
 
 @router.post("/sync")
 def workout_sync_post(payload: WorkoutSyncPayload):
-    """Upload workout logs from client (last-write-wins)."""
+    """Upload workout logs from client (last-write-wins with timestamp guard)."""
     with get_db() as conn:
         cursor = conn.cursor()
         now = get_utc_now()
@@ -624,21 +775,28 @@ def workout_sync_post(payload: WorkoutSyncPayload):
         _db_register_client(conn, client_id, now=now)
 
         applied_logs = []
+        rejected_logs = []
 
         for date_str, log_data in payload.logs.items():
-            _store_log(conn, date_str, log_data, client_id, now)
-            applied_logs.append(date_str)
+            result = _store_log(conn, date_str, log_data, client_id, now)
+            if result is None:
+                rejected_logs.append(date_str)
+            else:
+                applied_logs.append(date_str)
 
         cursor.execute("""
             INSERT OR REPLACE INTO meta_sync (key, value)
             VALUES ('last_server_sync_time', ?)
         """, (now,))
 
+        _purge_old_archives(cursor)
+
         conn.commit()
 
         return {
             "success": True,
             "appliedLogs": applied_logs,
+            "rejectedLogs": rejected_logs,
             "serverTime": now
         }
 
