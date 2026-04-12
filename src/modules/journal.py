@@ -329,6 +329,18 @@ def sync_delta(since: str, client_id: str):
         )
 
 
+CONFLICT_RETENTION_DAYS = 30
+
+
+def _prune_old_conflicts(cursor):
+    """Remove resolved sync_conflicts rows older than the retention window."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=CONFLICT_RETENTION_DAYS)).isoformat()
+    cursor.execute(
+        "DELETE FROM sync_conflicts WHERE resolved_at IS NOT NULL AND resolved_at < ?",
+        (cutoff,)
+    )
+
+
 @router.post("/sync/update", response_model=SyncResponse)
 def sync_update(payload: SyncPayload):
     """Update server with client data, with conflict detection."""
@@ -476,6 +488,7 @@ def sync_update(payload: SyncPayload):
                     VALUES ('last_server_sync_time', ?)
                 """, (now,))
 
+            _prune_old_conflicts(cursor)
             conn.commit()
 
             return SyncResponse(

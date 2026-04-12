@@ -1,6 +1,6 @@
-"""Integration tests for conflict resolution endpoints."""
+"""Integration tests for conflict resolution and pruning."""
 import pytest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 
 @pytest.mark.integration
@@ -197,3 +197,61 @@ class TestGetUnresolvedConflicts:
         """Should require client_id parameter."""
         response = client.get("/api/journal/sync/conflicts")
         assert response.status_code == 422
+
+
+@pytest.mark.integration
+class TestConflictPruning:
+    def test_resolved_conflicts_pruned_after_30_days(self, client, journal_registered_client, sample_tracker):
+        """Old resolved conflicts should be deleted during sync."""
+        import modules.journal as journal
+
+        # Insert an old resolved conflict directly
+        old_ts = (datetime.now(timezone.utc) - timedelta(days=31)).isoformat().replace("+00:00", "Z")
+        with journal.get_db() as conn:
+            conn.execute("""
+                INSERT INTO sync_conflicts
+                (entity_type, entity_id, client_id, client_data, resolution, resolved_at, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, ("tracker", "old-tracker", journal_registered_client, '{}', "client", old_ts, old_ts))
+            conn.commit()
+
+        # Trigger a sync to run the prune
+        client.post("/api/journal/sync/update", json={
+            "clientId": journal_registered_client,
+            "config": [sample_tracker],
+            "days": {}
+        })
+
+        # Verify old conflict was pruned
+        with journal.get_db() as conn:
+            count = conn.execute(
+                "SELECT COUNT(*) FROM sync_conflicts WHERE entity_id = 'old-tracker'"
+            ).fetchone()[0]
+            assert count == 0
+
+    def test_recent_resolved_conflicts_not_pruned(self, client, journal_registered_client, sample_tracker):
+        """Recently resolved conflicts should survive pruning."""
+        import modules.journal as journal
+
+        recent_ts = (datetime.now(timezone.utc) - timedelta(days=5)).isoformat().replace("+00:00", "Z")
+        with journal.get_db() as conn:
+            conn.execute("""
+                INSERT INTO sync_conflicts
+                (entity_type, entity_id, client_id, client_data, resolution, resolved_at, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, ("tracker", "recent-tracker", journal_registered_client, '{}', "client", recent_ts, recent_ts))
+            conn.commit()
+
+        # Trigger a sync to run the prune
+        client.post("/api/journal/sync/update", json={
+            "clientId": journal_registered_client,
+            "config": [sample_tracker],
+            "days": {}
+        })
+
+        # Verify recent conflict survives
+        with journal.get_db() as conn:
+            count = conn.execute(
+                "SELECT COUNT(*) FROM sync_conflicts WHERE entity_id = 'recent-tracker'"
+            ).fetchone()[0]
+            assert count == 1
