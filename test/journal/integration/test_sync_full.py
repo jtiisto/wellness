@@ -1,6 +1,6 @@
 """Integration tests for GET /api/journal/sync/full endpoint."""
 import pytest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 
 @pytest.mark.integration
@@ -49,7 +49,7 @@ class TestSyncFull:
         response = client.get("/api/journal/sync/full")
         data = response.json()
 
-        seven_days_ago = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+        seven_days_ago = (datetime.now(timezone.utc) - timedelta(days=7)).strftime("%Y-%m-%d")
         for date_str in data["days"].keys():
             assert date_str >= seven_days_ago
 
@@ -61,8 +61,8 @@ class TestSyncFull:
             "days": {}
         })
 
-        old_date = (datetime.now() - timedelta(days=10)).strftime("%Y-%m-%d")
-        today = datetime.now().strftime("%Y-%m-%d")
+        old_date = (datetime.now(timezone.utc) - timedelta(days=10)).strftime("%Y-%m-%d")
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
         client.post("/api/journal/sync/update", json={
             "clientId": journal_registered_client,

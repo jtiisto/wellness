@@ -8,7 +8,7 @@ import time
 
 import pytest
 import requests as http_requests
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pages.app_shell import AppShellPage
 from pages.journal import JournalPage
 
@@ -48,7 +48,7 @@ def seeded_journal_two_trackers(app_server):
         "days": {},
     })
 
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     days = {
         today: {
             tracker_quant["id"]: {"value": 1000, "completed": True, "_baseVersion": 0},
@@ -108,7 +108,7 @@ def _get_server_entry(app_server, tracker_id, date=None):
     resp = http_requests.get(f"{app_server['url']}/api/journal/sync/full")
     data = resp.json()
     if date is None:
-        date = datetime.now().strftime("%Y-%m-%d")
+        date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     return data.get("days", {}).get(date, {}).get(tracker_id)
 
 

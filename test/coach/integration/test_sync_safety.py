@@ -98,7 +98,7 @@ class TestCacheControlHeaders:
 class TestStaleWriteRejection:
     def test_stale_timestamp_rejected(self, client, coach_registered_client):
         """A log with an older _lastModifiedAt than the server's should be rejected."""
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
         # First upload — server stamps its own now as last_modified
         result1 = _upload(client, coach_registered_client, today, _make_log())
@@ -112,7 +112,7 @@ class TestStaleWriteRejection:
 
     def test_newer_timestamp_accepted(self, client, coach_registered_client):
         """A log with a newer _lastModifiedAt should overwrite the existing one."""
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
         # First upload
         _upload(client, coach_registered_client, today, _make_log())
@@ -125,7 +125,7 @@ class TestStaleWriteRejection:
 
     def test_missing_timestamp_accepted(self, client, coach_registered_client):
         """A log without _lastModifiedAt should always be accepted (backward compat)."""
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
         # Upload with timestamp first
         _upload(client, coach_registered_client, today, _make_log())
@@ -137,14 +137,14 @@ class TestStaleWriteRejection:
 
     def test_first_upload_no_existing_accepted(self, client, coach_registered_client):
         """First upload for a date should always succeed regardless of timestamp."""
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         result = _upload(client, coach_registered_client, today,
                          _make_log(timestamp=_past_ts()))
         assert today in result["appliedLogs"]
 
     def test_rejected_log_preserves_data(self, client, coach_registered_client):
         """After a stale write is rejected, the original data should be intact."""
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
         # Upload full workout
         _upload(client, coach_registered_client, today,
@@ -162,8 +162,8 @@ class TestStaleWriteRejection:
 
     def test_mixed_batch_partial_rejection(self, client, coach_registered_client):
         """In a batch upload, some logs can be accepted while others rejected."""
-        today = datetime.now().strftime("%Y-%m-%d")
-        yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
 
         # Upload today first — server stamps now
         _upload(client, coach_registered_client, today, _make_log())
@@ -192,7 +192,7 @@ class TestStaleWriteRejection:
 class TestSoftDeleteArchive:
     def test_overwrite_creates_archive(self, client, coach_registered_client, tmp_coach_db):
         """Overwriting a log should archive the old data before deletion."""
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
         # Upload original
         _upload(client, coach_registered_client, today,
@@ -230,7 +230,7 @@ class TestSoftDeleteArchive:
 
     def test_first_upload_no_archive(self, client, coach_registered_client, tmp_coach_db):
         """First upload for a date should not create archive entries."""
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         _upload(client, coach_registered_client, today, _make_log())
 
         conn = sqlite3.connect(tmp_coach_db)
@@ -243,7 +243,7 @@ class TestSoftDeleteArchive:
 
     def test_rejected_write_no_archive(self, client, coach_registered_client, tmp_coach_db):
         """A rejected stale write should NOT create an archive entry."""
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
         _upload(client, coach_registered_client, today, _make_log())
 
@@ -261,11 +261,11 @@ class TestSoftDeleteArchive:
 
     def test_archive_cleanup(self, client, coach_registered_client, tmp_coach_db):
         """Archive rows older than 14 days should be purged during sync."""
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
         # Manually insert an old archive entry
         conn = sqlite3.connect(tmp_coach_db)
-        old_ts = (datetime.now() - timedelta(days=15)).isoformat()
+        old_ts = (datetime.now(timezone.utc) - timedelta(days=15)).isoformat()
         conn.execute("""
             INSERT INTO workout_session_logs_archive
             (original_id, session_id, date, pain_discomfort, general_notes,
@@ -303,7 +303,7 @@ class TestSoftDeleteArchive:
 
     def test_recent_archives_not_purged(self, client, coach_registered_client, tmp_coach_db):
         """Archive rows within the retention window should NOT be purged."""
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
         # Upload + overwrite to create a recent archive
         _upload(client, coach_registered_client, today, _make_log())
@@ -311,7 +311,7 @@ class TestSoftDeleteArchive:
                 _make_log(timestamp=_future_ts()))
 
         # Trigger another sync to run cleanup
-        yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+        yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
         _upload(client, coach_registered_client, yesterday, _make_log())
 
         # Recent archive should still exist

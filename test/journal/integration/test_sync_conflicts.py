@@ -1,6 +1,6 @@
 """Integration tests for conflict resolution endpoints."""
 import pytest
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 @pytest.mark.integration
@@ -88,7 +88,7 @@ class TestResolveConflict:
             "days": {}
         })
 
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
         client.post("/api/journal/sync/update", json={
             "clientId": journal_registered_client,

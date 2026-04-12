@@ -8,7 +8,7 @@ import logging
 import sqlite3
 import subprocess
 from contextlib import contextmanager
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -438,7 +438,7 @@ ARCHIVE_RETENTION_DAYS = 14
 
 def _purge_old_archives(cursor):
     """Remove archive rows older than the retention window."""
-    cutoff = (datetime.now() - timedelta(days=ARCHIVE_RETENTION_DAYS)).isoformat()
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=ARCHIVE_RETENTION_DAYS)).isoformat()
     old_rows = cursor.execute(
         "SELECT id, original_id FROM workout_session_logs_archive WHERE superseded_at < ?",
         (cutoff,)
@@ -703,7 +703,7 @@ def workout_sync_get(
             UPDATE clients SET last_seen_at = ? WHERE id = ?
         """, (now, client_id))
 
-        cutoff = (datetime.now() - timedelta(days=SYNC_WINDOW_DAYS)).strftime("%Y-%m-%d")
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=SYNC_WINDOW_DAYS)).strftime("%Y-%m-%d")
 
         if last_sync_time:
             cursor.execute("""

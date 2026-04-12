@@ -162,7 +162,7 @@ def sample_simple_tracker():
 @pytest.fixture
 def sample_entry(sample_tracker):
     """Sample entry data for journal tests."""
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     return {
         "date": today,
         "tracker_id": sample_tracker["id"],
@@ -192,7 +192,7 @@ def journal_seeded_database(client, journal_registered_client, sample_tracker):
     response = client.post("/api/journal/sync/update", json=payload)
     assert response.status_code == 200
 
-    today = datetime.now()
+    today = datetime.now(timezone.utc)
     days = {}
     for i in range(3):
         date_str = (today - timedelta(days=i)).strftime("%Y-%m-%d")
@@ -316,8 +316,8 @@ def coach_seeded_database(client, coach_registered_client, sample_plan, sample_l
     """Coach database seeded with sample plan and log data for testing."""
     import sqlite3
 
-    today = datetime.now().strftime("%Y-%m-%d")
-    yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
 
     conn = sqlite3.connect(tmp_coach_db)
     conn.row_factory = sqlite3.Row

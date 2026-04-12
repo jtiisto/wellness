@@ -1,6 +1,6 @@
 """Integration tests for GET /api/coach/sync endpoint (full sync)."""
 import pytest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 
 @pytest.mark.integration
@@ -48,7 +48,7 @@ class TestSyncGetWithData:
         response = client.get(f"/api/coach/sync?client_id={coach_seeded_database['client_id']}")
         plans = response.json()["plans"]
 
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         plan = plans.get(today)
         assert plan is not None
         assert "blocks" in plan
@@ -61,7 +61,7 @@ class TestSyncGetWithData:
         response = client.get(f"/api/coach/sync?client_id={coach_seeded_database['client_id']}")
         plans = response.json()["plans"]
 
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         plan = plans[today]
         assert plan["day_name"] == "Test Workout"
         assert plan["location"] == "Home"
@@ -72,7 +72,7 @@ class TestSyncGetWithData:
         response = client.get(f"/api/coach/sync?client_id={coach_seeded_database['client_id']}")
         logs = response.json()["logs"]
 
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         log = logs.get(today)
         assert log is not None
         assert "session_feedback" in log
@@ -83,7 +83,7 @@ class TestSyncGetWithData:
         response = client.get(f"/api/coach/sync?client_id={coach_seeded_database['client_id']}")
         logs = response.json()["logs"]
 
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         log = logs[today]
         assert "ex_1" in log
         assert log["ex_1"]["completed"] is True
@@ -97,7 +97,7 @@ class TestDeltaSync:
         response = client.get(f"/api/coach/sync?client_id={coach_seeded_database['client_id']}")
         server_time = response.json()["serverTime"]
 
-        tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+        tomorrow = (datetime.now(timezone.utc) + timedelta(days=1)).strftime("%Y-%m-%d")
         client.post(
             "/api/coach/sync",
             json={

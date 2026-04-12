@@ -1,6 +1,6 @@
 """E2E tests for complete sync workflows via unified app."""
 import pytest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 
 @pytest.mark.e2e
@@ -27,7 +27,7 @@ class TestFreshClientWorkflow:
             "type": "simple",
             "_baseVersion": 0
         }
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         payload = {
             "clientId": client_id,
             "config": [tracker],
@@ -122,7 +122,7 @@ class TestTrackerLifecycle:
         full = client.get("/api/journal/sync/full").json()
         assert not any(t["id"] == "lifecycle-tracker" for t in full["config"])
 
-        past = (datetime.utcnow() - timedelta(hours=1)).isoformat() + "Z"
+        past = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat().replace("+00:00", "Z")
         delta = client.get(f"/api/journal/sync/delta?since={past}&client_id={journal_registered_client}").json()
         assert "lifecycle-tracker" in delta["deletedTrackers"]
 

@@ -5,7 +5,7 @@ Conflict-aware versioning sync engine for personal journal trackers.
 import json
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -239,7 +239,7 @@ def sync_full():
                 tracker.update(meta)
             config.append(tracker)
 
-        seven_days_ago = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+        seven_days_ago = (datetime.now(timezone.utc) - timedelta(days=7)).strftime("%Y-%m-%d")
         cursor.execute(
             "SELECT * FROM entries WHERE date >= ?",
             (seven_days_ago,)
@@ -297,7 +297,7 @@ def sync_delta(since: str, client_id: str):
                     tracker.update(meta)
                 config.append(tracker)
 
-        seven_days_ago = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+        seven_days_ago = (datetime.now(timezone.utc) - timedelta(days=7)).strftime("%Y-%m-%d")
         cursor.execute("""
             SELECT * FROM entries
             WHERE (last_modified_at > ? OR last_modified_at IS NULL)

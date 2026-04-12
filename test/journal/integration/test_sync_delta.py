@@ -1,13 +1,13 @@
 """Integration tests for GET /api/journal/sync/delta endpoint."""
 import pytest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 
 @pytest.mark.integration
 class TestSyncDelta:
     def test_returns_changes_since_timestamp(self, client, journal_seeded_database):
         """Should return only changes since the given timestamp."""
-        past = (datetime.utcnow() - timedelta(hours=1)).isoformat() + "Z"
+        past = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat().replace("+00:00", "Z")
 
         response = client.get(
             f"/api/journal/sync/delta?since={past}&client_id={journal_seeded_database['client_id']}"
@@ -21,7 +21,7 @@ class TestSyncDelta:
 
     def test_response_structure(self, client, journal_seeded_database):
         """Response should have correct structure."""
-        past = (datetime.utcnow() - timedelta(hours=1)).isoformat() + "Z"
+        past = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat().replace("+00:00", "Z")
         response = client.get(
             f"/api/journal/sync/delta?since={past}&client_id={journal_seeded_database['client_id']}"
         )
@@ -61,13 +61,13 @@ class TestSyncDelta:
 
     def test_requires_client_id_parameter(self, client):
         """Should require client_id parameter."""
-        past = (datetime.utcnow() - timedelta(hours=1)).isoformat() + "Z"
+        past = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat().replace("+00:00", "Z")
         response = client.get(f"/api/journal/sync/delta?since={past}")
         assert response.status_code == 422
 
     def test_empty_response_for_future_timestamp(self, client, journal_seeded_database):
         """Future timestamp should return empty changes."""
-        future = (datetime.utcnow() + timedelta(hours=1)).isoformat() + "Z"
+        future = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat().replace("+00:00", "Z")
         response = client.get(
             f"/api/journal/sync/delta?since={future}&client_id={journal_seeded_database['client_id']}"
         )
@@ -79,9 +79,9 @@ class TestSyncDelta:
 
     def test_only_returns_recent_entries(self, client, journal_registered_client, sample_tracker):
         """Should only return entries from last 7 days."""
-        old_date = (datetime.now() - timedelta(days=10)).strftime("%Y-%m-%d")
-        today = datetime.now().strftime("%Y-%m-%d")
-        past = (datetime.utcnow() - timedelta(hours=1)).isoformat() + "Z"
+        old_date = (datetime.now(timezone.utc) - timedelta(days=10)).strftime("%Y-%m-%d")
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        past = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat().replace("+00:00", "Z")
 
         client.post("/api/journal/sync/update", json={
             "clientId": journal_registered_client,
@@ -102,7 +102,7 @@ class TestSyncDelta:
 
     def test_includes_version_metadata(self, client, journal_seeded_database):
         """Returned items should include version metadata."""
-        past = (datetime.utcnow() - timedelta(hours=1)).isoformat() + "Z"
+        past = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat().replace("+00:00", "Z")
         response = client.get(
             f"/api/journal/sync/delta?since={past}&client_id={journal_seeded_database['client_id']}"
         )
