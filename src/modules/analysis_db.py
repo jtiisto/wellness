@@ -75,3 +75,14 @@ def has_active_report(db_path) -> bool:
     with get_db(db_path) as conn:
         row = conn.execute("SELECT COUNT(*) as cnt FROM reports WHERE status IN ('pending','running')").fetchone()
         return row["cnt"] > 0
+
+
+def recover_stale_reports(db_path):
+    """Mark any RUNNING reports as FAILED on startup (server restarted mid-execution)."""
+    with get_db(db_path) as conn:
+        conn.execute(
+            "UPDATE reports SET status='failed', error_message='Server restarted during execution', completed_at=? "
+            "WHERE status='running'",
+            (get_utc_now(),)
+        )
+        conn.commit()

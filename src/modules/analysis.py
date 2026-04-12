@@ -14,7 +14,7 @@ from pydantic import BaseModel
 
 from .analysis_db import (init_database, create_report, update_report_running,
     update_report_completed, update_report_failed, get_report, list_reports,
-    get_pending_reports, delete_report, has_active_report)
+    get_pending_reports, delete_report, has_active_report, recover_stale_reports)
 from .analysis_queries import get_query, list_queries, build_prompt
 
 
@@ -206,4 +206,5 @@ def create_router(db_path: Path) -> APIRouter:
     _db_path = db_path
     _llm_dir = _get_llm_dir()
     init_database(str(db_path))
+    recover_stale_reports(str(db_path))
     return router

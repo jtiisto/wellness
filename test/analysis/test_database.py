@@ -3,7 +3,7 @@ from modules.analysis_db import (
     init_database, create_report, update_report_running,
     update_report_completed, update_report_failed, get_report,
     list_reports, get_pending_reports, delete_report, has_active_report,
-    get_utc_now, get_db
+    recover_stale_reports, get_utc_now, get_db
 )
 
 
@@ -142,3 +142,39 @@ class TestReportLifecycle:
         report = get_report(analysis_initialized_db, report_id)
         assert report["status"] == "completed"
         assert report["response_markdown"] == "result"
+
+
+# ==================== recover_stale_reports ====================
+
+class TestRecoverStaleReports:
+    def test_running_reports_marked_failed(self, analysis_initialized_db):
+        """RUNNING reports should be marked FAILED after recovery."""
+        report_id = create_report(analysis_initialized_db, "test", "Test", "prompt")
+        update_report_running(analysis_initialized_db, report_id)
+        assert get_report(analysis_initialized_db, report_id)["status"] == "running"
+
+        recover_stale_reports(analysis_initialized_db)
+
+        report = get_report(analysis_initialized_db, report_id)
+        assert report["status"] == "failed"
+        assert report["error_message"] == "Server restarted during execution"
+        assert report["completed_at"] is not None
+
+    def test_pending_reports_not_touched(self, analysis_initialized_db):
+        """PENDING reports should remain PENDING after recovery."""
+        report_id = create_report(analysis_initialized_db, "test", "Test", "prompt")
+        assert get_report(analysis_initialized_db, report_id)["status"] == "pending"
+
+        recover_stale_reports(analysis_initialized_db)
+
+        assert get_report(analysis_initialized_db, report_id)["status"] == "pending"
+
+    def test_has_active_report_false_after_recovery(self, analysis_initialized_db):
+        """After recovery, has_active_report should return False if only RUNNING existed."""
+        report_id = create_report(analysis_initialized_db, "test", "Test", "prompt")
+        update_report_running(analysis_initialized_db, report_id)
+        assert has_active_report(analysis_initialized_db) is True
+
+        recover_stale_reports(analysis_initialized_db)
+
+        assert has_active_report(analysis_initialized_db) is False
