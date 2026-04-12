@@ -1,11 +1,15 @@
 """Tests for Coach MCP server tools and helpers."""
 
+import sqlite3
 from datetime import date, timedelta
+from pathlib import Path
 
 import pytest
 
 from coach_mcp.config import MCPConfig
 from coach_mcp.server import (
+    DatabaseManager,
+    SQLiteConnection,
     _is_bodyweight_or_band,
     _needs_transform,
     _transform_block_plan,
@@ -555,3 +559,195 @@ class TestWriteTools:
         result = self.tools["ingest_training_program"](plans=plans)
         assert result["success_count"] == 1
         assert result["failed_count"] == 1
+
+
+# ==================== Unit 4: Exercise Registry + DB Classes ====================
+
+
+@pytest.mark.integration
+class TestSearchExercises:
+    """Tests for search_exercises tool."""
+
+    @pytest.fixture(autouse=True)
+    def setup_mcp(self, test_app, coach_seeded_database, tmp_coach_db):
+        self.seed = coach_seeded_database
+        self.db_path = tmp_coach_db
+        config = MCPConfig(db_path=tmp_coach_db)
+        mcp = create_mcp_server(config)
+        self.tools = _extract_tools(mcp)
+        # Seed the exercises table by creating a plan via MCP tool
+        plan = {
+            "day_name": "Search Test",
+            "location": "Gym",
+            "phase": "Foundation",
+            "blocks": [
+                {
+                    "block_type": "strength",
+                    "title": "Main",
+                    "exercises": [
+                        {"id": "s1", "name": "DB Bench Press", "type": "strength",
+                         "target_sets": 3, "target_reps": "10"},
+                        {"id": "s2", "name": "KB Goblet Squat", "type": "strength",
+                         "target_sets": 3, "target_reps": "10"},
+                        {"id": "s3", "name": "Band Pull Apart", "type": "strength",
+                         "target_sets": 3, "target_reps": "15"},
+                    ],
+                }
+            ],
+        }
+        self.tools["set_workout_plan"](date="2099-03-01", plan=plan)
+
+    def test_search_by_name(self):
+        result = self.tools["search_exercises"](query="Bench")
+        names = [r["name"] for r in result]
+        assert any("Bench" in n for n in names)
+
+    def test_search_with_equipment_filter(self):
+        result = self.tools["search_exercises"](
+            query="", equipment="kettlebell"
+        )
+        assert all(r["equipment"] == "kettlebell" for r in result)
+
+    def test_search_fuzzy_match(self):
+        result = self.tools["search_exercises"](query="goblet sqat")
+        # Should fuzzy-match "KB Goblet Squat"
+        names = [r["name"] for r in result]
+        assert len(names) >= 1
+
+    def test_search_with_limit(self):
+        result = self.tools["search_exercises"](query="", limit=1)
+        assert len(result) <= 1
+
+    def test_search_empty_query_returns_all(self):
+        result = self.tools["search_exercises"](query="")
+        assert len(result) >= 3
+
+
+@pytest.mark.integration
+class TestGetExerciseHistory:
+    """Tests for get_exercise_history tool."""
+
+    @pytest.fixture(autouse=True)
+    def setup_mcp(self, test_app, coach_seeded_database, tmp_coach_db):
+        self.seed = coach_seeded_database
+        self.db_path = tmp_coach_db
+        config = MCPConfig(db_path=tmp_coach_db)
+        mcp = create_mcp_server(config)
+        self.tools = _extract_tools(mcp)
+        # Seed an exercise into the registry via set_workout_plan
+        plan = {
+            "day_name": "History Test",
+            "location": "Gym",
+            "phase": "Foundation",
+            "blocks": [
+                {
+                    "block_type": "strength",
+                    "title": "Main",
+                    "exercises": [
+                        {"id": "h1", "name": "Barbell Squat", "type": "strength",
+                         "target_sets": 3, "target_reps": "5"},
+                    ],
+                }
+            ],
+        }
+        self.tools["set_workout_plan"](date="2099-04-01", plan=plan)
+
+    def test_history_returns_exercise_info(self):
+        result = self.tools["get_exercise_history"](exercise_slug="barbell_squat")
+        assert result["exercise"]["slug"] == "barbell_squat"
+        assert result["exercise"]["name"] == "Barbell Squat"
+
+    def test_history_not_found(self):
+        with pytest.raises(ValueError, match="not found"):
+            self.tools["get_exercise_history"](exercise_slug="nonexistent_slug")
+
+    def test_history_respects_limit(self):
+        result = self.tools["get_exercise_history"](
+            exercise_slug="barbell_squat", limit=5
+        )
+        assert len(result["history"]) <= 5
+
+
+@pytest.mark.unit
+class TestDatabaseManager:
+    """Tests for DatabaseManager query/write methods."""
+
+    @pytest.fixture(autouse=True)
+    def setup_db(self, test_app, tmp_coach_db):
+        self.config = MCPConfig(db_path=tmp_coach_db)
+        self.db = DatabaseManager(self.config)
+
+    def test_execute_query_returns_dicts(self):
+        result = self.db.execute_query("SELECT 1 AS val")
+        assert result == [{"val": 1}]
+
+    def test_execute_query_bad_sql(self):
+        with pytest.raises(ValueError, match="Database error"):
+            self.db.execute_query("SELECT * FROM nonexistent_table_xyz")
+
+    def test_execute_write_returns_rowcount(self):
+        # Insert into a real table and check rowcount
+        count = self.db.execute_write(
+            "INSERT INTO workout_sessions (date, day_name, location, phase, last_modified, modified_by) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            ["2099-11-01", "DB Test", "Home", "Foundation", "2099-01-01T00:00:00Z", "test"],
+        )
+        assert count == 1
+
+    def test_transaction_rollback_on_error(self):
+        try:
+            with self.db.transaction() as cursor:
+                cursor.execute(
+                    "INSERT INTO workout_sessions (date, day_name, location, phase, last_modified, modified_by) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    ["2099-11-02", "Rollback Test", "Home", "Foundation", "2099-01-01T00:00:00Z", "test"],
+                )
+                raise RuntimeError("Trigger rollback")
+        except RuntimeError:
+            pass
+        # Row should not exist after rollback
+        result = self.db.execute_query(
+            "SELECT * FROM workout_sessions WHERE date = '2099-11-02'"
+        )
+        assert result == []
+
+
+@pytest.mark.unit
+class TestSQLiteConnection:
+    """Tests for SQLiteConnection context manager."""
+
+    @pytest.fixture(autouse=True)
+    def setup_db(self, test_app, tmp_coach_db):
+        self.db_path = tmp_coach_db
+
+    def test_read_only_rejects_writes(self):
+        with SQLiteConnection(self.db_path, read_only=True) as conn:
+            with pytest.raises(sqlite3.OperationalError):
+                conn.execute(
+                    "INSERT INTO workout_sessions (date, day_name, location, phase, last_modified, modified_by) "
+                    "VALUES ('2099-12-01', 'RO Test', 'Home', 'Foundation', '2099-01-01T00:00:00Z', 'test')"
+                )
+
+    def test_read_write_works(self):
+        with SQLiteConnection(self.db_path, read_only=False) as conn:
+            conn.execute(
+                "INSERT INTO workout_sessions (date, day_name, location, phase, last_modified, modified_by) "
+                "VALUES ('2099-12-02', 'RW Test', 'Home', 'Foundation', '2099-01-01T00:00:00Z', 'test')"
+            )
+            conn.commit()
+        # Verify it persisted
+        with SQLiteConnection(self.db_path, read_only=True) as conn:
+            row = conn.execute(
+                "SELECT day_name FROM workout_sessions WHERE date = '2099-12-02'"
+            ).fetchone()
+            assert row["day_name"] == "RW Test"
+
+    def test_foreign_keys_enabled(self):
+        with SQLiteConnection(self.db_path, read_only=True) as conn:
+            result = conn.execute("PRAGMA foreign_keys").fetchone()
+            assert result[0] == 1
+
+    def test_busy_timeout_set(self):
+        with SQLiteConnection(self.db_path, read_only=True) as conn:
+            result = conn.execute("PRAGMA busy_timeout").fetchone()
+            assert result[0] == 5000
