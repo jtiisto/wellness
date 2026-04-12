@@ -74,6 +74,20 @@ class TestMCPConfig:
         with pytest.raises(ValueError, match="not found"):
             config.validate()
 
+    def test_validate_max_rows_zero(self, tmp_path):
+        db = tmp_path / "test.db"
+        db.touch()
+        config = MCPConfig(db_path=db, max_rows=0)
+        with pytest.raises(ValueError, match="max_rows must be at least 1"):
+            config.validate()
+
+    def test_validate_max_rows_exceeds_absolute(self, tmp_path):
+        db = tmp_path / "test.db"
+        db.touch()
+        config = MCPConfig(db_path=db, max_rows=6000, max_rows_absolute=5000)
+        with pytest.raises(ValueError, match="cannot exceed max_rows_absolute"):
+            config.validate()
+
 
 # ==================== Integration Tests ====================
 
@@ -173,3 +187,19 @@ class TestJournalMCPTools:
     def test_get_journal_summary_max_days(self):
         with pytest.raises(ValueError, match="cannot exceed 365"):
             self.tools["get_journal_summary"](days=500)
+
+    def test_get_entries_empty_date_range(self):
+        result = self.tools["get_entries"](
+            start_date="2099-01-01", end_date="2099-01-31"
+        )
+        assert result == []
+
+    def test_execute_sql_query_rejects_multi_statement(self):
+        with pytest.raises(ValueError, match="Multiple statements"):
+            self.tools["execute_sql_query"](
+                query="SELECT 1; SELECT 2"
+            )
+
+    def test_list_trackers_empty_category(self):
+        result = self.tools["list_trackers"](category="nonexistent_category_xyz")
+        assert result == []
