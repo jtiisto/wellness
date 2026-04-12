@@ -265,6 +265,16 @@ export const scheduler = new SyncScheduler({
     pollCheckFn
 });
 
+// ==================== Helpers ====================
+
+function logHasExerciseContent(log) {
+    return Object.entries(log).some(([key, val]) => {
+        if (['_lastModifiedAt', '_lastModifiedBy', 'session_feedback'].includes(key)) return false;
+        if (typeof val !== 'object' || val === null) return false;
+        return val.completed || val.sets?.length > 0 || val.completed_items?.length > 0 || val.duration_min != null;
+    });
+}
+
 // ==================== Sync ====================
 
 async function triggerSync() {
@@ -298,12 +308,7 @@ async function triggerSync() {
                     return;
                 }
                 // Guard: only upload logs that contain actual exercise data
-                const hasContent = Object.entries(log).some(([key, val]) => {
-                    if (['_lastModifiedAt', '_lastModifiedBy', 'session_feedback'].includes(key)) return false;
-                    if (typeof val !== 'object' || val === null) return false;
-                    return val.completed || val.sets?.length > 0 || val.completed_items?.length > 0 || val.duration_min != null;
-                });
-                if (!hasContent) {
+                if (!logHasExerciseContent(log)) {
                     debugLog('coach-sync', 'skip upload: no exercise data', { date });
                     return;
                 }
@@ -510,9 +515,15 @@ export async function forceSync() {
                 const localTs = localLog._lastModifiedAt || '';
                 const serverTs = serverLog._lastModified || '';
                 if (localTs > serverTs) {
-                    uploadLogs[date] = localLog;
-                    mergedLogs[date] = localLog;
-                    uploaded++;
+                    if (logHasExerciseContent(localLog)) {
+                        uploadLogs[date] = localLog;
+                        mergedLogs[date] = localLog;
+                        uploaded++;
+                    } else {
+                        debugLog('coach-sync', 'force sync: skip upload, no exercise data', { date });
+                        mergedLogs[date] = serverLog;
+                        accepted++;
+                    }
                 } else if (serverTs > localTs) {
                     mergedLogs[date] = serverLog;
                     accepted++;
@@ -521,9 +532,15 @@ export async function forceSync() {
                     skipped++;
                 }
             } else if (localLog) {
-                uploadLogs[date] = localLog;
-                mergedLogs[date] = localLog;
-                uploaded++;
+                if (logHasExerciseContent(localLog)) {
+                    uploadLogs[date] = localLog;
+                    mergedLogs[date] = localLog;
+                    uploaded++;
+                } else {
+                    debugLog('coach-sync', 'force sync: skip upload, no exercise data', { date });
+                    mergedLogs[date] = localLog;
+                    skipped++;
+                }
             } else {
                 mergedLogs[date] = serverLog;
                 accepted++;
