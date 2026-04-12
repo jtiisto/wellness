@@ -322,3 +322,51 @@ class TestSoftDeleteArchive:
         ).fetchone()[0]
         assert count == 1
         conn.close()
+
+
+# ===========================================================================
+# Batch atomicity
+# ===========================================================================
+
+@pytest.mark.integration
+class TestBatchUploadAtomicity:
+    def test_batch_rolls_back_on_error(self, client, coach_registered_client, tmp_coach_db):
+        """If _store_log raises mid-batch, no dates from that batch should persist."""
+        from unittest.mock import patch
+
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
+
+        call_count = 0
+        original_store_log = None
+
+        def _exploding_store_log(conn, date_str, log_data, client_id, now):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 2:
+                raise RuntimeError("simulated DB failure on second date")
+            return original_store_log(conn, date_str, log_data, client_id, now)
+
+        # Grab a reference to the real function before patching
+        import modules.coach as coach_mod
+        original_store_log = coach_mod._store_log
+
+        with patch("modules.coach._store_log", side_effect=_exploding_store_log):
+            with pytest.raises(RuntimeError, match="simulated DB failure"):
+                client.post(
+                    "/api/coach/sync",
+                    json={
+                        "clientId": coach_registered_client,
+                        "logs": {
+                            yesterday: _make_log(),
+                            today: _make_log(),
+                        },
+                    },
+                )
+
+        # Neither date should have been persisted
+        conn = sqlite3.connect(tmp_coach_db)
+        conn.row_factory = sqlite3.Row
+        count = conn.execute("SELECT COUNT(*) FROM workout_session_logs").fetchone()[0]
+        assert count == 0, f"Expected 0 logs after rollback, found {count}"
+        conn.close()

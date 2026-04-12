@@ -777,21 +777,25 @@ def workout_sync_post(payload: WorkoutSyncPayload):
         applied_logs = []
         rejected_logs = []
 
-        for date_str, log_data in payload.logs.items():
-            result = _store_log(conn, date_str, log_data, client_id, now)
-            if result is None:
-                rejected_logs.append(date_str)
-            else:
-                applied_logs.append(date_str)
+        try:
+            for date_str, log_data in payload.logs.items():
+                result = _store_log(conn, date_str, log_data, client_id, now)
+                if result is None:
+                    rejected_logs.append(date_str)
+                else:
+                    applied_logs.append(date_str)
 
-        cursor.execute("""
-            INSERT OR REPLACE INTO meta_sync (key, value)
-            VALUES ('last_server_sync_time', ?)
-        """, (now,))
+            cursor.execute("""
+                INSERT OR REPLACE INTO meta_sync (key, value)
+                VALUES ('last_server_sync_time', ?)
+            """, (now,))
 
-        _purge_old_archives(cursor)
+            _purge_old_archives(cursor)
 
-        conn.commit()
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
 
         return {
             "success": True,
