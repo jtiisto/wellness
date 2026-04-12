@@ -1,5 +1,4 @@
 """Tests for shared database utilities (db.py)."""
-import sqlite3
 import pytest
 from src.modules.db import get_db
 
@@ -38,3 +37,12 @@ class TestGetDbAutoRollback:
         with get_db(db_path) as conn:
             count = conn.execute("SELECT COUNT(*) FROM items").fetchone()[0]
             assert count == 1
+
+
+class TestBusyTimeout:
+    def test_busy_timeout_configured(self, tmp_path):
+        """get_db connections should have busy_timeout set to 5000ms."""
+        db_path = tmp_path / "test.db"
+        with get_db(db_path) as conn:
+            timeout = conn.execute("PRAGMA busy_timeout").fetchone()[0]
+            assert timeout == 5000

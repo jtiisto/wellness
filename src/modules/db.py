@@ -16,6 +16,7 @@ def get_db(db_path, foreign_keys=False):
     """Context manager for database connections."""
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout = 5000")
     if foreign_keys:
         conn.execute("PRAGMA foreign_keys = ON")
     try:
