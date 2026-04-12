@@ -1,12 +1,16 @@
 """Tests for Coach MCP server tools and helpers."""
 
+from datetime import date, timedelta
+
 import pytest
 
+from coach_mcp.config import MCPConfig
 from coach_mcp.server import (
     _is_bodyweight_or_band,
     _needs_transform,
     _transform_block_plan,
     _transform_block_to_exercises,
+    create_mcp_server,
 )
 
 
@@ -184,3 +188,103 @@ class TestTransformBlockPlan:
         assert result["day_name"] == "Lower Body Power"
         # day_name not in raw, so theme is used
         assert "theme" not in result
+
+
+# ==================== Unit 2: Read Tools Integration Tests ====================
+
+
+def _extract_tools(mcp_server):
+    """Extract tool functions from MCP server by name."""
+    tools = {}
+    for tool in mcp_server._tool_manager._tools.values():
+        tools[tool.fn.__name__] = tool.fn
+    return tools
+
+
+@pytest.mark.integration
+class TestReadTools:
+    """Tests for read-only coach MCP tools against a seeded database."""
+
+    @pytest.fixture(autouse=True)
+    def setup_mcp(self, test_app, coach_seeded_database, tmp_coach_db):
+        self.seed = coach_seeded_database
+        config = MCPConfig(db_path=tmp_coach_db)
+        mcp = create_mcp_server(config)
+        self.tools = _extract_tools(mcp)
+
+    def test_get_workout_plan_returns_seeded_plans(self):
+        today = self.seed["dates"][0]
+        yesterday = self.seed["dates"][1]
+        result = self.tools["get_workout_plan"](
+            start_date=yesterday, end_date=today
+        )
+        assert len(result) == 2
+        dates = [r["date"] for r in result]
+        assert today in dates
+        assert yesterday in dates
+
+    def test_get_workout_plan_empty_range(self):
+        result = self.tools["get_workout_plan"](
+            start_date="2099-01-01", end_date="2099-01-31"
+        )
+        assert result == []
+
+    def test_get_workout_plan_structure(self):
+        today = self.seed["dates"][0]
+        result = self.tools["get_workout_plan"](
+            start_date=today, end_date=today
+        )
+        assert len(result) == 1
+        plan = result[0]["plan"]
+        assert "day_name" in plan
+        assert "location" in plan
+        assert "phase" in plan
+        assert "blocks" in plan
+        assert len(plan["blocks"]) >= 1
+        block = plan["blocks"][0]
+        assert "block_type" in block
+        assert "exercises" in block
+
+    def test_get_workout_logs_returns_seeded_log(self):
+        today = self.seed["dates"][0]
+        result = self.tools["get_workout_logs"](
+            start_date=today, end_date=today
+        )
+        assert len(result) == 1
+        log = result[0]["log"]
+        assert "session_feedback" in log
+        assert log["session_feedback"]["general_notes"] == "Good session"
+        # Check exercise log is present
+        assert "ex_1" in log
+        assert log["ex_1"]["sets"][0]["weight"] == 24
+
+    def test_get_workout_logs_empty_range(self):
+        result = self.tools["get_workout_logs"](
+            start_date="2099-01-01", end_date="2099-01-31"
+        )
+        assert result == []
+
+    def test_get_workout_summary(self):
+        result = self.tools["get_workout_summary"](days=30)
+        assert result["planned_workouts"] >= 2
+        assert result["completed_workouts"] >= 1
+        assert "completion_rate_percent" in result
+        assert "exercise_types_in_recent_plans" in result
+
+    def test_get_workout_summary_max_days(self):
+        with pytest.raises(ValueError, match="cannot exceed 365"):
+            self.tools["get_workout_summary"](days=366)
+
+    def test_list_scheduled_dates(self):
+        today = self.seed["dates"][0]
+        yesterday = self.seed["dates"][1]
+        result = self.tools["list_scheduled_dates"](
+            start_date=yesterday, end_date=today
+        )
+        assert today in result
+        assert yesterday in result
+
+    def test_list_scheduled_dates_defaults(self):
+        # No args should use today..+6 weeks — should not error
+        result = self.tools["list_scheduled_dates"]()
+        assert isinstance(result, list)
