@@ -512,8 +512,9 @@ def _archive_existing_log(cursor, date_str, superseded_by, now):
 def _store_log(conn, date_str, log_data, client_id, now):
     """Decompose a log dict into relational tables.
 
-    Returns the session_log_id on success, or None if the write was rejected
-    (incoming timestamp older than server's).
+    Returns the session_log_id on success, None if the write was rejected
+    (incoming timestamp older than server's), or "incomplete_content" if the
+    incoming payload has no exercises but the server already has exercise data.
     """
     cursor = conn.cursor()
 
@@ -530,6 +531,27 @@ def _store_log(conn, date_str, log_data, client_id, now):
                 date_str, existing["last_modified"], incoming_modified, client_id,
             )
             return None
+
+    # Layer 1b: Reject incomplete payloads that would destroy exercise data
+    meta_keys = {"session_feedback", "_lastModifiedAt", "_lastModifiedBy"}
+    incoming_exercise_count = sum(
+        1 for k, v in log_data.items()
+        if k not in meta_keys and isinstance(v, dict)
+    )
+    if incoming_exercise_count == 0:
+        existing_count = cursor.execute(
+            """SELECT COUNT(*) FROM exercise_logs el
+               JOIN workout_session_logs wsl ON el.session_log_id = wsl.id
+               WHERE wsl.date = ?""",
+            (date_str,)
+        ).fetchone()[0]
+        if existing_count > 0:
+            logger.warning(
+                "Rejecting incomplete log for %s: incoming has 0 exercises, "
+                "server has %d (client=%s)",
+                date_str, existing_count, client_id,
+            )
+            return "incomplete_content"
 
     feedback = log_data.get("session_feedback", {})
     pain = feedback.get("pain_discomfort")
@@ -551,7 +573,6 @@ def _store_log(conn, date_str, log_data, client_id, now):
     """, (session_id, date_str, pain, notes, now, client_id))
     session_log_id = cursor.lastrowid
 
-    meta_keys = {"session_feedback", "_lastModifiedAt", "_lastModifiedBy"}
     for exercise_key, exercise_data in log_data.items():
         if exercise_key in meta_keys:
             continue
@@ -776,11 +797,14 @@ def workout_sync_post(payload: WorkoutSyncPayload):
 
         applied_logs = []
         rejected_logs = []
+        content_rejected_logs = []
 
         try:
             for date_str, log_data in payload.logs.items():
                 result = _store_log(conn, date_str, log_data, client_id, now)
-                if result is None:
+                if result == "incomplete_content":
+                    content_rejected_logs.append(date_str)
+                elif result is None:
                     rejected_logs.append(date_str)
                 else:
                     applied_logs.append(date_str)
@@ -801,6 +825,7 @@ def workout_sync_post(payload: WorkoutSyncPayload):
             "success": True,
             "appliedLogs": applied_logs,
             "rejectedLogs": rejected_logs,
+            "contentRejectedLogs": content_rejected_logs,
             "serverTime": now
         }
 

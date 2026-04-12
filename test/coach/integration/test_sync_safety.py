@@ -185,6 +185,62 @@ class TestStaleWriteRejection:
 
 
 # ===========================================================================
+# Layer 1b: Content guard (reject incomplete payloads)
+# ===========================================================================
+
+@pytest.mark.integration
+class TestContentGuard:
+    def test_newer_partial_payload_preserves_exercises(self, client, coach_registered_client):
+        """Upload full log, then newer feedback-only log — exercises should survive."""
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+        # Upload full workout with exercises
+        _upload(client, coach_registered_client, today, _make_log(exercises=True))
+
+        # Upload newer log with only session_feedback (no exercises)
+        result = _upload(client, coach_registered_client, today,
+                         _make_log(exercises=False, timestamp=_future_ts()))
+
+        assert today in result["contentRejectedLogs"]
+        assert today not in result["appliedLogs"]
+        assert today not in result["rejectedLogs"]
+
+        # Verify exercise data survived
+        data = _download(client, coach_registered_client)
+        assert "ex_1" in data["logs"][today]
+        assert data["logs"][today]["ex_1"]["completed"] is True
+
+    def test_newer_complete_payload_replaces(self, client, coach_registered_client):
+        """Upload full log, then newer log with different exercises — should replace."""
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+        # Upload initial workout
+        _upload(client, coach_registered_client, today, _make_log(exercises=True))
+
+        # Upload newer log with exercises — should be accepted
+        new_log = _make_log(exercises=True, timestamp=_future_ts())
+        new_log["ex_1"]["user_note"] = "Updated note"
+        result = _upload(client, coach_registered_client, today, new_log)
+
+        assert today in result["appliedLogs"]
+        assert today not in result.get("contentRejectedLogs", [])
+
+        # Verify the updated data is present
+        data = _download(client, coach_registered_client)
+        assert data["logs"][today]["ex_1"]["user_note"] == "Updated note"
+
+    def test_first_upload_feedback_only_accepted(self, client, coach_registered_client):
+        """First upload with only feedback (no existing data) should be accepted."""
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+        result = _upload(client, coach_registered_client, today,
+                         _make_log(exercises=False))
+
+        assert today in result["appliedLogs"]
+        assert today not in result.get("contentRejectedLogs", [])
+
+
+# ===========================================================================
 # Layer 2: Soft-delete archive
 # ===========================================================================
 

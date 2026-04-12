@@ -337,6 +337,22 @@ async function triggerSync() {
                 }
             }
 
+            // Notify user about content-rejected logs (incomplete payload blocked)
+            if (uploadResult.contentRejectedLogs?.length > 0) {
+                debugLog('coach-sync', 'server rejected incomplete logs', { rejected: uploadResult.contentRejectedLogs });
+                meta.dirtyDates = meta.dirtyDates.filter(d => !uploadResult.contentRejectedLogs.includes(d));
+                for (const d of uploadResult.contentRejectedLogs) {
+                    delete meta.dirtyDateGenerations[d];
+                }
+                const dates = uploadResult.contentRejectedLogs.join(', ');
+                showNotification({
+                    type: 'warning',
+                    title: 'Sync skipped',
+                    message: `Workout data for ${dates} was not overwritten. Fetch the full workout before adding notes.`,
+                    duration: 8000,
+                });
+            }
+
             debugLog('coach-sync', 'upload success', { applied: uploadResult.appliedLogs?.length, rejected: uploadResult.rejectedLogs?.length });
             uploadedDates = [...meta.dirtyDates];
         }
@@ -523,6 +539,24 @@ export async function forceSync() {
                 body: JSON.stringify({ clientId, logs: uploadLogs })
             });
             if (!uploadResponse.ok) throw new Error('Failed to upload logs');
+
+            const uploadResult = await uploadResponse.json();
+            if (uploadResult.contentRejectedLogs?.length > 0) {
+                debugLog('coach-sync', 'force sync: server rejected incomplete logs', { rejected: uploadResult.contentRejectedLogs });
+                // Use server data for content-rejected dates instead of local
+                for (const d of uploadResult.contentRejectedLogs) {
+                    if (data.logs[d]) {
+                        mergedLogs[d] = data.logs[d];
+                    }
+                }
+                const dates = uploadResult.contentRejectedLogs.join(', ');
+                showNotification({
+                    type: 'warning',
+                    title: 'Sync skipped',
+                    message: `Workout data for ${dates} was not overwritten. Fetch the full workout before adding notes.`,
+                    duration: 8000,
+                });
+            }
         }
 
         // Apply merged state locally
