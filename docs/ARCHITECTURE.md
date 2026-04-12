@@ -84,7 +84,7 @@ The Journal tracks fine-grained daily data (supplements taken, habits checked) a
 - Per-record versioning (each tracker and each entry has its own integer version)
 - Conflicts are explicit - the user must choose which version to keep (unless auto-mergeable)
 - Soft deletes via `_deleted` flag preserve version history
-- Conflict audit trail stored in `sync_conflicts` table
+- Conflict audit trail stored in `sync_conflicts` table (resolved conflicts older than 30 days are auto-pruned during sync)
 
 **Data model:**
 ```
@@ -108,8 +108,10 @@ The Coach module handles workout plans (authored server-side, typically by AI) a
 **Sync safety layers:**
 - **HTTP cache prevention** — `GET /sync` returns `Cache-Control: no-cache, no-store, must-revalidate`; client fetch calls use `cache: 'no-store'`. Prevents stale sync responses from being served from browser HTTP cache (e.g., after Android storage clear).
 - **Timestamp-based rejection** — `_store_log()` compares the client's `_lastModifiedAt` against the server's `last_modified`. Stale writes are rejected; the POST response includes `rejectedLogs` so the client can clear those from `dirtyDates` and download fresh data.
+- **Content guard** — `_store_log()` rejects incoming logs that contain zero exercises when the existing log has exercise data. This prevents partial payloads (e.g., only `session_feedback`) from overwriting complete workout data via DELETE-then-INSERT. Rejected dates are returned in `contentRejectedLogs` and the client shows a warning toast.
+- **Batch transaction wrapping** — `workout_sync_post` wraps the multi-date `_store_log` loop in an explicit transaction with auto-rollback on failure, ensuring all-or-nothing semantics when uploading logs for multiple dates.
 - **Soft-delete archive** — Before deleting an existing log, all data (session log, exercise logs, set logs) is copied to `*_archive` tables with a `superseded_at` timestamp. Archives older than 14 days are purged during sync. This provides a recovery window for any unexpected data loss.
-- **Client upload validation** — The upload phase skips logs that contain no exercise data (only metadata/feedback or empty), preventing empty-storage scenarios from overwriting real data on the server.
+- **Client upload validation** — The upload phase skips logs that contain no exercise data (only metadata/feedback or empty), preventing empty-storage scenarios from overwriting real data on the server. Both `triggerSync` and `forceSync` apply this guard.
 
 **Sync status:** green (clean), red (dirty logs), gray (offline).
 
@@ -196,7 +198,7 @@ This means the pre-workout hook won't fire when offline, which is intentional: t
 
 ### Force Sync
 
-Both modules support force sync (accessible from the settings menu) which performs a full bidirectional reconciliation by timestamp comparison. Force sync reports per-module counts of uploaded and accepted records. The Journal module accepts server versions on conflict during force sync rather than prompting the user.
+Both modules support force sync (accessible from the settings menu) which performs a full bidirectional reconciliation by timestamp comparison. Force sync reports per-module counts of uploaded and accepted records. The Journal module accepts server versions on conflict during force sync rather than prompting the user. Both modules guard against overwriting server data during force sync: Coach skips logs without exercise content, and Journal snapshots generation counters before sync and only clears dirty state for items whose generation hasn't changed (preserving concurrent edits).
 
 ### Analysis: Offline Cache (No Sync)
 
@@ -206,6 +208,8 @@ The Analysis module has no bidirectional sync protocol — all authoritative sta
 - **Individual reports** — cached after each successful `loadReport()` call (completed/failed reports only). Cached reports are viewable offline.
 - **Submitting new queries** requires server connectivity. If the server is unreachable, a toast notifies the user.
 - **Initialization** — if `loadQueries()`/`checkPending()` fail on init (server unreachable), the module opens to History view with cached data rather than showing an error.
+
+**Stale report recovery:** On startup, any reports left in `status='running'` from a previous server crash are marked as `status='failed'`. This prevents `has_active_report` from permanently blocking new queries with a 409.
 
 **Flow:**
 1. User selects a pre-built query from the UI
@@ -233,7 +237,7 @@ The `public/js/shared/` directory contains cross-module utilities:
 
 **Path-based routing.** The app runs under a `/wellness` URL prefix (`BASE_PATH` in `server.py`). All frontend paths are prefixed (e.g., `/wellness/api/journal/sync`), while backend routes stay at root (`/api/journal/sync`). A `StripPrefixMiddleware` ASGI wrapper strips the prefix from incoming requests, enabling the app to work both behind Tailscale `serve --set-path /wellness` (which also strips the prefix) and via direct access at `localhost:9000/wellness/`. The server injects `$BASE_PATH$` into `sw.js` at serve time for service worker path matching.
 
-**SQLite** is used directly (no ORM) with one database file per module. This keeps modules fully isolated at the data layer and simplifies deployment (no database server required). Foreign key constraints are enforced via `PRAGMA foreign_keys = ON` in the Coach module where relational integrity matters.
+**SQLite** is used directly (no ORM) with one database file per module. This keeps modules fully isolated at the data layer and simplifies deployment (no database server required). Foreign key constraints are enforced via `PRAGMA foreign_keys = ON` in the Coach module where relational integrity matters. Both the main server (`get_db`) and Coach MCP configure `PRAGMA busy_timeout = 5000` (5 seconds) to handle concurrent database access gracefully instead of immediately throwing `SQLITE_BUSY`.
 
 **Uvicorn** runs the ASGI application. The server control script (`bin/server.sh`) manages the process via PID files and port detection.
 
