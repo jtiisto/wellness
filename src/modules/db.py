@@ -20,6 +20,9 @@ def get_db(db_path, foreign_keys=False):
         conn.execute("PRAGMA foreign_keys = ON")
     try:
         yield conn
+    except BaseException:
+        conn.rollback()
+        raise
     finally:
         conn.close()
 
