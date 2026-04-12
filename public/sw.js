@@ -28,6 +28,7 @@ const APP_SHELL_URLS = [
   B + '/js/shared/debug-log.js',
   B + '/js/shared/force-sync.js',
   B + '/js/shared/data-export.js',
+  B + '/js/shared/numeric-input.js',
   // Journal module
   B + '/js/journal/JournalView.js',
   B + '/js/journal/store.js',

@@ -15,6 +15,7 @@ const modules = signal([]);
 const activeModuleId = signal(localStorage.getItem('wellness_active_module') || null);
 const loading = signal(true);
 const moduleComponents = signal({});
+const moduleLoadErrors = signal({});
 
 // ==================== Icons (inline SVG) ====================
 
@@ -91,6 +92,7 @@ async function loadModuleComponent(moduleId) {
             };
         } catch (err) {
             console.error(`Failed to load module ${moduleId}:`, err);
+            moduleLoadErrors.value = { ...moduleLoadErrors.value, [moduleId]: err.message };
         }
     }
 }
@@ -137,11 +139,22 @@ function NavBar() {
 }
 
 function ModuleContent() {
-    const Component = moduleComponents.value[activeModuleId.value];
-    if (!Component) {
-        return html`<div class="loading"><div class="loading-spinner"></div></div>`;
+    const id = activeModuleId.value;
+    const Component = moduleComponents.value[id];
+    if (Component) {
+        return html`<${Component} key=${id}/>`;
     }
-    return html`<${Component} key=${activeModuleId.value}/>`;
+    const error = moduleLoadErrors.value[id];
+    if (error) {
+        return html`<div class="loading" style="flex-direction: column; gap: 12px;">
+            <p style="color: var(--text-secondary);">Failed to load module</p>
+            <button class="btn-primary" onClick=${() => {
+                moduleLoadErrors.value = { ...moduleLoadErrors.value, [id]: undefined };
+                loadModuleComponent(id);
+            }}>Retry</button>
+        </div>`;
+    }
+    return html`<div class="loading"><div class="loading-spinner"></div></div>`;
 }
 
 function App() {

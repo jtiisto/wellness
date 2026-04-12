@@ -115,6 +115,17 @@ def _store_plan_to_db(cursor, date_str, plan, modified_by="mcp"):
     """Store a plan dict into normalized tables. Returns session_id."""
     now = get_utc_now()
 
+    # Guard: refuse to replace plans that have workout logs attached.
+    # Use update_exercise/add_exercise/remove_exercise instead.
+    log_row = cursor.execute(
+        "SELECT id FROM workout_session_logs WHERE date = ?", [date_str]
+    ).fetchone()
+    if log_row:
+        raise ValueError(
+            f"Cannot replace plan for {date_str}: a workout log exists. "
+            f"Use update_exercise, add_exercise, or remove_exercise to edit in place."
+        )
+
     # Delete existing session for this date (CASCADE cleans blocks, exercises, checklist)
     cursor.execute("DELETE FROM workout_sessions WHERE date = ?", [date_str])
     # Clear any tombstone if re-creating a plan for a previously deleted date
