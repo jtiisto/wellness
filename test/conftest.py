@@ -316,8 +316,12 @@ def coach_seeded_database(client, coach_registered_client, sample_plan, sample_l
     """Coach database seeded with sample plan and log data for testing."""
     import sqlite3
 
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
+    # Use local time for dates — coach MCP tools like get_workout_summary
+    # use date.today() (local) to compute their windows. Seeding UTC dates
+    # causes the seed to land outside the function's window when UTC and
+    # local disagree (e.g., evening PDT).
+    today = datetime.now().strftime("%Y-%m-%d")
+    yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
 
     conn = sqlite3.connect(tmp_coach_db)
     conn.row_factory = sqlite3.Row

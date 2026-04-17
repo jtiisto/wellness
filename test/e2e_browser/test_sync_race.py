@@ -48,7 +48,9 @@ def seeded_journal_two_trackers(app_server):
         "days": {},
     })
 
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    # Use local time — the browser's getToday() uses local timezone, so seed
+    # dates must match or edits land on a different date than the seeded entry.
+    today = datetime.now().strftime("%Y-%m-%d")
     days = {
         today: {
             tracker_quant["id"]: {"value": 1000, "completed": True, "_baseVersion": 0},
@@ -108,7 +110,7 @@ def _get_server_entry(app_server, tracker_id, date=None):
     resp = http_requests.get(f"{app_server['url']}/api/journal/sync/full")
     data = resp.json()
     if date is None:
-        date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        date = datetime.now().strftime("%Y-%m-%d")
     return data.get("days", {}).get(date, {}).get(tracker_id)
 
 

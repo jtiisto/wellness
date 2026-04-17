@@ -65,7 +65,7 @@ class TestSyncWindowPlanFiltering:
             f"/api/coach/sync?client_id={coach_seeded_database['client_id']}"
         )
         data = response.json()
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        today = coach_seeded_database["dates"][0]
         assert today in data["plans"]
 
     def test_old_plan_excluded_from_full_sync(self, client, coach_registered_client, tmp_coach_db):
@@ -139,7 +139,7 @@ class TestSyncWindowLogFiltering:
             f"/api/coach/sync?client_id={coach_seeded_database['client_id']}"
         )
         data = response.json()
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        today = coach_seeded_database["dates"][0]
         assert today in data["logs"]
 
     def test_old_log_excluded(self, client, coach_registered_client):
