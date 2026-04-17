@@ -870,17 +870,19 @@ export async function resolveConflict(conflict, resolution) {
             }
 
         } else if (resolution === 'client') {
-            // Push client data to server with force
-            const response = await fetch(`${API_BASE}/resolve-conflict`, {
+            // Push client data to server with force. Server expects the
+            // routing scalars as query params and client_data as JSON body.
+            const entityId = conflict.type === 'entry' ? conflict.id : conflict.local.id;
+            const qs = new URLSearchParams({
+                entity_type: conflict.type,
+                entity_id: entityId,
+                resolution: 'client',
+                client_id: meta.clientId
+            });
+            const response = await fetch(`${API_BASE}/resolve-conflict?${qs}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    entity_type: conflict.type,
-                    entity_id: conflict.type === 'entry' ? conflict.id : conflict.local.id,
-                    resolution: 'client',
-                    client_id: meta.clientId,
-                    client_data: conflict.local
-                })
+                body: JSON.stringify(conflict.local)
             });
 
             if (!response.ok) {

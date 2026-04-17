@@ -155,3 +155,91 @@ def test_re_edit_same_set_during_sync_keeps_latest(coach_sync_page, app_server):
 
     # UI must also show 32
     assert page.locator(".set-input.weight").first.input_value() == "32"
+
+
+def test_feedback_edit_during_sync_keeps_latest(coach_sync_page, app_server):
+    """Edit feedback textarea → sync starts → re-edit during sync → latest wins.
+
+    Feedback textareas serialize through a different path than set inputs.
+    The re-edit while sync is in flight must not be dropped by clearDirtyState
+    when the first sync response comes back.
+    """
+    coach = coach_sync_page
+    page = coach.page
+    today = coach._seed_info["dates"][0]
+
+    coach.start_workout()
+    coach.expand_exercise("KB Goblet Squat")
+    page.wait_for_timeout(300)
+    # Fill a set so the log has exercise content — feedback-only logs are
+    # blocked by the content guard and never reach the server.
+    coach.fill_set_weight(0, 20)
+    page.wait_for_timeout(4000)  # let this sync complete before delaying
+
+    _delay_coach_sync_endpoints(page)
+
+    # First feedback edit (triggers sync after debounce)
+    coach.fill_feedback("General Notes", "first draft")
+
+    # Wait for debounce + sync to start (sync is delayed)
+    page.wait_for_timeout(3000)
+
+    # Re-edit the same feedback while sync is in flight
+    coach.fill_feedback("General Notes", "final version")
+
+    # Wait for all syncs to complete
+    page.wait_for_timeout(SYNC_DELAY_MS + 8000)
+
+    server_log = _get_server_log(app_server, today)
+    assert server_log is not None, "Log missing from server"
+    feedback = server_log.get("session_feedback", {})
+    assert feedback.get("general_notes") == "final version", (
+        f"Feedback re-edit lost; server has {feedback!r}")
+
+    # UI still shows final text
+    notes_field = page.locator(".feedback-field").filter(has_text="General Notes")
+    assert notes_field.locator("textarea").input_value() == "final version"
+
+
+def test_forcesync_during_edit_preserves_latest(coach_sync_page, app_server):
+    """Trigger coach Force Sync, edit during its in-flight phase.
+
+    Regression for the generation-counter fix that the journal store also
+    received in commit 0483635. Coach's forceSync snapshots dirtyDateGenerations
+    before downloading; an edit during the download/upload window must keep
+    the date dirty so a follow-up sync uploads the new value.
+    """
+    coach = coach_sync_page
+    page = coach.page
+    today = coach._seed_info["dates"][0]
+
+    coach.start_workout()
+    coach.expand_exercise("KB Goblet Squat")
+    page.wait_for_timeout(300)
+
+    _delay_coach_sync_endpoints(page)
+    # Accept the "Continue?" confirm() before Force Sync runs
+    page.once("dialog", lambda dialog: dialog.accept())
+
+    shell = AppShellPage(page)
+    shell.open_tools()
+    page.locator(".tools-item").filter(has_text="Force Sync").click()
+
+    # Let forceSync start its download
+    page.wait_for_timeout(1500)
+
+    # Edit mid-forceSync — the generation counter must keep this change dirty
+    coach.fill_set_weight(0, 42)
+
+    # Wait for forceSync + follow-up sync from the new dirty state
+    page.wait_for_timeout(SYNC_DELAY_MS * 2 + 8000)
+    page.wait_for_selector(".sync-dot.green", timeout=10000)
+
+    server_log = _get_server_log(app_server, today)
+    assert server_log is not None
+    ex_data = server_log.get("ex_1")
+    assert ex_data is not None
+    sets = ex_data.get("sets", [])
+    assert len(sets) >= 1
+    assert sets[0]["weight"] == 42, (
+        f"Edit during forceSync was lost; server has weight {sets[0].get('weight')}")
