@@ -1529,30 +1529,43 @@ body {
     border-left: 3px solid var(--accent-warning);
 }
 
-/* Set Entry */
-.coach .sets-container {
-    display: flex;
-    flex-direction: column;
-    gap: var(--spacing-sm);
+/* Set Entry — grid layout: one header row, then one row per set.
+   Columns are set dynamically by SetEntry.js via an inline style
+   (grid-template-columns), adapting to weight/reps/RPE vs. time-only. */
+.coach .sets-grid {
+    display: grid;
+    column-gap: var(--spacing-sm);
+    row-gap: var(--spacing-xs);
+    align-items: center;
     margin-bottom: var(--spacing-md);
 }
 
-.coach .set-row {
-    display: flex;
-    align-items: center;
-    gap: var(--spacing-sm);
-    padding: var(--spacing-xs) 0;
+.coach .sets-grid-head {
+    font-size: var(--font-size-sm);
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-align: center;
+    padding-bottom: var(--spacing-xs);
+    border-bottom: 1px solid var(--border-color);
+    line-height: 1.2;
 }
 
-.coach .set-num {
-    min-width: 24px;
+.coach .sets-grid-unit {
+    font-weight: 400;
+    color: var(--text-muted);
+    font-size: 0.75rem;
+}
+
+.coach .sets-grid-num {
     color: var(--text-muted);
     font-size: var(--font-size-sm);
     font-weight: 600;
+    text-align: center;
 }
 
-.coach .set-input {
-    width: 60px;
+.coach .sets-grid-input {
+    width: 100%;
+    min-width: 0;
     padding: var(--spacing-xs) var(--spacing-sm);
     background-color: var(--input-bg);
     border: 1px solid var(--border-color);
@@ -1560,38 +1573,25 @@ body {
     color: var(--text-primary);
     text-align: center;
     font-size: var(--font-size-md);
+    box-sizing: border-box;
 }
 
-.coach .set-input:focus {
+.coach .sets-grid-input:focus {
     border-color: var(--app-accent);
     outline: none;
 }
 
-.coach .set-input.weight {
-    width: 70px;
+.coach .sets-grid-check {
+    display: flex;
+    justify-content: center;
+    align-items: center;
 }
 
-.coach .set-input.reps {
-    width: 50px;
-}
-
-.coach .set-input.rpe {
-    width: 50px;
-}
-
-.coach .set-label {
-    font-size: var(--font-size-sm);
-    color: var(--text-secondary);
-}
-
-.coach .set-check {
-    margin-left: auto;
-}
-
-.coach .set-check input[type="checkbox"] {
+.coach .sets-grid-check input[type="checkbox"] {
     width: 20px;
     height: 20px;
     accent-color: var(--app-accent);
+    cursor: pointer;
 }
 
 /* Cardio Entry */

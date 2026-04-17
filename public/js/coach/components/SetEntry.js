@@ -1,13 +1,32 @@
 /**
  * Set Entry Component - For strength exercises
+ *
+ * Renders a grid: column headers once at the top, then one row per set.
+ * Columns are derived from showWeight/showTime so the same component
+ * handles weight+reps+RPE (normal lifting), reps+RPE (bodyweight),
+ * weight+time (weighted isometric), or time-only.
  */
-import { h } from 'preact';
+import { h, Fragment } from 'preact';
 import htm from 'htm';
 
 import { updateLog } from '../store.js';
 import { NumericInput } from '../../shared/numeric-input.js';
 
 const html = htm.bind(h);
+
+function buildColumns({ showWeight, showTime }) {
+    const cols = [];
+    if (showWeight) {
+        cols.push({ key: 'weight', label: 'Weight', unit: 'lbs', step: '0.5' });
+    }
+    if (showTime) {
+        cols.push({ key: 'duration_sec', label: 'Time', unit: 'sec' });
+    } else {
+        cols.push({ key: 'reps', label: 'Reps' });
+        cols.push({ key: 'rpe', label: 'RPE', min: 1, max: 10, step: '0.5' });
+    }
+    return cols;
+}
 
 export function SetEntry({ date, exerciseId, targetSets, sets, showTime = false, showWeight = true, isEditable = true }) {
     const handleSetChange = (setIndex, field, value) => {
@@ -27,64 +46,44 @@ export function SetEntry({ date, exerciseId, targetSets, sets, showTime = false,
         updateLog(date, exerciseId, { sets: updatedSets });
     };
 
-    // Create array for target number of sets
+    const columns = buildColumns({ showWeight, showTime });
+
+    // Grid template: [set-num] [value columns...] [done-check]
+    const gridTemplate = ['28px', ...columns.map(() => '1fr'), '36px'].join(' ');
+
+    // Build target-set rows (empty inputs for untouched sets)
     const setRows = [];
     for (let i = 0; i < targetSets; i++) {
-        const setData = sets[i] || {};
-        setRows.push({ index: i, data: setData });
+        setRows.push({ index: i, data: sets[i] || {} });
     }
 
     return html`
-        <div class="sets-container">
+        <div class="sets-grid" style=${`grid-template-columns: ${gridTemplate};`}>
+            <${Fragment}>
+                <span class="sets-grid-head">#</span>
+                ${columns.map(c => html`
+                    <span class="sets-grid-head" key=${'h-' + c.key}>
+                        ${c.label}${c.unit ? html` <span class="sets-grid-unit">(${c.unit})</span>` : null}
+                    </span>
+                `)}
+                <span class="sets-grid-head" aria-label="Done">\u2713</span>
+            </>
             ${setRows.map(({ index, data }) => html`
-                <div class="set-row" key=${index}>
-                    <span class="set-num">${index + 1}</span>
-
-                    ${showWeight ? html`
+                <${Fragment} key=${index}>
+                    <span class="sets-grid-num">${index + 1}</span>
+                    ${columns.map(c => html`
                         <${NumericInput}
-                            class="set-input weight"
-                            placeholder="lbs"
-                            step="0.5"
-                            value=${data.weight}
-                            onValueChange=${(v) => handleSetChange(index, 'weight', v)}
+                            key=${'c-' + index + '-' + c.key}
+                            class="sets-grid-input"
+                            value=${data[c.key]}
+                            onValueChange=${(v) => handleSetChange(index, c.key, v)}
                             disabled=${!isEditable}
+                            step=${c.step}
+                            min=${c.min}
+                            max=${c.max}
                         />
-                        <span class="set-label">lbs</span>
-                    ` : null}
-
-                    ${showTime ? html`
-                        <${NumericInput}
-                            class="set-input"
-                            placeholder="sec"
-                            value=${data.duration_sec}
-                            onValueChange=${(v) => handleSetChange(index, 'duration_sec', v)}
-                            disabled=${!isEditable}
-                        />
-                        <span class="set-label">sec</span>
-                    ` : html`
-                        <${NumericInput}
-                            class="set-input reps"
-                            placeholder="reps"
-                            value=${data.reps}
-                            onValueChange=${(v) => handleSetChange(index, 'reps', v)}
-                            disabled=${!isEditable}
-                        />
-                        <span class="set-label">reps</span>
-
-                        <${NumericInput}
-                            class="set-input rpe"
-                            placeholder="RPE"
-                            min="1"
-                            max="10"
-                            step="0.5"
-                            value=${data.rpe}
-                            onValueChange=${(v) => handleSetChange(index, 'rpe', v)}
-                            disabled=${!isEditable}
-                        />
-                        <span class="set-label">RPE</span>
-                    `}
-
-                    <div class="set-check">
+                    `)}
+                    <div class="sets-grid-check">
                         <input
                             type="checkbox"
                             checked=${!!data.completed}
@@ -92,7 +91,7 @@ export function SetEntry({ date, exerciseId, targetSets, sets, showTime = false,
                             disabled=${!isEditable}
                         />
                     </div>
-                </div>
+                </>
             `)}
         </div>
     `;
