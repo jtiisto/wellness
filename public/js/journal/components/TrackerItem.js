@@ -47,7 +47,7 @@ export function TrackerItem({ tracker }) {
     };
 
     const handleSliderChange = (e) => {
-        if (!editable || !completed) return;
+        if (!editable) return;
         updateEntry(date, tracker.id, { value: Number(e.target.value) });
     };
 
@@ -78,7 +78,7 @@ export function TrackerItem({ tracker }) {
                         <${NumericInput}
                             value=${value}
                             onValueChange=${(v) => {
-                                if (!editable || !completed) return;
+                                if (!editable) return;
                                 updateEntry(date, tracker.id, { value: v });
                             }}
                             disabled=${!editable}

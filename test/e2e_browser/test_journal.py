@@ -65,6 +65,32 @@ def test_config_screen_opens(journal_page):
     assert page.locator(".config-screen").is_visible()
 
 
+def test_value_persists_when_checkbox_unchecked(journal_page):
+    """Typing a value while the checkbox is unchecked must persist.
+
+    Regression: the value was silently dropped if completed=false, then
+    reverted to the default on the next re-render — users couldn't tell
+    their input wasn't stored.
+    """
+    page = journal_page.page
+    journal_page.set_tracker_checkbox("Water Intake", checked=False)
+    page.wait_for_timeout(500)
+    journal_page.set_tracker_value("Water Intake", 42)
+    page.wait_for_timeout(3500)  # debounce + sync
+    page.reload()
+    page.wait_for_selector(".shell", timeout=10000)
+    shell = AppShellPage(page)
+    shell.navigate_to("Journal")
+    journal = JournalPage(page)
+    journal.wait_for_loaded()
+    journal.wait_for_trackers()
+    page.wait_for_timeout(3000)
+    row = page.locator(".tracker-item").filter(has_text="Water Intake")
+    assert row.locator("input[type='number']").input_value() == "42"
+    # Checkbox must remain unchecked — we don't auto-check on value entry
+    assert not row.locator("input[type='checkbox']").is_checked()
+
+
 def test_add_tracker_from_config(journal_page):
     """Creating a new tracker via the form adds it to the list."""
     page = journal_page.page
