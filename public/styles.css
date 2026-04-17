@@ -790,6 +790,85 @@ body {
     pointer-events: none;
 }
 
+/* Commit-state ghosting: when the tracker's checkbox is unchecked, the value
+   control reads as a hint or uncommitted draft. Applied per-control rather
+   than on the whole row so the checkbox itself stays at full weight. */
+.journal .tracker-item--uncommitted .tracker-value-input input[type="number"],
+.journal .tracker-item--uncommitted .tracker-note-input textarea {
+    opacity: 0.55;
+    font-style: italic;
+}
+
+.journal .tracker-item--uncommitted .tracker-unit {
+    opacity: 0.55;
+}
+
+.journal .tracker-item--uncommitted .tracker-slider input[type="range"]::-webkit-slider-thumb {
+    background: var(--text-muted);
+}
+
+.journal .tracker-item--uncommitted .tracker-slider input[type="range"]::-moz-range-thumb {
+    background: var(--text-muted);
+}
+
+/* Accumulator "+" button — adds to running total for cumulative trackers
+   (protein, creatine). Inline next to the value + unit. */
+.journal .tracker-accum-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    margin-left: var(--spacing-xs);
+    padding: 0;
+    background: var(--app-accent-soft);
+    border: 1px solid var(--app-accent);
+    border-radius: var(--radius-full);
+    color: var(--app-accent);
+    font-size: 1.125rem;
+    font-weight: 600;
+    line-height: 1;
+    cursor: pointer;
+    font-family: inherit;
+    transition: background-color 0.15s;
+}
+
+.journal .tracker-accum-btn:hover:not(:disabled) {
+    background: var(--app-accent);
+    color: #0b1020;
+}
+
+.journal .tracker-accum-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* Last-updated caption for accumulator trackers — answers "did I already
+   add that intake today?" without another tap. */
+.journal .tracker-last-updated {
+    margin-top: var(--spacing-xs);
+    padding-left: 40px; /* roughly align with tracker name after checkbox */
+    font-size: var(--font-size-sm);
+    color: var(--text-muted);
+}
+
+/* Inline checkbox+label row used in config forms */
+.form-checkbox {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    cursor: pointer;
+    color: var(--text-primary);
+    font-size: var(--font-size-md);
+}
+
+.form-checkbox input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    accent-color: var(--app-accent, var(--accent-primary));
+    cursor: pointer;
+}
+
 .journal .tracker-checkbox {
     flex-shrink: 0;
 }
