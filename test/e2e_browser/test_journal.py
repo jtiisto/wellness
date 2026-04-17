@@ -260,6 +260,77 @@ def test_multi_client_conflict_resolution(journal_page, app_server, seeded_journ
     page.wait_for_selector(".sync-dot.yellow", state="detached", timeout=5000)
 
 
+def _seed_disposable_tracker(app_server, seeded_journal, tracker_id, name):
+    """Seed a throwaway tracker via API. Avoids mutating the shared seed."""
+    http_requests.post(f"{app_server['url']}/api/journal/sync/update", json={
+        "clientId": seeded_journal["client_id"],
+        "config": [{
+            "id": tracker_id, "name": name, "category": "disposable",
+            "type": "simple", "_baseVersion": 0,
+        }],
+        "days": {},
+    })
+
+
+def test_edit_tracker_via_config(journal_app_page, app_server, seeded_journal):
+    """Editing a tracker's name through config persists locally and to server.
+
+    Uses a disposable tracker so the rename doesn't poison shared-state used
+    by test_sync.py / test_offline.py later in the session.
+    """
+    _seed_disposable_tracker(app_server, seeded_journal, "tracker-to-edit", "Edit Me")
+    # Reload so the browser picks up the freshly seeded tracker
+    journal_app_page.reload()
+    shell = AppShellPage(journal_app_page)
+    shell.navigate_to("Journal")
+    journal = JournalPage(journal_app_page)
+    journal.wait_for_loaded()
+    journal.wait_for_trackers()
+
+    journal.open_config()
+    row = journal_app_page.locator(".tracker-config-item").filter(has_text="Edit Me")
+    row.locator("button[title='Edit']").click()
+    journal_app_page.wait_for_selector(".modal-content", timeout=3000)
+    journal_app_page.locator(".modal-content .form-input").first.fill("Edited")
+    journal_app_page.locator("button[type='submit']").click()
+    journal_app_page.wait_for_selector(".modal-content", state="hidden", timeout=3000)
+    journal_app_page.wait_for_timeout(3500)
+
+    assert journal_app_page.locator(".tracker-config-item").filter(
+        has_text="Edited").is_visible()
+    resp = http_requests.get(f"{app_server['url']}/api/journal/sync/full")
+    tracker = next(
+        t for t in resp.json().get("config", []) if t["id"] == "tracker-to-edit")
+    assert tracker["name"] == "Edited"
+
+
+def test_delete_tracker_via_config(journal_app_page, app_server, seeded_journal):
+    """Deleting a tracker tombstones it server-side and hides it locally.
+
+    Uses a disposable tracker so the tombstone doesn't remove Water Intake
+    (which later tests depend on).
+    """
+    _seed_disposable_tracker(app_server, seeded_journal, "tracker-to-delete", "Delete Me")
+    journal_app_page.reload()
+    shell = AppShellPage(journal_app_page)
+    shell.navigate_to("Journal")
+    journal = JournalPage(journal_app_page)
+    journal.wait_for_loaded()
+    journal.wait_for_trackers()
+
+    journal_app_page.on("dialog", lambda dialog: dialog.accept())
+    journal.open_config()
+    row = journal_app_page.locator(".tracker-config-item").filter(has_text="Delete Me")
+    row.locator("button[title='Delete']").click()
+    journal_app_page.wait_for_timeout(3500)
+
+    assert journal_app_page.locator(".tracker-config-item").filter(
+        has_text="Delete Me").count() == 0
+    resp = http_requests.get(f"{app_server['url']}/api/journal/sync/full")
+    tracker_ids = [t["id"] for t in resp.json().get("config", [])]
+    assert "tracker-to-delete" not in tracker_ids
+
+
 def test_add_tracker_from_config(journal_page):
     """Creating a new tracker via the form adds it to the list."""
     page = journal_page.page

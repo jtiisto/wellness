@@ -97,7 +97,7 @@ class TestDeltaSync:
         response = client.get(f"/api/coach/sync?client_id={coach_seeded_database['client_id']}")
         server_time = response.json()["serverTime"]
 
-        tomorrow = (datetime.now(timezone.utc) + timedelta(days=1)).strftime("%Y-%m-%d")
+        tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
         client.post(
             "/api/coach/sync",
             json={

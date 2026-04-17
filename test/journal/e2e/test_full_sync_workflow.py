@@ -27,7 +27,7 @@ class TestFreshClientWorkflow:
             "type": "simple",
             "_baseVersion": 0
         }
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        today = datetime.now().strftime("%Y-%m-%d")
         payload = {
             "clientId": client_id,
             "config": [tracker],

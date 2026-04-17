@@ -70,7 +70,7 @@ class TestSyncWindowPlanFiltering:
 
     def test_old_plan_excluded_from_full_sync(self, client, coach_registered_client, tmp_coach_db):
         """Plans older than SYNC_WINDOW_DAYS should be excluded from full sync."""
-        old_date = (datetime.now(timezone.utc) - timedelta(days=90)).strftime("%Y-%m-%d")
+        old_date = (datetime.now() - timedelta(days=90)).strftime("%Y-%m-%d")
         now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
         conn = sqlite3.connect(tmp_coach_db)
@@ -100,7 +100,7 @@ class TestSyncWindowPlanFiltering:
 
     def test_plan_at_boundary_included(self, client, coach_registered_client, tmp_coach_db):
         """Plan exactly at the boundary (60 days ago) should be included."""
-        boundary_date = (datetime.now(timezone.utc) - timedelta(days=59)).strftime("%Y-%m-%d")
+        boundary_date = (datetime.now() - timedelta(days=59)).strftime("%Y-%m-%d")
         now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
         conn = sqlite3.connect(tmp_coach_db)
@@ -144,7 +144,7 @@ class TestSyncWindowLogFiltering:
 
     def test_old_log_excluded(self, client, coach_registered_client):
         """Logs older than SYNC_WINDOW_DAYS should be excluded."""
-        old_date = (datetime.now(timezone.utc) - timedelta(days=90)).strftime("%Y-%m-%d")
+        old_date = (datetime.now() - timedelta(days=90)).strftime("%Y-%m-%d")
         client.post(
             "/api/coach/sync",
             json={

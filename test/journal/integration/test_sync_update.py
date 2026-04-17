@@ -114,7 +114,7 @@ class TestSyncUpdateEntries:
             "days": {}
         })
 
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        today = datetime.now().strftime("%Y-%m-%d")
         response = client.post("/api/journal/sync/update", json={
             "clientId": journal_registered_client,
             "config": [],
@@ -141,7 +141,7 @@ class TestSyncUpdateEntries:
             "days": {}
         })
 
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        today = datetime.now().strftime("%Y-%m-%d")
 
         client.post("/api/journal/sync/update", json={
             "clientId": journal_registered_client,
@@ -168,7 +168,7 @@ class TestSyncUpdateEntries:
             "days": {}
         })
 
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        today = datetime.now().strftime("%Y-%m-%d")
 
         client.post("/api/journal/sync/update", json={
             "clientId": journal_registered_client,
@@ -202,7 +202,7 @@ class TestSyncUpdateEntries:
             "days": {}
         })
 
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        today = datetime.now().strftime("%Y-%m-%d")
         response = client.post("/api/journal/sync/update", json={
             "clientId": journal_registered_client,
             "config": [],

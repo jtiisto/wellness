@@ -162,7 +162,7 @@ def sample_simple_tracker():
 @pytest.fixture
 def sample_entry(sample_tracker):
     """Sample entry data for journal tests."""
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    today = datetime.now().strftime("%Y-%m-%d")
     return {
         "date": today,
         "tracker_id": sample_tracker["id"],

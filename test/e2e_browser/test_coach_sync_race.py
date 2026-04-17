@@ -201,6 +201,45 @@ def test_feedback_edit_during_sync_keeps_latest(coach_sync_page, app_server):
     assert notes_field.locator("textarea").input_value() == "final version"
 
 
+def test_checklist_edit_during_sync_preserves_both(coach_sync_page, app_server):
+    """Toggle a checklist item → sync starts → toggle another during sync → both persist.
+
+    Checklist items serialize through `completed_items: [...]` (different
+    path than set_logs). A second toggle mid-sync must not be dropped
+    when the first sync response comes back.
+    """
+    coach = coach_sync_page
+    page = coach.page
+    today = coach._seed_info["dates"][0]
+
+    coach.start_workout()
+    coach.expand_exercise("Stability Start")
+    page.wait_for_timeout(300)
+
+    _delay_coach_sync_endpoints(page)
+
+    # First checklist toggle (triggers sync after debounce)
+    first_item = page.locator(".checklist-item").filter(has_text="Cat-Cow x10")
+    first_item.locator("input[type='checkbox']").check()
+
+    # Wait for debounce + sync to start
+    page.wait_for_timeout(3000)
+
+    # Toggle second item while sync is in flight
+    second_item = page.locator(".checklist-item").filter(has_text="Bird-Dog x5/side")
+    second_item.locator("input[type='checkbox']").check()
+
+    page.wait_for_timeout(SYNC_DELAY_MS + 8000)
+
+    server_log = _get_server_log(app_server, today)
+    assert server_log is not None, "Log missing from server"
+    warmup = server_log.get("warmup_0") or {}
+    completed = warmup.get("completed_items", [])
+    assert "Cat-Cow x10" in completed, f"First item missing; completed={completed}"
+    assert "Bird-Dog x5/side" in completed, (
+        f"Second item (mid-sync toggle) missing; completed={completed}")
+
+
 def test_forcesync_during_edit_preserves_latest(coach_sync_page, app_server):
     """Trigger coach Force Sync, edit during its in-flight phase.
 

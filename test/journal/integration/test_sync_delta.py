@@ -79,8 +79,8 @@ class TestSyncDelta:
 
     def test_only_returns_recent_entries(self, client, journal_registered_client, sample_tracker):
         """Should only return entries from last 7 days."""
-        old_date = (datetime.now(timezone.utc) - timedelta(days=10)).strftime("%Y-%m-%d")
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        old_date = (datetime.now() - timedelta(days=10)).strftime("%Y-%m-%d")
+        today = datetime.now().strftime("%Y-%m-%d")
         past = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat().replace("+00:00", "Z")
 
         client.post("/api/journal/sync/update", json={

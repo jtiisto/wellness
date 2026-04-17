@@ -39,7 +39,7 @@ class TestSyncPostBasic:
 class TestSyncPostLogs:
     def test_upload_single_log(self, client, sample_log, coach_registered_client):
         """Should successfully upload a workout log."""
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        today = datetime.now().strftime("%Y-%m-%d")
         response = client.post(
             "/api/coach/sync",
             json={
@@ -54,8 +54,8 @@ class TestSyncPostLogs:
 
     def test_upload_multiple_logs(self, client, sample_log, coach_registered_client):
         """Should handle multiple logs in single upload."""
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
+        today = datetime.now().strftime("%Y-%m-%d")
+        yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
 
         response = client.post(
             "/api/coach/sync",
@@ -88,7 +88,7 @@ class TestSyncPostLogs:
 
     def test_log_roundtrip(self, client, sample_log, coach_registered_client):
         """Test uploading and then downloading a log."""
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        today = datetime.now().strftime("%Y-%m-%d")
 
         client.post(
             "/api/coach/sync",
@@ -123,7 +123,7 @@ class TestSyncResponse:
 class TestLogDataIntegrity:
     def test_exercise_sets_preserved(self, client, coach_registered_client):
         """Exercise set data should be fully preserved."""
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        today = datetime.now().strftime("%Y-%m-%d")
         log = {
             "ex_1": {
                 "completed": True,
@@ -150,7 +150,7 @@ class TestLogDataIntegrity:
 
     def test_cardio_data_preserved(self, client, coach_registered_client):
         """Cardio entry data should be fully preserved."""
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        today = datetime.now().strftime("%Y-%m-%d")
         log = {
             "cardio_1": {
                 "completed": True,
@@ -174,7 +174,7 @@ class TestLogDataIntegrity:
 
     def test_checklist_items_preserved(self, client, coach_registered_client):
         """Checklist completed items should be preserved."""
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        today = datetime.now().strftime("%Y-%m-%d")
         log = {
             "warmup_1": {
                 "completed_items": ["Cat-Cow x10", "Bird-Dog x5/side", "Dead Bug x10"]
@@ -194,7 +194,7 @@ class TestLogDataIntegrity:
 
     def test_user_notes_preserved(self, client, coach_registered_client):
         """User notes should be preserved."""
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        today = datetime.now().strftime("%Y-%m-%d")
         log = {
             "ex_1": {
                 "completed": True,
