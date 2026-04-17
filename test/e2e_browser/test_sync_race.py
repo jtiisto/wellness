@@ -225,6 +225,125 @@ def test_checkbox_edit_during_sync_not_reverted(
     assert not meditation_row.locator("input[type='checkbox']").is_checked()
 
 
+def test_edit_before_initial_sync_completes(
+        page, app_server, seeded_journal_two_trackers):
+    """Edit a tracker value while the initial (first-ever) sync is in flight.
+
+    Exercises the /full sync code path (lastServerSyncTime is null),
+    which no other race test covers — all others start from a synced state.
+    The edit must win once the initial sync completes.
+    """
+    seed = seeded_journal_two_trackers
+
+    # Delay BOTH the initial /full fetch and any follow-up /update.
+    # Routes must be set before navigation so the initial sync is delayed.
+    def _delayed_continue(route):
+        time.sleep(SYNC_DELAY_MS / 1000)
+        try:
+            route.continue_()
+        except Exception:
+            pass
+
+    page.route("**/api/journal/sync/full", _delayed_continue)
+    page.route("**/api/journal/sync/delta*", _delayed_continue)
+    page.route("**/api/journal/sync/update", _delayed_continue)
+
+    page.goto(app_server["url"])
+    page.wait_for_selector(".shell", timeout=10000)
+    shell = AppShellPage(page)
+    shell.navigate_to("Journal")
+    journal = JournalPage(page)
+    journal.wait_for_loaded()
+    # Trackers won't appear until initial sync returns — wait for seeded data.
+    journal.wait_for_trackers(timeout=SYNC_DELAY_MS + 5000)
+
+    # Edit immediately — the initial sync + any follow-up is still delayed.
+    journal.set_tracker_value("Steps", 7777)
+
+    # Wait for all sync activity to settle
+    page.wait_for_timeout(SYNC_DELAY_MS * 2 + 6000)
+    page.wait_for_selector(".sync-dot.green", timeout=10000)
+
+    entry = _get_server_entry(app_server, seed["trackers"][0]["id"], seed["today"])
+    assert entry is not None
+    assert entry["value"] == 7777, f"Expected 7777, got {entry['value']}"
+
+    page.unroute_all(behavior="ignoreErrors")
+
+
+def test_forcesync_during_edit_preserves_latest(
+        race_journal_page, app_server, seeded_journal_two_trackers):
+    """Trigger Force Sync, then edit during its in-flight phase.
+
+    Regression for commit 0483635 (forceSync generation-based dirty clearing).
+    Before the fix, an edit made during forceSync could be cleared from dirty
+    state when the sync completed, leaving the new value unsynced.
+    """
+    page = race_journal_page.page
+    seed = seeded_journal_two_trackers
+
+    _delay_sync_endpoints(page)
+    # Accept the "Continue?" confirm() before clicking Force Sync
+    page.once("dialog", lambda dialog: dialog.accept())
+
+    # Open tools menu and click Force Sync
+    shell = AppShellPage(page)
+    shell.open_tools()
+    page.locator(".tools-item").filter(has_text="Force Sync").click()
+
+    # Let forceSync start (it calls /full first)
+    page.wait_for_timeout(1500)
+
+    # Edit mid-forceSync — after the generation snapshot is taken
+    race_journal_page.set_tracker_value("Steps", 8888)
+
+    # Wait for forceSync to complete + any follow-up sync from the new dirty state
+    page.wait_for_timeout(SYNC_DELAY_MS * 2 + 6000)
+    page.wait_for_selector(".sync-dot.green", timeout=10000)
+
+    entry = _get_server_entry(app_server, seed["trackers"][0]["id"], seed["today"])
+    assert entry is not None
+    assert entry["value"] == 8888, (
+        f"Edit during forceSync was lost; server has {entry['value']}")
+
+
+def test_rapid_keystrokes_during_sync_preserves_final_value(
+        race_journal_page, app_server, seeded_journal_two_trackers):
+    """Type character-by-character during an in-flight sync.
+
+    Each keystroke fires onInput → updateEntry → increments the dirty-entry
+    generation counter. This stresses the "re-modified during sync" detection
+    in clearDirtyState. Existing tests use fill() which is one atomic event.
+    """
+    page = race_journal_page.page
+    seed = seeded_journal_two_trackers
+
+    _delay_sync_endpoints(page)
+
+    # Prime a sync with one edit so it's in-flight
+    race_journal_page.set_tracker_value("Steps", 1)
+    page.wait_for_timeout(3000)  # debounce + sync starts
+
+    # Now rapid-type a new value into the Steps input while sync is delayed
+    steps_row = page.locator(".tracker-item").filter(has_text="Steps")
+    steps_input = steps_row.locator("input[type='number']")
+    steps_input.click()
+    steps_input.press("Control+a")
+    steps_input.press("Delete")
+    steps_input.press_sequentially("54321", delay=40)
+    steps_input.blur()
+
+    # Wait for in-flight sync + follow-up sync for the rapid edits
+    page.wait_for_timeout(SYNC_DELAY_MS + 8000)
+    page.wait_for_selector(".sync-dot.green", timeout=10000)
+
+    entry = _get_server_entry(app_server, seed["trackers"][0]["id"], seed["today"])
+    assert entry is not None
+    assert entry["value"] == 54321, (
+        f"Rapid keystrokes lost; server has {entry['value']}")
+    assert steps_input.input_value() == "54321"
+
+
 def test_dirty_data_during_sync_triggers_followup(
         race_journal_page, app_server, seeded_journal_two_trackers):
     """Edit during sync → after sync completes, follow-up sync fires and uploads.
