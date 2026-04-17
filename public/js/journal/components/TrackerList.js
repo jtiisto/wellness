@@ -28,14 +28,18 @@ function DateSelector({ selected, hasDirtyTrackers, hasConflicts, onDateSelect }
     return html`
         <div class="date-selector">
             ${days.map(day => html`
-                <div
+                <button
+                    type="button"
                     class="date-item ${day.date === selected ? 'selected' : ''} ${isDisabled(day.date) ? 'disabled' : ''}"
                     onClick=${() => handleDateClick(day.date)}
+                    aria-pressed=${day.date === selected}
+                    aria-disabled=${isDisabled(day.date)}
+                    disabled=${isDisabled(day.date)}
                     key=${day.date}
                 >
                     <span class="date-day">${day.dayName}</span>
                     <span class="date-num">${day.dayNum}</span>
-                </div>
+                </button>
             `)}
         </div>
     `;
@@ -107,10 +111,15 @@ export function TrackerList() {
                     const isCollapsed = !expanded.has(category);
                     return html`
                         <div class="category" key=${category}>
-                            <div class="category-header" onClick=${() => toggleCategoryExpanded(category)}>
+                            <button
+                                type="button"
+                                class="category-header"
+                                onClick=${() => toggleCategoryExpanded(category)}
+                                aria-expanded=${!isCollapsed}
+                            >
                                 <span class="category-chevron ${isCollapsed ? 'collapsed' : ''}">▼</span>
                                 <h2 class="category-title">${category}</h2>
-                            </div>
+                            </button>
                             ${!isCollapsed && grouped[category].map(tracker => html`
                                 <${TrackerItem} tracker=${tracker} key=${tracker.id} />
                             `)}

@@ -21,6 +21,8 @@ export function SyncIndicator({ status, syncing, conflictCount = 0 }) {
         <div
             class="sync-indicator ${syncing ? 'syncing' : ''} ${conflictCount > 0 ? 'has-conflicts' : ''}"
             title=${getTooltip()}
+            role="status"
+            aria-label=${`Sync status: ${getTooltip()}`}
         >
             <div class="sync-dot ${status}"></div>
             ${conflictCount > 0 && html`

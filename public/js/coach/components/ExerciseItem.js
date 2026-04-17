@@ -89,9 +89,23 @@ export function ExerciseItem({ date, exercise, logData, isEditable = true }) {
         }
     };
 
+    const handleHeaderKeyDown = (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            setExpanded(!expanded);
+        }
+    };
+
     return html`
         <div class="exercise-item ${expanded ? 'expanded' : ''} ${completed ? 'completed' : ''}">
-            <div class="exercise-header" onClick=${() => setExpanded(!expanded)}>
+            <div
+                class="exercise-header"
+                onClick=${() => setExpanded(!expanded)}
+                onKeyDown=${handleHeaderKeyDown}
+                role="button"
+                tabIndex="0"
+                aria-expanded=${expanded}
+            >
                 <div class="exercise-checkbox" onClick=${(e) => e.stopPropagation()}>
                     <input
                         type="checkbox"

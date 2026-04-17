@@ -63,6 +63,8 @@ export function Header() {
                 <div
                     class="sync-indicator ${syncing ? 'syncing' : ''} ${status === 'yellow' ? 'has-conflicts' : ''}"
                     title=${getSyncTooltip()}
+                    role="status"
+                    aria-label=${`Sync status: ${getSyncTooltip()}`}
                 >
                     <div class="sync-dot ${status}"></div>
                     ${conflictCount > 0 && html`
@@ -73,6 +75,7 @@ export function Header() {
                     class="icon-btn"
                     onClick=${handleConfigClick}
                     title=${view === 'home' ? 'Settings' : 'Back'}
+                    aria-label=${view === 'home' ? 'Settings' : 'Back'}
                 >
                     ${view === 'home' ? '\u2699' : '\u2190'}
                 </button>

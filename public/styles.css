@@ -127,6 +127,49 @@ body {
     height: 100%;
 }
 
+/* Normalize buttons that act as interactive cards or tiles so they
+   inherit the surrounding typography and layout instead of the UA
+   button defaults. Per-component rules below (.date-item,
+   .category-header, etc.) still drive the actual look. */
+button.date-item,
+button.category-header {
+    background: none;
+    border: none;
+    color: inherit;
+    font: inherit;
+    text-align: inherit;
+}
+
+button.date-item[disabled] {
+    /* preserve the existing .disabled visual; UA disabled styling is muted
+       by letting the class rule own opacity/cursor. */
+    pointer-events: none;
+}
+
+/* ==================== Focus rings ====================
+
+   Strategy: suppress the default focus ring on mouse-click only
+   (via :focus-not-visible via UA defaults), and render a crisp
+   keyboard-only ring on every focusable interactive element with
+   the active module accent. */
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+[role="button"]:focus-visible,
+[tabindex]:focus-visible {
+    outline: 2px solid var(--app-accent, var(--accent-primary));
+    outline-offset: 2px;
+}
+
+/* Hide the default focus ring on mouse/touch focus so only keyboard
+   focus shows a ring. :focus-visible handles the keyboard case above. */
+:focus:not(:focus-visible) {
+    outline: none;
+}
+
 /* ==================== Shell Layout ==================== */
 
 .shell {

@@ -261,10 +261,10 @@ function TrackerConfigItem({ tracker, onEdit, onDelete }) {
                 </div>
             </div>
             <div class="tracker-config-actions">
-                <button class="icon-btn" onClick=${() => onEdit(tracker)} title="Edit">
+                <button class="icon-btn" onClick=${() => onEdit(tracker)} title="Edit" aria-label=${`Edit ${tracker.name}`}>
                     \u270E
                 </button>
-                <button class="icon-btn" onClick=${() => onDelete(tracker.id)} title="Delete">
+                <button class="icon-btn" onClick=${() => onDelete(tracker.id)} title="Delete" aria-label=${`Delete ${tracker.name}`}>
                     \u{1F5D1}
                 </button>
             </div>
