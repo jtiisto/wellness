@@ -34,13 +34,25 @@
 
     --text-primary: #eaeaea;
     --text-secondary: #a0a0a0;
-    --text-muted: #6a6a6a;
+    --text-muted: #8a8a8a;
 
     --accent-primary: #f59e0b;
     --accent-secondary: #0f3460;
     --accent-success: #4ade80;
     --accent-warning: #fbbf24;
     --accent-error: #ef4444;
+
+    /* Per-module accent colors. Rules inside a module scope (.journal / .coach
+       / .analysis) reference `--app-accent`, which each module sets to its
+       own color below. Used sparingly: active-tab underline, selected-date
+       tile, module-scoped focus rings and slider thumbs. Semantic colors
+       (success/warning/error) remain module-agnostic. */
+    --journal-accent: #f59e0b;
+    --journal-accent-soft: rgba(245, 158, 11, 0.18);
+    --coach-accent: #2dd4bf;
+    --coach-accent-soft: rgba(45, 212, 191, 0.18);
+    --analysis-accent: #a78bfa;
+    --analysis-accent-soft: rgba(167, 139, 250, 0.18);
 
     --border-color: #2a2a4a;
     --input-bg: #252540;
@@ -69,6 +81,21 @@
     --tap-target: 44px;
     --max-width: 600px;
     --nav-height: 56px;
+}
+
+/* Module-scoped accent: child rules use `var(--app-accent)` to track the
+   active module. Fallback to global amber for rules outside any module. */
+.journal {
+    --app-accent: var(--journal-accent);
+    --app-accent-soft: var(--journal-accent-soft);
+}
+.coach {
+    --app-accent: var(--coach-accent);
+    --app-accent-soft: var(--coach-accent-soft);
+}
+.analysis {
+    --app-accent: var(--analysis-accent);
+    --app-accent-soft: var(--analysis-accent-soft);
 }
 
 /* ==================== Reset & Base ==================== */
@@ -193,7 +220,7 @@ body {
     width: 32px;
     height: 32px;
     border: 3px solid var(--border-color);
-    border-top-color: var(--accent-primary);
+    border-top-color: var(--app-accent, var(--accent-primary));
     border-radius: 50%;
     animation: spin 0.8s linear infinite;
 }
@@ -466,12 +493,12 @@ body {
 }
 
 .btn-primary {
-    background-color: var(--accent-primary);
-    color: white;
+    background-color: var(--app-accent, var(--accent-primary));
+    color: #0b1020;
 }
 
 .btn-primary:hover {
-    background-color: #d97706;
+    filter: brightness(0.92);
 }
 
 .btn-secondary {
@@ -524,7 +551,7 @@ body {
 .form-input:focus,
 .form-select:focus {
     outline: none;
-    border-color: var(--accent-primary);
+    border-color: var(--app-accent, var(--accent-primary));
 }
 
 .form-select {
@@ -645,18 +672,17 @@ body {
     background-color: var(--bg-tertiary);
 }
 
+/* Selected date: soft fill + accent border keeps the module accent as an
+   accent rather than a solid slab that dominates the header. */
 .date-item.selected {
-    background-color: var(--accent-primary);
-    color: white;
+    background-color: var(--app-accent-soft, var(--accent-primary));
+    border-color: var(--app-accent, var(--accent-primary));
+    color: var(--text-primary);
 }
 
 .date-day {
     font-size: var(--font-size-sm);
     color: var(--text-secondary);
-}
-
-.date-item.selected .date-day {
-    color: rgba(255, 255, 255, 0.8);
 }
 
 .date-num {
@@ -727,8 +753,8 @@ body {
 
 .journal .category-title {
     font-size: var(--font-size-md);
-    font-weight: 600;
-    color: var(--accent-primary);
+    font-weight: 700;
+    color: var(--text-primary);
     margin: 0;
     padding: 0;
 }
@@ -772,7 +798,7 @@ body {
     width: 24px;
     height: 24px;
     cursor: pointer;
-    accent-color: var(--accent-primary);
+    accent-color: var(--app-accent);
 }
 
 .journal .tracker-info {
@@ -808,7 +834,7 @@ body {
 
 .journal .tracker-value-input input[type="number"]:focus {
     outline: none;
-    border-color: var(--accent-primary);
+    border-color: var(--app-accent);
 }
 
 .journal .tracker-unit {
@@ -842,7 +868,7 @@ body {
     appearance: none;
     width: 20px;
     height: 20px;
-    background: var(--accent-primary);
+    background: var(--app-accent);
     border-radius: var(--radius-full);
     cursor: pointer;
 }
@@ -850,7 +876,7 @@ body {
 .journal .tracker-slider input[type="range"]::-moz-range-thumb {
     width: 20px;
     height: 20px;
-    background: var(--accent-primary);
+    background: var(--app-accent);
     border-radius: var(--radius-full);
     cursor: pointer;
     border: none;
@@ -876,7 +902,7 @@ body {
 
 .journal .tracker-note-input textarea:focus {
     outline: none;
-    border-color: var(--accent-primary);
+    border-color: var(--app-accent);
 }
 
 .journal .tracker-note-input textarea::placeholder {
@@ -1006,8 +1032,8 @@ body {
 }
 
 .journal .conflict-type.tracker {
-    background-color: rgba(245, 158, 11, 0.2);
-    color: var(--accent-primary);
+    background-color: var(--app-accent-soft);
+    color: var(--app-accent);
 }
 
 .journal .conflict-type.entry {
@@ -1044,7 +1070,7 @@ body {
 }
 
 .journal .conflict-version.local {
-    border: 2px solid var(--accent-primary);
+    border: 2px solid var(--app-accent);
 }
 
 .journal .conflict-version.server {
@@ -1067,8 +1093,8 @@ body {
     font-size: var(--font-size-sm);
     padding: 2px 8px;
     border-radius: var(--radius-sm);
-    background-color: var(--accent-primary);
-    color: white;
+    background-color: var(--app-accent);
+    color: #000;
 }
 
 .journal .version-badge.server {
@@ -1307,15 +1333,15 @@ body {
 }
 
 .coach .block-title {
-    font-weight: 600;
-    color: var(--accent-primary);
+    font-weight: 700;
+    color: var(--text-primary);
 }
 
 .coach .block-rounds {
     font-size: var(--font-size-sm);
-    color: var(--accent-primary);
+    color: var(--app-accent);
     font-weight: 500;
-    opacity: 0.8;
+    opacity: 0.85;
 }
 
 .coach .rest-guidance {
@@ -1371,7 +1397,7 @@ body {
     width: 24px;
     height: 24px;
     cursor: pointer;
-    accent-color: var(--accent-primary);
+    accent-color: var(--app-accent);
 }
 
 .coach .exercise-name {
@@ -1458,7 +1484,7 @@ body {
 }
 
 .coach .set-input:focus {
-    border-color: var(--accent-primary);
+    border-color: var(--app-accent);
     outline: none;
 }
 
@@ -1486,7 +1512,7 @@ body {
 .coach .set-check input[type="checkbox"] {
     width: 20px;
     height: 20px;
-    accent-color: var(--accent-primary);
+    accent-color: var(--app-accent);
 }
 
 /* Cardio Entry */
@@ -1525,7 +1551,7 @@ body {
 }
 
 .coach .cardio-field input:focus {
-    border-color: var(--accent-primary);
+    border-color: var(--app-accent);
     outline: none;
 }
 
@@ -1546,7 +1572,7 @@ body {
 .coach .checklist-item input[type="checkbox"] {
     width: 20px;
     height: 20px;
-    accent-color: var(--accent-primary);
+    accent-color: var(--app-accent);
     flex-shrink: 0;
 }
 
@@ -1579,7 +1605,7 @@ body {
 }
 
 .coach .user-note textarea:focus {
-    border-color: var(--accent-primary);
+    border-color: var(--app-accent);
     outline: none;
 }
 
@@ -1596,9 +1622,9 @@ body {
 }
 
 .coach .feedback-title {
-    font-weight: 600;
+    font-weight: 700;
     margin-bottom: var(--spacing-sm);
-    color: var(--accent-primary);
+    color: var(--text-primary);
 }
 
 .coach .feedback-field {
@@ -1629,7 +1655,7 @@ body {
 }
 
 .coach .feedback-textarea:focus {
-    border-color: var(--accent-primary);
+    border-color: var(--app-accent);
     outline: none;
 }
 
@@ -1814,12 +1840,12 @@ body {
 
 .coach .calendar-day.today {
     font-weight: 700;
-    color: var(--accent-primary);
+    color: var(--app-accent);
 }
 
 .coach .calendar-day.selected {
-    background-color: var(--accent-primary);
-    color: white;
+    background-color: var(--app-accent);
+    color: #0b1020;
 }
 
 .coach .calendar-day.status-completed::after {
@@ -1853,7 +1879,7 @@ body {
 }
 
 .coach .calendar-day.selected::after {
-    background-color: white;
+    background-color: #0b1020;
 }
 
 .coach .calendar-day.disabled {
@@ -1879,8 +1905,9 @@ body {
 }
 
 .coach .calendar-today-btn:hover {
-    background-color: var(--accent-primary);
-    border-color: var(--accent-primary);
+    background-color: var(--app-accent);
+    border-color: var(--app-accent);
+    color: #0b1020;
 }
 
 .coach .calendar-legend {
@@ -1991,15 +2018,6 @@ body {
     transform: scale(0.98);
 }
 
-.analysis .btn-primary {
-    background-color: var(--accent-primary);
-    color: white;
-}
-
-.analysis .btn-primary:hover {
-    background-color: #d97706;
-}
-
 /* Analysis Query Grid */
 .analysis .query-grid {
     display: flex; flex-direction: column; gap: var(--spacing-md); padding: var(--spacing-md);
@@ -2010,7 +2028,7 @@ body {
     cursor: pointer; transition: background-color 0.2s, border-color 0.2s;
     text-align: left; font-family: inherit; color: inherit;
 }
-.analysis .query-card:hover { background-color: var(--bg-secondary); border-color: var(--accent-primary); }
+.analysis .query-card:hover { background-color: var(--bg-secondary); border-color: var(--app-accent); }
 .analysis .query-card:active { transform: scale(0.98); }
 .analysis .query-card-label { font-size: var(--font-size-lg); font-weight: 600; margin-bottom: var(--spacing-xs); }
 .analysis .query-card-description { font-size: var(--font-size-sm); color: var(--text-secondary); }
@@ -2022,7 +2040,7 @@ body {
 }
 .analysis .progress-spinner {
     width: 48px; height: 48px; border: 4px solid var(--border-color);
-    border-top-color: var(--accent-primary); border-radius: 50%;
+    border-top-color: var(--app-accent); border-radius: 50%;
     animation: spin 1s linear infinite;
 }
 .analysis .progress-text { color: var(--text-secondary); text-align: center; }
@@ -2038,9 +2056,9 @@ body {
 .analysis .report-meta { font-size: var(--font-size-sm); color: var(--text-secondary); margin-bottom: var(--spacing-md); }
 .analysis .report-content { line-height: 1.7; }
 .analysis .report-content h2 {
-    color: var(--accent-primary); font-size: var(--font-size-lg);
+    color: var(--text-primary); font-size: var(--font-size-lg);
     margin-top: var(--spacing-lg); margin-bottom: var(--spacing-sm);
-    padding-bottom: var(--spacing-xs); border-bottom: 1px solid var(--border-color);
+    padding-bottom: var(--spacing-xs); border-bottom: 1px solid var(--app-accent);
 }
 .analysis .report-content h3 { color: var(--text-primary); margin-top: var(--spacing-md); margin-bottom: var(--spacing-sm); }
 .analysis .report-content p { margin-bottom: var(--spacing-md); color: var(--text-secondary); }
@@ -2059,7 +2077,7 @@ body {
 }
 .analysis .report-content th {
     text-align: left; color: var(--text-primary); font-weight: 600;
-    padding: var(--spacing-sm); border-bottom: 2px solid var(--accent-primary);
+    padding: var(--spacing-sm); border-bottom: 2px solid var(--app-accent);
     white-space: nowrap;
 }
 .analysis .report-content td {
@@ -2102,7 +2120,7 @@ body {
     transition: color 0.2s, border-color 0.2s;
 }
 .analysis .analysis-tab-btn:hover { color: var(--text-secondary); }
-.analysis .analysis-tab-btn.active { color: var(--text-primary); border-bottom-color: var(--accent-primary); }
+.analysis .analysis-tab-btn.active { color: var(--text-primary); border-bottom-color: var(--app-accent); }
 
 /* Analysis Back button */
 .analysis .back-btn {
