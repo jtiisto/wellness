@@ -2298,10 +2298,20 @@ textarea:focus-visible,
     border-radius: var(--radius-lg); padding: var(--spacing-lg);
     cursor: pointer; transition: background-color 0.2s, border-color 0.2s;
     text-align: left; font-family: inherit; color: inherit;
+    display: grid;
+    grid-template-columns: auto 1fr;
+    column-gap: var(--spacing-md);
+    row-gap: 2px;
+    align-items: start;
 }
 .analysis .query-card:hover { background-color: var(--bg-secondary); border-color: var(--app-accent); }
 .analysis .query-card:active { transform: scale(0.98); }
-.analysis .query-card-label { font-size: var(--font-size-lg); font-weight: 600; margin-bottom: var(--spacing-xs); }
+.analysis .query-card-icon {
+    grid-row: 1 / span 2;
+    color: var(--app-accent);
+    flex-shrink: 0;
+}
+.analysis .query-card-label { font-size: var(--font-size-lg); font-weight: 600; margin-bottom: 0; }
 .analysis .query-card-description { font-size: var(--font-size-sm); color: var(--text-secondary); }
 
 /* Analysis Progress/Loading View */
@@ -2316,6 +2326,26 @@ textarea:focus-visible,
 }
 .analysis .progress-text { color: var(--text-secondary); text-align: center; }
 .analysis .progress-elapsed { font-size: var(--font-size-sm); color: var(--text-muted); }
+
+/* Cancel button bails out of the progress view client-side. Styled as a
+   low-emphasis tertiary action so it reads as an escape hatch, not a
+   primary action — the primary action is waiting for the report to finish. */
+.analysis .progress-cancel {
+    margin-top: var(--spacing-sm);
+    padding: var(--spacing-xs) var(--spacing-md);
+    background: transparent;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    color: var(--text-secondary);
+    font-family: inherit;
+    font-size: var(--font-size-sm);
+    cursor: pointer;
+}
+
+.analysis .progress-cancel:hover {
+    background: var(--bg-card);
+    color: var(--text-primary);
+}
 
 /* Analysis Report View */
 .analysis .report-view { padding: var(--spacing-md); }

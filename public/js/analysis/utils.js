@@ -10,10 +10,24 @@ export function formatTimestamp(isoStr) {
     });
 }
 
+// Status cells in report tables often render as "🟢 OK" / "🟡 YELLOW" /
+// "🔴 RED" — the color emoji and the word carry the same information, so
+// the text is pure visual noise. Collapse the redundant pair (in either
+// order) to emoji-only so the status column scans cleanly. Applied to the
+// raw markdown before parsing so it also catches prose, not just cells.
+function collapseStatusText(md) {
+    const word = '(?:OK|RED|YELLOW|GREEN|PASS|FAIL)';
+    const dot = '[🟢🟡🔴✅❌⚠️]';
+    return md
+        .replace(new RegExp(`(${dot})\\s+${word}\\b`, 'gi'), '$1')
+        .replace(new RegExp(`\\b${word}\\s+(${dot})`, 'gi'), '$1');
+}
+
 export function markdownToHtml(md) {
     if (!md) return '';
-    return marked.parse(md).replace(/<table>/g, '<div class="table-wrap"><table>')
-                           .replace(/<\/table>/g, '</table></div>');
+    const cleaned = collapseStatusText(md);
+    return marked.parse(cleaned).replace(/<table>/g, '<div class="table-wrap"><table>')
+                                .replace(/<\/table>/g, '</table></div>');
 }
 
 export function elapsedTime(startIso) {

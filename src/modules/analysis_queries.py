@@ -64,6 +64,7 @@ QUERIES = list(_USER_QUERIES) + [
         "id": "post_workout",
         "label": "Today's Workout Analysis",
         "description": "Post-workout analysis of today's session",
+        "icon": "dumbbell",
         "prompt_template": (
             "IMPORTANT: Always use Garmin MCP tools to sync the latest health and workout data first.\n\n"
             "Analyze today's workout performance.\n\n"
@@ -93,6 +94,7 @@ QUERIES = list(_USER_QUERIES) + [
         "id": "pre_workout",
         "label": "Pre-Workout Readiness",
         "description": "Check readiness before today's workout",
+        "icon": "zap",
         "prompt_template": (
             "IMPORTANT: Always use Garmin MCP tools to sync the latest health and workout data first.\n\n"
             "Assess my readiness for today's planned workout.\n\n"
@@ -125,6 +127,7 @@ QUERIES = list(_USER_QUERIES) + [
         "id": "weekly_review",
         "label": "Weekly Performance Review",
         "description": "Week-to-week performance comparison",
+        "icon": "calendar",
         "timeout": 400,
         "prompt_template": (
             "IMPORTANT: Always use Garmin MCP tools to sync the latest health and workout data first.\n\n"
@@ -192,6 +195,7 @@ def list_queries() -> list[dict]:
             "id": q["id"],
             "label": q["label"],
             "description": q["description"],
+            **({"icon": q["icon"]} if q.get("icon") else {}),
             **({"accepts_location": True} if q.get("accepts_location") else {}),
         }
         for q in QUERIES
