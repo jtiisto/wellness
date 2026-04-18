@@ -299,20 +299,26 @@ textarea:focus-visible,
 
 /* ==================== Sync Indicator ==================== */
 
+/* Sync indicator reads as "dot + label" so the state is self-describing,
+   not a raw coloured dot that requires hovering to decode. The label
+   hides on very narrow viewports (<360px); aria-label on the wrapper
+   keeps the full text available to assistive tech regardless. */
 .sync-indicator {
-    width: var(--tap-target);
-    height: var(--tap-target);
+    min-height: var(--tap-target);
     display: flex;
     align-items: center;
-    justify-content: center;
+    gap: var(--spacing-xs);
+    padding: 0 var(--spacing-sm);
     border-radius: var(--radius-full);
+    position: relative;
 }
 
 .sync-dot {
-    width: 12px;
-    height: 12px;
+    width: 10px;
+    height: 10px;
     border-radius: var(--radius-full);
     transition: background-color 0.3s;
+    flex-shrink: 0;
 }
 
 .sync-dot.green { background-color: var(--sync-green); }
@@ -320,14 +326,18 @@ textarea:focus-visible,
 .sync-dot.gray { background-color: var(--sync-gray); }
 .sync-dot.yellow { background-color: var(--accent-warning); }
 
-.sync-indicator.has-conflicts {
-    position: relative;
+.sync-indicator-label {
+    font-size: var(--font-size-sm);
+    color: var(--text-secondary);
+    line-height: 1;
+    white-space: nowrap;
+}
+
+@media (max-width: 359px) {
+    .sync-indicator-label { display: none; }
 }
 
 .conflict-badge {
-    position: absolute;
-    top: 4px;
-    right: 4px;
     background-color: var(--accent-warning);
     color: #000;
     font-size: 10px;
@@ -339,6 +349,7 @@ textarea:focus-visible,
     align-items: center;
     justify-content: center;
     padding: 0 4px;
+    margin-left: 2px;
 }
 
 .sync-indicator.syncing .sync-dot {
@@ -643,6 +654,22 @@ textarea:focus-visible,
     border-radius: var(--radius-lg) var(--radius-lg) 0 0;
     padding: var(--spacing-lg);
     overflow-y: auto;
+    position: relative;
+}
+
+/* Drag handle affordance: a small rounded pill at the top of the sheet
+   signals "this is a bottom sheet" and hints at dismissibility. Visual
+   cue only — swipe-to-dismiss would be a separate, larger change. */
+.modal-content::before {
+    content: '';
+    display: block;
+    position: sticky;
+    top: 0;
+    width: 40px;
+    height: 4px;
+    margin: calc(var(--spacing-lg) * -1 + var(--spacing-xs)) auto var(--spacing-sm);
+    background-color: var(--border-color);
+    border-radius: var(--radius-full);
 }
 
 .modal-header {
@@ -2439,9 +2466,11 @@ textarea:focus-visible,
 
 /* ==================== Tools Menu ==================== */
 
+/* Tools is a peer nav entry, not a floating action — share the flex: 1
+   sizing of the other nav buttons so the row stays symmetric regardless
+   of how many modules are registered. */
 .tools-btn {
-    flex: 0 0 auto;
-    width: 56px;
+    flex: 1;
 }
 
 .tools-menu {

@@ -301,11 +301,12 @@ class TestToolsCss:
     def test_has_tools_btn_style(self):
         assert ".tools-btn" in self.source
 
-    def test_tools_btn_fixed_width(self):
-        """Tools button should not flex-grow with module buttons."""
+    def test_tools_btn_sizes_as_peer(self):
+        """Tools button shares the flex: 1 sizing of other nav buttons so
+        the bottom row stays symmetric regardless of module count."""
         match = re.search(r'\.tools-btn\s*\{[^}]+\}', self.source)
         assert match is not None
-        assert "flex: 0" in match.group()
+        assert "flex: 1" in match.group()
 
     def test_has_tools_menu_style(self):
         assert ".tools-menu" in self.source

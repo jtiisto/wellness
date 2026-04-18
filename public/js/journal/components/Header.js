@@ -11,6 +11,7 @@ import {
     isSyncing,
     pendingConflicts
 } from '../store.js';
+import { SyncIndicator } from '../../shared/header.js';
 
 const html = htm.bind(h);
 
@@ -46,35 +47,20 @@ export function Header() {
         }
     };
 
-    const getSyncTooltip = () => {
-        if (syncing) return 'Syncing...';
-        if (status === 'yellow') return `${conflictCount} conflict${conflictCount !== 1 ? 's' : ''} to resolve`;
-        if (status === 'red') return 'Pending changes';
-        if (status === 'green') return 'Synced';
-        return 'Offline';
-    };
-
     return html`
         <header class="header">
             <h1 class="header-title">
                 ${getTitle()}
             </h1>
             <div class="header-actions">
-                <div
-                    class="sync-indicator ${syncing ? 'syncing' : ''} ${status === 'yellow' ? 'has-conflicts' : ''}"
-                    title=${getSyncTooltip()}
-                    role="status"
-                    aria-label=${`Sync status: ${getSyncTooltip()}`}
-                >
-                    <div class="sync-dot ${status}"></div>
-                    ${conflictCount > 0 && html`
-                        <span class="conflict-badge">${conflictCount}</span>
-                    `}
-                </div>
+                <${SyncIndicator}
+                    status=${status}
+                    syncing=${syncing}
+                    conflictCount=${conflictCount}
+                />
                 <button
                     class="icon-btn"
                     onClick=${handleConfigClick}
-                    title=${view === 'home' ? 'Settings' : 'Back'}
                     aria-label=${view === 'home' ? 'Settings' : 'Back'}
                 >
                     ${view === 'home' ? '\u2699' : '\u2190'}
