@@ -690,29 +690,44 @@ textarea:focus-visible,
 .date-selector {
     display: flex;
     gap: var(--spacing-xs);
-    padding: var(--spacing-md);
+    padding: var(--spacing-sm) var(--spacing-md);
     overflow-x: auto;
     background-color: var(--bg-secondary);
     border-bottom: 1px solid var(--border-color);
     -webkit-overflow-scrolling: touch;
 }
 
+/* Items grow to share available width so 7 days fit mobile viewports
+   without scrolling; min-width keeps each a valid tap target. */
 .date-item {
-    flex: 0 0 auto;
+    flex: 1 1 0;
     min-width: var(--tap-target);
-    padding: var(--spacing-sm) var(--spacing-md);
+    padding: var(--spacing-sm) var(--spacing-xs);
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: var(--spacing-xs);
+    gap: 2px;
     border-radius: var(--radius-md);
     cursor: pointer;
     transition: background-color 0.2s;
     border: 2px solid transparent;
+    position: relative;
 }
 
 .date-item:hover {
     background-color: var(--bg-tertiary);
+}
+
+/* Today gets a thin accent underline independent of selection so users
+   can always tell "today" apart from any other past day in the strip. */
+.date-item.today .date-num::after {
+    content: '';
+    display: block;
+    width: 14px;
+    height: 2px;
+    margin: 2px auto 0;
+    background-color: var(--app-accent, var(--accent-primary));
+    border-radius: 1px;
 }
 
 /* Selected date: soft fill + accent border keeps the module accent as an
@@ -733,22 +748,19 @@ textarea:focus-visible,
     font-weight: 600;
 }
 
-/* Journal-specific: disabled state when trackers are unsynced */
+/* Journal-specific: disabled state when trackers are unsynced. A small
+   lock glyph replaces the prior red dot so the reason reads instead of
+   looking like an error indicator. */
 .journal .date-item.disabled {
-    opacity: 0.5;
+    opacity: 0.55;
     cursor: not-allowed;
-    position: relative;
 }
 
-.journal .date-item.disabled::after {
-    content: '';
+.journal .date-item .date-lock {
     position: absolute;
-    top: 4px;
-    right: 4px;
-    width: 8px;
-    height: 8px;
-    background-color: var(--sync-red);
-    border-radius: var(--radius-full);
+    top: 3px;
+    right: 3px;
+    color: var(--text-secondary);
 }
 
 /* Main Content */
@@ -763,6 +775,13 @@ textarea:focus-visible,
     margin-bottom: var(--spacing-lg);
 }
 
+/* Collapsed categories shrink to a single row — no card chrome, just a
+   chevron + label — so the user isn't scrolling past rows of empty dark
+   blocks to reach expanded content. */
+.journal .category:has(.category-header[aria-expanded="false"]) {
+    margin-bottom: var(--spacing-sm);
+}
+
 .journal .category-header {
     display: flex;
     align-items: center;
@@ -775,12 +794,30 @@ textarea:focus-visible,
     user-select: none;
 }
 
+/* Expanded header carries matching side + top borders so its vertical
+   edges line up with the tracker-items below, rendering the header +
+   items as a single rounded card. */
+.journal .category-header[aria-expanded="true"] {
+    border: 1px solid var(--border-color);
+    border-bottom: none;
+}
+
+.journal .category-header[aria-expanded="false"] {
+    padding: var(--spacing-xs) var(--spacing-sm);
+    background-color: transparent;
+    border-radius: 0;
+}
+
 .journal .category-header:last-child {
     border-radius: var(--radius-md);
 }
 
 .journal .category-header:hover {
     background-color: #0d2a4d;
+}
+
+.journal .category-header[aria-expanded="false"]:hover {
+    background-color: var(--bg-tertiary);
 }
 
 .journal .category-chevron {
@@ -895,6 +932,16 @@ textarea:focus-visible,
     color: var(--text-muted);
 }
 
+/* Memory-cue caption for today's quantifiable entries — shows the most
+   recent prior committed value so users have a reference without opening
+   history. Mirrors the tracker-last-updated alignment. */
+.journal .tracker-last-value {
+    margin-top: var(--spacing-xs);
+    padding-left: 40px;
+    font-size: var(--font-size-sm);
+    color: var(--text-secondary);
+}
+
 /* Inline checkbox+label row used in config forms */
 .form-checkbox {
     display: inline-flex;
@@ -971,7 +1018,7 @@ textarea:focus-visible,
     align-items: center;
     gap: var(--spacing-sm);
     flex-shrink: 0;
-    width: 140px;
+    width: 180px;
 }
 
 .journal .tracker-slider input[type="range"] {
@@ -979,10 +1026,32 @@ textarea:focus-visible,
     height: 6px;
     -webkit-appearance: none;
     appearance: none;
-    background: var(--bg-tertiary);
+    /* Tick marks at 0/25/50/75/100% drawn as a repeating linear gradient
+       over the track fill, so users can see the 5 discrete stops at a
+       glance instead of having to drag to find them. */
+    background:
+        repeating-linear-gradient(
+            to right,
+            var(--text-muted) 0 2px,
+            transparent 2px 25%
+        ),
+        var(--bg-tertiary);
     border-radius: var(--radius-full);
     cursor: pointer;
     touch-action: none;
+}
+
+.journal .tracker-slider-value {
+    font-size: var(--font-size-sm);
+    color: var(--text-secondary);
+    min-width: 24px;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+.journal .tracker-item--uncommitted .tracker-slider-value {
+    opacity: 0.55;
+    font-style: italic;
 }
 
 .journal .tracker-slider input[type="range"]::-webkit-slider-thumb {
@@ -1019,6 +1088,11 @@ textarea:focus-visible,
     font-size: var(--font-size-md);
     font-family: inherit;
     resize: none;
+    /* Auto-grow with content (Chrome 123+, Safari 17.4+); falls back to
+       the rows="2" intrinsic height on browsers without field-sizing. */
+    field-sizing: content;
+    min-height: 3em;
+    max-height: 18em;
     overflow-y: auto;
 }
 

@@ -255,6 +255,24 @@ export function getEntry(date, trackerId) {
     return dailyLogs.value[date]?.[trackerId] || null;
 }
 
+// Most recent committed prior value for a tracker, scanning cached logs.
+// Returns { value, date } or null. Used by TrackerItem to show a "Last: …"
+// hint so users have a memory cue on today's entry (e.g. weight, body comp).
+export function getLastValue(trackerId, beforeDate) {
+    const logs = dailyLogs.value;
+    const dates = Object.keys(logs)
+        .filter(d => d < beforeDate)
+        .sort()
+        .reverse();
+    for (const date of dates) {
+        const entry = logs[date]?.[trackerId];
+        if (entry && entry.completed === true && entry.value !== undefined && entry.value !== null && entry.value !== '') {
+            return { value: entry.value, date };
+        }
+    }
+    return null;
+}
+
 // Record a per-entry "value last updated" timestamp. Client-only (LocalForage),
 // not synced — solves the accumulator "did I already add this intake?" problem
 // without schema churn. See plans/ui-refresh.md 2A.

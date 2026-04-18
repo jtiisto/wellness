@@ -11,9 +11,11 @@ import {
     trackerValueUpdatedTimes,
     updateEntry,
     markValueUpdated,
-    isDayEditable
+    isDayEditable,
+    getLastValue
 } from '../store.js';
 import { NumericInput } from '../../shared/numeric-input.js';
+import { getToday, parseLocalDate } from '../../shared/utils.js';
 
 const html = htm.bind(h);
 
@@ -57,6 +59,16 @@ export function TrackerItem({ tracker }) {
     const isAccumulator = tracker.type === 'quantifiable' && tracker.accumulator === true;
     const lastUpdatedIso = valueUpdated[`${date}|${tracker.id}`] || null;
     const lastUpdatedLabel = isAccumulator ? formatLastUpdated(lastUpdatedIso, date) : null;
+
+    // Memory hint: on today's entry, show the most recent prior committed
+    // value. Skip for accumulators (their "last updated" line already serves).
+    const showLastValueHint = tracker.type === 'quantifiable'
+        && !isAccumulator
+        && date === getToday();
+    const lastPrior = showLastValueHint ? getLastValue(tracker.id, date) : null;
+    const lastPriorLabel = lastPrior
+        ? `Last: ${lastPrior.value}${tracker.unit ? ' ' + tracker.unit : ''} on ${parseLocalDate(lastPrior.date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`
+        : null;
 
     const handleCompletedChange = (e) => {
         if (!editable) return;
@@ -161,7 +173,9 @@ export function TrackerItem({ tracker }) {
                             onInput=${handleSliderChange}
                             onWheel=${(e) => e.preventDefault()}
                             disabled=${!editable}
+                            aria-valuetext="${value ?? 50}"
                         />
+                        <span class="tracker-slider-value" aria-hidden="true">${value ?? 50}</span>
                     </div>
                 `}
             </div>
@@ -178,6 +192,9 @@ export function TrackerItem({ tracker }) {
             `}
             ${lastUpdatedLabel && html`
                 <div class="tracker-last-updated">Last updated ${lastUpdatedLabel}</div>
+            `}
+            ${lastPriorLabel && html`
+                <div class="tracker-last-value">${lastPriorLabel}</div>
             `}
         </div>
     `;

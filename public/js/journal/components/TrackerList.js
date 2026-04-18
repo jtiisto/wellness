@@ -13,7 +13,7 @@ import { TrackerItem } from './TrackerItem.js';
 const html = htm.bind(h);
 
 function DateSelector({ selected, hasDirtyTrackers, hasConflicts, onDateSelect }) {
-    const days = getLastNDays(5);
+    const days = getLastNDays(7);
     const today = getToday();
 
     const handleDateClick = (date) => {
@@ -24,23 +24,42 @@ function DateSelector({ selected, hasDirtyTrackers, hasConflicts, onDateSelect }
     };
 
     const isDisabled = (date) => (hasDirtyTrackers || hasConflicts) && date !== today;
+    const lockReason = 'Locked — resolve conflicts or commit changes first';
 
     return html`
-        <div class="date-selector">
-            ${days.map(day => html`
-                <button
-                    type="button"
-                    class="date-item ${day.date === selected ? 'selected' : ''} ${isDisabled(day.date) ? 'disabled' : ''}"
-                    onClick=${() => handleDateClick(day.date)}
-                    aria-pressed=${day.date === selected}
-                    aria-disabled=${isDisabled(day.date)}
-                    disabled=${isDisabled(day.date)}
-                    key=${day.date}
-                >
-                    <span class="date-day">${day.dayName}</span>
-                    <span class="date-num">${day.dayNum}</span>
-                </button>
-            `)}
+        <div class="date-selector" role="group" aria-label="Select date">
+            ${days.map(day => {
+                const disabled = isDisabled(day.date);
+                const isToday = day.date === today;
+                const classes = [
+                    'date-item',
+                    day.date === selected ? 'selected' : '',
+                    isToday ? 'today' : '',
+                    disabled ? 'disabled' : ''
+                ].filter(Boolean).join(' ');
+                const label = `${day.dayName} ${day.dayNum}${isToday ? ' (today)' : ''}${disabled ? ' — ' + lockReason : ''}`;
+                return html`
+                    <button
+                        type="button"
+                        class=${classes}
+                        onClick=${() => handleDateClick(day.date)}
+                        aria-pressed=${day.date === selected}
+                        aria-disabled=${disabled}
+                        aria-label=${label}
+                        disabled=${disabled}
+                        key=${day.date}
+                    >
+                        <span class="date-day" aria-hidden="true">${day.dayName}</span>
+                        <span class="date-num" aria-hidden="true">${day.dayNum}</span>
+                        ${disabled && html`
+                            <svg class="date-lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="10" height="10" aria-hidden="true">
+                                <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                                <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                            </svg>
+                        `}
+                    </button>
+                `;
+            })}
         </div>
     `;
 }
