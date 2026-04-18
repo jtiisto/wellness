@@ -92,12 +92,12 @@ def test_edit_during_sync_preserves_data(coach_sync_page, app_server):
     page.wait_for_timeout(SYNC_DELAY_MS + 8000)
 
     # Verify UI still shows all three sets
-    weights = page.locator(".set-input.weight")
+    weights = page.locator(".sets-grid-input[data-col='weight']")
     assert weights.nth(0).input_value() == "24"
     assert weights.nth(1).input_value() == "28"
     assert weights.nth(2).input_value() == "28"
 
-    reps = page.locator(".set-input.reps")
+    reps = page.locator(".sets-grid-input[data-col='reps']")
     assert reps.nth(0).input_value() == "10"
     assert reps.nth(1).input_value() == "8"
     assert reps.nth(2).input_value() == "6"
@@ -154,7 +154,7 @@ def test_re_edit_same_set_during_sync_keeps_latest(coach_sync_page, app_server):
         f"Server should have latest weight 32, got {sets[0]['weight']}")
 
     # UI must also show 32
-    assert page.locator(".set-input.weight").first.input_value() == "32"
+    assert page.locator(".sets-grid-input[data-col='weight']").first.input_value() == "32"
 
 
 def test_feedback_edit_during_sync_keeps_latest(coach_sync_page, app_server):

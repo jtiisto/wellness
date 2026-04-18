@@ -36,10 +36,10 @@ class CoachPage:
         self.page.locator(".exercise-item").filter(has_text=name).locator(".exercise-header").click()
 
     def fill_set_weight(self, set_index, value):
-        self.page.locator(".set-input.weight").nth(set_index).fill(str(value))
+        self.page.locator(".sets-grid-input[data-col='weight']").nth(set_index).fill(str(value))
 
     def fill_set_reps(self, set_index, value):
-        self.page.locator(".set-input.reps").nth(set_index).fill(str(value))
+        self.page.locator(".sets-grid-input[data-col='reps']").nth(set_index).fill(str(value))
 
     def fill_feedback(self, field_label, text):
         field = self.page.locator(".feedback-field").filter(has_text=field_label)

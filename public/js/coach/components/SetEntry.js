@@ -75,6 +75,7 @@ export function SetEntry({ date, exerciseId, targetSets, sets, showTime = false,
                         <${NumericInput}
                             key=${'c-' + index + '-' + c.key}
                             class="sets-grid-input"
+                            data-col=${c.key}
                             value=${data[c.key]}
                             onValueChange=${(v) => handleSetChange(index, c.key, v)}
                             disabled=${!isEditable}
