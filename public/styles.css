@@ -792,6 +792,10 @@ textarea:focus-visible,
     border-radius: var(--radius-md) var(--radius-md) 0 0;
     margin-bottom: 0;
     user-select: none;
+    /* <button> with display:flex doesn't auto-stretch to block width; force
+       full width so the header's right edge aligns with the tracker-items
+       stacked underneath when expanded. */
+    width: 100%;
 }
 
 /* Expanded header carries matching side + top borders so its vertical
