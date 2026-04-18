@@ -23,7 +23,7 @@ import htm from 'htm';
 
 import { BlockView } from './BlockView.js';
 import { SessionFeedback } from './SessionFeedback.js';
-import { getToday } from '../../shared/utils.js';
+import { getToday, parseLocalDate } from '../../shared/utils.js';
 
 const html = htm.bind(h);
 
@@ -78,8 +78,12 @@ export function WorkoutView({ date, plan, log, isEditable = true }) {
     const today = getToday();
     const isFutureDate = date > today;
 
-    // Collapsible header state
+    // Collapsible header state.
+    // `hasAutoExpanded` tracks whether the "gate active → auto-expand header"
+    // effect has fired for this session, so the user's manual collapse is not
+    // overridden once it's happened. Both reset when sessionId changes.
     const [expanded, setExpanded] = useState(false);
+    const [hasAutoExpanded, setHasAutoExpanded] = useState(false);
 
     // Workout action availability & button states
     const [actionsAvailable, setActionsAvailable] = useState({ start: false, end: false });
@@ -146,10 +150,24 @@ export function WorkoutView({ date, plan, log, isEditable = true }) {
 
         setStatusLoaded(false);
         setStatusFetchFailed(false);
+        // Reset collapsible state when switching sessions so each workout
+        // starts with its own auto-expand decision.
+        setExpanded(false);
+        setHasAutoExpanded(false);
         fetchWorkoutStatus();
 
         return () => { cancelled = true; };
     }, [sessionId, isEditable]);
+
+    // Auto-expand the header the first time the Start gate is active so the
+    // user can see why exercise entry is locked. Fires once per session; the
+    // user stays in control after manual toggling.
+    useEffect(() => {
+        if (!hasAutoExpanded && showControls && !startGateSatisfied) {
+            setExpanded(true);
+            setHasAutoExpanded(true);
+        }
+    }, [showControls, startGateSatisfied, hasAutoExpanded]);
 
     // Lock the start-workout undo once exercise data appears
     useEffect(() => {
@@ -238,18 +256,40 @@ export function WorkoutView({ date, plan, log, isEditable = true }) {
         `;
     }
 
-    // Banner text for non-editable views only (past/future)
-    const readOnlyReason = !isEditable
-        ? (isFutureDate ? 'Viewing scheduled workout (read-only)' : 'Viewing past workout (read-only)')
-        : null;
+    // Banner content for non-editable views only (past/future).
+    // Explains *why* the day is locked, not just that it is — future dates
+    // point the user to when they can log, past dates clarify read-only.
+    let readOnlyBanner = null;
+    if (!isEditable) {
+        if (isFutureDate) {
+            const when = parseLocalDate(date).toLocaleDateString(undefined, {
+                weekday: 'short', month: 'short', day: 'numeric'
+            });
+            readOnlyBanner = html`
+                <div class="read-only-banner">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true">
+                        <circle cx="12" cy="12" r="10"></circle>
+                        <polyline points="12 6 12 12 16 14"></polyline>
+                    </svg>
+                    <span>Scheduled workout — come back on ${when} to log it.</span>
+                </div>
+            `;
+        } else {
+            readOnlyBanner = html`
+                <div class="read-only-banner">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16" aria-hidden="true">
+                        <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                        <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                    </svg>
+                    <span>Past workout — read-only.</span>
+                </div>
+            `;
+        }
+    }
 
     return html`
         <div class="workout-view ${!effectiveEditable ? 'read-only' : ''}">
-            ${readOnlyReason && html`
-                <div class="read-only-banner">
-                    ${readOnlyReason}
-                </div>
-            `}
+            ${readOnlyBanner}
             <div class="workout-header ${showControls ? 'workout-header--collapsible' : ''}">
                 <div
                     class="workout-header-toggle"
