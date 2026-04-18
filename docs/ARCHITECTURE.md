@@ -299,6 +299,7 @@ Each query is a dict with these fields:
 | `label` | yes | Display name shown in the UI |
 | `description` | yes | Short description shown below the label |
 | `prompt_template` | yes | The prompt sent to Claude Code CLI |
+| `icon` | no | Icon name rendered on the query card. Known names: `dumbbell`, `zap`, `calendar`, `heart-pulse`, `trending-up`. Unknown or omitted values fall back to a neutral document glyph. |
 | `accepts_location` | no | If `true`, the UI shows a location input field |
 | `extra_allowed_tools` | no | Additional tools beyond the defaults (e.g., `["WebSearch", "WebFetch"]`) |
 

@@ -26,8 +26,10 @@ class JournalPage:
                 return color
         return None
 
-    def get_sync_tooltip(self):
-        return self.page.locator(".sync-indicator").get_attribute("title")
+    def get_sync_label(self):
+        """Text shown next to the sync dot — source of truth for sync state
+        after the 5A refresh (previously exposed via `title=`)."""
+        return self.page.locator(".sync-indicator .sync-indicator-label").inner_text()
 
     def select_date(self, index):
         self.page.locator(".date-item").nth(index).click()

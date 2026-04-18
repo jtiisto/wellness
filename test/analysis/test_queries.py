@@ -54,3 +54,18 @@ class TestListQueries:
             assert "id" in q
             assert "label" in q
             assert "description" in q
+
+    def test_passes_through_icon_when_present(self):
+        """Queries with an `icon` key in the server config expose it to
+        the client; queries without one omit the key (client falls back
+        to a neutral glyph)."""
+        result = list_queries()
+        by_id = {q["id"]: q for q in result}
+        # Built-in queries all carry icons.
+        assert by_id["post_workout"]["icon"] == "dumbbell"
+        assert by_id["pre_workout"]["icon"] == "zap"
+        assert by_id["weekly_review"]["icon"] == "calendar"
+        # Queries that don't declare an icon should not have the key set.
+        for src in QUERIES:
+            if not src.get("icon"):
+                assert "icon" not in by_id[src["id"]]
