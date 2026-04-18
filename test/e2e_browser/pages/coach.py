@@ -36,10 +36,10 @@ class CoachPage:
         self.page.locator(".exercise-item").filter(has_text=name).locator(".exercise-header").click()
 
     def fill_set_weight(self, set_index, value):
-        self.page.locator(".set-input.weight").nth(set_index).fill(str(value))
+        self.page.locator(".sets-grid-input[data-col='weight']").nth(set_index).fill(str(value))
 
     def fill_set_reps(self, set_index, value):
-        self.page.locator(".set-input.reps").nth(set_index).fill(str(value))
+        self.page.locator(".sets-grid-input[data-col='reps']").nth(set_index).fill(str(value))
 
     def fill_feedback(self, field_label, text):
         field = self.page.locator(".feedback-field").filter(has_text=field_label)
@@ -53,15 +53,16 @@ class CoachPage:
         return self.page.locator(".workout-view.read-only").is_visible()
 
     def start_workout(self):
-        """Expand the header and click Start Workout to unlock exercises."""
-        # Expand the collapsible header
-        toggle = self.page.locator(".workout-header-toggle")
-        toggle.click()
-        self.page.wait_for_timeout(300)
-        # Click Start Workout
+        """Click Start Workout to unlock exercises. Expands the header first
+        only if it is not already expanded (it auto-expands when the gate
+        is active, so toggling unconditionally would collapse it)."""
+        body = self.page.locator(".workout-header-body--open")
+        if body.count() == 0:
+            toggle = self.page.locator(".workout-header-toggle")
+            toggle.click()
+            self.page.wait_for_timeout(300)
         start_btn = self.page.locator(".hook-btn--start")
         start_btn.click()
-        # Wait for the gate to unlock
         self.page.wait_for_timeout(500)
 
     def end_workout(self):

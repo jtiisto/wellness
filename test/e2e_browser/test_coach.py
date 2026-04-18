@@ -48,8 +48,8 @@ def test_log_workout_set(coach_page, app_page):
     app_page.wait_for_timeout(300)
     coach_page.fill_set_weight(0, 24)
     coach_page.fill_set_reps(0, 10)
-    weight_val = app_page.locator(".set-input.weight").first.input_value()
-    reps_val = app_page.locator(".set-input.reps").first.input_value()
+    weight_val = app_page.locator(".sets-grid-input[data-col='weight']").first.input_value()
+    reps_val = app_page.locator(".sets-grid-input[data-col='reps']").first.input_value()
     assert weight_val == "24"
     assert reps_val == "10"
 

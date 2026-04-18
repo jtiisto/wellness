@@ -34,13 +34,25 @@
 
     --text-primary: #eaeaea;
     --text-secondary: #a0a0a0;
-    --text-muted: #6a6a6a;
+    --text-muted: #9a9a9a;
 
     --accent-primary: #f59e0b;
     --accent-secondary: #0f3460;
     --accent-success: #4ade80;
     --accent-warning: #fbbf24;
     --accent-error: #ef4444;
+
+    /* Per-module accent colors. Rules inside a module scope (.journal / .coach
+       / .analysis) reference `--app-accent`, which each module sets to its
+       own color below. Used sparingly: active-tab underline, selected-date
+       tile, module-scoped focus rings and slider thumbs. Semantic colors
+       (success/warning/error) remain module-agnostic. */
+    --journal-accent: #f59e0b;
+    --journal-accent-soft: rgba(245, 158, 11, 0.18);
+    --coach-accent: #2dd4bf;
+    --coach-accent-soft: rgba(45, 212, 191, 0.18);
+    --analysis-accent: #a78bfa;
+    --analysis-accent-soft: rgba(167, 139, 250, 0.18);
 
     --border-color: #2a2a4a;
     --input-bg: #252540;
@@ -71,6 +83,21 @@
     --nav-height: 56px;
 }
 
+/* Module-scoped accent: child rules use `var(--app-accent)` to track the
+   active module. Fallback to global amber for rules outside any module. */
+.journal {
+    --app-accent: var(--journal-accent);
+    --app-accent-soft: var(--journal-accent-soft);
+}
+.coach {
+    --app-accent: var(--coach-accent);
+    --app-accent-soft: var(--coach-accent-soft);
+}
+.analysis {
+    --app-accent: var(--analysis-accent);
+    --app-accent-soft: var(--analysis-accent-soft);
+}
+
 /* ==================== Reset & Base ==================== */
 
 *, *::before, *::after {
@@ -98,6 +125,49 @@ body {
 
 #app {
     height: 100%;
+}
+
+/* Normalize buttons that act as interactive cards or tiles so they
+   inherit the surrounding typography and layout instead of the UA
+   button defaults. Per-component rules below (.date-item,
+   .category-header, etc.) still drive the actual look. */
+button.date-item,
+button.category-header {
+    background: none;
+    border: none;
+    color: inherit;
+    font: inherit;
+    text-align: inherit;
+}
+
+button.date-item[disabled] {
+    /* preserve the existing .disabled visual; UA disabled styling is muted
+       by letting the class rule own opacity/cursor. */
+    pointer-events: none;
+}
+
+/* ==================== Focus rings ====================
+
+   Strategy: suppress the default focus ring on mouse-click only
+   (via :focus-not-visible via UA defaults), and render a crisp
+   keyboard-only ring on every focusable interactive element with
+   the active module accent. */
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+[role="button"]:focus-visible,
+[tabindex]:focus-visible {
+    outline: 2px solid var(--app-accent, var(--accent-primary));
+    outline-offset: 2px;
+}
+
+/* Hide the default focus ring on mouse/touch focus so only keyboard
+   focus shows a ring. :focus-visible handles the keyboard case above. */
+:focus:not(:focus-visible) {
+    outline: none;
 }
 
 /* ==================== Shell Layout ==================== */
@@ -193,7 +263,7 @@ body {
     width: 32px;
     height: 32px;
     border: 3px solid var(--border-color);
-    border-top-color: var(--accent-primary);
+    border-top-color: var(--app-accent, var(--accent-primary));
     border-radius: 50%;
     animation: spin 0.8s linear infinite;
 }
@@ -229,20 +299,26 @@ body {
 
 /* ==================== Sync Indicator ==================== */
 
+/* Sync indicator reads as "dot + label" so the state is self-describing,
+   not a raw coloured dot that requires hovering to decode. The label
+   hides on very narrow viewports (<360px); aria-label on the wrapper
+   keeps the full text available to assistive tech regardless. */
 .sync-indicator {
-    width: var(--tap-target);
-    height: var(--tap-target);
+    min-height: var(--tap-target);
     display: flex;
     align-items: center;
-    justify-content: center;
+    gap: var(--spacing-xs);
+    padding: 0 var(--spacing-sm);
     border-radius: var(--radius-full);
+    position: relative;
 }
 
 .sync-dot {
-    width: 12px;
-    height: 12px;
+    width: 10px;
+    height: 10px;
     border-radius: var(--radius-full);
     transition: background-color 0.3s;
+    flex-shrink: 0;
 }
 
 .sync-dot.green { background-color: var(--sync-green); }
@@ -250,14 +326,18 @@ body {
 .sync-dot.gray { background-color: var(--sync-gray); }
 .sync-dot.yellow { background-color: var(--accent-warning); }
 
-.sync-indicator.has-conflicts {
-    position: relative;
+.sync-indicator-label {
+    font-size: var(--font-size-sm);
+    color: var(--text-secondary);
+    line-height: 1;
+    white-space: nowrap;
+}
+
+@media (max-width: 359px) {
+    .sync-indicator-label { display: none; }
 }
 
 .conflict-badge {
-    position: absolute;
-    top: 4px;
-    right: 4px;
     background-color: var(--accent-warning);
     color: #000;
     font-size: 10px;
@@ -269,6 +349,7 @@ body {
     align-items: center;
     justify-content: center;
     padding: 0 4px;
+    margin-left: 2px;
 }
 
 .sync-indicator.syncing .sync-dot {
@@ -466,12 +547,12 @@ body {
 }
 
 .btn-primary {
-    background-color: var(--accent-primary);
-    color: white;
+    background-color: var(--app-accent, var(--accent-primary));
+    color: #0b1020;
 }
 
 .btn-primary:hover {
-    background-color: #d97706;
+    filter: brightness(0.92);
 }
 
 .btn-secondary {
@@ -524,7 +605,7 @@ body {
 .form-input:focus,
 .form-select:focus {
     outline: none;
-    border-color: var(--accent-primary);
+    border-color: var(--app-accent, var(--accent-primary));
 }
 
 .form-select {
@@ -573,6 +654,22 @@ body {
     border-radius: var(--radius-lg) var(--radius-lg) 0 0;
     padding: var(--spacing-lg);
     overflow-y: auto;
+    position: relative;
+}
+
+/* Drag handle affordance: a small rounded pill at the top of the sheet
+   signals "this is a bottom sheet" and hints at dismissibility. Visual
+   cue only — swipe-to-dismiss would be a separate, larger change. */
+.modal-content::before {
+    content: '';
+    display: block;
+    position: sticky;
+    top: 0;
+    width: 40px;
+    height: 4px;
+    margin: calc(var(--spacing-lg) * -1 + var(--spacing-xs)) auto var(--spacing-sm);
+    background-color: var(--border-color);
+    border-radius: var(--radius-full);
 }
 
 .modal-header {
@@ -620,34 +717,52 @@ body {
 .date-selector {
     display: flex;
     gap: var(--spacing-xs);
-    padding: var(--spacing-md);
+    padding: var(--spacing-sm) var(--spacing-md);
     overflow-x: auto;
     background-color: var(--bg-secondary);
     border-bottom: 1px solid var(--border-color);
     -webkit-overflow-scrolling: touch;
 }
 
+/* Items grow to share available width so 7 days fit mobile viewports
+   without scrolling; min-width keeps each a valid tap target. */
 .date-item {
-    flex: 0 0 auto;
+    flex: 1 1 0;
     min-width: var(--tap-target);
-    padding: var(--spacing-sm) var(--spacing-md);
+    padding: var(--spacing-sm) var(--spacing-xs);
     display: flex;
     flex-direction: column;
     align-items: center;
-    gap: var(--spacing-xs);
+    gap: 2px;
     border-radius: var(--radius-md);
     cursor: pointer;
     transition: background-color 0.2s;
     border: 2px solid transparent;
+    position: relative;
 }
 
 .date-item:hover {
     background-color: var(--bg-tertiary);
 }
 
+/* Today gets a thin accent underline independent of selection so users
+   can always tell "today" apart from any other past day in the strip. */
+.date-item.today .date-num::after {
+    content: '';
+    display: block;
+    width: 14px;
+    height: 2px;
+    margin: 2px auto 0;
+    background-color: var(--app-accent, var(--accent-primary));
+    border-radius: 1px;
+}
+
+/* Selected date: soft fill + accent border keeps the module accent as an
+   accent rather than a solid slab that dominates the header. */
 .date-item.selected {
-    background-color: var(--accent-primary);
-    color: white;
+    background-color: var(--app-accent-soft, var(--accent-primary));
+    border-color: var(--app-accent, var(--accent-primary));
+    color: var(--text-primary);
 }
 
 .date-day {
@@ -655,31 +770,24 @@ body {
     color: var(--text-secondary);
 }
 
-.date-item.selected .date-day {
-    color: rgba(255, 255, 255, 0.8);
-}
-
 .date-num {
     font-size: var(--font-size-lg);
     font-weight: 600;
 }
 
-/* Journal-specific: disabled state when trackers are unsynced */
+/* Journal-specific: disabled state when trackers are unsynced. A small
+   lock glyph replaces the prior red dot so the reason reads instead of
+   looking like an error indicator. */
 .journal .date-item.disabled {
-    opacity: 0.5;
+    opacity: 0.55;
     cursor: not-allowed;
-    position: relative;
 }
 
-.journal .date-item.disabled::after {
-    content: '';
+.journal .date-item .date-lock {
     position: absolute;
-    top: 4px;
-    right: 4px;
-    width: 8px;
-    height: 8px;
-    background-color: var(--sync-red);
-    border-radius: var(--radius-full);
+    top: 3px;
+    right: 3px;
+    color: var(--text-secondary);
 }
 
 /* Main Content */
@@ -694,6 +802,13 @@ body {
     margin-bottom: var(--spacing-lg);
 }
 
+/* Collapsed categories shrink to a single row — no card chrome, just a
+   chevron + label — so the user isn't scrolling past rows of empty dark
+   blocks to reach expanded content. */
+.journal .category:has(.category-header[aria-expanded="false"]) {
+    margin-bottom: var(--spacing-sm);
+}
+
 .journal .category-header {
     display: flex;
     align-items: center;
@@ -704,6 +819,24 @@ body {
     border-radius: var(--radius-md) var(--radius-md) 0 0;
     margin-bottom: 0;
     user-select: none;
+    /* <button> with display:flex doesn't auto-stretch to block width; force
+       full width so the header's right edge aligns with the tracker-items
+       stacked underneath when expanded. */
+    width: 100%;
+}
+
+/* Expanded header carries matching side + top borders so its vertical
+   edges line up with the tracker-items below, rendering the header +
+   items as a single rounded card. */
+.journal .category-header[aria-expanded="true"] {
+    border: 1px solid var(--border-color);
+    border-bottom: none;
+}
+
+.journal .category-header[aria-expanded="false"] {
+    padding: var(--spacing-xs) var(--spacing-sm);
+    background-color: transparent;
+    border-radius: 0;
 }
 
 .journal .category-header:last-child {
@@ -712,6 +845,10 @@ body {
 
 .journal .category-header:hover {
     background-color: #0d2a4d;
+}
+
+.journal .category-header[aria-expanded="false"]:hover {
+    background-color: var(--bg-tertiary);
 }
 
 .journal .category-chevron {
@@ -727,8 +864,8 @@ body {
 
 .journal .category-title {
     font-size: var(--font-size-md);
-    font-weight: 600;
-    color: var(--accent-primary);
+    font-weight: 700;
+    color: var(--text-primary);
     margin: 0;
     padding: 0;
 }
@@ -764,6 +901,95 @@ body {
     pointer-events: none;
 }
 
+/* Commit-state ghosting: when the tracker's checkbox is unchecked, the value
+   control reads as a hint or uncommitted draft. Applied per-control rather
+   than on the whole row so the checkbox itself stays at full weight. */
+.journal .tracker-item--uncommitted .tracker-value-input input[type="number"],
+.journal .tracker-item--uncommitted .tracker-note-input textarea {
+    opacity: 0.55;
+    font-style: italic;
+}
+
+.journal .tracker-item--uncommitted .tracker-unit {
+    opacity: 0.55;
+}
+
+.journal .tracker-item--uncommitted .tracker-slider input[type="range"]::-webkit-slider-thumb {
+    background: var(--text-muted);
+}
+
+.journal .tracker-item--uncommitted .tracker-slider input[type="range"]::-moz-range-thumb {
+    background: var(--text-muted);
+}
+
+/* Accumulator "+" button — adds to running total for cumulative trackers
+   (protein, creatine). Inline next to the value + unit. */
+.journal .tracker-accum-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    margin-left: var(--spacing-xs);
+    padding: 0;
+    background: var(--app-accent-soft);
+    border: 1px solid var(--app-accent);
+    border-radius: var(--radius-full);
+    color: var(--app-accent);
+    font-size: 1.125rem;
+    font-weight: 600;
+    line-height: 1;
+    cursor: pointer;
+    font-family: inherit;
+    transition: background-color 0.15s;
+}
+
+.journal .tracker-accum-btn:hover:not(:disabled) {
+    background: var(--app-accent);
+    color: #0b1020;
+}
+
+.journal .tracker-accum-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* Last-updated caption for accumulator trackers — answers "did I already
+   add that intake today?" without another tap. */
+.journal .tracker-last-updated {
+    margin-top: var(--spacing-xs);
+    padding-left: 40px; /* roughly align with tracker name after checkbox */
+    font-size: var(--font-size-sm);
+    color: var(--text-muted);
+}
+
+/* Memory-cue caption for today's quantifiable entries — shows the most
+   recent prior committed value so users have a reference without opening
+   history. Mirrors the tracker-last-updated alignment. */
+.journal .tracker-last-value {
+    margin-top: var(--spacing-xs);
+    padding-left: 40px;
+    font-size: var(--font-size-sm);
+    color: var(--text-secondary);
+}
+
+/* Inline checkbox+label row used in config forms */
+.form-checkbox {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    cursor: pointer;
+    color: var(--text-primary);
+    font-size: var(--font-size-md);
+}
+
+.form-checkbox input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    accent-color: var(--app-accent, var(--accent-primary));
+    cursor: pointer;
+}
+
 .journal .tracker-checkbox {
     flex-shrink: 0;
 }
@@ -772,7 +998,7 @@ body {
     width: 24px;
     height: 24px;
     cursor: pointer;
-    accent-color: var(--accent-primary);
+    accent-color: var(--app-accent);
 }
 
 .journal .tracker-info {
@@ -808,7 +1034,7 @@ body {
 
 .journal .tracker-value-input input[type="number"]:focus {
     outline: none;
-    border-color: var(--accent-primary);
+    border-color: var(--app-accent);
 }
 
 .journal .tracker-unit {
@@ -823,7 +1049,7 @@ body {
     align-items: center;
     gap: var(--spacing-sm);
     flex-shrink: 0;
-    width: 140px;
+    width: 180px;
 }
 
 .journal .tracker-slider input[type="range"] {
@@ -831,10 +1057,32 @@ body {
     height: 6px;
     -webkit-appearance: none;
     appearance: none;
-    background: var(--bg-tertiary);
+    /* Tick marks at 0/25/50/75/100% drawn as a repeating linear gradient
+       over the track fill, so users can see the 5 discrete stops at a
+       glance instead of having to drag to find them. */
+    background:
+        repeating-linear-gradient(
+            to right,
+            var(--text-muted) 0 2px,
+            transparent 2px 25%
+        ),
+        var(--bg-tertiary);
     border-radius: var(--radius-full);
     cursor: pointer;
     touch-action: none;
+}
+
+.journal .tracker-slider-value {
+    font-size: var(--font-size-sm);
+    color: var(--text-secondary);
+    min-width: 24px;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+.journal .tracker-item--uncommitted .tracker-slider-value {
+    opacity: 0.55;
+    font-style: italic;
 }
 
 .journal .tracker-slider input[type="range"]::-webkit-slider-thumb {
@@ -842,7 +1090,7 @@ body {
     appearance: none;
     width: 20px;
     height: 20px;
-    background: var(--accent-primary);
+    background: var(--app-accent);
     border-radius: var(--radius-full);
     cursor: pointer;
 }
@@ -850,7 +1098,7 @@ body {
 .journal .tracker-slider input[type="range"]::-moz-range-thumb {
     width: 20px;
     height: 20px;
-    background: var(--accent-primary);
+    background: var(--app-accent);
     border-radius: var(--radius-full);
     cursor: pointer;
     border: none;
@@ -871,12 +1119,17 @@ body {
     font-size: var(--font-size-md);
     font-family: inherit;
     resize: none;
+    /* Auto-grow with content (Chrome 123+, Safari 17.4+); falls back to
+       the rows="2" intrinsic height on browsers without field-sizing. */
+    field-sizing: content;
+    min-height: 3em;
+    max-height: 18em;
     overflow-y: auto;
 }
 
 .journal .tracker-note-input textarea:focus {
     outline: none;
-    border-color: var(--accent-primary);
+    border-color: var(--app-accent);
 }
 
 .journal .tracker-note-input textarea::placeholder {
@@ -1006,8 +1259,8 @@ body {
 }
 
 .journal .conflict-type.tracker {
-    background-color: rgba(245, 158, 11, 0.2);
-    color: var(--accent-primary);
+    background-color: var(--app-accent-soft);
+    color: var(--app-accent);
 }
 
 .journal .conflict-type.entry {
@@ -1044,7 +1297,7 @@ body {
 }
 
 .journal .conflict-version.local {
-    border: 2px solid var(--accent-primary);
+    border: 2px solid var(--app-accent);
 }
 
 .journal .conflict-version.server {
@@ -1067,8 +1320,8 @@ body {
     font-size: var(--font-size-sm);
     padding: 2px 8px;
     border-radius: var(--radius-sm);
-    background-color: var(--accent-primary);
-    color: white;
+    background-color: var(--app-accent);
+    color: #000;
 }
 
 .journal .version-badge.server {
@@ -1260,7 +1513,24 @@ body {
     cursor: not-allowed;
 }
 
-/* Fired (success) state — green */
+/* Primary CTA. Start keeps a filled style so it reads as the must-do
+   action when the gate is active. Dark text on the teal module accent
+   provides enough contrast without reaching for a stroke/shadow. */
+.coach .hook-btn.hook-btn--start {
+    background: var(--app-accent);
+    border-color: var(--app-accent);
+    color: var(--bg-primary);
+    font-weight: 600;
+}
+
+/* End is secondary — can fire any time, shouldn't compete with Start
+   for attention. Outlined variant against the module background. */
+.coach .hook-btn.hook-btn--end {
+    background: transparent;
+}
+
+/* Fired (success) state — green. Overrides the start/end variants so
+   success feedback is consistent regardless of which button fired. */
 .coach .hook-btn.hook-btn--fired {
     background: #16a34a;
     border-color: #16a34a;
@@ -1307,15 +1577,15 @@ body {
 }
 
 .coach .block-title {
-    font-weight: 600;
-    color: var(--accent-primary);
+    font-weight: 700;
+    color: var(--text-primary);
 }
 
 .coach .block-rounds {
     font-size: var(--font-size-sm);
-    color: var(--accent-primary);
+    color: var(--app-accent);
     font-weight: 500;
-    opacity: 0.8;
+    opacity: 0.85;
 }
 
 .coach .rest-guidance {
@@ -1350,6 +1620,19 @@ body {
     border-radius: 0 0 var(--radius-md) var(--radius-md);
 }
 
+/* Superset pairing: each paired exercise carries a 3px colored left
+   border in a stable hue per pair key. Since paired exercises sit flush
+   with no margin between them, the borders visually merge into a single
+   continuous bar spanning the pair — making it obvious at a glance that
+   skipping one of them breaks the prescribed stimulus. */
+.coach .exercise-item[data-pair] {
+    border-left-width: 3px;
+    border-left-style: solid;
+}
+.coach .exercise-item[data-pair="A"] { border-left-color: var(--app-accent); }
+.coach .exercise-item[data-pair="B"] { border-left-color: #60a5fa; }
+.coach .exercise-item[data-pair="C"] { border-left-color: #a78bfa; }
+
 .coach .exercise-header {
     display: flex;
     align-items: center;
@@ -1371,7 +1654,7 @@ body {
     width: 24px;
     height: 24px;
     cursor: pointer;
-    accent-color: var(--accent-primary);
+    accent-color: var(--app-accent);
 }
 
 .coach .exercise-name {
@@ -1393,6 +1676,27 @@ body {
 .coach .exercise-target {
     color: var(--text-secondary);
     font-size: var(--font-size-sm);
+}
+
+/* Per-row progress pill so users can see "how far in" an exercise is
+   without expanding it. Reads as neutral while in progress, flips to
+   success green once the target is met. */
+.coach .exercise-progress {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 8px;
+    border-radius: var(--radius-full);
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    font-size: 0.75rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+}
+
+.coach .exercise-progress.exercise-progress--complete {
+    background: var(--accent-success);
+    color: var(--bg-primary);
 }
 
 .coach .exercise-chevron {
@@ -1424,30 +1728,43 @@ body {
     border-left: 3px solid var(--accent-warning);
 }
 
-/* Set Entry */
-.coach .sets-container {
-    display: flex;
-    flex-direction: column;
-    gap: var(--spacing-sm);
+/* Set Entry — grid layout: one header row, then one row per set.
+   Columns are set dynamically by SetEntry.js via an inline style
+   (grid-template-columns), adapting to weight/reps/RPE vs. time-only. */
+.coach .sets-grid {
+    display: grid;
+    column-gap: var(--spacing-sm);
+    row-gap: var(--spacing-xs);
+    align-items: center;
     margin-bottom: var(--spacing-md);
 }
 
-.coach .set-row {
-    display: flex;
-    align-items: center;
-    gap: var(--spacing-sm);
-    padding: var(--spacing-xs) 0;
+.coach .sets-grid-head {
+    font-size: var(--font-size-sm);
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-align: center;
+    padding-bottom: var(--spacing-xs);
+    border-bottom: 1px solid var(--border-color);
+    line-height: 1.2;
 }
 
-.coach .set-num {
-    min-width: 24px;
+.coach .sets-grid-unit {
+    font-weight: 400;
+    color: var(--text-muted);
+    font-size: 0.75rem;
+}
+
+.coach .sets-grid-num {
     color: var(--text-muted);
     font-size: var(--font-size-sm);
     font-weight: 600;
+    text-align: center;
 }
 
-.coach .set-input {
-    width: 60px;
+.coach .sets-grid-input {
+    width: 100%;
+    min-width: 0;
     padding: var(--spacing-xs) var(--spacing-sm);
     background-color: var(--input-bg);
     border: 1px solid var(--border-color);
@@ -1455,38 +1772,25 @@ body {
     color: var(--text-primary);
     text-align: center;
     font-size: var(--font-size-md);
+    box-sizing: border-box;
 }
 
-.coach .set-input:focus {
-    border-color: var(--accent-primary);
+.coach .sets-grid-input:focus {
+    border-color: var(--app-accent);
     outline: none;
 }
 
-.coach .set-input.weight {
-    width: 70px;
+.coach .sets-grid-check {
+    display: flex;
+    justify-content: center;
+    align-items: center;
 }
 
-.coach .set-input.reps {
-    width: 50px;
-}
-
-.coach .set-input.rpe {
-    width: 50px;
-}
-
-.coach .set-label {
-    font-size: var(--font-size-sm);
-    color: var(--text-secondary);
-}
-
-.coach .set-check {
-    margin-left: auto;
-}
-
-.coach .set-check input[type="checkbox"] {
+.coach .sets-grid-check input[type="checkbox"] {
     width: 20px;
     height: 20px;
-    accent-color: var(--accent-primary);
+    accent-color: var(--app-accent);
+    cursor: pointer;
 }
 
 /* Cardio Entry */
@@ -1525,7 +1829,7 @@ body {
 }
 
 .coach .cardio-field input:focus {
-    border-color: var(--accent-primary);
+    border-color: var(--app-accent);
     outline: none;
 }
 
@@ -1546,7 +1850,7 @@ body {
 .coach .checklist-item input[type="checkbox"] {
     width: 20px;
     height: 20px;
-    accent-color: var(--accent-primary);
+    accent-color: var(--app-accent);
     flex-shrink: 0;
 }
 
@@ -1579,7 +1883,7 @@ body {
 }
 
 .coach .user-note textarea:focus {
-    border-color: var(--accent-primary);
+    border-color: var(--app-accent);
     outline: none;
 }
 
@@ -1596,9 +1900,9 @@ body {
 }
 
 .coach .feedback-title {
-    font-weight: 600;
+    font-weight: 700;
     margin-bottom: var(--spacing-sm);
-    color: var(--accent-primary);
+    color: var(--text-primary);
 }
 
 .coach .feedback-field {
@@ -1629,19 +1933,30 @@ body {
 }
 
 .coach .feedback-textarea:focus {
-    border-color: var(--accent-primary);
+    border-color: var(--app-accent);
     outline: none;
 }
 
-/* Migraine Protocol Banner */
+/* Migraine Protocol Banner — reads as a warning/alert, not a promoted
+   action, so we use the error color family (toned down) instead of the
+   amber accent family. A small left-aligned icon hint is drawn via an
+   emoji embedded by the consumer when this rule is used. */
 .coach .migraine-banner {
-    background: linear-gradient(135deg, var(--accent-warning), #f59e0b);
-    color: #000;
+    background: linear-gradient(135deg, #b91c1c, #ea580c);
+    color: #fff;
     padding: var(--spacing-sm) var(--spacing-md);
-    text-align: center;
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
     font-weight: 500;
     border-radius: var(--radius-md);
     margin-bottom: var(--spacing-md);
+}
+
+.coach .migraine-banner::before {
+    content: '⚠';
+    font-size: var(--font-size-lg);
+    line-height: 1;
 }
 
 .coach .migraine-toggle {
@@ -1814,12 +2129,12 @@ body {
 
 .coach .calendar-day.today {
     font-weight: 700;
-    color: var(--accent-primary);
+    color: var(--app-accent);
 }
 
 .coach .calendar-day.selected {
-    background-color: var(--accent-primary);
-    color: white;
+    background-color: var(--app-accent);
+    color: #0b1020;
 }
 
 .coach .calendar-day.status-completed::after {
@@ -1853,7 +2168,7 @@ body {
 }
 
 .coach .calendar-day.selected::after {
-    background-color: white;
+    background-color: #0b1020;
 }
 
 .coach .calendar-day.disabled {
@@ -1879,8 +2194,9 @@ body {
 }
 
 .coach .calendar-today-btn:hover {
-    background-color: var(--accent-primary);
-    border-color: var(--accent-primary);
+    background-color: var(--app-accent);
+    border-color: var(--app-accent);
+    color: #0b1020;
 }
 
 .coach .calendar-legend {
@@ -1910,15 +2226,24 @@ body {
 .coach .legend-dot.missed { background-color: var(--accent-error); }
 .coach .legend-dot.scheduled { background-color: var(--accent-warning); }
 
-/* Read-only Mode */
+/* Read-only Mode — banner explains *why* the day is locked rather than
+   just that it is. Icon + left-aligned layout reads as informational,
+   not as a decorative centered label. */
 .coach .read-only-banner {
     background: linear-gradient(135deg, var(--bg-tertiary), var(--accent-secondary));
     color: var(--text-secondary);
     padding: var(--spacing-sm) var(--spacing-md);
-    text-align: center;
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
     font-size: var(--font-size-sm);
     border-radius: var(--radius-md);
     margin-bottom: var(--spacing-md);
+}
+
+.coach .read-only-banner svg {
+    flex-shrink: 0;
+    color: var(--text-secondary);
 }
 
 .coach .workout-view.read-only input:disabled,
@@ -1991,15 +2316,6 @@ body {
     transform: scale(0.98);
 }
 
-.analysis .btn-primary {
-    background-color: var(--accent-primary);
-    color: white;
-}
-
-.analysis .btn-primary:hover {
-    background-color: #d97706;
-}
-
 /* Analysis Query Grid */
 .analysis .query-grid {
     display: flex; flex-direction: column; gap: var(--spacing-md); padding: var(--spacing-md);
@@ -2009,10 +2325,20 @@ body {
     border-radius: var(--radius-lg); padding: var(--spacing-lg);
     cursor: pointer; transition: background-color 0.2s, border-color 0.2s;
     text-align: left; font-family: inherit; color: inherit;
+    display: grid;
+    grid-template-columns: auto 1fr;
+    column-gap: var(--spacing-md);
+    row-gap: 2px;
+    align-items: start;
 }
-.analysis .query-card:hover { background-color: var(--bg-secondary); border-color: var(--accent-primary); }
+.analysis .query-card:hover { background-color: var(--bg-secondary); border-color: var(--app-accent); }
 .analysis .query-card:active { transform: scale(0.98); }
-.analysis .query-card-label { font-size: var(--font-size-lg); font-weight: 600; margin-bottom: var(--spacing-xs); }
+.analysis .query-card-icon {
+    grid-row: 1 / span 2;
+    color: var(--app-accent);
+    flex-shrink: 0;
+}
+.analysis .query-card-label { font-size: var(--font-size-lg); font-weight: 600; margin-bottom: 0; }
 .analysis .query-card-description { font-size: var(--font-size-sm); color: var(--text-secondary); }
 
 /* Analysis Progress/Loading View */
@@ -2022,11 +2348,31 @@ body {
 }
 .analysis .progress-spinner {
     width: 48px; height: 48px; border: 4px solid var(--border-color);
-    border-top-color: var(--accent-primary); border-radius: 50%;
+    border-top-color: var(--app-accent); border-radius: 50%;
     animation: spin 1s linear infinite;
 }
 .analysis .progress-text { color: var(--text-secondary); text-align: center; }
 .analysis .progress-elapsed { font-size: var(--font-size-sm); color: var(--text-muted); }
+
+/* Cancel button bails out of the progress view client-side. Styled as a
+   low-emphasis tertiary action so it reads as an escape hatch, not a
+   primary action — the primary action is waiting for the report to finish. */
+.analysis .progress-cancel {
+    margin-top: var(--spacing-sm);
+    padding: var(--spacing-xs) var(--spacing-md);
+    background: transparent;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    color: var(--text-secondary);
+    font-family: inherit;
+    font-size: var(--font-size-sm);
+    cursor: pointer;
+}
+
+.analysis .progress-cancel:hover {
+    background: var(--bg-card);
+    color: var(--text-primary);
+}
 
 /* Analysis Report View */
 .analysis .report-view { padding: var(--spacing-md); }
@@ -2038,9 +2384,9 @@ body {
 .analysis .report-meta { font-size: var(--font-size-sm); color: var(--text-secondary); margin-bottom: var(--spacing-md); }
 .analysis .report-content { line-height: 1.7; }
 .analysis .report-content h2 {
-    color: var(--accent-primary); font-size: var(--font-size-lg);
+    color: var(--text-primary); font-size: var(--font-size-lg);
     margin-top: var(--spacing-lg); margin-bottom: var(--spacing-sm);
-    padding-bottom: var(--spacing-xs); border-bottom: 1px solid var(--border-color);
+    padding-bottom: var(--spacing-xs); border-bottom: 1px solid var(--app-accent);
 }
 .analysis .report-content h3 { color: var(--text-primary); margin-top: var(--spacing-md); margin-bottom: var(--spacing-sm); }
 .analysis .report-content p { margin-bottom: var(--spacing-md); color: var(--text-secondary); }
@@ -2059,7 +2405,7 @@ body {
 }
 .analysis .report-content th {
     text-align: left; color: var(--text-primary); font-weight: 600;
-    padding: var(--spacing-sm); border-bottom: 2px solid var(--accent-primary);
+    padding: var(--spacing-sm); border-bottom: 2px solid var(--app-accent);
     white-space: nowrap;
 }
 .analysis .report-content td {
@@ -2102,7 +2448,7 @@ body {
     transition: color 0.2s, border-color 0.2s;
 }
 .analysis .analysis-tab-btn:hover { color: var(--text-secondary); }
-.analysis .analysis-tab-btn.active { color: var(--text-primary); border-bottom-color: var(--accent-primary); }
+.analysis .analysis-tab-btn.active { color: var(--text-primary); border-bottom-color: var(--app-accent); }
 
 /* Analysis Back button */
 .analysis .back-btn {
@@ -2120,9 +2466,11 @@ body {
 
 /* ==================== Tools Menu ==================== */
 
+/* Tools is a peer nav entry, not a floating action — share the flex: 1
+   sizing of the other nav buttons so the row stays symmetric regardless
+   of how many modules are registered. */
 .tools-btn {
-    flex: 0 0 auto;
-    width: 56px;
+    flex: 1;
 }
 
 .tools-menu {

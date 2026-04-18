@@ -2,6 +2,7 @@ import { h } from 'preact';
 import { useState, useEffect } from 'preact/hooks';
 import htm from 'htm';
 import { elapsedTime } from '../utils.js';
+import { cancelActiveReport } from '../store.js';
 
 const html = htm.bind(h);
 
@@ -23,6 +24,11 @@ export function ProgressView({ report }) {
             <div class="progress-spinner"></div>
             <div class="progress-text">${label}</div>
             <div class="progress-elapsed">${elapsed}</div>
+            <button
+                class="progress-cancel"
+                type="button"
+                onClick=${cancelActiveReport}
+            >Cancel</button>
         </div>
     `;
 }

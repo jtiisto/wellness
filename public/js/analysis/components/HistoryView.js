@@ -34,10 +34,25 @@ export function HistoryView() {
         }
     };
 
+    const handleItemKeyDown = (e, id) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            loadReport(id);
+        }
+    };
+
     return html`
         <div class="history-list">
             ${items.map(r => html`
-                <div key=${r.id} class="history-item" onClick=${() => loadReport(r.id)}>
+                <div
+                    key=${r.id}
+                    class="history-item"
+                    onClick=${() => loadReport(r.id)}
+                    onKeyDown=${(e) => handleItemKeyDown(e, r.id)}
+                    role="button"
+                    tabIndex="0"
+                    aria-label=${`Open report ${r.query_label} from ${formatTimestamp(r.created_at)}`}
+                >
                     <div class="history-item-content">
                         <div class="history-item-label">${r.query_label}</div>
                         <div class="history-item-date">${formatTimestamp(r.created_at)}</div>
@@ -46,6 +61,7 @@ export function HistoryView() {
                     <button
                         class="history-item-delete"
                         onClick=${(e) => handleDelete(e, r.id)}
+                        aria-label="Delete report"
                     >✕</button>
                 </div>
             `)}

@@ -185,6 +185,17 @@ export function navigateTo(view) {
     if (view === 'history') loadHistory();
 }
 
+// Abandon the in-flight report client-side: stop polling, clear the active
+// report, and return to the query list. The server-side task keeps running
+// and the finished report will surface in history later — this is just a UI
+// escape hatch so the user isn't stuck on the progress screen.
+export function cancelActiveReport() {
+    stopPolling();
+    activeReport.value = null;
+    activeReportId.value = null;
+    currentView.value = 'queries';
+}
+
 // Init: load queries, check for pending reports
 export async function initializeStore() {
     isLoading.value = true;

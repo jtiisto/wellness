@@ -35,11 +35,11 @@ def test_sync_indicator_not_clickable(journal_page):
 
 
 def test_sync_indicator_tooltip_synced(journal_page):
-    """Green state shows 'Synced' tooltip."""
+    """Green state shows 'Synced' label."""
     page = journal_page.page
     page.wait_for_selector(".sync-dot.green", timeout=10000)
-    tooltip = journal_page.get_sync_tooltip()
-    assert tooltip == "Synced"
+    label = journal_page.get_sync_label()
+    assert label == "Synced"
 
 
 def test_sync_indicator_offline_on_failed_sync(journal_page):
@@ -55,10 +55,10 @@ def test_sync_indicator_offline_on_failed_sync(journal_page):
     journal_page.set_tracker_value("Water Intake", 77)
     # Wait for debounce (2.5s) + sync attempt
     page.wait_for_timeout(4000)
-    tooltip = journal_page.get_sync_tooltip()
+    label = journal_page.get_sync_label()
     page.context.set_offline(False)
     # After the sync attempt detects offline, status should be gray
-    assert tooltip in ["Offline", "Pending changes"]
+    assert label in ["Offline", "Pending"]
 
 
 def test_debounced_upload_persists(journal_page, app_server):

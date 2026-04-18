@@ -19,16 +19,16 @@ def journal_page_online(journal_app_page):
 
 
 def test_offline_sync_indicator(journal_page_online):
-    """Going offline and triggering a sync attempt shows Offline tooltip."""
+    """Going offline and triggering a sync attempt shows Offline label."""
     page = journal_page_online.page
     page.context.set_offline(True)
     # Edit a value to trigger a debounced sync attempt while offline
     journal_page_online.set_tracker_value("Water Intake", 77)
     # Wait for debounce (2.5s) + sync attempt
     page.wait_for_timeout(4000)
-    tooltip = journal_page_online.get_sync_tooltip()
+    label = journal_page_online.get_sync_label()
     page.context.set_offline(False)
-    assert tooltip in ["Offline", "Pending changes"]
+    assert label in ["Offline", "Pending"]
 
 
 def test_offline_data_entry(journal_page_online):

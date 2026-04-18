@@ -29,11 +29,11 @@ function AnalysisHeader() {
                 <button
                     class="analysis-tab-btn ${isNewActive ? 'active' : ''}"
                     onClick=${() => navigateTo('queries')}
-                >New</button>
+                >Run</button>
                 <button
                     class="analysis-tab-btn ${view === 'history' ? 'active' : ''}"
                     onClick=${() => navigateTo('history')}
-                >History</button>
+                >Past Reports</button>
             </div>
         </header>
     `;

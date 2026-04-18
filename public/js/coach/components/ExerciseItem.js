@@ -6,7 +6,7 @@ import { useState } from 'preact/hooks';
 import htm from 'htm';
 
 import { updateLog } from '../store.js';
-import { formatTarget, isExerciseCompleted } from '../utils.js';
+import { formatTarget, getExerciseProgress, isExerciseCompleted } from '../utils.js';
 import { SetEntry } from './SetEntry.js';
 import { CardioEntry } from './CardioEntry.js';
 import { ChecklistEntry } from './ChecklistEntry.js';
@@ -22,11 +22,25 @@ function parseName(name) {
     return { base, pills };
 }
 
+// Extract a superset pair key (e.g. "A", "B") from name pills. Returns
+// the key or null. Supports `Pair A`, `Superset A`, and bare `A` when
+// the pill is a single uppercase letter — tolerant to plan-author style.
+function extractPairKey(pills) {
+    for (const p of pills) {
+        const m = p.match(/^(?:Pair|Superset)\s+([A-Z])$/i);
+        if (m) return m[1].toUpperCase();
+    }
+    return null;
+}
+
 export function ExerciseItem({ date, exercise, logData, isEditable = true }) {
     const [expanded, setExpanded] = useState(false);
 
     const completed = isExerciseCompleted(exercise, logData);
     const target = formatTarget(exercise);
+    const progress = getExerciseProgress(exercise, logData);
+    const parsed = parseName(exercise.name);
+    const pairKey = extractPairKey(parsed.pills);
 
     const handleCompletedChange = (e) => {
         if (!isEditable) return;
@@ -89,9 +103,26 @@ export function ExerciseItem({ date, exercise, logData, isEditable = true }) {
         }
     };
 
+    const handleHeaderKeyDown = (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            setExpanded(!expanded);
+        }
+    };
+
     return html`
-        <div class="exercise-item ${expanded ? 'expanded' : ''} ${completed ? 'completed' : ''}">
-            <div class="exercise-header" onClick=${() => setExpanded(!expanded)}>
+        <div
+            class="exercise-item ${expanded ? 'expanded' : ''} ${completed ? 'completed' : ''}"
+            data-pair=${pairKey || undefined}
+        >
+            <div
+                class="exercise-header"
+                onClick=${() => setExpanded(!expanded)}
+                onKeyDown=${handleHeaderKeyDown}
+                role="button"
+                tabIndex="0"
+                aria-expanded=${expanded}
+            >
                 <div class="exercise-checkbox" onClick=${(e) => e.stopPropagation()}>
                     <input
                         type="checkbox"
@@ -100,11 +131,17 @@ export function ExerciseItem({ date, exercise, logData, isEditable = true }) {
                         disabled=${!isEditable}
                     />
                 </div>
-                <span class="exercise-name">${parseName(exercise.name).base}</span>
-                ${parseName(exercise.name).pills.map(p => html`
+                <span class="exercise-name">${parsed.base}</span>
+                ${parsed.pills.map(p => html`
                     <span class="exercise-pill">${p}</span>
                 `)}
                 <span class="exercise-target">${target}</span>
+                ${progress && html`
+                    <span
+                        class="exercise-progress ${progress.complete ? 'exercise-progress--complete' : ''}"
+                        aria-label="Progress: ${progress.display}"
+                    >${progress.display}</span>
+                `}
                 <span class="exercise-chevron">▼</span>
             </div>
 

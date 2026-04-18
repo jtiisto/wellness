@@ -78,6 +78,41 @@ export function formatTarget(exercise) {
 }
 
 /**
+ * Progress indicator for an exercise row header. Returns { display, complete }
+ * or null when the exercise type has no meaningful "N of M" reading.
+ *  - strength / circuit / weighted_time: completed sets / target sets
+ *  - checklist: completed items / total items
+ *  - duration (cardio): ✓ when duration_min is logged
+ */
+export function getExerciseProgress(exercise, logData) {
+    const data = logData || {};
+    switch (exercise.type) {
+        case 'strength':
+        case 'circuit':
+        case 'weighted_time': {
+            const target = exercise.target_sets || 0;
+            if (!target) return null;
+            const done = (data.sets || []).filter(s => s && s.completed === true).length;
+            return { display: `${done}/${target}`, complete: done >= target };
+        }
+        case 'checklist': {
+            const target = exercise.items?.length || 0;
+            if (!target) return null;
+            const done = (data.completed_items || []).length;
+            return { display: `${done}/${target}`, complete: done >= target };
+        }
+        case 'duration': {
+            if (data.duration_min != null && data.duration_min !== '') {
+                return { display: '\u2713', complete: true };
+            }
+            return null;
+        }
+        default:
+            return null;
+    }
+}
+
+/**
  * Check if an exercise is completed based on log data
  */
 export function isExerciseCompleted(exercise, logData) {

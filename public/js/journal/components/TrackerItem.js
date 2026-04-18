@@ -5,19 +5,46 @@ import { h } from 'preact';
 import { useState, useEffect } from 'preact/hooks';
 import { effect } from '@preact/signals';
 import htm from 'htm';
-import { selectedDate, dailyLogs, updateEntry, isDayEditable } from '../store.js';
+import {
+    selectedDate,
+    dailyLogs,
+    trackerValueUpdatedTimes,
+    updateEntry,
+    markValueUpdated,
+    isDayEditable,
+    getLastValue
+} from '../store.js';
 import { NumericInput } from '../../shared/numeric-input.js';
+import { getToday, parseLocalDate } from '../../shared/utils.js';
 
 const html = htm.bind(h);
+
+// Format a value-updated timestamp for display.
+// Same calendar day as the selected date → time only. Different day → short date + time.
+function formatLastUpdated(isoString, selectedDateStr) {
+    if (!isoString) return null;
+    const d = new Date(isoString);
+    // Parse selected date as local (yyyy-mm-dd), compare only calendar parts.
+    const [yr, mo, dy] = selectedDateStr.split('-').map(Number);
+    const sameDay = d.getFullYear() === yr && (d.getMonth() + 1) === mo && d.getDate() === dy;
+    if (sameDay) {
+        return d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+    }
+    return d.toLocaleString(undefined, {
+        month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
+    });
+}
 
 export function TrackerItem({ tracker }) {
     const [date, setDate] = useState(selectedDate.value);
     const [logs, setLogs] = useState(dailyLogs.value);
+    const [valueUpdated, setValueUpdated] = useState(trackerValueUpdatedTimes.value);
 
     useEffect(() => {
         const dispose = effect(() => {
             setDate(selectedDate.value);
             setLogs({...dailyLogs.value});
+            setValueUpdated({...trackerValueUpdatedTimes.value});
         });
         return dispose;
     }, []);
@@ -26,7 +53,22 @@ export function TrackerItem({ tracker }) {
     const editable = isDayEditable(date);
 
     const completed = entry.completed ?? false;
+    const isCommitted = entry.completed === true;
     const value = entry.value ?? tracker.defaultValue ?? (tracker.type === 'evaluation' ? 50 : null);
+
+    const isAccumulator = tracker.type === 'quantifiable' && tracker.accumulator === true;
+    const lastUpdatedIso = valueUpdated[`${date}|${tracker.id}`] || null;
+    const lastUpdatedLabel = isAccumulator ? formatLastUpdated(lastUpdatedIso, date) : null;
+
+    // Memory hint: on today's entry, show the most recent prior committed
+    // value. Skip for accumulators (their "last updated" line already serves).
+    const showLastValueHint = tracker.type === 'quantifiable'
+        && !isAccumulator
+        && date === getToday();
+    const lastPrior = showLastValueHint ? getLastValue(tracker.id, date) : null;
+    const lastPriorLabel = lastPrior
+        ? `Last: ${lastPrior.value}${tracker.unit ? ' ' + tracker.unit : ''} on ${parseLocalDate(lastPrior.date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`
+        : null;
 
     const handleCompletedChange = (e) => {
         if (!editable) return;
@@ -57,8 +99,33 @@ export function TrackerItem({ tracker }) {
         updateEntry(date, tracker.id, { value: noteValue, completed: noteValue.trim() !== '' });
     };
 
+    const handleNumericChange = (v) => {
+        if (!editable) return;
+        updateEntry(date, tracker.id, { value: v });
+        if (isAccumulator) markValueUpdated(date, tracker.id);
+    };
+
+    const handleAccumulatorAdd = () => {
+        if (!editable) return;
+        const raw = prompt(`Add to ${tracker.name}${tracker.unit ? ` (${tracker.unit})` : ''}:`);
+        if (raw === null) return;
+        const increment = Number(raw);
+        if (!Number.isFinite(increment) || increment === 0) return;
+        const current = Number(value) || 0;
+        const next = current + increment;
+        updateEntry(date, tracker.id, { value: next });
+        markValueUpdated(date, tracker.id);
+    };
+
+    const rowClasses = [
+        'tracker-item',
+        !editable ? 'disabled' : '',
+        !isCommitted ? 'tracker-item--uncommitted' : '',
+        tracker.type === 'note' ? 'tracker-item-note' : ''
+    ].filter(Boolean).join(' ');
+
     return html`
-        <div class="tracker-item ${!editable ? 'disabled' : ''} ${tracker.type === 'note' ? 'tracker-item-note' : ''}">
+        <div class=${rowClasses}>
             <div class="tracker-row">
                 ${tracker.type !== 'note' && html`
                     <div class="tracker-checkbox">
@@ -77,15 +144,22 @@ export function TrackerItem({ tracker }) {
                     <div class="tracker-value-input">
                         <${NumericInput}
                             value=${value}
-                            onValueChange=${(v) => {
-                                if (!editable) return;
-                                updateEntry(date, tracker.id, { value: v });
-                            }}
+                            onValueChange=${handleNumericChange}
                             disabled=${!editable}
                             min="0"
                             step="any"
                         />
                         <span class="tracker-unit">${tracker.unit || ''}</span>
+                        ${isAccumulator && html`
+                            <button
+                                type="button"
+                                class="tracker-accum-btn"
+                                onClick=${handleAccumulatorAdd}
+                                disabled=${!editable}
+                                title="Add to total"
+                                aria-label="Add to total"
+                            >+</button>
+                        `}
                     </div>
                 `}
                 ${tracker.type === 'evaluation' && html`
@@ -99,7 +173,9 @@ export function TrackerItem({ tracker }) {
                             onInput=${handleSliderChange}
                             onWheel=${(e) => e.preventDefault()}
                             disabled=${!editable}
+                            aria-valuetext="${value ?? 50}"
                         />
+                        <span class="tracker-slider-value" aria-hidden="true">${value ?? 50}</span>
                     </div>
                 `}
             </div>
@@ -113,6 +189,12 @@ export function TrackerItem({ tracker }) {
                         rows="2"
                     />
                 </div>
+            `}
+            ${lastUpdatedLabel && html`
+                <div class="tracker-last-updated">Last updated ${lastUpdatedLabel}</div>
+            `}
+            ${lastPriorLabel && html`
+                <div class="tracker-last-value">${lastPriorLabel}</div>
             `}
         </div>
     `;

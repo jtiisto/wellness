@@ -401,8 +401,10 @@ class TestSyncIndicatorReadOnly:
     def test_tooltip_shows_synced(self):
         assert "'Synced'" in self.header_source
 
-    def test_tooltip_shows_pending_changes(self):
-        assert "'Pending changes'" in self.header_source
+    def test_label_shows_pending(self):
+        # Post-5A the label is a short state word — "Pending" rather than
+        # the earlier "Pending changes" tooltip copy.
+        assert "'Pending'" in self.header_source
 
 
 class TestCoachViewNoSyncClick:
@@ -420,7 +422,12 @@ class TestCoachViewNoSyncClick:
 
 
 class TestJournalHeaderNoSyncClick:
-    """Tests that journal Header no longer has sync click behavior."""
+    """Tests that journal Header no longer has sync click behavior.
+
+    Journal Header used to inline the sync-indicator markup; post-5A it
+    delegates to the shared SyncIndicator component, which makes the
+    no-onClick contract structural — there's no inline indicator here
+    at all to attach a handler to."""
 
     @pytest.fixture(autouse=True)
     def load_source(self):
@@ -432,15 +439,11 @@ class TestJournalHeaderNoSyncClick:
     def test_no_handle_sync_click(self):
         assert "handleSyncClick" not in self.source
 
-    def test_no_on_click_on_indicator(self):
-        """Sync indicator div should not have onClick."""
-        # Find the sync-indicator div
-        idx = self.source.find("sync-indicator")
-        assert idx >= 0
-        # Get the next closing > to check the div's attributes
-        div_end = self.source.find(">", idx)
-        div_attrs = self.source[idx:div_end]
-        assert "onClick" not in div_attrs
+    def test_uses_shared_sync_indicator(self):
+        """Delegates to the shared component instead of inlining markup —
+        the no-click contract is then enforced by TestSyncIndicatorReadOnly."""
+        assert "SyncIndicator" in self.source
+        assert "sync-indicator" not in self.source  # no inline class literal
 
     def test_tooltip_no_click_to_sync(self):
         assert "click to sync" not in self.source.lower()

@@ -23,7 +23,8 @@ const KEYS = {
     CONFIG: 'tracker_config',
     LOGS: 'daily_logs',
     CLIENT_ID: 'client_id',
-    EXPANDED_CATEGORIES: 'expanded_categories'
+    EXPANDED_CATEGORIES: 'expanded_categories',
+    VALUE_UPDATED_TIMES: 'tracker_value_updated_times'
 };
 
 // ==================== Signals ====================
@@ -63,6 +64,11 @@ export const editingTracker = signal(null);
 // Expanded categories state (categories are collapsed by default)
 export const expandedCategories = signal(new Set());
 
+// Per-entry "last value update" timestamps. Stored client-side only (not
+// synced) to solve the accumulator "did I already add this intake?" problem.
+// Keyed by "YYYY-MM-DD|trackerId".
+export const trackerValueUpdatedTimes = signal({});
+
 // ==================== Expanded Categories ====================
 
 export function toggleCategoryExpanded(category) {
@@ -97,12 +103,13 @@ export async function initializeStore() {
     try {
         isLoading.value = true;
 
-        const [metadata, config, logs, clientId, expanded] = await Promise.all([
+        const [metadata, config, logs, clientId, expanded, valueUpdated] = await Promise.all([
             storage.getItem(KEYS.METADATA),
             storage.getItem(KEYS.CONFIG),
             storage.getItem(KEYS.LOGS),
             getClientId(),
-            storage.getItem(KEYS.EXPANDED_CATEGORIES)
+            storage.getItem(KEYS.EXPANDED_CATEGORIES),
+            storage.getItem(KEYS.VALUE_UPDATED_TIMES)
         ]);
 
         batch(() => {
@@ -118,6 +125,7 @@ export async function initializeStore() {
             trackerConfig.value = config || [];
             dailyLogs.value = logs || {};
             expandedCategories.value = new Set(expanded || []);
+            trackerValueUpdatedTimes.value = valueUpdated || {};
         });
 
         updateSyncStatus();
@@ -245,6 +253,34 @@ export function updateEntry(date, trackerId, data) {
 
 export function getEntry(date, trackerId) {
     return dailyLogs.value[date]?.[trackerId] || null;
+}
+
+// Most recent committed prior value for a tracker, scanning cached logs.
+// Returns { value, date } or null. Used by TrackerItem to show a "Last: …"
+// hint so users have a memory cue on today's entry (e.g. weight, body comp).
+export function getLastValue(trackerId, beforeDate) {
+    const logs = dailyLogs.value;
+    const dates = Object.keys(logs)
+        .filter(d => d < beforeDate)
+        .sort()
+        .reverse();
+    for (const date of dates) {
+        const entry = logs[date]?.[trackerId];
+        if (entry && entry.completed === true && entry.value !== undefined && entry.value !== null && entry.value !== '') {
+            return { value: entry.value, date };
+        }
+    }
+    return null;
+}
+
+// Record a per-entry "value last updated" timestamp. Client-only (LocalForage),
+// not synced — solves the accumulator "did I already add this intake?" problem
+// without schema churn. See plans/ui-refresh.md 2A.
+export function markValueUpdated(date, trackerId) {
+    const key = `${date}|${trackerId}`;
+    const next = { ...trackerValueUpdatedTimes.value, [key]: getUtcNow() };
+    trackerValueUpdatedTimes.value = next;
+    storage.setItem(KEYS.VALUE_UPDATED_TIMES, next);
 }
 
 // ==================== Dirty State Management ====================

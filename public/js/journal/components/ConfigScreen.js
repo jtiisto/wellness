@@ -35,6 +35,7 @@ function TrackerForm({ tracker, onSave, onCancel }) {
         type: tracker?.type || 'simple',
         unit: tracker?.unit || '',
         defaultValue: tracker?.defaultValue ?? '',
+        accumulator: tracker?.accumulator === true,
         frequency: tracker?.frequency || 'daily',
         weeklyDay: tracker?.weeklyDay ?? 1
     });
@@ -74,6 +75,7 @@ function TrackerForm({ tracker, onSave, onCancel }) {
         if (formData.type === 'quantifiable') {
             trackerData.unit = formData.unit;
             trackerData.defaultValue = formData.defaultValue !== '' ? Number(formData.defaultValue) : null;
+            trackerData.accumulator = formData.accumulator === true;
         }
 
         if (formData.frequency === 'weekly') {
@@ -182,6 +184,16 @@ function TrackerForm({ tracker, onSave, onCancel }) {
                                 />
                             </div>
                         </div>
+                        <div class="form-group">
+                            <label class="form-checkbox">
+                                <input
+                                    type="checkbox"
+                                    checked=${formData.accumulator}
+                                    onChange=${(e) => setFormData(prev => ({ ...prev, accumulator: e.target.checked }))}
+                                />
+                                <span>Running total (accumulator) — tap + to add throughout the day</span>
+                            </label>
+                        </div>
                     `}
 
                     <div class="form-group">
@@ -249,10 +261,10 @@ function TrackerConfigItem({ tracker, onEdit, onDelete }) {
                 </div>
             </div>
             <div class="tracker-config-actions">
-                <button class="icon-btn" onClick=${() => onEdit(tracker)} title="Edit">
+                <button class="icon-btn" onClick=${() => onEdit(tracker)} title="Edit" aria-label=${`Edit ${tracker.name}`}>
                     \u270E
                 </button>
-                <button class="icon-btn" onClick=${() => onDelete(tracker.id)} title="Delete">
+                <button class="icon-btn" onClick=${() => onDelete(tracker.id)} title="Delete" aria-label=${`Delete ${tracker.name}`}>
                     \u{1F5D1}
                 </button>
             </div>

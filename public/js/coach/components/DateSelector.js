@@ -44,13 +44,15 @@ export function DateSelector({ plans, logs }) {
                 if (hasLog) className += ' has-log';
 
                 return html`
-                    <div
+                    <button
+                        type="button"
                         class=${className}
                         onClick=${() => handleDateClick(date)}
+                        aria-pressed=${isSelected}
                     >
                         <span class="date-day">${day}</span>
                         <span class="date-num">${num}</span>
-                    </div>
+                    </button>
                 `;
             })}
         </div>

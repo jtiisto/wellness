@@ -192,8 +192,8 @@ class TestAnalysisOffline:
         shell.navigate_to("Analysis")
         page.wait_for_selector(".analysis", timeout=5000)
 
-        # Navigate to History to trigger loadHistory (caches to LocalForage)
-        page.locator(".analysis-tab-btn").filter(has_text="History").click()
+        # Navigate to Past Reports to trigger loadHistory (caches to LocalForage)
+        page.locator(".analysis-tab-btn").filter(has_text="Past Reports").click()
         page.wait_for_timeout(2000)
 
         assert page.locator(".history-item").count() >= 1, "Should see report in history online"
@@ -206,8 +206,8 @@ class TestAnalysisOffline:
         page.wait_for_selector(".analysis", timeout=5000)
         page.wait_for_timeout(2000)
 
-        # Should fall back to History view with cached data
-        page.locator(".analysis-tab-btn").filter(has_text="History").click()
+        # Should fall back to Past Reports view with cached data
+        page.locator(".analysis-tab-btn").filter(has_text="Past Reports").click()
         page.wait_for_timeout(1000)
         assert page.locator(".history-item").count() >= 1, "Should see cached history offline"
         assert page.locator(".history-item-label").first.text_content() == history_text
@@ -222,7 +222,7 @@ class TestAnalysisOffline:
         page.wait_for_selector(".analysis", timeout=5000)
 
         # View the report online to cache it
-        page.locator(".analysis-tab-btn").filter(has_text="History").click()
+        page.locator(".analysis-tab-btn").filter(has_text="Past Reports").click()
         page.wait_for_timeout(2000)
         page.locator(".history-item").first.click()
         page.wait_for_selector(".report-content", timeout=5000)
@@ -235,8 +235,8 @@ class TestAnalysisOffline:
         page.wait_for_selector(".analysis", timeout=5000)
         page.wait_for_timeout(2000)
 
-        # Navigate to History and click the report
-        page.locator(".analysis-tab-btn").filter(has_text="History").click()
+        # Navigate to Past Reports and click the report
+        page.locator(".analysis-tab-btn").filter(has_text="Past Reports").click()
         page.wait_for_timeout(1000)
         page.locator(".history-item").first.click()
         page.wait_for_timeout(2000)
