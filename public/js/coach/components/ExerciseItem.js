@@ -22,17 +22,6 @@ function parseName(name) {
     return { base, pills };
 }
 
-// Extract a superset pair key (e.g. "A", "B") from name pills. Returns
-// the key or null. Supports `Pair A`, `Superset A`, and bare `A` when
-// the pill is a single uppercase letter — tolerant to plan-author style.
-function extractPairKey(pills) {
-    for (const p of pills) {
-        const m = p.match(/^(?:Pair|Superset)\s+([A-Z])$/i);
-        if (m) return m[1].toUpperCase();
-    }
-    return null;
-}
-
 export function ExerciseItem({ date, exercise, logData, isEditable = true }) {
     const [expanded, setExpanded] = useState(false);
 
@@ -40,7 +29,6 @@ export function ExerciseItem({ date, exercise, logData, isEditable = true }) {
     const target = formatTarget(exercise);
     const progress = getExerciseProgress(exercise, logData);
     const parsed = parseName(exercise.name);
-    const pairKey = extractPairKey(parsed.pills);
 
     const handleCompletedChange = (e) => {
         if (!isEditable) return;
@@ -114,7 +102,6 @@ export function ExerciseItem({ date, exercise, logData, isEditable = true }) {
     return html`
         <div
             class="exercise-item ${expanded ? 'expanded' : ''} ${completed ? 'completed' : ''}"
-            data-pair=${pairKey || undefined}
         >
             <div
                 class="exercise-header"

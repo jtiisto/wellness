@@ -54,6 +54,39 @@ export function isFuture(dateStr) {
 }
 
 /**
+ * Fold consecutive exercises that share a superset_group label into a wrapper.
+ *
+ * Returns a list of items, each either:
+ *   - { kind: 'single', exercise }                       — render as ExerciseItem
+ *   - { kind: 'group', label, exercises: [...] }         — render via SupersetGroup
+ *
+ * Exercises without `superset_group` are emitted as singles. A run is broken
+ * by either a different label or a label-less exercise, so two separate
+ * "A" groups in the same block stay separate (LLMs should re-label, but we
+ * shouldn't merge them on the client).
+ */
+export function groupExercises(exercises) {
+    const items = [];
+    let current = null;
+
+    for (const ex of exercises) {
+        const label = ex.superset_group;
+        if (label && current && current.kind === 'group' && current.label === label) {
+            current.exercises.push(ex);
+            continue;
+        }
+        if (label) {
+            current = { kind: 'group', label, exercises: [ex] };
+        } else {
+            current = { kind: 'single', exercise: ex };
+        }
+        items.push(current);
+    }
+
+    return items;
+}
+
+/**
  * Format exercise target for display
  */
 export function formatTarget(exercise) {

@@ -1620,18 +1620,65 @@ textarea:focus-visible,
     border-radius: 0 0 var(--radius-md) var(--radius-md);
 }
 
-/* Superset pairing: each paired exercise carries a 3px colored left
-   border in a stable hue per pair key. Since paired exercises sit flush
-   with no margin between them, the borders visually merge into a single
-   continuous bar spanning the pair — making it obvious at a glance that
-   skipping one of them breaks the prescribed stimulus. */
-.coach .exercise-item[data-pair] {
-    border-left-width: 3px;
-    border-left-style: solid;
+/* Superset / antagonist pair grouping. Members of the same superset_group
+   are wrapped in a labeled container with a left-side accent bar so the
+   pair reads as a single unit and skipping one stands out as breaking
+   the prescribed stimulus. */
+.coach .superset-group {
+    position: relative;
+    border-left: 3px solid var(--app-accent);
+    border-radius: 0 var(--radius-md) var(--radius-md) 0;
+    padding: var(--spacing-sm) 0 var(--spacing-sm) var(--spacing-md);
+    margin: var(--spacing-sm) 0;
+    background: color-mix(in srgb, var(--app-accent) 6%, transparent);
 }
-.coach .exercise-item[data-pair="A"] { border-left-color: var(--app-accent); }
-.coach .exercise-item[data-pair="B"] { border-left-color: #60a5fa; }
-.coach .exercise-item[data-pair="C"] { border-left-color: #a78bfa; }
+
+.coach .superset-group__label {
+    display: inline-block;
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--app-accent);
+    background: color-mix(in srgb, var(--app-accent) 14%, transparent);
+    padding: 0.15rem 0.55rem;
+    border-radius: 999px;
+    margin-bottom: var(--spacing-sm);
+}
+
+.coach .superset-group__members {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-xs);
+}
+
+/* Distinct accent for second/third concurrent groups within a block,
+   in case a block has multiple pairs and the user scans them at once. */
+.coach .superset-group[data-superset-group="B"],
+.coach .superset-group[data-superset-group^="Pair B"],
+.coach .superset-group[data-superset-group^="Triplet B"] {
+    border-left-color: #60a5fa;
+    background: color-mix(in srgb, #60a5fa 6%, transparent);
+}
+.coach .superset-group[data-superset-group="B"] .superset-group__label,
+.coach .superset-group[data-superset-group^="Pair B"] .superset-group__label,
+.coach .superset-group[data-superset-group^="Triplet B"] .superset-group__label {
+    color: #60a5fa;
+    background: color-mix(in srgb, #60a5fa 14%, transparent);
+}
+
+.coach .superset-group[data-superset-group="C"],
+.coach .superset-group[data-superset-group^="Pair C"],
+.coach .superset-group[data-superset-group^="Triplet C"] {
+    border-left-color: #a78bfa;
+    background: color-mix(in srgb, #a78bfa 6%, transparent);
+}
+.coach .superset-group[data-superset-group="C"] .superset-group__label,
+.coach .superset-group[data-superset-group^="Pair C"] .superset-group__label,
+.coach .superset-group[data-superset-group^="Triplet C"] .superset-group__label {
+    color: #a78bfa;
+    background: color-mix(in srgb, #a78bfa 14%, transparent);
+}
 
 .coach .exercise-header {
     display: flex;
