@@ -29,6 +29,7 @@ import os
 import re
 import sqlite3
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 DEFAULT_DB = Path(__file__).resolve().parent.parent / "data" / "coach.db"
@@ -94,23 +95,31 @@ def ensure_column(conn, dry_run: bool) -> bool:
 
 
 def migrate_planned_exercises(conn, dry_run: bool):
-    """Parse legacy suffix on planned_exercises rows and lift into superset_group."""
+    """Parse legacy suffix on planned_exercises rows and lift into superset_group.
+
+    Returns a tuple ``(updates, touched_session_ids)`` so the caller can bump
+    ``workout_sessions.last_modified`` on every session whose exercises moved —
+    without that bump the PWA's delta sync sees no change and keeps serving
+    the legacy plan from its IndexedDB cache.
+    """
     rows = conn.execute(
-        "SELECT id, name, canonical_slug FROM planned_exercises"
+        "SELECT id, session_id, name, canonical_slug FROM planned_exercises"
     ).fetchall()
 
     updates = []
+    touched_sessions = set()
     for row in rows:
-        ex_id, name, old_slug = row[0], row[1], row[2]
+        ex_id, session_id, name, old_slug = row[0], row[1], row[2], row[3]
         clean, label = parse_legacy_label(name)
         if label is None:
             continue
         new_slug = generate_slug(clean)
         updates.append((ex_id, name, clean, label, old_slug, new_slug))
+        touched_sessions.add(session_id)
 
     if not updates:
         print("  no planned_exercises rows match the legacy suffix")
-        return updates
+        return updates, touched_sessions
 
     print(f"  found {len(updates)} planned_exercises row(s) to migrate")
     for u in updates[:10]:
@@ -119,7 +128,7 @@ def migrate_planned_exercises(conn, dry_run: bool):
         print(f"    ... and {len(updates) - 10} more")
 
     if dry_run:
-        return updates
+        return updates, touched_sessions
 
     for u in updates:
         ex_id, _old_name, clean, label, _old_slug, new_slug = u
@@ -127,7 +136,26 @@ def migrate_planned_exercises(conn, dry_run: bool):
             "UPDATE planned_exercises SET name = ?, superset_group = ?, canonical_slug = ? WHERE id = ?",
             (clean, label, new_slug, ex_id),
         )
-    return updates
+    return updates, touched_sessions
+
+
+def bump_session_last_modified(conn, session_ids, dry_run: bool):
+    """Mark every touched session as recently modified so PWA clients refetch.
+
+    Returns the timestamp used (or None when there are no sessions to bump).
+    """
+    if not session_ids:
+        return None
+    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    print(f"  bumping last_modified on {len(session_ids)} session(s) to {now}")
+    if dry_run:
+        return now
+    placeholders = ",".join("?" for _ in session_ids)
+    conn.execute(
+        f"UPDATE workout_sessions SET last_modified = ?, modified_by = 'migration' WHERE id IN ({placeholders})",
+        (now, *session_ids),
+    )
+    return now
 
 
 def dedupe_exercise_registry(conn, dry_run: bool):
@@ -160,6 +188,7 @@ def dedupe_exercise_registry(conn, dry_run: bool):
 
     plan = []  # list of (survivor_slug, [orphan_slugs])
     creates = []  # list of survivor rows to insert (when no clean exists)
+    touched_sessions = set()
 
     for clean_slug, members in clusters.items():
         if len(members) == 1 and members[0]["slug"] == clean_slug:
@@ -188,7 +217,7 @@ def dedupe_exercise_registry(conn, dry_run: bool):
 
     if not creates and not plan:
         print("  exercises registry has no duplicate clusters")
-        return creates, plan
+        return creates, plan, touched_sessions
 
     if creates:
         print(f"  would create {len(creates)} canonical survivor row(s)")
@@ -205,7 +234,16 @@ def dedupe_exercise_registry(conn, dry_run: bool):
         print(f"    ... and {len(plan) - 10} more clusters")
 
     if dry_run:
-        return creates, plan
+        # Best-effort estimate of which sessions a real run would touch, so
+        # the dry-run output reflects the same scope as --apply.
+        for survivor, orphans in plan:
+            for orphan in orphans:
+                rows = conn.execute(
+                    "SELECT DISTINCT session_id FROM planned_exercises WHERE canonical_slug = ?",
+                    (orphan,),
+                ).fetchall()
+                touched_sessions.update(r[0] for r in rows)
+        return creates, plan, touched_sessions
 
     for c in creates:
         conn.execute(
@@ -218,6 +256,12 @@ def dedupe_exercise_registry(conn, dry_run: bool):
 
     for survivor, orphans in plan:
         for orphan in orphans:
+            rows = conn.execute(
+                "SELECT DISTINCT session_id FROM planned_exercises WHERE canonical_slug = ?",
+                (orphan,),
+            ).fetchall()
+            touched_sessions.update(r[0] for r in rows)
+
             conn.execute(
                 "UPDATE planned_exercises SET canonical_slug = ? WHERE canonical_slug = ?",
                 (survivor, orphan),
@@ -228,7 +272,7 @@ def dedupe_exercise_registry(conn, dry_run: bool):
             )
             conn.execute("DELETE FROM exercises WHERE slug = ?", (orphan,))
 
-    return creates, plan
+    return creates, plan, touched_sessions
 
 
 def main():
@@ -267,7 +311,7 @@ def main():
         # FK constraint to exercises(slug) fires when we point a row at a
         # slug that doesn't yet exist.
         print("Step 2: dedupe exercises registry")
-        creates, registry_plan = dedupe_exercise_registry(conn, dry_run)
+        creates, registry_plan, dedupe_sessions = dedupe_exercise_registry(conn, dry_run)
         print()
 
         print("Step 3: migrate planned_exercises rows")
@@ -275,11 +319,17 @@ def main():
         # SELECT/UPDATE it, so the planned-exercises migration is informational
         # only on a fresh DB. On a real prod DB the column either exists from
         # phase-1 server code or we just added it for real.
-        planned_updates = migrate_planned_exercises(conn, dry_run)
+        planned_updates, planned_sessions = migrate_planned_exercises(conn, dry_run)
+        print()
+
+        print("Step 4: bump session last_modified for PWA cache invalidation")
+        # Without this bump, PWA clients see no plan changes via delta sync
+        # and keep serving the legacy plan from their IndexedDB cache.
+        bump_session_last_modified(conn, dedupe_sessions | planned_sessions, dry_run)
         print()
 
         if not dry_run:
-            print("Step 4: idempotency check")
+            print("Step 5: idempotency check")
             remaining = conn.execute(
                 "SELECT COUNT(*) FROM planned_exercises WHERE name LIKE '%(Pair %' OR name LIKE '%(Superset %' OR name LIKE '%(Triplet %'"
             ).fetchone()[0]
