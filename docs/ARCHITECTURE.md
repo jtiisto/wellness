@@ -127,10 +127,18 @@ The Coach module handles workout plans (authored server-side, typically by AI) a
 ```
 workout_sessions   (id, date, day_name, location, phase, duration_min)
 session_blocks     (id, session_id, position, block_type, title)
-planned_exercises  (id, session_id, block_id, exercise_key, name, exercise_type, targets...)
+planned_exercises  (id, session_id, block_id, exercise_key, name, exercise_type,
+                    targets..., superset_group, canonical_slug)
 checklist_items    (id, exercise_id, position, item_text)
 deleted_plans      (date, deleted_at)  -- tombstones for incremental sync
 ```
+
+`superset_group` is a free-form text label scoped per block — consecutive
+exercises sharing the same label render as a single visual group in the UI
+(e.g. antagonist pair, triplet). Plan authors set it via the structured field;
+encoding pair info in the exercise `name` (e.g. `"Bench Press (Pair A)"`) is
+rejected by the server because the suffix would leak into `canonical_slug`
+and break cross-session comparison.
 
 **Data model (logs):**
 ```

@@ -171,6 +171,20 @@ def seeded_coach_db(app_server):
         VALUES (?, ?, 'ex_1', 0, 'KB Goblet Squat', 'strength', 3, '10', 'Tempo 3-1-1')
     """, (s1, b2))
 
+    # Superset pair: two exercises sharing superset_group='A'
+    conn.execute("""
+        INSERT INTO planned_exercises
+        (session_id, block_id, exercise_key, position, name, exercise_type,
+         target_sets, target_reps, superset_group)
+        VALUES (?, ?, 'ex_pair_a1', 1, 'DB Bench Press', 'strength', 3, '8', 'A')
+    """, (s1, b2))
+    conn.execute("""
+        INSERT INTO planned_exercises
+        (session_id, block_id, exercise_key, position, name, exercise_type,
+         target_sets, target_reps, superset_group)
+        VALUES (?, ?, 'ex_pair_a2', 2, 'Bent Row', 'strength', 3, '8', 'A')
+    """, (s1, b2))
+
     conn.execute(
         "INSERT INTO session_blocks (session_id, position, block_type, title) VALUES (?, 2, 'cardio', 'Conditioning')",
         (s1,))
