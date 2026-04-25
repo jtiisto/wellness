@@ -48,6 +48,38 @@ def test_workout_sessions_schema(test_app, tmp_coach_db):
 
 
 @pytest.mark.unit
+def test_planned_exercises_has_superset_group(test_app, tmp_coach_db):
+    """planned_exercises.superset_group column is created on init."""
+    conn = sqlite3.connect(tmp_coach_db)
+    cursor = conn.cursor()
+
+    cursor.execute("PRAGMA table_info(planned_exercises)")
+    columns = {row[1]: row[2] for row in cursor.fetchall()}
+
+    conn.close()
+
+    assert "superset_group" in columns
+    assert columns["superset_group"] == "TEXT"
+
+
+@pytest.mark.unit
+def test_canonical_slug_columns_in_create_table(test_app, tmp_coach_db):
+    """canonical_slug exists on both tables from CREATE TABLE (no ALTER needed)."""
+    conn = sqlite3.connect(tmp_coach_db)
+    cursor = conn.cursor()
+
+    cursor.execute("PRAGMA table_info(planned_exercises)")
+    pe_cols = {row[1] for row in cursor.fetchall()}
+    cursor.execute("PRAGMA table_info(exercise_logs)")
+    el_cols = {row[1] for row in cursor.fetchall()}
+
+    conn.close()
+
+    assert "canonical_slug" in pe_cols
+    assert "canonical_slug" in el_cols
+
+
+@pytest.mark.unit
 def test_foreign_keys_enforced(test_app, tmp_coach_db):
     """Test that foreign keys are enforced."""
     conn = sqlite3.connect(tmp_coach_db)

@@ -105,6 +105,8 @@ def init_database():
             guidance_note   TEXT,
             hide_weight     INTEGER DEFAULT 0,
             show_time       INTEGER DEFAULT 0,
+            superset_group  TEXT,
+            canonical_slug  TEXT REFERENCES exercises(slug),
             extra           TEXT,
             UNIQUE(session_id, exercise_key)
         )
@@ -150,6 +152,7 @@ def init_database():
             duration_min    REAL,
             avg_hr          INTEGER,
             max_hr          INTEGER,
+            canonical_slug  TEXT REFERENCES exercises(slug),
             extra           TEXT
         )
     """)
@@ -180,16 +183,6 @@ def init_database():
         )
     """)
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_set_logs_exercise ON set_logs(exercise_log_id)")
-
-    for stmt in [
-        "ALTER TABLE planned_exercises ADD COLUMN canonical_slug TEXT REFERENCES exercises(slug)",
-        "ALTER TABLE exercise_logs ADD COLUMN canonical_slug TEXT REFERENCES exercises(slug)",
-    ]:
-        try:
-            cursor.execute(stmt)
-        except sqlite3.OperationalError as e:
-            if "duplicate column" not in str(e).lower():
-                raise
 
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_pe_canonical ON planned_exercises(canonical_slug)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_el_canonical ON exercise_logs(canonical_slug)")
@@ -337,6 +330,8 @@ def _assemble_plan(conn, session_row):
                 exercise["hide_weight"] = True
             if er["show_time"]:
                 exercise["show_time"] = True
+            if er["superset_group"]:
+                exercise["superset_group"] = er["superset_group"]
 
             if er["canonical_slug"]:
                 exercise["canonical_slug"] = er["canonical_slug"]
