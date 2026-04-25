@@ -149,6 +149,22 @@ class TestTransformBlockToExercises:
         assert ex["type"] == "interval"
         assert ex["name"] == "VO2 Max Intervals"
 
+    def test_superset_group_passes_through(self):
+        """superset_group on input exercises is preserved in transform."""
+        block = {
+            "block_type": "strength",
+            "title": "Antagonist",
+            "exercises": [
+                {"name": "Bench Press", "sets": 3, "reps": "8", "superset_group": "A"},
+                {"name": "Bent Row", "sets": 3, "reps": "8", "superset_group": "A"},
+                {"name": "Plank", "sets": 3, "reps": "30s"},
+            ],
+        }
+        result = _transform_block_to_exercises(block, 0)
+        assert result[0]["superset_group"] == "A"
+        assert result[1]["superset_group"] == "A"
+        assert "superset_group" not in result[2]
+
 
 @pytest.mark.unit
 class TestTransformBlockPlan:
@@ -559,6 +575,110 @@ class TestWriteTools:
         result = self.tools["ingest_training_program"](plans=plans)
         assert result["success_count"] == 1
         assert result["failed_count"] == 1
+
+    # --- superset_group support ---
+
+    def _superset_plan(self, group_a="A", group_b="A"):
+        return {
+            "day_name": "Antagonist Day",
+            "location": "Gym",
+            "phase": "Foundation",
+            "blocks": [
+                {
+                    "block_type": "strength",
+                    "title": "Pairs",
+                    "exercises": [
+                        {"id": "bench", "name": "Bench Press", "type": "strength",
+                         "target_sets": 3, "target_reps": "8", "superset_group": group_a},
+                        {"id": "row", "name": "Bent Row", "type": "strength",
+                         "target_sets": 3, "target_reps": "8", "superset_group": group_b},
+                        {"id": "plank", "name": "Plank", "type": "strength",
+                         "target_sets": 3, "target_reps": "30s"},
+                    ],
+                }
+            ],
+        }
+
+    def test_set_workout_plan_persists_superset_group(self):
+        result = self.tools["set_workout_plan"](
+            date="2099-08-01", plan=self._superset_plan()
+        )
+        exercises = result["plan"]["blocks"][0]["exercises"]
+        by_id = {ex["id"]: ex for ex in exercises}
+        assert by_id["bench"]["superset_group"] == "A"
+        assert by_id["row"]["superset_group"] == "A"
+        assert "superset_group" not in by_id["plank"]
+
+    def test_set_workout_plan_freeform_label(self):
+        result = self.tools["set_workout_plan"](
+            date="2099-08-02", plan=self._superset_plan(group_a="Triplet A", group_b="Triplet A")
+        )
+        exercises = result["plan"]["blocks"][0]["exercises"]
+        assert exercises[0]["superset_group"] == "Triplet A"
+        assert exercises[1]["superset_group"] == "Triplet A"
+
+    def test_set_workout_plan_rejects_legacy_pair_suffix(self):
+        plan = self._make_plan()
+        plan["blocks"][0]["exercises"][0]["name"] = "Bench Press (Pair A)"
+        with pytest.raises(ValueError, match="legacy pair suffix"):
+            self.tools["set_workout_plan"](date="2099-08-03", plan=plan)
+
+    def test_set_workout_plan_rejects_legacy_superset_suffix(self):
+        plan = self._make_plan()
+        plan["blocks"][0]["exercises"][0]["name"] = "Squat (Superset B)"
+        with pytest.raises(ValueError, match="legacy pair suffix"):
+            self.tools["set_workout_plan"](date="2099-08-04", plan=plan)
+
+    def test_set_workout_plan_rejects_legacy_triplet_suffix(self):
+        plan = self._make_plan()
+        plan["blocks"][0]["exercises"][0]["name"] = "Deadlift (Triplet A)"
+        with pytest.raises(ValueError, match="legacy pair suffix"):
+            self.tools["set_workout_plan"](date="2099-08-05", plan=plan)
+
+    def test_add_exercise_persists_superset_group(self):
+        self.tools["set_workout_plan"](date="2099-08-06", plan=self._make_plan())
+        new_ex = {
+            "id": "added",
+            "name": "Pull-up",
+            "type": "strength",
+            "target_sets": 3,
+            "target_reps": "8",
+            "superset_group": "B",
+        }
+        self.tools["add_exercise"](
+            date="2099-08-06", exercise=new_ex, block_position=0
+        )
+        plan = self.tools["get_workout_plan"](
+            start_date="2099-08-06", end_date="2099-08-06"
+        )[0]["plan"]
+        added = next(ex for ex in plan["blocks"][0]["exercises"] if ex["id"] == "added")
+        assert added["superset_group"] == "B"
+
+    def test_add_exercise_rejects_legacy_pair_suffix(self):
+        self.tools["set_workout_plan"](date="2099-08-07", plan=self._make_plan())
+        bad = {"id": "bad", "name": "Curl (Pair A)", "type": "strength"}
+        with pytest.raises(ValueError, match="legacy pair suffix"):
+            self.tools["add_exercise"](
+                date="2099-08-07", exercise=bad, block_position=0
+            )
+
+    def test_update_exercise_can_set_superset_group(self):
+        self.tools["set_workout_plan"](date="2099-08-08", plan=self._make_plan())
+        result = self.tools["update_exercise"](
+            date="2099-08-08",
+            exercise_id="test_ex_1",
+            updates={"superset_group": "A"},
+        )
+        assert result["updated_exercise"]["superset_group"] == "A"
+
+    def test_update_exercise_rejects_legacy_pair_suffix_in_name(self):
+        self.tools["set_workout_plan"](date="2099-08-09", plan=self._make_plan())
+        with pytest.raises(ValueError, match="legacy pair suffix"):
+            self.tools["update_exercise"](
+                date="2099-08-09",
+                exercise_id="test_ex_1",
+                updates={"name": "Renamed (Pair A)"},
+            )
 
 
 # ==================== Unit 4: Exercise Registry + DB Classes ====================

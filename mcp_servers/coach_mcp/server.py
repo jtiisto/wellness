@@ -6,11 +6,28 @@ through the Model Context Protocol for LLM workout planning and analysis.
 
 import json
 import os
+import re
 import sqlite3
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+# Legacy pair-suffix pattern: rejects names like "Bench Press (Pair A)" so that
+# pair info is forced through the structured `superset_group` field instead of
+# leaking into canonical_slug.
+LEGACY_PAIR_SUFFIX_RE = re.compile(r"\((?:Pair|Superset|Triplet)\b[^)]*\)", re.IGNORECASE)
+
+
+def _reject_legacy_pair_suffix(name: str, context: str = "") -> None:
+    """Raise ValueError if name still uses the deprecated `(Pair X)` suffix."""
+    if name and LEGACY_PAIR_SUFFIX_RE.search(name):
+        prefix = f"{context}: " if context else ""
+        raise ValueError(
+            f"{prefix}Exercise name '{name}' uses the legacy pair suffix "
+            f"convention. Put pair info in the structured `superset_group` "
+            f"field instead (e.g. \"superset_group\": \"A\")."
+        )
 
 try:
     from fastmcp import FastMCP
@@ -170,8 +187,8 @@ def _store_plan_to_db(cursor, date_str, plan, modified_by="mcp"):
                 (session_id, block_id, exercise_key, position, name, exercise_type,
                  target_sets, target_reps, target_duration_min, target_duration_sec,
                  rounds, work_duration_sec, rest_duration_sec,
-                 guidance_note, hide_weight, show_time, extra, canonical_slug)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 guidance_note, hide_weight, show_time, superset_group, extra, canonical_slug)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, [
                 session_id, block_id, exercise_key, j,
                 ex.get("name", "Unknown"),
@@ -186,6 +203,7 @@ def _store_plan_to_db(cursor, date_str, plan, modified_by="mcp"):
                 ex.get("guidance_note"),
                 1 if ex.get("hide_weight") else 0,
                 1 if ex.get("show_time") else 0,
+                ex.get("superset_group"),
                 json.dumps(ex["extra"]) if ex.get("extra") else None,
                 ex.get("canonical_slug"),
             ])
@@ -248,6 +266,8 @@ def _assemble_plan_from_db(cursor, session_id):
                 exercise["hide_weight"] = True
             if er["show_time"]:
                 exercise["show_time"] = True
+            if er["superset_group"]:
+                exercise["superset_group"] = er["superset_group"]
 
             if er["canonical_slug"]:
                 exercise["canonical_slug"] = er["canonical_slug"]
@@ -487,6 +507,7 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
                         f"Exercise {i} has invalid type: {exercise['type']}. "
                         f"Must be one of: {valid_types}"
                     )
+                _reject_legacy_pair_suffix(exercise["name"], f"Exercise {i}")
 
         try:
             with db_manager.transaction() as cursor:
@@ -708,7 +729,11 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
             "guidance_note": "guidance_note",
             "hide_weight": "hide_weight",
             "show_time": "show_time",
+            "superset_group": "superset_group",
         }
+
+        if "name" in updates:
+            _reject_legacy_pair_suffix(updates["name"])
 
         try:
             with db_manager.transaction() as cursor:
@@ -827,6 +852,8 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
         if exercise["type"] not in valid_types:
             raise ValueError(f"Invalid exercise type: {exercise['type']}")
 
+        _reject_legacy_pair_suffix(exercise["name"])
+
         try:
             with db_manager.transaction() as cursor:
                 # Get session
@@ -889,8 +916,8 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
                     (session_id, block_id, exercise_key, position, name, exercise_type,
                      target_sets, target_reps, target_duration_min, target_duration_sec,
                      rounds, work_duration_sec, rest_duration_sec,
-                     guidance_note, hide_weight, show_time, canonical_slug)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     guidance_note, hide_weight, show_time, superset_group, canonical_slug)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, [
                     session_id, block_id, exercise["id"], position,
                     exercise["name"], exercise["type"],
@@ -904,6 +931,7 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
                     exercise.get("guidance_note"),
                     1 if exercise.get("hide_weight") else 0,
                     1 if exercise.get("show_time") else 0,
+                    exercise.get("superset_group"),
                     slug,
                 ])
                 exercise_id = cursor.lastrowid
@@ -1551,6 +1579,9 @@ def _transform_block_to_exercises(block: dict, block_index: int) -> list:
             if notes:
                 exercise["guidance_note"] = ". ".join(notes)
 
+            if ex.get("superset_group"):
+                exercise["superset_group"] = ex["superset_group"]
+
             exercises.append(exercise)
 
     # Handle blocks with instructions (cardio blocks)
@@ -1666,6 +1697,23 @@ Can use `instructions` array or `exercises` list.
 {"id": "hiit_1", "name": "Bike Intervals", "type": "interval",
  "rounds": 4, "work_duration_sec": 30, "rest_duration_sec": 90}
 ```
+
+## Antagonist Pairs / Supersets
+
+Group two or more exercises into a superset using the `superset_group` field.
+Exercises in the same block that share the same group label are rendered
+together in the UI. The label is free-form: `"A"`, `"B"`, `"Triplet A"`, etc.
+
+```json
+{"id": "ex_1", "name": "Bench Press", "type": "strength",
+ "target_sets": 3, "target_reps": "8", "superset_group": "A"},
+{"id": "ex_2", "name": "Bent Row", "type": "strength",
+ "target_sets": 3, "target_reps": "8", "superset_group": "A"}
+```
+
+**Do NOT** put pair info in the exercise `name` (e.g. `"Bench Press (Pair A)"`).
+Names like that are rejected by the server because the suffix would leak into
+the canonical slug and break cross-session comparison.
 
 ## Example: Block-Based Plan
 
