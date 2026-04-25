@@ -12,10 +12,8 @@ import {
     updateEntry,
     markValueUpdated,
     isDayEditable,
-    getLastValue
 } from '../store.js';
 import { NumericInput } from '../../shared/numeric-input.js';
-import { getToday, parseLocalDate } from '../../shared/utils.js';
 
 const html = htm.bind(h);
 
@@ -58,16 +56,11 @@ export function TrackerItem({ tracker }) {
 
     const isAccumulator = tracker.type === 'quantifiable' && tracker.accumulator === true;
     const lastUpdatedIso = valueUpdated[`${date}|${tracker.id}`] || null;
-    const lastUpdatedLabel = isAccumulator ? formatLastUpdated(lastUpdatedIso, date) : null;
-
-    // Memory hint: on today's entry, show the most recent prior committed
-    // value. Skip for accumulators (their "last updated" line already serves).
-    const showLastValueHint = tracker.type === 'quantifiable'
-        && !isAccumulator
-        && date === getToday();
-    const lastPrior = showLastValueHint ? getLastValue(tracker.id, date) : null;
-    const lastPriorLabel = lastPrior
-        ? `Last: ${lastPrior.value}${tracker.unit ? ' ' + tracker.unit : ''} on ${parseLocalDate(lastPrior.date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`
+    // Show "Last updated HH:MM" on every quantifiable tracker so users can
+    // see when they last touched the value today — primarily a memory cue
+    // for trackers (e.g. protein) that get bumped throughout the day.
+    const lastUpdatedLabel = tracker.type === 'quantifiable'
+        ? formatLastUpdated(lastUpdatedIso, date)
         : null;
 
     const handleCompletedChange = (e) => {
@@ -102,7 +95,7 @@ export function TrackerItem({ tracker }) {
     const handleNumericChange = (v) => {
         if (!editable) return;
         updateEntry(date, tracker.id, { value: v });
-        if (isAccumulator) markValueUpdated(date, tracker.id);
+        markValueUpdated(date, tracker.id);
     };
 
     const handleAccumulatorAdd = () => {
@@ -192,9 +185,6 @@ export function TrackerItem({ tracker }) {
             `}
             ${lastUpdatedLabel && html`
                 <div class="tracker-last-updated">Last updated ${lastUpdatedLabel}</div>
-            `}
-            ${lastPriorLabel && html`
-                <div class="tracker-last-value">${lastPriorLabel}</div>
             `}
         </div>
     `;

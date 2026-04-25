@@ -94,6 +94,37 @@ def test_value_persists_when_checkbox_unchecked(journal_page):
     assert not row.locator("input[type='checkbox']").is_checked()
 
 
+def test_last_updated_label_appears_after_value_change(journal_page):
+    """Editing a quantifiable tracker's value shows a 'Last updated HH:MM' caption.
+
+    Solves the memory cue users want when bumping accumulating intake (e.g.
+    protein) throughout the day. Replaces the prior-day 'Last:' value hint.
+    """
+    page = journal_page.page
+    row = page.locator(".tracker-item").filter(has_text="Water Intake")
+
+    # No update has happened on the current page render → no caption yet.
+    assert row.locator(".tracker-last-updated").count() == 0
+
+    journal_page.set_tracker_value("Water Intake", 6)
+    page.wait_for_timeout(300)
+
+    caption = row.locator(".tracker-last-updated")
+    assert caption.count() == 1
+    text = caption.text_content()
+    assert text.startswith("Last updated ")
+    # Format includes a colon separator for HH:MM
+    assert ":" in text
+
+
+def test_last_updated_label_no_prior_day_cue(journal_page):
+    """The legacy 'Last: <value> on <date>' caption is gone (no .tracker-last-value)."""
+    page = journal_page.page
+    # Seeded data has prior-day values, so under the old behavior at least
+    # one .tracker-last-value div would render. The class is removed.
+    assert page.locator(".tracker-last-value").count() == 0
+
+
 @pytest.fixture
 def journal_with_extras(page, app_server, seeded_journal):
     """Load the journal after seeding an evaluation slider and a note tracker.

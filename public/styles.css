@@ -954,23 +954,14 @@ textarea:focus-visible,
     cursor: not-allowed;
 }
 
-/* Last-updated caption for accumulator trackers — answers "did I already
-   add that intake today?" without another tap. */
+/* Last-updated caption for quantifiable trackers — shows when the value
+   was last touched today, so users tracking accumulating intake (e.g.
+   protein) can see at a glance when they last bumped the number. */
 .journal .tracker-last-updated {
     margin-top: var(--spacing-xs);
     padding-left: 40px; /* roughly align with tracker name after checkbox */
     font-size: var(--font-size-sm);
     color: var(--text-muted);
-}
-
-/* Memory-cue caption for today's quantifiable entries — shows the most
-   recent prior committed value so users have a reference without opening
-   history. Mirrors the tracker-last-updated alignment. */
-.journal .tracker-last-value {
-    margin-top: var(--spacing-xs);
-    padding-left: 40px;
-    font-size: var(--font-size-sm);
-    color: var(--text-secondary);
 }
 
 /* Inline checkbox+label row used in config forms */
