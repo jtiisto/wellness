@@ -94,6 +94,12 @@ export function TrackerItem({ tracker }) {
 
     const handleNumericChange = (v) => {
         if (!editable) return;
+        // NumericInput fires onValueChange on blur even when the field was
+        // only focused, so we no-op when nothing actually changed — otherwise
+        // tabbing through inputs would bump every "Last updated" timestamp.
+        const prev = entry.value ?? null;
+        const next = v ?? null;
+        if (prev === next) return;
         updateEntry(date, tracker.id, { value: v });
         markValueUpdated(date, tracker.id);
     };

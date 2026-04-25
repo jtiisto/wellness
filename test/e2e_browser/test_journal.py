@@ -125,6 +125,47 @@ def test_last_updated_label_no_prior_day_cue(journal_page):
     assert page.locator(".tracker-last-value").count() == 0
 
 
+def test_focus_blur_without_value_change_does_not_update_timestamp(journal_page):
+    """Tabbing into and out of the field without editing must not bump the
+    'Last updated' timestamp. Otherwise scrolling through trackers would
+    appear to mark every value as freshly edited.
+    """
+    page = journal_page.page
+    row = page.locator(".tracker-item").filter(has_text="Water Intake")
+
+    # First, do a real edit so a "Last updated" caption exists to compare against.
+    journal_page.set_tracker_value("Water Intake", 6)
+    page.wait_for_timeout(300)
+    initial = row.locator(".tracker-last-updated").text_content()
+    assert initial.startswith("Last updated ")
+
+    # Now read the underlying timestamp before focus/blur.
+    before = page.evaluate(
+        """async () => {
+            const m = await import('/js/journal/store.js');
+            return JSON.parse(JSON.stringify(m.trackerValueUpdatedTimes.value));
+        }"""
+    )
+
+    # Simulate tabbing: focus the input, then blur without typing.
+    input_el = row.locator("input[type='number']")
+    input_el.focus()
+    page.wait_for_timeout(100)
+    input_el.blur()
+    page.wait_for_timeout(300)
+
+    after = page.evaluate(
+        """async () => {
+            const m = await import('/js/journal/store.js');
+            return JSON.parse(JSON.stringify(m.trackerValueUpdatedTimes.value));
+        }"""
+    )
+    assert before == after, (
+        f"Focus/blur with no value change should not bump the timestamp. "
+        f"Before: {before}, After: {after}"
+    )
+
+
 @pytest.fixture
 def journal_with_extras(page, app_server, seeded_journal):
     """Load the journal after seeding an evaluation slider and a note tracker.
