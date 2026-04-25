@@ -71,7 +71,15 @@ export function formatTarget(exercise) {
         case 'weighted_time':
             return `${exercise.target_duration_sec || 60}s`;
         case 'interval':
-            return exercise.target_duration_min ? `${exercise.target_duration_min} min` : '';
+            if (exercise.target_duration_min) return `${exercise.target_duration_min} min`;
+            if (exercise.rounds) {
+                const work = exercise.work_duration_sec;
+                const rest = exercise.rest_duration_sec;
+                if (work && rest) return `${exercise.rounds} × ${work}/${rest}s`;
+                if (work) return `${exercise.rounds} × ${work}s`;
+                return `${exercise.rounds} rounds`;
+            }
+            return '';
         default:
             return '';
     }
@@ -101,7 +109,8 @@ export function getExerciseProgress(exercise, logData) {
             const done = (data.completed_items || []).length;
             return { display: `${done}/${target}`, complete: done >= target };
         }
-        case 'duration': {
+        case 'duration':
+        case 'interval': {
             if (data.duration_min != null && data.duration_min !== '') {
                 return { display: '\u2713', complete: true };
             }
@@ -126,6 +135,7 @@ export function isExerciseCompleted(exercise, logData) {
             const sets = logData.sets || [];
             return sets.length >= (exercise.target_sets || 1);
         case 'duration':
+        case 'interval':
             return logData.duration_min != null;
         default:
             return logData.completed === true;

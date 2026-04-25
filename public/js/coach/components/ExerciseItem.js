@@ -78,6 +78,7 @@ export function ExerciseItem({ date, exercise, logData, isEditable = true }) {
                     />
                 `;
             case 'duration':
+            case 'interval':
                 return html`
                     <${CardioEntry}
                         date=${date}

@@ -181,6 +181,13 @@ def seeded_coach_db(app_server):
         VALUES (?, ?, 'cardio_1', 0, 'Zone 2 Bike', 'duration', 15, 'HR 135-148')
     """, (s1, b3))
 
+    conn.execute("""
+        INSERT INTO planned_exercises
+        (session_id, block_id, exercise_key, position, name, exercise_type,
+         rounds, work_duration_sec, rest_duration_sec, guidance_note)
+        VALUES (?, ?, 'cardio_2', 1, 'Bike Intervals', 'interval', 4, 30, 90, 'VO2 max effort')
+    """, (s1, b3))
+
     conn.commit()
     conn.close()
 

@@ -35,6 +35,31 @@ class CoachPage:
     def expand_exercise(self, name):
         self.page.locator(".exercise-item").filter(has_text=name).locator(".exercise-header").click()
 
+    def get_exercise_target(self, name):
+        """Read the prescription text shown in the exercise header."""
+        return self.page.locator(".exercise-item").filter(has_text=name).locator(".exercise-target").text_content()
+
+    def is_exercise_marked_complete(self, name):
+        """True when the exercise-item has the .completed class."""
+        item = self.page.locator(".exercise-item").filter(has_text=name)
+        classes = item.get_attribute("class") or ""
+        return "completed" in classes.split()
+
+    def get_exercise_progress(self, name):
+        """Return the .exercise-progress text or None if not visible."""
+        item = self.page.locator(".exercise-item").filter(has_text=name)
+        progress = item.locator(".exercise-progress")
+        return progress.text_content() if progress.count() else None
+
+    def has_cardio_entry(self, name):
+        """True when the named exercise's expanded body shows a .cardio-entry."""
+        return self.page.locator(".exercise-item").filter(has_text=name).locator(".cardio-entry").is_visible()
+
+    def fill_cardio_duration(self, name, value):
+        """Fill the Duration field (first numeric input) inside the named exercise."""
+        self.page.locator(".exercise-item").filter(has_text=name).locator(
+            ".cardio-entry input[type='number']").first.fill(str(value))
+
     def fill_set_weight(self, set_index, value):
         self.page.locator(".sets-grid-input[data-col='weight']").nth(set_index).fill(str(value))
 
