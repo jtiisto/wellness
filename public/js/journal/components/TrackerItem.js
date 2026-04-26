@@ -2,7 +2,7 @@
  * TrackerItem Component
  */
 import { h } from 'preact';
-import { useState, useEffect } from 'preact/hooks';
+import { useState, useEffect, useRef } from 'preact/hooks';
 import { effect } from '@preact/signals';
 import htm from 'htm';
 import {
@@ -37,6 +37,8 @@ export function TrackerItem({ tracker }) {
     const [date, setDate] = useState(selectedDate.value);
     const [logs, setLogs] = useState(dailyLogs.value);
     const [valueUpdated, setValueUpdated] = useState(trackerValueUpdatedTimes.value);
+    const [accumModal, setAccumModal] = useState({ open: false, raw: '' });
+    const accumInputRef = useRef(null);
 
     useEffect(() => {
         const dispose = effect(() => {
@@ -46,6 +48,14 @@ export function TrackerItem({ tracker }) {
         });
         return dispose;
     }, []);
+
+    // Autofocus the increment input when the modal opens so the user can
+    // start typing immediately (matching the muscle memory of the old prompt()).
+    useEffect(() => {
+        if (accumModal.open && accumInputRef.current) {
+            accumInputRef.current.focus();
+        }
+    }, [accumModal.open]);
 
     const entry = logs[date]?.[tracker.id] || {};
     const editable = isDayEditable(date);
@@ -106,14 +116,24 @@ export function TrackerItem({ tracker }) {
 
     const handleAccumulatorAdd = () => {
         if (!editable) return;
-        const raw = prompt(`Add to ${tracker.name}${tracker.unit ? ` (${tracker.unit})` : ''}:`);
-        if (raw === null) return;
-        const increment = Number(raw);
-        if (!Number.isFinite(increment) || increment === 0) return;
+        setAccumModal({ open: true, raw: '' });
+    };
+
+    const closeAccumModal = () => setAccumModal({ open: false, raw: '' });
+
+    const handleAccumulatorSubmit = (e) => {
+        e.preventDefault();
+        if (!editable) return;
+        const increment = Number(accumModal.raw);
+        if (!Number.isFinite(increment) || increment === 0) {
+            closeAccumModal();
+            return;
+        }
         const current = Number(value) || 0;
         const next = current + increment;
         updateEntry(date, tracker.id, { value: next });
         markValueUpdated(date, tracker.id);
+        closeAccumModal();
     };
 
     const rowClasses = [
@@ -191,6 +211,36 @@ export function TrackerItem({ tracker }) {
             `}
             ${lastUpdatedLabel && html`
                 <div class="tracker-last-updated">Last updated ${lastUpdatedLabel}</div>
+            `}
+            ${accumModal.open && html`
+                <div class="modal-overlay" onClick=${closeAccumModal}>
+                    <div class="modal-content" onClick=${(e) => e.stopPropagation()}>
+                        <div class="modal-header">
+                            <h2 class="modal-title">Add to ${tracker.name}</h2>
+                            <button class="icon-btn" onClick=${closeAccumModal} aria-label="Close">✕</button>
+                        </div>
+                        <form onSubmit=${handleAccumulatorSubmit}>
+                            <div class="form-group">
+                                <label class="form-label">
+                                    Amount${tracker.unit ? ` (${tracker.unit})` : ''}
+                                </label>
+                                <input
+                                    ref=${accumInputRef}
+                                    type="number"
+                                    class="form-input"
+                                    inputmode="decimal"
+                                    step="any"
+                                    value=${accumModal.raw}
+                                    onInput=${(e) => setAccumModal({ open: true, raw: e.target.value })}
+                                    placeholder="e.g. 25"
+                                />
+                            </div>
+                            <div class="form-group mt-md">
+                                <button type="submit" class="btn btn-primary btn-block">Add</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
             `}
         </div>
     `;

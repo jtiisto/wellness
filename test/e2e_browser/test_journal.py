@@ -125,6 +125,84 @@ def test_last_updated_label_no_prior_day_cue(journal_page):
     assert page.locator(".tracker-last-value").count() == 0
 
 
+@pytest.fixture
+def journal_with_accumulator(page, app_server, seeded_journal):
+    """Seed an accumulator tracker (e.g. 'Protein') and load the journal."""
+    base = app_server["url"]
+    client_id = seeded_journal["client_id"]
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    http_requests.post(f"{base}/api/journal/sync/update", json={
+        "clientId": client_id,
+        "config": [{
+            "id": "tracker-protein",
+            "name": "Protein",
+            "category": "nutrition",
+            "type": "quantifiable",
+            "unit": "g",
+            "accumulator": True,
+            "_baseVersion": 0,
+        }],
+        "days": {today: {"tracker-protein": {
+            "value": 100, "completed": True, "_baseVersion": 0,
+        }}},
+    })
+
+    page.goto(app_server["url"])
+    page.wait_for_selector(".shell", timeout=10000)
+    shell = AppShellPage(page)
+    shell.navigate_to("Journal")
+    journal = JournalPage(page)
+    journal.wait_for_loaded()
+    journal.wait_for_trackers()
+    return {"journal": journal, "today": today}
+
+
+def test_accumulator_add_uses_styled_modal(journal_with_accumulator):
+    """Tapping + opens an in-app modal (not the native browser prompt) and adds the value."""
+    journal = journal_with_accumulator["journal"]
+    page = journal.page
+
+    row = page.locator(".tracker-item").filter(has_text="Protein")
+    # Open the modal by clicking the accumulator + button
+    row.locator(".tracker-accum-btn").click()
+    page.wait_for_timeout(200)
+
+    # Styled modal renders (not a native dialog)
+    overlay = page.locator(".modal-overlay")
+    assert overlay.count() == 1
+    assert overlay.locator(".modal-title").text_content() == "Add to Protein"
+
+    # Type an increment and submit
+    overlay.locator("input[type='number']").fill("25")
+    overlay.locator("button[type='submit']").click()
+    page.wait_for_timeout(300)
+
+    # Modal closes and value updates from 100 → 125
+    assert page.locator(".modal-overlay").count() == 0
+    assert row.locator("input[type='number']").input_value() == "125"
+
+
+def test_accumulator_modal_dismisses_via_overlay(journal_with_accumulator):
+    """Clicking the overlay backdrop closes the modal without committing."""
+    journal = journal_with_accumulator["journal"]
+    page = journal.page
+
+    row = page.locator(".tracker-item").filter(has_text="Protein")
+    row.locator(".tracker-accum-btn").click()
+    page.wait_for_timeout(200)
+
+    overlay = page.locator(".modal-overlay")
+    assert overlay.count() == 1
+
+    # Click on the overlay (outside the modal-content) to dismiss
+    overlay.click(position={"x": 10, "y": 10})
+    page.wait_for_timeout(200)
+    assert page.locator(".modal-overlay").count() == 0
+    # Value untouched
+    assert row.locator("input[type='number']").input_value() == "100"
+
+
 def test_focus_blur_without_value_change_does_not_update_timestamp(journal_page):
     """Tabbing into and out of the field without editing must not bump the
     'Last updated' timestamp. Otherwise scrolling through trackers would
