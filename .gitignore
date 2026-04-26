@@ -21,6 +21,9 @@ server.log
 # User-specific queries (contains personal medical data)
 src/modules/user_queries.py
 
+# Personal medical retrospectives — belong in the private health repo
+retrospectives/
+
 # IDE
 .vscode/
 .idea/
