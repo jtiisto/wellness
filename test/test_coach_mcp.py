@@ -148,6 +148,29 @@ class TestTransformBlockToExercises:
         ex = result[0]
         assert ex["type"] == "interval"
         assert ex["name"] == "VO2 Max Intervals"
+        # Without block-level structured fields, only target_duration_min is set
+        assert "rounds" not in ex
+        assert "work_duration_sec" not in ex
+        assert "rest_duration_sec" not in ex
+
+    def test_instruction_block_vo2max_with_structured_fields(self):
+        """Block-level rounds/work/rest are passed through to the interval exercise."""
+        block = {
+            "block_type": "cardio",
+            "title": "VO2 Max",
+            "duration_min": 20,
+            "rounds": 4,
+            "work_duration_sec": 180,
+            "rest_duration_sec": 120,
+            "instructions": ["4 x (3 min HARD / 2 min easy)", "HR 160-175"],
+        }
+        result = _transform_block_to_exercises(block, 0)
+        ex = result[0]
+        assert ex["type"] == "interval"
+        assert ex["rounds"] == 4
+        assert ex["work_duration_sec"] == 180
+        assert ex["rest_duration_sec"] == 120
+        assert ex["target_duration_min"] == 20
 
     def test_superset_group_passes_through(self):
         """superset_group on input exercises is preserved in transform."""
@@ -208,6 +231,117 @@ class TestTransformBlockPlan:
         assert result["day_name"] == "Lower Body Power"
         # day_name not in raw, so theme is used
         assert "theme" not in result
+
+    def test_transformed_cardio_passes_through(self):
+        """Already-transformed cardio block survives re-ingest unchanged.
+
+        Mixed plan: raw warmup + transformed Zone 2 cardio. Without idempotency
+        the cardio block would route through the strength branch and lose
+        type=duration / target_duration_min.
+        """
+        raw = {
+            "theme": "Cardio Day",
+            "blocks": [
+                {
+                    "block_type": "warmup",
+                    "title": "Warmup",
+                    "exercises": [{"name": "Arm Circles", "reps": 10}],
+                },
+                {
+                    "block_type": "cardio",
+                    "title": "Zone 2",
+                    "duration_min": 15,
+                    "exercises": [
+                        {
+                            "id": "cardio_1_1",
+                            "name": "Zone 2 Bike",
+                            "type": "duration",
+                            "target_duration_min": 15,
+                            "guidance_note": "HR 135-148",
+                        }
+                    ],
+                },
+            ],
+        }
+        result = _transform_block_plan(raw)
+        cardio_ex = result["blocks"][1]["exercises"][0]
+        assert cardio_ex["type"] == "duration"
+        assert cardio_ex["target_duration_min"] == 15
+        assert cardio_ex["name"] == "Zone 2 Bike"
+
+    def test_transformed_warmup_passes_through(self):
+        """Already-transformed warmup checklist survives re-ingest with items intact."""
+        raw = {
+            "theme": "Mixed",
+            "blocks": [
+                {
+                    "block_type": "warmup",
+                    "title": "Warmup",
+                    "exercises": [
+                        {
+                            "id": "warmup_0",
+                            "name": "Stability Start",
+                            "type": "checklist",
+                            "items": ["Cat-Cow x10", "Bird-Dog x5/side", "Glute Bridge x10"],
+                        }
+                    ],
+                },
+                {
+                    "block_type": "strength",
+                    "title": "Main",
+                    "exercises": [{"name": "Bench Press", "sets": 4, "reps": "6-8"}],
+                },
+            ],
+        }
+        result = _transform_block_plan(raw)
+        warmup_ex = result["blocks"][0]["exercises"][0]
+        assert warmup_ex["type"] == "checklist"
+        assert warmup_ex["items"] == ["Cat-Cow x10", "Bird-Dog x5/side", "Glute Bridge x10"]
+        assert warmup_ex["name"] == "Stability Start"
+
+    def test_transformed_strength_passes_through(self):
+        """Already-transformed strength block keeps target_sets/target_reps/superset_group."""
+        raw = {
+            "theme": "Mixed",
+            "blocks": [
+                {
+                    "block_type": "cardio",
+                    "title": "Zone 2",
+                    "duration_min": 30,
+                    "instructions": ["Keep HR 130-145"],
+                },
+                {
+                    "block_type": "strength",
+                    "title": "Antagonist",
+                    "exercises": [
+                        {
+                            "id": "strength_1_1",
+                            "name": "Bench Press",
+                            "type": "strength",
+                            "target_sets": 4,
+                            "target_reps": "6-8",
+                            "superset_group": "A",
+                        },
+                        {
+                            "id": "strength_1_2",
+                            "name": "Bent Row",
+                            "type": "strength",
+                            "target_sets": 4,
+                            "target_reps": "6-8",
+                            "superset_group": "A",
+                        },
+                    ],
+                },
+            ],
+        }
+        result = _transform_block_plan(raw)
+        strength_block = result["blocks"][1]["exercises"]
+        assert strength_block[0]["target_sets"] == 4
+        assert strength_block[0]["target_reps"] == "6-8"
+        assert strength_block[0]["superset_group"] == "A"
+        assert strength_block[1]["target_sets"] == 4
+        assert strength_block[1]["target_reps"] == "6-8"
+        assert strength_block[1]["superset_group"] == "A"
 
 
 # ==================== Unit 2: Read Tools Integration Tests ====================

@@ -1534,8 +1534,12 @@ def _transform_block_to_exercises(block: dict, block_index: int) -> list:
             exercise_id = f"{block_type}_{block_index}_{i+1}"
 
             # Determine exercise type based on block type
-            if block_type in ["circuit", "power"]:
+            if ex.get("type"):
+                ex_type = ex["type"]
+            elif block_type in ["circuit", "power"]:
                 ex_type = "circuit"
+            elif block_type == "cardio":
+                ex_type = "duration"
             elif block_type in ["strength", "accessory"]:
                 ex_type = "strength"
             else:
@@ -1546,6 +1550,11 @@ def _transform_block_to_exercises(block: dict, block_index: int) -> list:
                 "name": ex.get("name", "Unknown"),
                 "type": ex_type,
             }
+
+            for key in ("target_duration_min", "target_duration_sec",
+                        "rounds", "work_duration_sec", "rest_duration_sec"):
+                if ex.get(key) is not None:
+                    exercise[key] = ex[key]
 
             if ex.get("sets"):
                 exercise["target_sets"] = ex["sets"] if isinstance(ex["sets"], int) else 3
@@ -1603,6 +1612,9 @@ def _transform_block_to_exercises(block: dict, block_index: int) -> list:
             "target_duration_min": duration,
             "guidance_note": " | ".join(block["instructions"])
         }
+        for key in ("rounds", "work_duration_sec", "rest_duration_sec"):
+            if block.get(key) is not None:
+                exercise[key] = block[key]
         exercises.append(exercise)
 
     return exercises
@@ -1613,7 +1625,11 @@ def _transform_block_plan(plan_data: dict) -> dict:
     blocks = []
 
     for i, block in enumerate(plan_data.get("blocks", [])):
-        block_exercises = _transform_block_to_exercises(block, i)
+        existing = block.get("exercises")
+        if existing and all("id" in ex and "type" in ex for ex in existing):
+            block_exercises = existing
+        else:
+            block_exercises = _transform_block_to_exercises(block, i)
 
         transformed_block = {
             "block_index": i,

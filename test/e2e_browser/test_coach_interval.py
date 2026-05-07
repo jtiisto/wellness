@@ -39,7 +39,7 @@ def test_interval_renders_cardio_inputs(coach_page, app_page):
 def test_interval_header_shows_rounds_fallback(coach_page):
     """With no target_duration_min, the header falls back to rounds × work/rest."""
     target = coach_page.get_exercise_target(INTERVAL_NAME)
-    assert target == "4 × 30/90s"
+    assert target == "4 × 0:30/1:30"
 
 
 def test_interval_log_duration_marks_progress(coach_page, app_page):
@@ -92,8 +92,8 @@ def _completed(page, exercise, log):
     )
 
 
-def test_format_target_interval_target_duration_wins(app_page):
-    """target_duration_min takes precedence over rounds when both are set."""
+def test_format_target_interval_structured_wins_over_duration(app_page):
+    """rounds/work/rest take precedence over target_duration_min when both are set."""
     out = _format_target(app_page, {
         "type": "interval",
         "target_duration_min": 20,
@@ -101,7 +101,7 @@ def test_format_target_interval_target_duration_wins(app_page):
         "work_duration_sec": 30,
         "rest_duration_sec": 90,
     })
-    assert out == "20 min"
+    assert out == "4 × 0:30/1:30"
 
 
 def test_format_target_interval_rounds_work_rest(app_page):
@@ -111,7 +111,7 @@ def test_format_target_interval_rounds_work_rest(app_page):
         "work_duration_sec": 30,
         "rest_duration_sec": 90,
     })
-    assert out == "4 × 30/90s"
+    assert out == "4 × 0:30/1:30"
 
 
 def test_format_target_interval_rounds_work_only(app_page):
@@ -120,7 +120,18 @@ def test_format_target_interval_rounds_work_only(app_page):
         "rounds": 4,
         "work_duration_sec": 30,
     })
-    assert out == "4 × 30s"
+    assert out == "4 × 0:30"
+
+
+def test_format_target_interval_vo2_minutes(app_page):
+    """Multi-minute work/rest format with mm:ss."""
+    out = _format_target(app_page, {
+        "type": "interval",
+        "rounds": 4,
+        "work_duration_sec": 180,
+        "rest_duration_sec": 120,
+    })
+    assert out == "4 × 3:00/2:00"
 
 
 def test_format_target_interval_rounds_only(app_page):

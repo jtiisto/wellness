@@ -103,16 +103,15 @@ export function formatTarget(exercise) {
             return `${exercise.items?.length || 0} items`;
         case 'weighted_time':
             return `${exercise.target_duration_sec || 60}s`;
-        case 'interval':
+        case 'interval': {
+            const fmt = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+            const { rounds, work_duration_sec: work, rest_duration_sec: rest } = exercise;
+            if (rounds && work && rest) return `${rounds} × ${fmt(work)}/${fmt(rest)}`;
+            if (rounds && work) return `${rounds} × ${fmt(work)}`;
+            if (rounds) return `${rounds} rounds`;
             if (exercise.target_duration_min) return `${exercise.target_duration_min} min`;
-            if (exercise.rounds) {
-                const work = exercise.work_duration_sec;
-                const rest = exercise.rest_duration_sec;
-                if (work && rest) return `${exercise.rounds} × ${work}/${rest}s`;
-                if (work) return `${exercise.rounds} × ${work}s`;
-                return `${exercise.rounds} rounds`;
-            }
             return '';
+        }
         default:
             return '';
     }

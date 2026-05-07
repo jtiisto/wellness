@@ -140,6 +140,44 @@ encoding pair info in the exercise `name` (e.g. `"Bench Press (Pair A)"`) is
 rejected by the server because the suffix would leak into `canonical_slug`
 and break cross-session comparison.
 
+**Ingest & transform pipeline:**
+
+`ingest_training_program` (coach MCP) accepts plans in two shapes and routes them
+through `_transform_block_plan`:
+
+- **Raw LLM block format** — blocks contain either `instructions: [...]` text
+  (cardio) or `exercises: [...]` whose entries lack `id`/`type` (strength, etc.).
+  `_transform_block_plan` walks each block and calls
+  `_transform_block_to_exercises` to assign IDs, derive types from `block_type`,
+  aggregate warmup items into a checklist, and split cardio `instructions` into
+  a single exercise with `type: duration` (Zone 2) or `type: interval` (when the
+  text mentions VO2/HARD).
+- **Transformed format** — exercises already carry `id` and `type`. Blocks in
+  this shape pass through verbatim, so re-ingesting an existing plan is a no-op.
+
+The per-block predicate "every exercise has both `id` and `type`" decides
+pass-through vs transform; this matches `_needs_transform` and means a plan
+mixing raw and transformed blocks (e.g. raw warmup + transformed cardio) only
+transforms the raw ones.
+
+For interval cardio, the LLM may emit structured timing fields at the block
+level alongside `instructions`. These pass through to the resulting exercise:
+
+```json
+{
+  "block_type": "cardio",
+  "duration_min": 20,
+  "rounds": 4,
+  "work_duration_sec": 180,
+  "rest_duration_sec": 120,
+  "instructions": ["4 x (3 min HARD / 2 min easy)", "HR 160-175"]
+}
+```
+
+The PWA's `formatTarget` (`public/js/coach/utils.js`) renders
+`rounds × work/rest` (mm:ss) when all three are set, otherwise falls back to
+`target_duration_min`.
+
 **Data model (logs):**
 ```
 workout_session_logs  (id, session_id, date, pain_discomfort, general_notes)
