@@ -87,9 +87,35 @@ export function groupExercises(exercises) {
 }
 
 /**
- * Format exercise target for display
+ * Format circuit/interval timing into a compact label, e.g.
+ *   "4 × 0:40/0:20"  ·  "4 × 3:00"  ·  "0:40/0:20"  ·  "4 rounds"  ·  "20 min"
+ *
+ * For circuit/interval blocks this timing is canonical at the block level
+ * (see the coach MCP transform pipeline), so callers usually pass the block
+ * as the source. Returns "" when there's nothing meaningful to show.
  */
-export function formatTarget(exercise) {
+export function formatInterval({
+    rounds,
+    work_duration_sec: work,
+    rest_duration_sec: rest,
+    target_duration_min: dur,
+} = {}) {
+    const fmt = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+    if (rounds && work && rest) return `${rounds} × ${fmt(work)}/${fmt(rest)}`;
+    if (rounds && work) return `${rounds} × ${fmt(work)}`;
+    if (rounds) return `${rounds} rounds`;
+    if (work && rest) return `${fmt(work)}/${fmt(rest)}`;
+    if (work) return fmt(work);
+    if (dur) return `${dur} min`;
+    return '';
+}
+
+/**
+ * Format exercise target for display. `block` (optional) supplies block-level
+ * circuit/interval timing that an interval exercise falls back to when it
+ * doesn't carry its own.
+ */
+export function formatTarget(exercise, block) {
     switch (exercise.type) {
         case 'strength':
         case 'circuit':
@@ -103,15 +129,13 @@ export function formatTarget(exercise) {
             return `${exercise.items?.length || 0} items`;
         case 'weighted_time':
             return `${exercise.target_duration_sec || 60}s`;
-        case 'interval': {
-            const fmt = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
-            const { rounds, work_duration_sec: work, rest_duration_sec: rest } = exercise;
-            if (rounds && work && rest) return `${rounds} × ${fmt(work)}/${fmt(rest)}`;
-            if (rounds && work) return `${rounds} × ${fmt(work)}`;
-            if (rounds) return `${rounds} rounds`;
-            if (exercise.target_duration_min) return `${exercise.target_duration_min} min`;
-            return '';
-        }
+        case 'interval':
+            return formatInterval({
+                rounds: exercise.rounds ?? block?.rounds,
+                work_duration_sec: exercise.work_duration_sec ?? block?.work_duration_sec,
+                rest_duration_sec: exercise.rest_duration_sec ?? block?.rest_duration_sec,
+                target_duration_min: exercise.target_duration_min,
+            });
         default:
             return '';
     }

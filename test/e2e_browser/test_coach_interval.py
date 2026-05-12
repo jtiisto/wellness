@@ -62,13 +62,23 @@ def test_interval_log_duration_marks_progress(coach_page, app_page):
 # the running PWA serves the module so we can import it directly in the page context.
 
 
-def _format_target(page, exercise):
+def _format_target(page, exercise, block=None):
     return page.evaluate(
-        """async (ex) => {
+        """async ([ex, block]) => {
             const m = await import('/js/coach/utils.js');
-            return m.formatTarget(ex);
+            return m.formatTarget(ex, block);
         }""",
-        exercise,
+        [exercise, block],
+    )
+
+
+def _format_interval(page, src):
+    return page.evaluate(
+        """async (src) => {
+            const m = await import('/js/coach/utils.js');
+            return m.formatInterval(src);
+        }""",
+        src,
     )
 
 
@@ -142,6 +152,42 @@ def test_format_target_interval_rounds_only(app_page):
 def test_format_target_interval_empty(app_page):
     out = _format_target(app_page, {"type": "interval"})
     assert out == ""
+
+
+def test_format_target_interval_falls_back_to_block(app_page):
+    """An interval exercise with no own timing uses the block's (block is
+    canonical for circuit/interval timing)."""
+    out = _format_target(
+        app_page,
+        {"type": "interval", "target_duration_min": 20},
+        {"rounds": 4, "work_duration_sec": 30, "rest_duration_sec": 90},
+    )
+    assert out == "4 × 0:30/1:30"
+
+
+def test_format_target_interval_exercise_timing_beats_block(app_page):
+    out = _format_target(
+        app_page,
+        {"type": "interval", "rounds": 8, "work_duration_sec": 60, "rest_duration_sec": 60},
+        {"rounds": 4, "work_duration_sec": 30, "rest_duration_sec": 90},
+    )
+    assert out == "8 × 1:00/1:00"
+
+
+def test_format_interval_rounds_work_rest(app_page):
+    assert _format_interval(
+        app_page, {"rounds": 4, "work_duration_sec": 40, "rest_duration_sec": 20}
+    ) == "4 × 0:40/0:20"
+
+
+def test_format_interval_work_rest_no_rounds(app_page):
+    assert _format_interval(
+        app_page, {"work_duration_sec": 40, "rest_duration_sec": 20}
+    ) == "0:40/0:20"
+
+
+def test_format_interval_empty(app_page):
+    assert _format_interval(app_page, {}) == ""
 
 
 def test_get_exercise_progress_interval_unlogged(app_page):

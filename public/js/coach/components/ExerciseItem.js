@@ -22,11 +22,11 @@ function parseName(name) {
     return { base, pills };
 }
 
-export function ExerciseItem({ date, exercise, logData, isEditable = true }) {
+export function ExerciseItem({ date, exercise, logData, block, isEditable = true }) {
     const [expanded, setExpanded] = useState(false);
 
     const completed = isExerciseCompleted(exercise, logData);
-    const target = formatTarget(exercise);
+    const target = formatTarget(exercise, block);
     const progress = getExerciseProgress(exercise, logData);
     const parsed = parseName(exercise.name);
 
