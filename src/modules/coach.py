@@ -73,18 +73,29 @@ def init_database():
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS session_blocks (
-            id             INTEGER PRIMARY KEY AUTOINCREMENT,
-            session_id     INTEGER NOT NULL REFERENCES workout_sessions(id) ON DELETE CASCADE,
-            position       INTEGER NOT NULL,
-            block_type     TEXT NOT NULL,
-            title          TEXT,
-            duration_min   INTEGER,
-            rest_guidance  TEXT,
-            rounds         INTEGER,
+            id                INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id        INTEGER NOT NULL REFERENCES workout_sessions(id) ON DELETE CASCADE,
+            position          INTEGER NOT NULL,
+            block_type        TEXT NOT NULL,
+            title             TEXT,
+            duration_min      INTEGER,
+            rest_guidance     TEXT,
+            rounds            INTEGER,
+            work_duration_sec INTEGER,
+            rest_duration_sec INTEGER,
             UNIQUE(session_id, position)
         )
     """)
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_blocks_session ON session_blocks(session_id)")
+
+    # Migration: add block-level interval timing columns to pre-existing DBs.
+    # Circuit/interval timing (rounds/work/rest) is canonical at the block level;
+    # see _transform_block_plan / _transform_block_to_exercises in the coach MCP.
+    for _col, _decl in (("work_duration_sec", "INTEGER"), ("rest_duration_sec", "INTEGER")):
+        try:
+            cursor.execute(f"ALTER TABLE session_blocks ADD COLUMN {_col} {_decl}")
+        except sqlite3.OperationalError:
+            pass
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS planned_exercises (
