@@ -1523,6 +1523,79 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
             raise ValueError(f"Failed to remove block: {str(e)}")
 
     @mcp.tool()
+    def reorder_blocks(
+        date: str,
+        order: List[int]
+    ) -> Dict[str, Any]:
+        """WHEN TO USE: When changing the order of a plan's blocks — e.g. moving
+        a cardio block ahead of strength — without rebuilding the plan.
+
+        Args:
+            date: Date of the plan (YYYY-MM-DD)
+            order: The blocks' current 0-indexed positions in their new order — a
+                   permutation of 0..N-1. Example: [2, 0, 1] moves the block
+                   currently at position 2 to the front.
+
+        Returns:
+            Confirmation with the block titles in their new order
+        """
+        if not isinstance(order, list) or not all(isinstance(p, int) for p in order):
+            raise ValueError("order must be a list of integers")
+
+        try:
+            with db_manager.transaction() as cursor:
+                cursor.execute("SELECT id FROM workout_sessions WHERE date = ?", [date])
+                session = cursor.fetchone()
+                if not session:
+                    raise ValueError(f"No plan found for date: {date}")
+                session_id = session["id"]
+
+                blocks = cursor.execute("""
+                    SELECT id, position FROM session_blocks
+                    WHERE session_id = ? ORDER BY position
+                """, [session_id]).fetchall()
+                n = len(blocks)
+                if sorted(order) != list(range(n)):
+                    raise ValueError(
+                        f"order must be a permutation of 0..{n - 1} "
+                        f"(got {order} for a plan with {n} block(s))"
+                    )
+
+                id_by_pos = {b["position"]: b["id"] for b in blocks}
+                # Two-phase update: park every block in a disjoint range
+                # (n..2n-1), then settle into the target positions, so the
+                # UNIQUE(session_id, position) constraint never trips.
+                for b in blocks:
+                    cursor.execute(
+                        "UPDATE session_blocks SET position = ? WHERE id = ?",
+                        [b["position"] + n, b["id"]],
+                    )
+                for new_pos, old_pos in enumerate(order):
+                    cursor.execute(
+                        "UPDATE session_blocks SET position = ? WHERE id = ?",
+                        [new_pos, id_by_pos[old_pos]],
+                    )
+
+                now = get_utc_now()
+                cursor.execute(
+                    "UPDATE workout_sessions SET last_modified = ?, modified_by = ? WHERE id = ?",
+                    [now, "mcp", session_id],
+                )
+
+                updated_plan = _assemble_plan_from_db(cursor, session_id)
+
+            return {
+                "success": True,
+                "date": date,
+                "block_order": [
+                    b["title"] or b["block_type"] for b in updated_plan["blocks"]
+                ],
+                "message": "Blocks reordered",
+            }
+        except Exception as e:
+            raise ValueError(f"Failed to reorder blocks: {str(e)}")
+
+    @mcp.tool()
     def search_exercises(
         query: str,
         equipment: Optional[str] = None,

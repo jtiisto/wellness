@@ -958,6 +958,40 @@ class TestWriteTools:
         with pytest.raises(ValueError, match="No block at position"):
             self.tools["remove_block"](date=self.FUTURE3, block_position=5)
 
+    # --- reorder_blocks ---
+
+    def test_reorder_blocks(self):
+        self.tools["set_workout_plan"](date=self.FUTURE3, plan=self._two_block_plan())
+        result = self.tools["reorder_blocks"](date=self.FUTURE3, order=[1, 0])
+        assert result["success"] is True
+        assert result["block_order"] == ["Main", "Warmup"]
+        plan = self.tools["get_workout_plan"](
+            start_date=self.FUTURE3, end_date=self.FUTURE3
+        )[0]["plan"]
+        assert [b["title"] for b in plan["blocks"]] == ["Main", "Warmup"]
+        assert [b["block_index"] for b in plan["blocks"]] == [0, 1]
+
+    def test_reorder_blocks_identity(self):
+        self.tools["set_workout_plan"](date=self.FUTURE3, plan=self._two_block_plan())
+        result = self.tools["reorder_blocks"](date=self.FUTURE3, order=[0, 1])
+        assert result["block_order"] == ["Warmup", "Main"]
+
+    def test_reorder_blocks_bad_permutation(self):
+        self.tools["set_workout_plan"](date=self.FUTURE3, plan=self._two_block_plan())
+        with pytest.raises(ValueError, match="permutation"):
+            self.tools["reorder_blocks"](date=self.FUTURE3, order=[0, 0])
+        with pytest.raises(ValueError, match="permutation"):
+            self.tools["reorder_blocks"](date=self.FUTURE3, order=[0])
+
+    def test_reorder_blocks_not_int(self):
+        self.tools["set_workout_plan"](date=self.FUTURE3, plan=self._make_plan())
+        with pytest.raises(ValueError, match="list of integers"):
+            self.tools["reorder_blocks"](date=self.FUTURE3, order=["a", "b"])
+
+    def test_reorder_blocks_no_plan(self):
+        with pytest.raises(ValueError, match="No plan found"):
+            self.tools["reorder_blocks"](date="2099-12-31", order=[0])
+
     # --- ingest_training_program ---
 
     def test_ingest_training_program_success(self):
