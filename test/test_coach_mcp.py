@@ -153,8 +153,9 @@ class TestTransformBlockToExercises:
         assert "work_duration_sec" not in ex
         assert "rest_duration_sec" not in ex
 
-    def test_instruction_block_vo2max_with_structured_fields(self):
-        """Block-level rounds/work/rest are passed through to the interval exercise."""
+    def test_instruction_block_structured_timing_stays_off_exercise(self):
+        """Block-level rounds/work/rest are NOT copied onto the synthesized
+        exercise; they remain block-level (see _transform_block_plan)."""
         block = {
             "block_type": "cardio",
             "title": "VO2 Max",
@@ -167,10 +168,10 @@ class TestTransformBlockToExercises:
         result = _transform_block_to_exercises(block, 0)
         ex = result[0]
         assert ex["type"] == "interval"
-        assert ex["rounds"] == 4
-        assert ex["work_duration_sec"] == 180
-        assert ex["rest_duration_sec"] == 120
         assert ex["target_duration_min"] == 20
+        assert "rounds" not in ex
+        assert "work_duration_sec" not in ex
+        assert "rest_duration_sec" not in ex
 
     def test_superset_group_passes_through(self):
         """superset_group on input exercises is preserved in transform."""
@@ -342,6 +343,35 @@ class TestTransformBlockPlan:
         assert strength_block[1]["target_sets"] == 4
         assert strength_block[1]["target_reps"] == "6-8"
         assert strength_block[1]["superset_group"] == "A"
+
+    def test_block_level_timing_carried_on_block(self):
+        """Interval timing on a cardio instructions block is canonical at the
+        block level: it survives on the transformed block, not on the
+        synthesized exercise."""
+        raw = {
+            "theme": "VO2 Day",
+            "blocks": [
+                {
+                    "block_type": "cardio",
+                    "title": "VO2 Max",
+                    "duration_min": 20,
+                    "rounds": 4,
+                    "work_duration_sec": 180,
+                    "rest_duration_sec": 120,
+                    "instructions": ["4 x (3 min HARD / 2 min easy)"],
+                },
+            ],
+        }
+        result = _transform_block_plan(raw)
+        block = result["blocks"][0]
+        assert block["rounds"] == 4
+        assert block["work_duration_sec"] == 180
+        assert block["rest_duration_sec"] == 120
+        ex = block["exercises"][0]
+        assert ex["type"] == "interval"
+        assert "rounds" not in ex
+        assert "work_duration_sec" not in ex
+        assert "rest_duration_sec" not in ex
 
 
 # ==================== Unit 2: Read Tools Integration Tests ====================

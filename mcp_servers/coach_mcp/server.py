@@ -1610,6 +1610,9 @@ def _transform_block_to_exercises(block: dict, block_index: int) -> list:
             ex_type = "duration"
             name = title or "Zone 2 Cardio"
 
+        # Block-level rounds/work/rest timing stays on the block (see
+        # _transform_block_plan); the synthesized exercise only carries the
+        # cardio-specific fields it owns.
         exercise = {
             "id": exercise_id,
             "name": name,
@@ -1617,9 +1620,6 @@ def _transform_block_to_exercises(block: dict, block_index: int) -> list:
             "target_duration_min": duration,
             "guidance_note": " | ".join(block["instructions"])
         }
-        for key in ("rounds", "work_duration_sec", "rest_duration_sec"):
-            if block.get(key) is not None:
-                exercise[key] = block[key]
         exercises.append(exercise)
 
     return exercises
@@ -1643,6 +1643,8 @@ def _transform_block_plan(plan_data: dict) -> dict:
             "duration_min": block.get("duration_min"),
             "rest_guidance": block.get("rest_guidance", ""),
             "rounds": block.get("rounds"),
+            "work_duration_sec": block.get("work_duration_sec"),
+            "rest_duration_sec": block.get("rest_duration_sec"),
             "exercises": block_exercises
         }
         blocks.append(transformed_block)
