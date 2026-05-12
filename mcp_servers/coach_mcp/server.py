@@ -1181,6 +1181,108 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
         except Exception as e:
             raise ValueError(f"Failed to update plan metadata: {str(e)}")
 
+    # ---- Block-level edits (in place; don't rebuild the plan) ----
+
+    _VALID_BLOCK_TYPES = ["warmup", "strength", "cardio", "circuit", "accessory", "power"]
+    _BLOCK_COLUMN_MAP = {
+        "block_type": "block_type",
+        "title": "title",
+        "duration_min": "duration_min",
+        "rest_guidance": "rest_guidance",
+        "rounds": "rounds",
+        "work_duration_sec": "work_duration_sec",
+        "rest_duration_sec": "rest_duration_sec",
+    }
+
+    @mcp.tool()
+    def update_block(
+        date: str,
+        block_position: int,
+        updates: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """WHEN TO USE: When changing a block's settings — its type, title, total
+        duration, rest guidance, or circuit/interval timing — without rebuilding
+        the whole plan.
+
+        Patches block-level fields of one block in an existing plan. Block-level
+        timing (rounds / work_duration_sec / rest_duration_sec) is canonical here:
+        for circuit and interval blocks edit it on the block, not on the
+        individual exercises.
+
+        Args:
+            date: Date of the plan (YYYY-MM-DD)
+            block_position: 0-indexed position of the block within the plan
+            updates: Fields to change. Allowed: block_type, title, duration_min,
+                     rest_guidance, rounds, work_duration_sec, rest_duration_sec.
+                     Pass null to clear a nullable field.
+
+        Returns:
+            The updated block, reassembled from the database
+        """
+        if not updates:
+            raise ValueError("No updates provided")
+        invalid_fields = set(updates.keys()) - set(_BLOCK_COLUMN_MAP.keys())
+        if invalid_fields:
+            raise ValueError(
+                f"Invalid block fields: {sorted(invalid_fields)}. "
+                f"Allowed: {sorted(_BLOCK_COLUMN_MAP.keys())}"
+            )
+        if "block_type" in updates and updates["block_type"] not in _VALID_BLOCK_TYPES:
+            raise ValueError(
+                f"Invalid block_type: {updates['block_type']}. "
+                f"Must be one of: {_VALID_BLOCK_TYPES}"
+            )
+
+        try:
+            with db_manager.transaction() as cursor:
+                cursor.execute("""
+                    SELECT sb.id, sb.session_id FROM session_blocks sb
+                    JOIN workout_sessions ws ON sb.session_id = ws.id
+                    WHERE ws.date = ? AND sb.position = ?
+                """, [date, block_position])
+                row = cursor.fetchone()
+                if not row:
+                    raise ValueError(
+                        f"No block at position {block_position} in plan for {date}"
+                    )
+                block_id = row["id"]
+                session_id = row["session_id"]
+
+                set_clauses = []
+                params: List[Any] = []
+                for key, value in updates.items():
+                    set_clauses.append(f"{_BLOCK_COLUMN_MAP[key]} = ?")
+                    params.append(value)
+                params.append(block_id)
+                cursor.execute(
+                    f"UPDATE session_blocks SET {', '.join(set_clauses)} WHERE id = ?",
+                    params,
+                )
+
+                now = get_utc_now()
+                cursor.execute("""
+                    UPDATE workout_sessions SET last_modified = ?, modified_by = ?
+                    WHERE id = ?
+                """, [now, "mcp", session_id])
+
+                updated_plan = _assemble_plan_from_db(cursor, session_id)
+                updated_block = next(
+                    (b for b in updated_plan["blocks"]
+                     if b["block_index"] == block_position),
+                    None,
+                )
+
+            return {
+                "success": True,
+                "date": date,
+                "block_position": block_position,
+                "updated_fields": list(updates.keys()),
+                "block": updated_block,
+                "message": f"Block {block_position} updated successfully",
+            }
+        except Exception as e:
+            raise ValueError(f"Failed to update block: {str(e)}")
+
     @mcp.tool()
     def search_exercises(
         query: str,

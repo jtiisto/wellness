@@ -738,6 +738,69 @@ class TestWriteTools:
                 date="2099-12-31", updates={"day_name": "X"}
             )
 
+    # --- update_block ---
+
+    def test_update_block_success(self):
+        plan = self._make_plan()
+        plan["blocks"][0]["block_type"] = "circuit"
+        self.tools["set_workout_plan"](date=self.FUTURE3, plan=plan)
+        result = self.tools["update_block"](
+            date=self.FUTURE3,
+            block_position=0,
+            updates={
+                "title": "Metcon",
+                "rounds": 5,
+                "work_duration_sec": 40,
+                "rest_duration_sec": 20,
+            },
+        )
+        assert result["success"] is True
+        block = result["block"]
+        assert block["title"] == "Metcon"
+        assert block["rounds"] == 5
+        assert block["work_duration_sec"] == 40
+        assert block["rest_duration_sec"] == 20
+
+    def test_update_block_persists(self):
+        self.tools["set_workout_plan"](date=self.FUTURE3, plan=self._make_plan())
+        self.tools["update_block"](
+            date=self.FUTURE3, block_position=0,
+            updates={"rest_guidance": "Rest 3 min"},
+        )
+        plan = self.tools["get_workout_plan"](
+            start_date=self.FUTURE3, end_date=self.FUTURE3
+        )[0]["plan"]
+        assert plan["blocks"][0]["rest_guidance"] == "Rest 3 min"
+
+    def test_update_block_invalid_field(self):
+        self.tools["set_workout_plan"](date=self.FUTURE3, plan=self._make_plan())
+        with pytest.raises(ValueError, match="Invalid block fields"):
+            self.tools["update_block"](
+                date=self.FUTURE3, block_position=0, updates={"bogus": 1}
+            )
+
+    def test_update_block_invalid_block_type(self):
+        self.tools["set_workout_plan"](date=self.FUTURE3, plan=self._make_plan())
+        with pytest.raises(ValueError, match="Invalid block_type"):
+            self.tools["update_block"](
+                date=self.FUTURE3, block_position=0,
+                updates={"block_type": "yoga"},
+            )
+
+    def test_update_block_not_found(self):
+        self.tools["set_workout_plan"](date=self.FUTURE3, plan=self._make_plan())
+        with pytest.raises(ValueError, match="No block at position"):
+            self.tools["update_block"](
+                date=self.FUTURE3, block_position=7, updates={"title": "X"}
+            )
+
+    def test_update_block_empty_updates(self):
+        self.tools["set_workout_plan"](date=self.FUTURE3, plan=self._make_plan())
+        with pytest.raises(ValueError, match="No updates provided"):
+            self.tools["update_block"](
+                date=self.FUTURE3, block_position=0, updates={}
+            )
+
     # --- ingest_training_program ---
 
     def test_ingest_training_program_success(self):
