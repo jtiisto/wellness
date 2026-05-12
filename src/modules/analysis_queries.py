@@ -157,7 +157,7 @@ QUERIES = list(_USER_QUERIES) + [
             "Check supplement and habit adherence from journal data. "
             "IMPORTANT: Before flagging any supplement gaps, read `plans/ACTIVE_CONTEXT.md` "
             "for active taper schedules and cycling rules that override normal adherence expectations "
-            "(e.g., caffeine taper, Thesis Clarity paused, L-theanine tapering). "
+            "(e.g., Thesis Clarity paused, L-theanine tapering). "
             "Only flag gaps that violate the current plan.\n\n"
             "## Priorities for Next Week\n"
             "3 specific priorities based on the data (e.g., 'increase squat weight by 5 lbs', "
