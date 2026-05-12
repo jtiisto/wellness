@@ -2098,10 +2098,23 @@ Exercises are aggregated into a single checklist.
 Individual exercises with sets/reps.
 
 ### circuit / power
-Exercises with rounds (from block-level `rounds` field).
+Exercises performed for `rounds` rounds. Round/work/rest timing is
+**block-level** — put `rounds`, `work_duration_sec`, `rest_duration_sec` on
+the block, not on the individual exercises:
+```json
+{"block_type": "circuit", "title": "Metcon", "rounds": 4,
+ "work_duration_sec": 40, "rest_duration_sec": 20,
+ "exercises": [ ... ]}
+```
 
 ### cardio
-Can use `instructions` array or `exercises` list.
+Can use `instructions` array or `exercises` list. For interval cardio (VO2,
+HARD efforts) put the structured timing on the block too:
+```json
+{"block_type": "cardio", "title": "VO2 Max", "duration_min": 20,
+ "rounds": 4, "work_duration_sec": 180, "rest_duration_sec": 120,
+ "instructions": ["4 x (3 min HARD / 2 min easy)", "HR 160-175"]}
+```
 
 ## Exercise Types
 
@@ -2130,6 +2143,9 @@ Can use `instructions` array or `exercises` list.
 ```
 
 ### interval
+A standalone interval workout (one exercise in a cardio block). Timing may be
+on the exercise; for an interval *block* (multiple stations) put it on the
+block instead — see the cardio/circuit block types above.
 ```json
 {"id": "hiit_1", "name": "Bike Intervals", "type": "interval",
  "rounds": 4, "work_duration_sec": 30, "rest_duration_sec": 90}
@@ -2190,6 +2206,18 @@ the canonical slug and break cross-session comparison.
     ]
 }
 ```
+
+## Editing Existing Plans
+
+`set_workout_plan` / `ingest_training_program` replace a whole plan and are
+blocked once a workout log exists for that date. To tweak an existing plan,
+use the in-place editors instead (they don't rebuild the plan):
+
+- Plan metadata: `update_plan_metadata`
+- Exercises: `update_exercise`, `add_exercise`, `remove_exercise`
+- Blocks: `update_block`, `add_block`, `remove_block`, `reorder_blocks`
+  (blocks are addressed by 0-indexed position; `update_block` is also how you
+  change a block's circuit/interval timing)
 
 ## Exercise Registry
 
