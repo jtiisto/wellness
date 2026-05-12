@@ -128,6 +128,70 @@ def get_utc_now() -> str:
 # ==================== Plan Storage Helpers ====================
 
 
+def _insert_block(cursor, session_id, position, block):
+    """Insert one block (with its exercises and checklist items) at ``position``.
+
+    Exercises without an explicit ``id`` get a key derived from the block type
+    and position; callers needing collision-free keys across an existing
+    session should set ``id`` first. Returns the new ``session_blocks`` row id.
+    """
+    cursor.execute("""
+        INSERT INTO session_blocks
+        (session_id, position, block_type, title, duration_min, rest_guidance, rounds,
+         work_duration_sec, rest_duration_sec)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, [
+        session_id, position,
+        block.get("block_type", ""),
+        block.get("title"),
+        block.get("duration_min"),
+        block.get("rest_guidance", ""),
+        block.get("rounds"),
+        block.get("work_duration_sec"),
+        block.get("rest_duration_sec"),
+    ])
+    block_id = cursor.lastrowid
+
+    for j, ex in enumerate(block.get("exercises", [])):
+        exercise_key = ex.get("id") or f"{block.get('block_type', 'ex')}_{position}_{j}"
+        cursor.execute("""
+            INSERT INTO planned_exercises
+            (session_id, block_id, exercise_key, position, name, exercise_type,
+             target_sets, target_reps, target_duration_min, target_duration_sec,
+             rounds, work_duration_sec, rest_duration_sec,
+             guidance_note, hide_weight, show_time, superset_group, extra, canonical_slug)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, [
+            session_id, block_id, exercise_key, j,
+            ex.get("name", "Unknown"),
+            ex.get("type", "strength"),
+            ex.get("target_sets"),
+            ex.get("target_reps"),
+            ex.get("target_duration_min"),
+            ex.get("target_duration_sec"),
+            ex.get("rounds"),
+            ex.get("work_duration_sec"),
+            ex.get("rest_duration_sec"),
+            ex.get("guidance_note"),
+            1 if ex.get("hide_weight") else 0,
+            1 if ex.get("show_time") else 0,
+            ex.get("superset_group"),
+            json.dumps(ex["extra"]) if ex.get("extra") else None,
+            ex.get("canonical_slug"),
+        ])
+        exercise_id = cursor.lastrowid
+
+        # Checklist items
+        if ex.get("type") == "checklist":
+            for k, item in enumerate(ex.get("items", [])):
+                cursor.execute("""
+                    INSERT INTO checklist_items (exercise_id, position, item_text)
+                    VALUES (?, ?, ?)
+                """, [exercise_id, k, item])
+
+    return block_id
+
+
 def _store_plan_to_db(cursor, date_str, plan, modified_by="mcp"):
     """Store a plan dict into normalized tables. Returns session_id."""
     now = get_utc_now()
@@ -166,59 +230,7 @@ def _store_plan_to_db(cursor, date_str, plan, modified_by="mcp"):
 
     # Insert blocks and exercises
     for i, block in enumerate(plan.get("blocks", [])):
-        cursor.execute("""
-            INSERT INTO session_blocks
-            (session_id, position, block_type, title, duration_min, rest_guidance, rounds,
-             work_duration_sec, rest_duration_sec)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, [
-            session_id, i,
-            block.get("block_type", ""),
-            block.get("title"),
-            block.get("duration_min"),
-            block.get("rest_guidance", ""),
-            block.get("rounds"),
-            block.get("work_duration_sec"),
-            block.get("rest_duration_sec"),
-        ])
-        block_id = cursor.lastrowid
-
-        for j, ex in enumerate(block.get("exercises", [])):
-            exercise_key = ex.get("id", f"{block.get('block_type', 'ex')}_{i}_{j}")
-            cursor.execute("""
-                INSERT INTO planned_exercises
-                (session_id, block_id, exercise_key, position, name, exercise_type,
-                 target_sets, target_reps, target_duration_min, target_duration_sec,
-                 rounds, work_duration_sec, rest_duration_sec,
-                 guidance_note, hide_weight, show_time, superset_group, extra, canonical_slug)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, [
-                session_id, block_id, exercise_key, j,
-                ex.get("name", "Unknown"),
-                ex.get("type", "strength"),
-                ex.get("target_sets"),
-                ex.get("target_reps"),
-                ex.get("target_duration_min"),
-                ex.get("target_duration_sec"),
-                ex.get("rounds"),
-                ex.get("work_duration_sec"),
-                ex.get("rest_duration_sec"),
-                ex.get("guidance_note"),
-                1 if ex.get("hide_weight") else 0,
-                1 if ex.get("show_time") else 0,
-                ex.get("superset_group"),
-                json.dumps(ex["extra"]) if ex.get("extra") else None,
-                ex.get("canonical_slug"),
-            ])
-            exercise_id = cursor.lastrowid
-
-            # Checklist items
-            if ex.get("type") == "checklist":
-                for k, item in enumerate(ex.get("items", [])):
-                    cursor.execute("""
-                        INSERT INTO checklist_items (exercise_id, position, item_text)
-                        VALUES (?, ?, ?)
-                    """, [exercise_id, k, item])
+        _insert_block(cursor, session_id, i, block)
 
     return session_id
 
@@ -1282,6 +1294,148 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
             }
         except Exception as e:
             raise ValueError(f"Failed to update block: {str(e)}")
+
+    @mcp.tool()
+    def add_block(
+        date: str,
+        block: Dict[str, Any],
+        position: Optional[int] = None
+    ) -> Dict[str, Any]:
+        """WHEN TO USE: When inserting a new block into an existing plan — a
+        finisher, an extra accessory block, a cardio block — without rebuilding
+        the plan.
+
+        The block may carry inline ``exercises`` (raw LLM or transformed form)
+        or ``instructions`` (cardio text); they're normalized and stored the
+        same way set_workout_plan does. An empty block (no exercises) is
+        allowed — populate it later with add_exercise.
+
+        Args:
+            date: Date of the plan (YYYY-MM-DD)
+            block: Block object. Requires ``block_type`` (warmup | strength |
+                   cardio | circuit | accessory | power). Optional: title,
+                   duration_min, rest_guidance, rounds, work_duration_sec,
+                   rest_duration_sec, and exercises | instructions.
+            position: 0-indexed insert position. None (default) appends to the
+                      end; otherwise blocks at >= position shift down by one.
+
+        Returns:
+            Confirmation with the inserted block's index, the new block count,
+            and the reassembled block (so you can see the final exercise ids)
+        """
+        if not isinstance(block, dict):
+            raise ValueError("block must be a dictionary")
+        if "block_type" not in block:
+            raise ValueError("block missing 'block_type' field")
+        if block["block_type"] not in _VALID_BLOCK_TYPES:
+            raise ValueError(
+                f"Invalid block_type: {block['block_type']}. "
+                f"Must be one of: {_VALID_BLOCK_TYPES}"
+            )
+
+        # Normalize inline exercises/instructions through the same transform
+        # set_workout_plan uses.
+        fragment = {"blocks": [dict(block)]}
+        if _needs_transform(fragment):
+            fragment = _transform_block_plan(fragment)
+        norm_block = fragment["blocks"][0]
+        # The transform's full-plan wrapper keeps only the standard block
+        # fields, so re-apply any block-level value the caller set explicitly.
+        for key in ("title", "duration_min", "rest_guidance", "rounds",
+                    "work_duration_sec", "rest_duration_sec"):
+            if key in block and block[key] is not None:
+                norm_block[key] = block[key]
+
+        valid_ex_types = ["strength", "duration", "checklist",
+                          "weighted_time", "interval", "circuit"]
+        for i, ex in enumerate(norm_block.get("exercises", [])):
+            for field in ("id", "name", "type"):
+                if not ex.get(field):
+                    raise ValueError(f"Exercise {i} in block missing '{field}'")
+            if ex["type"] not in valid_ex_types:
+                raise ValueError(
+                    f"Exercise {i} has invalid type: {ex['type']}. "
+                    f"Must be one of: {valid_ex_types}"
+                )
+            _reject_legacy_pair_suffix(ex["name"], f"Exercise {i}")
+
+        try:
+            with db_manager.transaction() as cursor:
+                cursor.execute("SELECT id FROM workout_sessions WHERE date = ?", [date])
+                session = cursor.fetchone()
+                if not session:
+                    raise ValueError(f"No plan found for date: {date}")
+                session_id = session["id"]
+
+                cursor.execute(
+                    "SELECT COUNT(*) AS c FROM session_blocks WHERE session_id = ?",
+                    [session_id],
+                )
+                block_count = cursor.fetchone()["c"]
+                if position is None or position >= block_count:
+                    insert_pos = block_count
+                else:
+                    insert_pos = max(0, position)
+                    # Make room: walk top-down so each target slot is vacated
+                    # before it's filled (session_blocks has UNIQUE(session_id,
+                    # position)).
+                    rows = cursor.execute("""
+                        SELECT id, position FROM session_blocks
+                        WHERE session_id = ? AND position >= ?
+                        ORDER BY position DESC
+                    """, [session_id, insert_pos]).fetchall()
+                    for r in rows:
+                        cursor.execute(
+                            "UPDATE session_blocks SET position = ? WHERE id = ?",
+                            [r["position"] + 1, r["id"]],
+                        )
+
+                # Keep new exercise keys collision-free within the session.
+                existing_keys = {
+                    r["exercise_key"] for r in cursor.execute(
+                        "SELECT exercise_key FROM planned_exercises WHERE session_id = ?",
+                        [session_id],
+                    ).fetchall()
+                }
+                for ex in norm_block.get("exercises", []):
+                    key = ex["id"]
+                    if key in existing_keys:
+                        n = 2
+                        while f"{key}_{n}" in existing_keys:
+                            n += 1
+                        key = f"{key}_{n}"
+                    ex["id"] = key
+                    existing_keys.add(key)
+
+                # Resolve names → canonical slugs (creates registry entries).
+                resolve_plan_exercises(registry, {"blocks": [norm_block]}, cursor)
+
+                _insert_block(cursor, session_id, insert_pos, norm_block)
+
+                now = get_utc_now()
+                cursor.execute(
+                    "UPDATE workout_sessions SET last_modified = ?, modified_by = ? WHERE id = ?",
+                    [now, "mcp", session_id],
+                )
+
+                updated_plan = _assemble_plan_from_db(cursor, session_id)
+                inserted = next(
+                    (b for b in updated_plan["blocks"]
+                     if b["block_index"] == insert_pos),
+                    None,
+                )
+                total_blocks = len(updated_plan["blocks"])
+
+            return {
+                "success": True,
+                "date": date,
+                "block_index": insert_pos,
+                "total_blocks": total_blocks,
+                "block": inserted,
+                "message": f"Block added at position {insert_pos}",
+            }
+        except Exception as e:
+            raise ValueError(f"Failed to add block: {str(e)}")
 
     @mcp.tool()
     def search_exercises(

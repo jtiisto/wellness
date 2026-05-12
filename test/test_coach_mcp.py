@@ -801,6 +801,105 @@ class TestWriteTools:
                 date=self.FUTURE3, block_position=0, updates={}
             )
 
+    # --- add_block ---
+
+    def test_add_block_append(self):
+        self.tools["set_workout_plan"](date=self.FUTURE3, plan=self._make_plan())
+        result = self.tools["add_block"](
+            date=self.FUTURE3,
+            block={
+                "block_type": "accessory",
+                "title": "Finisher",
+                "exercises": [{"name": "Face Pulls", "sets": 3, "reps": "15"}],
+            },
+        )
+        assert result["success"] is True
+        assert result["block_index"] == 1
+        assert result["total_blocks"] == 2
+        block = result["block"]
+        assert block["block_type"] == "accessory"
+        assert block["title"] == "Finisher"
+        assert len(block["exercises"]) == 1
+        # The raw exercise was transformed: it now has an id and a type.
+        assert block["exercises"][0]["id"]
+        assert block["exercises"][0]["type"] == "strength"
+
+    def test_add_block_at_position_shifts(self):
+        self.tools["set_workout_plan"](date=self.FUTURE3, plan=self._make_plan())
+        self.tools["add_block"](
+            date=self.FUTURE3,
+            block={
+                "block_type": "warmup",
+                "title": "Warmup",
+                "exercises": [{"name": "Arm Circles", "reps": 10}],
+            },
+            position=0,
+        )
+        plan = self.tools["get_workout_plan"](
+            start_date=self.FUTURE3, end_date=self.FUTURE3
+        )[0]["plan"]
+        assert [b["title"] for b in plan["blocks"]] == ["Warmup", "Main"]
+        assert [b["block_index"] for b in plan["blocks"]] == [0, 1]
+
+    def test_add_block_empty(self):
+        self.tools["set_workout_plan"](date=self.FUTURE3, plan=self._make_plan())
+        result = self.tools["add_block"](
+            date=self.FUTURE3, block={"block_type": "accessory", "title": "TBD"}
+        )
+        assert result["success"] is True
+        assert result["block"]["exercises"] == []
+
+    def test_add_block_carries_timing(self):
+        self.tools["set_workout_plan"](date=self.FUTURE3, plan=self._make_plan())
+        result = self.tools["add_block"](
+            date=self.FUTURE3,
+            block={
+                "block_type": "circuit",
+                "title": "AMRAP",
+                "rounds": 5,
+                "work_duration_sec": 40,
+                "rest_duration_sec": 20,
+                "exercises": [{"name": "Burpees", "reps": "10"}],
+            },
+        )
+        block = result["block"]
+        assert block["rounds"] == 5
+        assert block["work_duration_sec"] == 40
+        assert block["rest_duration_sec"] == 20
+
+    def test_add_block_no_plan(self):
+        with pytest.raises(ValueError, match="No plan found"):
+            self.tools["add_block"](
+                date="2099-12-31", block={"block_type": "strength"}
+            )
+
+    def test_add_block_invalid_block_type(self):
+        self.tools["set_workout_plan"](date=self.FUTURE3, plan=self._make_plan())
+        with pytest.raises(ValueError, match="Invalid block_type"):
+            self.tools["add_block"](date=self.FUTURE3, block={"block_type": "yoga"})
+
+    def test_add_block_missing_block_type(self):
+        self.tools["set_workout_plan"](date=self.FUTURE3, plan=self._make_plan())
+        with pytest.raises(ValueError, match="missing 'block_type'"):
+            self.tools["add_block"](date=self.FUTURE3, block={"title": "X"})
+
+    def test_add_block_dedups_exercise_keys(self):
+        self.tools["set_workout_plan"](date=self.FUTURE3, plan=self._make_plan())
+        result = self.tools["add_block"](
+            date=self.FUTURE3,
+            block={
+                "block_type": "strength",
+                "title": "Extra",
+                "exercises": [{
+                    "id": "test_ex_1", "name": "Curl", "type": "strength",
+                    "target_sets": 3, "target_reps": "10",
+                }],
+            },
+        )
+        new_key = result["block"]["exercises"][0]["id"]
+        assert new_key != "test_ex_1"
+        assert new_key.startswith("test_ex_1")
+
     # --- ingest_training_program ---
 
     def test_ingest_training_program_success(self):
