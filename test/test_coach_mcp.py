@@ -559,6 +559,24 @@ class TestWriteTools:
                 date=today, plan=self._make_plan()
             )
 
+    def test_block_timing_round_trips(self):
+        """Block-level rounds/work/rest timing survives store -> assemble."""
+        plan = self._make_plan()
+        plan["blocks"][0]["block_type"] = "circuit"
+        plan["blocks"][0]["title"] = "Conditioning Circuit"
+        plan["blocks"][0]["rounds"] = 4
+        plan["blocks"][0]["work_duration_sec"] = 40
+        plan["blocks"][0]["rest_duration_sec"] = 20
+        plan["blocks"][0]["exercises"][0]["type"] = "circuit"
+        self.tools["set_workout_plan"](date=self.FUTURE3, plan=plan)
+        result = self.tools["get_workout_plan"](
+            start_date=self.FUTURE3, end_date=self.FUTURE3
+        )
+        block = result[0]["plan"]["blocks"][0]
+        assert block["rounds"] == 4
+        assert block["work_duration_sec"] == 40
+        assert block["rest_duration_sec"] == 20
+
     # --- update_exercise ---
 
     def test_update_exercise_success(self):

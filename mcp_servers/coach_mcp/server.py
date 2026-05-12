@@ -168,8 +168,9 @@ def _store_plan_to_db(cursor, date_str, plan, modified_by="mcp"):
     for i, block in enumerate(plan.get("blocks", [])):
         cursor.execute("""
             INSERT INTO session_blocks
-            (session_id, position, block_type, title, duration_min, rest_guidance, rounds)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            (session_id, position, block_type, title, duration_min, rest_guidance, rounds,
+             work_duration_sec, rest_duration_sec)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, [
             session_id, i,
             block.get("block_type", ""),
@@ -177,6 +178,8 @@ def _store_plan_to_db(cursor, date_str, plan, modified_by="mcp"):
             block.get("duration_min"),
             block.get("rest_guidance", ""),
             block.get("rounds"),
+            block.get("work_duration_sec"),
+            block.get("rest_duration_sec"),
         ])
         block_id = cursor.lastrowid
 
@@ -288,6 +291,8 @@ def _assemble_plan_from_db(cursor, session_id):
             "duration_min": br["duration_min"],
             "rest_guidance": br["rest_guidance"] or "",
             "rounds": br["rounds"],
+            "work_duration_sec": br["work_duration_sec"],
+            "rest_duration_sec": br["rest_duration_sec"],
             "exercises": exercises,
         })
 

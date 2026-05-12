@@ -363,6 +363,8 @@ def _assemble_plan(conn, session_row):
             "duration_min": br["duration_min"],
             "rest_guidance": br["rest_guidance"] or "",
             "rounds": br["rounds"],
+            "work_duration_sec": br["work_duration_sec"],
+            "rest_duration_sec": br["rest_duration_sec"],
             "exercises": exercises,
         })
 
