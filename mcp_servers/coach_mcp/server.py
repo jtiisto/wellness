@@ -1438,6 +1438,91 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
             raise ValueError(f"Failed to add block: {str(e)}")
 
     @mcp.tool()
+    def remove_block(
+        date: str,
+        block_position: int,
+        force: bool = False
+    ) -> Dict[str, Any]:
+        """WHEN TO USE: When dropping a whole block from a plan.
+
+        Removes the block at ``block_position`` and re-packs the remaining
+        block positions. Refuses to remove a block that still has exercises
+        unless ``force=True`` — pass force to drop the block and its exercises
+        together. (As with remove_exercise, removing an exercise that has a
+        workout log leaves that log entry without a matching plan exercise.)
+
+        Args:
+            date: Date of the plan (YYYY-MM-DD)
+            block_position: 0-indexed position of the block to remove
+            force: Required to remove a block that still contains exercises
+
+        Returns:
+            Confirmation with the removed exercise count and remaining block count
+        """
+        try:
+            with db_manager.transaction() as cursor:
+                cursor.execute("""
+                    SELECT sb.id, sb.session_id FROM session_blocks sb
+                    JOIN workout_sessions ws ON sb.session_id = ws.id
+                    WHERE ws.date = ? AND sb.position = ?
+                """, [date, block_position])
+                row = cursor.fetchone()
+                if not row:
+                    raise ValueError(
+                        f"No block at position {block_position} in plan for {date}"
+                    )
+                block_id = row["id"]
+                session_id = row["session_id"]
+
+                ex_count = cursor.execute(
+                    "SELECT COUNT(*) AS c FROM planned_exercises WHERE block_id = ?",
+                    [block_id],
+                ).fetchone()["c"]
+                if ex_count > 0 and not force:
+                    raise ValueError(
+                        f"Block {block_position} has {ex_count} exercise(s). "
+                        f"Remove them first, or pass force=true to drop the block "
+                        f"and its exercises together."
+                    )
+
+                # Delete the block (CASCADE drops its exercises + checklist items).
+                cursor.execute("DELETE FROM session_blocks WHERE id = ?", [block_id])
+
+                # Re-pack the positions of the blocks that came after it.
+                rows = cursor.execute("""
+                    SELECT id, position FROM session_blocks
+                    WHERE session_id = ? AND position > ?
+                    ORDER BY position ASC
+                """, [session_id, block_position]).fetchall()
+                for r in rows:
+                    cursor.execute(
+                        "UPDATE session_blocks SET position = ? WHERE id = ?",
+                        [r["position"] - 1, r["id"]],
+                    )
+
+                now = get_utc_now()
+                cursor.execute(
+                    "UPDATE workout_sessions SET last_modified = ?, modified_by = ? WHERE id = ?",
+                    [now, "mcp", session_id],
+                )
+
+                remaining = cursor.execute(
+                    "SELECT COUNT(*) AS c FROM session_blocks WHERE session_id = ?",
+                    [session_id],
+                ).fetchone()["c"]
+
+            return {
+                "success": True,
+                "date": date,
+                "removed_block_position": block_position,
+                "removed_exercises": ex_count,
+                "remaining_blocks": remaining,
+                "message": f"Block {block_position} removed",
+            }
+        except Exception as e:
+            raise ValueError(f"Failed to remove block: {str(e)}")
+
+    @mcp.tool()
     def search_exercises(
         query: str,
         equipment: Optional[str] = None,

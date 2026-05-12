@@ -900,6 +900,64 @@ class TestWriteTools:
         assert new_key != "test_ex_1"
         assert new_key.startswith("test_ex_1")
 
+    # --- remove_block ---
+
+    def _two_block_plan(self):
+        return {
+            "day_name": "Two Blocks", "location": "Gym", "phase": "Foundation",
+            "blocks": [
+                {
+                    "block_type": "warmup", "title": "Warmup",
+                    "exercises": [{
+                        "id": "w_1", "name": "Arm Circles",
+                        "type": "checklist", "items": ["Arm Circles x10"],
+                    }],
+                },
+                {
+                    "block_type": "strength", "title": "Main",
+                    "exercises": [{
+                        "id": "s_1", "name": "Bench Press", "type": "strength",
+                        "target_sets": 3, "target_reps": "8",
+                    }],
+                },
+            ],
+        }
+
+    def test_remove_block_requires_force_when_not_empty(self):
+        self.tools["set_workout_plan"](date=self.FUTURE3, plan=self._two_block_plan())
+        with pytest.raises(ValueError, match="pass force"):
+            self.tools["remove_block"](date=self.FUTURE3, block_position=0)
+
+    def test_remove_block_force_repacks_positions(self):
+        self.tools["set_workout_plan"](date=self.FUTURE3, plan=self._two_block_plan())
+        result = self.tools["remove_block"](
+            date=self.FUTURE3, block_position=0, force=True
+        )
+        assert result["success"] is True
+        assert result["removed_exercises"] == 1
+        assert result["remaining_blocks"] == 1
+        plan = self.tools["get_workout_plan"](
+            start_date=self.FUTURE3, end_date=self.FUTURE3
+        )[0]["plan"]
+        assert len(plan["blocks"]) == 1
+        assert plan["blocks"][0]["title"] == "Main"
+        assert plan["blocks"][0]["block_index"] == 0
+
+    def test_remove_block_empty_no_force_needed(self):
+        self.tools["set_workout_plan"](date=self.FUTURE3, plan=self._make_plan())
+        self.tools["add_block"](
+            date=self.FUTURE3, block={"block_type": "accessory", "title": "TBD"}
+        )
+        result = self.tools["remove_block"](date=self.FUTURE3, block_position=1)
+        assert result["success"] is True
+        assert result["removed_exercises"] == 0
+        assert result["remaining_blocks"] == 1
+
+    def test_remove_block_not_found(self):
+        self.tools["set_workout_plan"](date=self.FUTURE3, plan=self._make_plan())
+        with pytest.raises(ValueError, match="No block at position"):
+            self.tools["remove_block"](date=self.FUTURE3, block_position=5)
+
     # --- ingest_training_program ---
 
     def test_ingest_training_program_success(self):
