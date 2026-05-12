@@ -126,12 +126,18 @@ The Coach module handles workout plans (authored server-side, typically by AI) a
 **Data model (plans):**
 ```
 workout_sessions   (id, date, day_name, location, phase, duration_min)
-session_blocks     (id, session_id, position, block_type, title)
+session_blocks     (id, session_id, position, block_type, title, duration_min,
+                    rest_guidance, rounds, work_duration_sec, rest_duration_sec)
 planned_exercises  (id, session_id, block_id, exercise_key, name, exercise_type,
                     targets..., superset_group, canonical_slug)
 checklist_items    (id, exercise_id, position, item_text)
 deleted_plans      (date, deleted_at)  -- tombstones for incremental sync
 ```
+
+`rounds` / `work_duration_sec` / `rest_duration_sec` on `session_blocks` are
+the canonical home for circuit and interval timing — it describes the whole
+block, not a single exercise (do all the block's exercises, that's one round,
+repeat). They were added by migration (`ALTER TABLE` in `init_database`).
 
 `superset_group` is a free-form text label scoped per block — consecutive
 exercises sharing the same label render as a single visual group in the UI
@@ -160,8 +166,8 @@ pass-through vs transform; this matches `_needs_transform` and means a plan
 mixing raw and transformed blocks (e.g. raw warmup + transformed cardio) only
 transforms the raw ones.
 
-For interval cardio, the LLM may emit structured timing fields at the block
-level alongside `instructions`. These pass through to the resulting exercise:
+For interval/circuit blocks the LLM emits structured timing fields at the
+**block** level:
 
 ```json
 {
@@ -174,9 +180,40 @@ level alongside `instructions`. These pass through to the resulting exercise:
 }
 ```
 
-The PWA's `formatTarget` (`public/js/coach/utils.js`) renders
-`rounds × work/rest` (mm:ss) when all three are set, otherwise falls back to
-`target_duration_min`.
+These stay on the block — `_transform_block_to_exercises` does **not** copy
+them onto the synthesized cardio exercise. `BlockView` renders a compact
+timing badge in the block header (`formatInterval` → `4 × 3:00/2:00`), and an
+interval exercise's `formatTarget` falls back to the block's timing when it
+doesn't carry its own. (Pre-canonical-block plans that stored timing on the
+exercise still render, because `formatTarget` checks the exercise first.)
+
+**Editing plans in place:**
+
+`set_workout_plan` / `ingest_training_program` replace a whole plan (delete +
+re-insert, blocked when a workout log exists). For everything short of that,
+the coach MCP exposes granular editors that mutate the relational rows
+directly and bump `workout_sessions.last_modified` so the next sync picks the
+change up:
+
+| Level | Tools |
+|-------|-------|
+| Plan metadata | `update_plan_metadata` (day_name, location, phase, total_duration_min) |
+| Exercise | `update_exercise`, `add_exercise`, `remove_exercise` |
+| Block | `update_block`, `add_block`, `remove_block`, `reorder_blocks` |
+
+Block tools address a block by its 0-indexed `position`. `update_block` patches
+`block_type` / `title` / `duration_min` / `rest_guidance` and the canonical
+timing fields (`rounds` / `work_duration_sec` / `rest_duration_sec`).
+`add_block` inserts a block (appending or shifting later blocks down) and runs
+any inline `exercises` / `instructions` through the same transform
+`set_workout_plan` uses, keeping new exercise keys unique within the session;
+the block-write path (`_insert_block`) is shared with `_store_plan_to_db`.
+`remove_block` refuses to drop a non-empty block unless `force=true` and
+re-packs positions; `reorder_blocks` takes a permutation of `0..N-1` and
+rewrites positions in a two-phase update (park in `N..2N-1`, then settle) to
+respect `UNIQUE(session_id, position)`. None of the block tools are
+log-guarded — like `remove_exercise`, removing an exercise that has a log
+entry leaves that entry without a matching plan exercise.
 
 **Data model (logs):**
 ```
