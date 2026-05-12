@@ -2108,13 +2108,23 @@ the block, not on the individual exercises:
 ```
 
 ### cardio
-Can use `instructions` array or `exercises` list. For interval cardio (VO2,
-HARD efforts) put the structured timing on the block too:
+Use an `exercises` list with `duration` exercises (steady cardio) and/or
+`interval` exercises (VO2 / HARD work). For an interval block the round /
+work / rest timing is **block-level** — put `rounds`, `work_duration_sec`,
+`rest_duration_sec` on the block:
 ```json
 {"block_type": "cardio", "title": "VO2 Max", "duration_min": 20,
  "rounds": 4, "work_duration_sec": 180, "rest_duration_sec": 120,
- "instructions": ["4 x (3 min HARD / 2 min easy)", "HR 160-175"]}
+ "exercises": [
+   {"id": "vo2_1", "name": "VO2 Max Intervals", "type": "interval",
+    "target_duration_min": 20,
+    "guidance_note": "4 x (3 min HARD / 2 min easy). HR 160-175"}
+ ]}
 ```
+Shorthand: a block with an `instructions` array (free-form text, no
+`exercises`) still works — the server expands it into a single `duration`
+exercise, or `interval` if the text mentions VO2/HARD. The `exercises` form
+is preferred: explicit type and name, no keyword-guessing.
 
 ## Exercise Types
 
