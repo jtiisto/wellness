@@ -94,7 +94,26 @@ class TestTransformBlockToExercises:
         assert ex["id"] == "strength_1_1"
         assert ex["target_sets"] == 4
         assert ex["target_reps"] == "6-8"
-        assert "Rest 2 min" in ex["guidance_note"]
+        # Block-level rest_guidance is not folded into the exercise note; with
+        # no exercise-specific cues, guidance_note is absent entirely.
+        assert "guidance_note" not in ex
+
+    def test_block_rest_guidance_not_copied_to_exercise_note(self):
+        """Block-level rest_guidance stays on the block — exercise notes carry
+        only exercise-specific cues (tempo/load_guide/notes)."""
+        block = {
+            "block_type": "strength",
+            "title": "Main Lifts",
+            "rest_guidance": "Rest 2 min",
+            "exercises": [
+                {"name": "Bench Press", "sets": 4, "reps": "6-8",
+                 "notes": "Pause at chest"},
+            ],
+        }
+        result = _transform_block_to_exercises(block, 1)
+        ex = result[0]
+        assert ex["guidance_note"] == "Pause at chest"
+        assert "Rest 2 min" not in ex["guidance_note"]
 
     def test_circuit_block_type(self):
         block = {

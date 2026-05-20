@@ -1923,7 +1923,6 @@ def _transform_block_to_exercises(block: dict, block_index: int) -> list:
     exercises = []
     block_type = block.get("block_type", "")
     title = block.get("title", "")
-    rest_guidance = block.get("rest_guidance", "")
     duration = block.get("duration_min", 0)
 
     # Handle warmup blocks specially - aggregate into single checklist
@@ -1993,7 +1992,8 @@ def _transform_block_to_exercises(block: dict, block_index: int) -> list:
             elif _is_bodyweight_or_band(ex.get("name", "")):
                 exercise["hide_weight"] = True
 
-            # Build guidance note
+            # Build guidance note from exercise-specific cues only. Block-level
+            # rest_guidance is not folded in here — it stays on the block.
             notes = []
             if ex.get("tempo"):
                 notes.append(f"Tempo {ex['tempo']}")
@@ -2001,8 +2001,6 @@ def _transform_block_to_exercises(block: dict, block_index: int) -> list:
                 notes.append(ex["load_guide"])
             if ex.get("notes"):
                 notes.append(ex["notes"])
-            if rest_guidance and block_type == "strength":
-                notes.append(rest_guidance)
 
             if notes:
                 exercise["guidance_note"] = ". ".join(notes)

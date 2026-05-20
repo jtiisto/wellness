@@ -187,6 +187,10 @@ interval exercise's `formatTarget` falls back to the block's timing when it
 doesn't carry its own. (Pre-canonical-block plans that stored timing on the
 exercise still render, because `formatTarget` checks the exercise first.)
 
+Likewise, a block's `rest_guidance` text stays on the block — it is **not**
+folded into exercise `guidance_note` fields. An exercise's `guidance_note`
+carries only exercise-specific cues (`tempo`, `load_guide`, `notes`).
+
 **Editing plans in place:**
 
 `set_workout_plan` / `ingest_training_program` replace a whole plan (delete +
