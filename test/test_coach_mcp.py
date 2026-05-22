@@ -10,6 +10,7 @@ from coach_mcp.config import MCPConfig
 from coach_mcp.server import (
     DatabaseManager,
     SQLiteConnection,
+    _ensure_exercise_ids,
     _is_bodyweight_or_band,
     _needs_transform,
     _transform_block_plan,
@@ -25,9 +26,11 @@ from coach_mcp.server import (
 class TestNeedsTransform:
     """Tests for _needs_transform detection of raw LLM plans."""
 
-    def test_exercises_missing_id(self):
+    def test_exercise_missing_id_only_no_transform(self):
+        """A formed exercise missing only `id` does NOT need transformation —
+        the id is backfilled separately by _ensure_exercise_ids."""
         plan = {"blocks": [{"exercises": [{"name": "Squat", "type": "strength"}]}]}
-        assert _needs_transform(plan) is True
+        assert _needs_transform(plan) is False
 
     def test_exercises_missing_type(self):
         plan = {"blocks": [{"exercises": [{"id": "ex_1", "name": "Squat"}]}]}
@@ -40,6 +43,48 @@ class TestNeedsTransform:
     def test_instruction_block_without_exercises(self):
         plan = {"blocks": [{"instructions": ["Run 30 min zone 2"], "block_type": "cardio"}]}
         assert _needs_transform(plan) is True
+
+
+@pytest.mark.unit
+class TestEnsureExerciseIds:
+    """Tests for _ensure_exercise_ids idempotent id backfill."""
+
+    def test_assigns_missing_ids(self):
+        plan = {"blocks": [{"block_type": "strength", "exercises": [
+            {"name": "Squat", "type": "strength"},
+            {"name": "Press", "type": "strength"},
+        ]}]}
+        _ensure_exercise_ids(plan)
+        ids = [ex["id"] for ex in plan["blocks"][0]["exercises"]]
+        assert ids == ["strength_0_1", "strength_0_2"]
+
+    def test_preserves_existing_ids(self):
+        plan = {"blocks": [{"block_type": "strength", "exercises": [
+            {"id": "keep_me", "name": "Squat", "type": "strength"},
+        ]}]}
+        _ensure_exercise_ids(plan)
+        assert plan["blocks"][0]["exercises"][0]["id"] == "keep_me"
+
+    def test_idempotent(self):
+        plan = {"blocks": [{"block_type": "strength", "exercises": [
+            {"name": "Squat", "type": "strength"},
+        ]}]}
+        _ensure_exercise_ids(plan)
+        first = plan["blocks"][0]["exercises"][0]["id"]
+        _ensure_exercise_ids(plan)
+        assert plan["blocks"][0]["exercises"][0]["id"] == first
+
+    def test_generated_id_avoids_collision(self):
+        """A generated id never collides with an id already used in the block."""
+        plan = {"blocks": [{"block_type": "strength", "exercises": [
+            {"name": "A", "type": "strength"},
+            {"id": "strength_0_1", "name": "B", "type": "strength"},
+        ]}]}
+        _ensure_exercise_ids(plan)
+        ids = [ex["id"] for ex in plan["blocks"][0]["exercises"]]
+        assert ids[1] == "strength_0_1"
+        assert ids[0] != "strength_0_1"
+        assert len(set(ids)) == 2
 
 
 @pytest.mark.unit
@@ -77,6 +122,66 @@ class TestTransformBlockToExercises:
         assert ex["id"] == "warmup_0"
         assert "Arm Circles x10" in ex["items"]
         assert "Cat-Cow 10 each" in ex["items"]
+
+    def test_warmup_preserves_preformed_checklist(self):
+        """A pre-formed checklist in a warmup block keeps its `items` and
+        metadata — it is not rebuilt from the exercise name."""
+        block = {
+            "block_type": "warmup",
+            "title": "Warmup",
+            "exercises": [{
+                "name": "The Stability Start",
+                "type": "checklist",
+                "canonical_slug": "the_stability_start",
+                "items": ["Cat-Cow x10", "Bird-Dog 5/side", "Dead Bug x10"],
+            }],
+        }
+        result = _transform_block_to_exercises(block, 0)
+        assert len(result) == 1
+        ex = result[0]
+        assert ex["type"] == "checklist"
+        assert ex["items"] == ["Cat-Cow x10", "Bird-Dog 5/side", "Dead Bug x10"]
+        assert ex["canonical_slug"] == "the_stability_start"
+
+    def test_warmup_mixed_preformed_and_raw(self):
+        """A warmup block mixing a pre-formed checklist with raw movements
+        preserves the checklist and aggregates only the raw movements."""
+        block = {
+            "block_type": "warmup",
+            "title": "Warmup",
+            "exercises": [
+                {"name": "Mobility", "type": "checklist", "items": ["Cat-Cow x10"]},
+                {"name": "Arm Circles", "reps": 10},
+                {"name": "Leg Swings", "reps": "8/side"},
+            ],
+        }
+        result = _transform_block_to_exercises(block, 0)
+        assert len(result) == 2
+        assert result[0]["items"] == ["Cat-Cow x10"]
+        assert result[1]["type"] == "checklist"
+        assert result[1]["items"] == ["Arm Circles x10", "Leg Swings 8/side"]
+
+    def test_strength_preserves_preformed_fields(self):
+        """A formed strength exercise (missing only `id`) keeps target_sets/
+        target_reps/canonical_slug/guidance_note through the transform."""
+        block = {
+            "block_type": "strength",
+            "title": "Main",
+            "exercises": [{
+                "name": "Back Squat",
+                "type": "strength",
+                "target_sets": 5,
+                "target_reps": "5",
+                "canonical_slug": "back_squat",
+                "guidance_note": "Belt on top sets",
+            }],
+        }
+        result = _transform_block_to_exercises(block, 0)
+        ex = result[0]
+        assert ex["target_sets"] == 5
+        assert ex["target_reps"] == "5"
+        assert ex["canonical_slug"] == "back_squat"
+        assert ex["guidance_note"] == "Belt on top sets"
 
     def test_strength_sets_and_reps(self):
         block = {
@@ -318,6 +423,56 @@ class TestTransformBlockPlan:
         assert warmup_ex["type"] == "checklist"
         assert warmup_ex["items"] == ["Cat-Cow x10", "Bird-Dog x5/side", "Glute Bridge x10"]
         assert warmup_ex["name"] == "Stability Start"
+
+    def test_warmup_without_id_passes_through(self):
+        """A pre-formed warmup checklist missing only `id` is preserved — its
+        items are not collapsed (regression: bugfix_warmup_ingest_field_loss)."""
+        raw = {
+            "theme": "Mixed",
+            "blocks": [
+                {
+                    "block_type": "warmup",
+                    "title": "Warmup",
+                    "exercises": [{
+                        "name": "The Stability Start",
+                        "type": "checklist",
+                        "items": ["Cat-Cow x10", "Bird-Dog 5/side", "Dead Bug x10"],
+                    }],
+                },
+                {
+                    "block_type": "strength",
+                    "title": "Main",
+                    "exercises": [{"name": "Bench Press", "sets": 4, "reps": "6-8"}],
+                },
+            ],
+        }
+        result = _transform_block_plan(raw)
+        warmup_ex = result["blocks"][0]["exercises"][0]
+        assert warmup_ex["type"] == "checklist"
+        assert warmup_ex["items"] == ["Cat-Cow x10", "Bird-Dog 5/side", "Dead Bug x10"]
+
+    def test_strength_without_id_passes_through(self):
+        """A formed strength block missing only `id`s passes through with
+        target_sets/target_reps/canonical_slug intact."""
+        raw = {
+            "theme": "Strength Day",
+            "blocks": [{
+                "block_type": "strength",
+                "title": "Main",
+                "exercises": [{
+                    "name": "Back Squat",
+                    "type": "strength",
+                    "target_sets": 5,
+                    "target_reps": "5",
+                    "canonical_slug": "back_squat",
+                }],
+            }],
+        }
+        result = _transform_block_plan(raw)
+        ex = result["blocks"][0]["exercises"][0]
+        assert ex["target_sets"] == 5
+        assert ex["target_reps"] == "5"
+        assert ex["canonical_slug"] == "back_squat"
 
     def test_transformed_strength_passes_through(self):
         """Already-transformed strength block keeps target_sets/target_reps/superset_group."""
@@ -625,6 +780,35 @@ class TestWriteTools:
         assert block["rounds"] == 4
         assert block["work_duration_sec"] == 40
         assert block["rest_duration_sec"] == 20
+
+    def test_set_workout_plan_preserves_preformed_warmup_checklist(self):
+        """Regression (bugfix_warmup_ingest_field_loss): a warmup checklist
+        supplied with type/items but no id keeps every item through
+        set_workout_plan -> get_workout_plan."""
+        plan = {
+            "day_name": "Warmup Test",
+            "location": "Home",
+            "phase": "Building",
+            "blocks": [{
+                "block_type": "warmup",
+                "title": "Warmup",
+                "duration_min": 10,
+                "exercises": [{
+                    "name": "The Stability Start",
+                    "type": "checklist",
+                    "items": ["Cat-Cow x10", "Bird-Dog 5/side", "Dead Bug x10"],
+                }],
+            }],
+        }
+        result = self.tools["set_workout_plan"](date=self.FUTURE2, plan=plan)
+        assert result["success"] is True
+        readback = self.tools["get_workout_plan"](
+            start_date=self.FUTURE2, end_date=self.FUTURE2
+        )
+        ex = readback[0]["plan"]["blocks"][0]["exercises"][0]
+        assert ex["type"] == "checklist"
+        assert ex["items"] == ["Cat-Cow x10", "Bird-Dog 5/side", "Dead Bug x10"]
+        assert ex.get("id")  # backfilled by _ensure_exercise_ids
 
     # --- update_exercise ---
 

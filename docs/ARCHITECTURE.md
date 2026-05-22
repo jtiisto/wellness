@@ -152,19 +152,26 @@ and break cross-session comparison.
 through `_transform_block_plan`:
 
 - **Raw LLM block format** — blocks contain either `instructions: [...]` text
-  (cardio) or `exercises: [...]` whose entries lack `id`/`type` (strength, etc.).
+  (cardio) or `exercises: [...]` whose entries lack a `type`.
   `_transform_block_plan` walks each block and calls
-  `_transform_block_to_exercises` to assign IDs, derive types from `block_type`,
-  aggregate warmup items into a checklist, and split cardio `instructions` into
-  a single exercise with `type: duration` (Zone 2) or `type: interval` (when the
-  text mentions VO2/HARD).
-- **Transformed format** — exercises already carry `id` and `type`. Blocks in
-  this shape pass through verbatim, so re-ingesting an existing plan is a no-op.
+  `_transform_block_to_exercises` to derive types from `block_type`,
+  aggregate raw warmup movements into a checklist, and split cardio
+  `instructions` into a single exercise with `type: duration` (Zone 2) or
+  `type: interval` (when the text mentions VO2/HARD).
+- **Transformed format** — exercises already carry a `type`. Blocks in this
+  shape pass through verbatim, so re-ingesting an existing plan is a no-op.
 
-The per-block predicate "every exercise has both `id` and `type`" decides
-pass-through vs transform; this matches `_needs_transform` and means a plan
-mixing raw and transformed blocks (e.g. raw warmup + transformed cardio) only
-transforms the raw ones.
+`type` — not `id` — is the marker of an already-formed exercise: the per-block
+predicate is "every exercise has a `type`" (matching `_needs_transform`), so a
+plan mixing raw and transformed blocks only transforms the raw ones. A missing
+`id` does **not** by itself force a block through the transform; ids are
+backfilled afterwards by `_ensure_exercise_ids`, an idempotent pass that
+assigns a deterministic `{block_type}_{block}_{n}` id to any exercise lacking
+one. This split keeps the transform lossless for a pre-formed exercise that is
+merely missing its id — `_transform_block_to_exercises` copies each input
+exercise and only *fills* absent canonical fields, and the warmup branch
+preserves a pre-built checklist's `items` instead of rebuilding them from the
+exercise name.
 
 For interval/circuit blocks the LLM emits structured timing fields at the
 **block** level:
