@@ -66,6 +66,82 @@ class TestInitDatabase:
         assert 'last_modified_at' in columns
         assert 'deleted' in columns
 
+    def test_archive_tables_exist(self, test_app):
+        """Migration 2 should create archive tables with the expected columns."""
+        import modules.journal as journal
+        with journal.get_db() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            tables = {row[0] for row in cursor.fetchall()}
+            assert 'entries_archive' in tables
+            assert 'trackers_archive' in tables
+
+            cursor.execute("PRAGMA table_info(entries_archive)")
+            cols = {row[1] for row in cursor.fetchall()}
+            assert cols == {
+                'id', 'date', 'tracker_id', 'value', 'completed',
+                'last_modified_at', 'superseded_at',
+            }
+
+            cursor.execute("PRAGMA table_info(trackers_archive)")
+            cols = {row[1] for row in cursor.fetchall()}
+            assert cols == {
+                'id', 'tracker_id', 'name', 'category', 'type', 'meta_json',
+                'deleted', 'last_modified_at', 'superseded_at',
+            }
+
+    def test_user_version_set_to_latest_migration(self, test_app):
+        """PRAGMA user_version should reflect the latest applied migration."""
+        import modules.journal as journal
+        with journal.get_db() as conn:
+            cursor = conn.cursor()
+            current = cursor.execute("PRAGMA user_version").fetchone()[0]
+            expected = max(v for v, _ in journal.MIGRATIONS)
+            assert current == expected
+
+    def test_purge_old_archives_removes_aged_rows(self, test_app):
+        """_purge_old_archives should delete archive rows older than the retention window in both archive tables."""
+        import modules.journal as journal
+        from datetime import datetime, timedelta, timezone
+
+        old_ts = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat().replace("+00:00", "Z")
+        fresh_ts = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat().replace("+00:00", "Z")
+
+        with journal.get_db() as conn:
+            cursor = conn.cursor()
+            # entries_archive: one old, one fresh
+            cursor.execute(
+                "INSERT INTO entries_archive (date, tracker_id, value, completed, last_modified_at, superseded_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                ("2026-01-01", "t1", 1.0, 1, old_ts, old_ts),
+            )
+            cursor.execute(
+                "INSERT INTO entries_archive (date, tracker_id, value, completed, last_modified_at, superseded_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                ("2026-01-02", "t1", 2.0, 1, fresh_ts, fresh_ts),
+            )
+            # trackers_archive: one old, one fresh
+            cursor.execute(
+                "INSERT INTO trackers_archive (tracker_id, name, category, type, meta_json, deleted, last_modified_at, superseded_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                ("t-old", "Old Tracker", "cat", "checkbox", "{}", 0, old_ts, old_ts),
+            )
+            cursor.execute(
+                "INSERT INTO trackers_archive (tracker_id, name, category, type, meta_json, deleted, last_modified_at, superseded_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                ("t-fresh", "Fresh Tracker", "cat", "checkbox", "{}", 0, fresh_ts, fresh_ts),
+            )
+            conn.commit()
+
+            journal._purge_old_archives(conn)
+            conn.commit()
+
+            cursor.execute("SELECT date FROM entries_archive")
+            assert [r[0] for r in cursor.fetchall()] == ["2026-01-02"]
+
+            cursor.execute("SELECT tracker_id FROM trackers_archive")
+            assert [r[0] for r in cursor.fetchall()] == ["t-fresh"]
+
 
 @pytest.mark.unit
 class TestGetUtcNow:

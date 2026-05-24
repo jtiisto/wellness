@@ -118,6 +118,53 @@ def _migration_1_baseline(cursor):
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_entries_modified ON entries(last_modified_at)")
 
 
+def _migration_2_archive_tables(cursor):
+    """Add archive tables for recovering overwrites of entries and trackers.
+
+    Each archive row captures the prior values plus a superseded_at timestamp.
+    Purged on a 14-day retention window by _purge_old_archives. Mirrors the
+    Coach module's archive pattern.
+
+    Columns intentionally omit `version` and `last_modified_by`: those fields
+    on the live `entries` / `trackers` tables are being phased out by the
+    journal-sync-simplification work, so the archive captures only fields the
+    post-LWW protocol actually uses for recovery.
+    """
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS entries_archive (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT NOT NULL,
+            tracker_id TEXT NOT NULL,
+            value REAL,
+            completed INTEGER,
+            last_modified_at TEXT NOT NULL,
+            superseded_at TEXT NOT NULL
+        )
+    """)
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_entries_archive_superseded "
+        "ON entries_archive(superseded_at)"
+    )
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS trackers_archive (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tracker_id TEXT NOT NULL,
+            name TEXT,
+            category TEXT,
+            type TEXT,
+            meta_json TEXT,
+            deleted INTEGER,
+            last_modified_at TEXT NOT NULL,
+            superseded_at TEXT NOT NULL
+        )
+    """)
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_trackers_archive_superseded "
+        "ON trackers_archive(superseded_at)"
+    )
+
+
 # Ordered (target_version, migration_fn) pairs. Each migration is applied at
 # most once per DB, tracked via PRAGMA user_version. New schema changes are
 # added as a new entry with the next sequential version number.
@@ -127,7 +174,33 @@ def _migration_1_baseline(cursor):
 # each migration in a single BEGIN IMMEDIATE transaction.
 MIGRATIONS = [
     (1, _migration_1_baseline),
+    (2, _migration_2_archive_tables),
 ]
+
+
+# Archive retention window. Rows older than this are pruned on each sync.
+# Recovery is manual SQL only — there is no UI restore path.
+ARCHIVE_RETENTION_DAYS = 14
+
+
+def _purge_old_archives(conn):
+    """Delete archive rows older than ARCHIVE_RETENTION_DAYS.
+
+    Intended to be called opportunistically during sync. Cheap (indexed on
+    superseded_at) and idempotent — safe to invoke on every sync request.
+    Not yet wired in; the call site is added when sync endpoints start writing
+    archive rows.
+    """
+    cutoff = (
+        datetime.now(timezone.utc) - timedelta(days=ARCHIVE_RETENTION_DAYS)
+    ).isoformat().replace("+00:00", "Z")
+    cursor = conn.cursor()
+    cursor.execute(
+        "DELETE FROM entries_archive WHERE superseded_at < ?", (cutoff,)
+    )
+    cursor.execute(
+        "DELETE FROM trackers_archive WHERE superseded_at < ?", (cutoff,)
+    )
 
 
 def init_database():
