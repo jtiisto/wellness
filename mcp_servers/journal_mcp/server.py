@@ -285,15 +285,21 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
     ) -> List[Dict[str, Any]]:
         """WHEN TO USE: When you want to see what trackers are available for journaling.
 
-        Lists all trackers (habits, metrics, etc.) that can be tracked in the journal.
-        Trackers can be simple checkboxes or quantifiable values.
+        Lists trackers (habits, metrics, etc.) defined in the journal. Trackers can
+        be simple checkboxes or quantifiable values. Tracker IDs are UUIDs, so a
+        re-created tracker with the same display name as a deleted one is a
+        distinct row — set `include_deleted=True` to see both.
 
         Args:
             category: Optional filter by category (e.g., 'Supplements', 'Habits')
-            include_deleted: Whether to include deleted trackers (default: False)
+            include_deleted: When False (default), only active trackers. When True,
+                also returns soft-deleted trackers so historical entries can be
+                attributed to the right (possibly retired) tracker.
 
         Returns:
-            List of trackers with their details including name, category, type, and metadata
+            List of trackers. Each item carries `deleted` as a bool. Entries
+            belonging to deleted trackers are still queryable via `get_entries`
+            or raw SQL — the deletion is purely a UI/sync-visibility flag.
         """
         try:
             query = """
@@ -315,6 +321,7 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
             results = db_manager.execute_safe_query(query, params)
 
             for row in results:
+                row["deleted"] = bool(row.get("deleted"))
                 if row.get("meta_json"):
                     try:
                         row["metadata"] = json.loads(row["meta_json"])
@@ -338,7 +345,10 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
         """WHEN TO USE: When you want to see journal entries for specific dates or trackers.
 
         Retrieves journal entries with tracker information. Use this to see what was
-        tracked on specific days, analyze habits, or review progress.
+        tracked on specific days, analyze habits, or review progress. Entries
+        belonging to soft-deleted trackers are included — the `tracker_deleted`
+        field on each row flags them so analysis can distinguish "B12 (current)"
+        from "B12 (retired)" when the same name was reused with a different ID.
 
         Args:
             start_date: Start date in YYYY-MM-DD format (default: days ago from today)
@@ -347,7 +357,9 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
             days: Number of days to look back if start_date not specified (default: 7)
 
         Returns:
-            List of entries with tracker names, dates, values, and completion status
+            List of entries with tracker names, dates, values, completion status,
+            and a `tracker_deleted` boolean flagging entries whose tracker has
+            since been soft-deleted.
         """
         try:
             if not end_date:
@@ -358,9 +370,11 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
             query = """
                 SELECT
                     e.date,
+                    t.id as tracker_id,
                     t.name as tracker_name,
                     t.category,
                     t.type as tracker_type,
+                    t.deleted as tracker_deleted,
                     e.value,
                     e.completed
                 FROM entries e
@@ -375,7 +389,10 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
 
             query += " ORDER BY e.date DESC, t.category, t.name"
 
-            return db_manager.execute_safe_query(query, params)
+            results = db_manager.execute_safe_query(query, params)
+            for row in results:
+                row["tracker_deleted"] = bool(row.get("tracker_deleted"))
+            return results
         except Exception as e:
             raise ValueError(f"Failed to get entries: {str(e)}")
 
@@ -432,16 +449,18 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
             categories = db_manager.execute_safe_query(category_query, [start_date])
 
             top_trackers_query = """
-                SELECT t.name, COUNT(*) as entry_count,
+                SELECT t.name, t.deleted as tracker_deleted, COUNT(*) as entry_count,
                        SUM(CASE WHEN e.completed = 1 THEN 1 ELSE 0 END) as completed_count
                 FROM entries e
                 JOIN trackers t ON e.tracker_id = t.id
                 WHERE e.date >= ?
-                GROUP BY t.id, t.name
+                GROUP BY t.id, t.name, t.deleted
                 ORDER BY entry_count DESC
                 LIMIT 10
             """
             top_trackers = db_manager.execute_safe_query(top_trackers_query, [start_date])
+            for row in top_trackers:
+                row["tracker_deleted"] = bool(row.get("tracker_deleted"))
 
             completion_rate = round(completed / total_entries * 100, 1) if total_entries > 0 else 0
 
@@ -468,11 +487,13 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
 def _get_table_description(table_name: str) -> str:
     """Get human-readable description for table."""
     descriptions = {
-        "trackers": "Tracker definitions including habits, supplements, metrics with their categories and types",
-        "entries": "Daily journal entries recording tracker values and completion status",
-        "clients": "Client devices that sync with the journal",
+        "trackers": "Tracker definitions including habits, supplements, metrics with their categories and types. `deleted=1` means the tracker is hidden from the UI but its entries are kept for historical analysis.",
+        "entries": "Daily journal entries recording tracker values and completion status. Entries persist even after their tracker is soft-deleted.",
+        "clients": "Client devices that sync with the journal (debug breadcrumb only)",
         "meta_sync": "Sync metadata for client synchronization",
-        "sync_conflicts": "Records of sync conflicts between clients",
+        "entries_archive": "Snapshots of overwritten entry rows, retained 14 days for manual recovery",
+        "trackers_archive": "Snapshots of overwritten tracker rows, retained 14 days for manual recovery",
+        "sync_conflicts": "Vestigial — no longer written. Predates the optimistic-concurrency sync protocol",
     }
     return descriptions.get(table_name, "Journal data table")
 
@@ -488,25 +509,45 @@ def _get_journal_data_guide() -> str:
 3. Use `get_journal_summary` for a quick overview
 4. Use `execute_sql_query` for custom analysis
 
+## Tracker Lifecycle and Historical Data
+
+Tracker IDs are UUIDs. When a tracker is "deleted" it is soft-deleted
+(`deleted=1`) — the UI hides it and the sync delta stops sending it to the
+client, but the row and all of its entries remain in the database. This
+means:
+
+- A user who deletes "B12" and later creates a new "B12" creates two
+  distinct tracker rows with the same display name. Their entries are
+  linked by UUID, not by name — histories stay structurally separate.
+- Historical analysis queries should generally NOT filter `deleted = 0`
+  unless you specifically want only currently-active trackers. The
+  `get_entries`, `get_journal_summary`, and `execute_sql_query` tools
+  return entries for deleted trackers by default.
+- `list_trackers` filters deleted trackers by default — pass
+  `include_deleted=True` when correlating historical entries with their
+  defining tracker row.
+
 ## Main Data Tables
 
 ### trackers
 **WHAT**: Definitions of things being tracked
 **COLUMNS**:
-- id: Unique identifier (UUID)
+- id: Unique identifier (UUID, stable across renames)
 - name: Display name (e.g., "Vitamin D3", "Exercise")
 - category: Grouping category (e.g., "Supplements", "Habits")
 - type: "simple" (checkbox) or "quantifiable" (has a value)
 - meta_json: Additional settings like frequency, unit, defaultValue
-- deleted: Soft delete flag
+- deleted: Soft delete flag — 1 means hidden from UI but retained for history
+- last_modified_at: Server-stamped timestamp (opaque sync token)
 
 ### entries
-**WHAT**: Daily tracking records
+**WHAT**: Daily tracking records. Persist even after their tracker is deleted.
 **COLUMNS**:
 - date: The date of the entry (YYYY-MM-DD)
-- tracker_id: Links to trackers table
+- tracker_id: Links to trackers table (foreign key by UUID)
 - value: Numeric value for quantifiable trackers (NULL for simple)
 - completed: 1 if completed/checked, 0 otherwise
+- last_modified_at: Server-stamped timestamp (opaque sync token)
 
 ## Tracker Types
 - **simple**: Binary yes/no tracking (e.g., "Did I take my vitamins?")
@@ -514,42 +555,51 @@ def _get_journal_data_guide() -> str:
 
 ## Common Queries
 
-### See all active trackers by category
+### Active trackers by category (UI-visible only)
 ```sql
 SELECT category, name, type FROM trackers
 WHERE deleted = 0 ORDER BY category, name
 ```
 
-### Get completion rate for a tracker
+### All trackers including soft-deleted ones
 ```sql
-SELECT t.name,
+SELECT category, name, type, deleted FROM trackers
+ORDER BY category, name
+```
+
+### Completion rate for a tracker across its entire history,
+### even if it has been retired
+```sql
+SELECT t.name, t.deleted,
        COUNT(*) as total_days,
        SUM(completed) as completed_days,
        ROUND(100.0 * SUM(completed) / COUNT(*), 1) as completion_rate
 FROM entries e JOIN trackers t ON e.tracker_id = t.id
 WHERE t.name = 'Exercise'
-GROUP BY t.id
+GROUP BY t.id, t.name, t.deleted
 ```
 
-### Daily summary for a date
+### Daily summary for a date (active trackers only)
 ```sql
 SELECT t.category, t.name, e.completed, e.value
 FROM entries e JOIN trackers t ON e.tracker_id = t.id
-WHERE e.date = '2026-01-22'
+WHERE e.date = '2026-01-22' AND t.deleted = 0
 ORDER BY t.category, t.name
 ```
 
-### Streak analysis
+### Find a tracker that was renamed via delete-and-recreate
 ```sql
-SELECT date, completed FROM entries e
-JOIN trackers t ON e.tracker_id = t.id
-WHERE t.name = 'Exercise'
-ORDER BY date DESC
+SELECT id, name, deleted, last_modified_at
+FROM trackers
+WHERE name LIKE '%B12%'
+ORDER BY last_modified_at
 ```
 
 ## Tips
 - Join entries with trackers to get meaningful names
-- Filter by deleted = 0 to exclude deleted trackers
+- Default to INCLUDING deleted trackers for historical analysis;
+  filter to `deleted = 0` only when you need the current UI view
+- Tracker IDs are UUIDs — same name twice means two distinct rows
 - Use date ranges to analyze trends over time
 - Group by category for category-level analysis
     """.strip()

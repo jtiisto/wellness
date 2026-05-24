@@ -152,6 +152,32 @@ class TestJournalMCPTools:
         assert "name" in tracker
         assert "category" in tracker
         assert "metadata" in tracker
+        # `deleted` is surfaced as a proper bool for the analysis prompt
+        assert tracker["deleted"] is False
+
+    def test_list_trackers_include_deleted_surfaces_soft_deleted_rows(self):
+        """When include_deleted=True, soft-deleted trackers appear with deleted=True.
+
+        Historical analysis prompts need to see retired trackers to attribute
+        their entries correctly.
+        """
+        import modules.journal as journal
+        # Mark the seeded tracker as deleted directly in the DB
+        with journal.get_db() as conn:
+            conn.execute(
+                "UPDATE trackers SET deleted = 1 WHERE id = ?",
+                (self.seed_data["tracker"]["id"],),
+            )
+            conn.commit()
+
+        active = self.tools["list_trackers"]()
+        assert all(t["deleted"] is False for t in active)
+        assert not any(t["name"] == "Water Intake" for t in active)
+
+        full = self.tools["list_trackers"](include_deleted=True)
+        deleted = [t for t in full if t["name"] == "Water Intake"]
+        assert len(deleted) == 1
+        assert deleted[0]["deleted"] is True
 
     def test_list_trackers_by_category(self):
         result = self.tools["list_trackers"](category="health")
@@ -167,6 +193,29 @@ class TestJournalMCPTools:
         assert "date" in entry
         assert "tracker_name" in entry
         assert "value" in entry
+        assert entry["tracker_deleted"] is False
+
+    def test_get_entries_surfaces_entries_for_deleted_trackers(self):
+        """Entries belonging to soft-deleted trackers must still be returned.
+
+        Each entry carries `tracker_deleted` so the analysis prompt can
+        distinguish entries from a now-retired tracker.
+        """
+        import modules.journal as journal
+        dates = self.seed_data["dates"]
+
+        with journal.get_db() as conn:
+            conn.execute(
+                "UPDATE trackers SET deleted = 1 WHERE id = ?",
+                (self.seed_data["tracker"]["id"],),
+            )
+            conn.commit()
+
+        result = self.tools["get_entries"](
+            start_date=dates[-1], end_date=dates[0]
+        )
+        assert len(result) >= 1, "entries for the deleted tracker should still appear"
+        assert all(e["tracker_deleted"] is True for e in result)
 
     def test_get_entries_by_tracker_name(self):
         dates = self.seed_data["dates"]
