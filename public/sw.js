@@ -34,7 +34,6 @@ const APP_SHELL_URLS = [
   B + '/js/journal/store.js',
   B + '/js/journal/utils.js',
   B + '/js/journal/components/ConfigScreen.js',
-  B + '/js/journal/components/ConflictResolver.js',
   B + '/js/journal/components/Header.js',
   B + '/js/journal/components/TrackerItem.js',
   B + '/js/journal/components/TrackerList.js',

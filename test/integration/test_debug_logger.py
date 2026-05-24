@@ -167,26 +167,31 @@ class TestJournalStoreInstrumentation:
     def test_logs_sync_start(self):
         assert "debugLog('journal-sync', 'sync start'" in self.source
 
-    def test_logs_delta_sync(self):
-        assert "debugLog('journal-sync', 'delta sync'" in self.source
-
-    def test_logs_full_sync(self):
-        assert "debugLog('journal-sync', 'full sync" in self.source
-
-    def test_logs_server_data_received(self):
-        assert "debugLog('journal-sync', 'server data received'" in self.source
-
-    def test_logs_conflict_detection(self):
-        assert "debugLog('journal-sync', 'conflict detection'" in self.source
-
-    def test_logs_auto_merge(self):
-        assert "debugLog('journal-sync', 'auto-merge applied'" in self.source
+    def test_logs_sync_complete_when_nothing_to_upload(self):
+        """When the pull leaves nothing dirty, sync logs a "complete (no upload)" trace."""
+        assert "debugLog('journal-sync', 'sync complete (no upload)'" in self.source
 
     def test_logs_upload_attempt(self):
         assert "debugLog('journal-sync', 'upload attempt'" in self.source
 
+    def test_logs_in_cycle_rejection_recovery(self):
+        """Rejected uploads are recovered in-cycle by applying the returned
+        serverRow; the trace records how many records that affected so the
+        debug log captures the optimistic-concurrency contract working."""
+        assert "debugLog('journal-sync', 'upload had rejections (recovered in-cycle)'" in self.source
+
     def test_logs_sync_error(self):
         assert "debugLog('journal-sync', 'sync error'" in self.source
+
+    def test_logs_schema_migration(self):
+        """Schema migration of LocalForage should leave a trace so a forced
+        clear-and-repull is debuggable after the fact."""
+        assert "debugLog('journal-sync', 'migrating LocalForage to LWW schema'" in self.source
+
+    def test_logs_schema_migration_blocked(self):
+        """If migration is blocked by dirty edits the user must explicitly
+        discard, the block decision is also logged."""
+        assert "debugLog('journal-sync', 'migration blocked: dirty edits from previous schema'" in self.source
 
 
 # ==================== data-export.js ====================

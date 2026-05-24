@@ -141,10 +141,9 @@ def journal_with_accumulator(page, app_server, seeded_journal):
             "type": "quantifiable",
             "unit": "g",
             "accumulator": True,
-            "_baseVersion": 0,
         }],
         "days": {today: {"tracker-protein": {
-            "value": 100, "completed": True, "_baseVersion": 0,
+            "value": 100, "completed": True,
         }}},
     })
 
@@ -262,14 +261,12 @@ def journal_with_extras(page, app_server, seeded_journal):
             "name": "Mood",
             "category": "wellbeing",
             "type": "evaluation",
-            "_baseVersion": 0,
         },
         {
             "id": "tracker-reflection",
             "name": "Reflection",
             "category": "wellbeing",
             "type": "note",
-            "_baseVersion": 0,
         },
     ]
     http_requests.post(f"{base}/api/journal/sync/update", json={
@@ -338,44 +335,78 @@ def test_note_text_sets_completed_and_clearing_unsets(journal_with_extras, app_s
     assert refl_row.locator("textarea").input_value() == "felt focused today"
     # Note trackers don't render a checkbox, so we check server state instead
     today = journal_with_extras["today"]
-    resp = http_requests.get(f"{app_server['url']}/api/journal/sync/full")
+    resp = http_requests.get(f"{app_server['url']}/api/journal/sync/delta")
     entry = resp.json().get("days", {}).get(today, {}).get("tracker-reflection")
     assert entry is not None and entry.get("completed") is True
 
     # Clearing the note should flip completed to False
     refl_row.locator("textarea").fill("")
     page.wait_for_timeout(3500)
-    resp = http_requests.get(f"{app_server['url']}/api/journal/sync/full")
+    resp = http_requests.get(f"{app_server['url']}/api/journal/sync/delta")
     entry = resp.json().get("days", {}).get(today, {}).get("tracker-reflection")
     assert entry is not None and entry.get("completed") is False
 
 
-def test_multi_client_conflict_resolution(journal_page, app_server, seeded_journal):
-    """Two clients edit the same entry value → yellow state → user picks a side.
+def test_stale_upload_recovers_in_cycle_via_server_row(
+        journal_page, app_server, seeded_journal):
+    """Concurrent third-party write → client's stale upload rejected → client
+    silently adopts the server's row via the rejection's `serverRow`. No
+    yellow status, no notification, no manual conflict resolution.
 
-    Exercises the ConflictResolver UI end-to-end — the only way this
-    component renders is when detectLocalConflicts flags an entry where
-    both the local client and the server have overlapping value changes.
+    The legacy two-client conflict-resolution UI is gone. The new protocol
+    handles the underlying race by having the server reject any upload whose
+    `_baseLastModifiedAt` is older than the stored timestamp and return the
+    current row inline, which the client folds into local state in the same
+    sync cycle.
     """
+    import time
+
     page = journal_page.page
     base = app_server["url"]
     today = datetime.now().strftime("%Y-%m-%d")
 
-    # Simulate another device writing to the same entry. Must use the
-    # current server version for _baseVersion so the write isn't rejected
-    # under accumulated state from other tests.
-    current = http_requests.get(f"{base}/api/journal/sync/full").json()
+    # Wait for the initial sync so the client has a known base token for the
+    # Water Intake entry.
+    page.wait_for_selector(".sync-dot.green", timeout=10000)
+
+    # Read the current server stamp the client has cached for today's entry.
+    current = http_requests.get(f"{base}/api/journal/sync/delta").json()
     server_entry = current.get("days", {}).get(today, {}).get("tracker-e2e", {})
-    server_version = server_entry.get("_version", 0)
-    http_requests.post(f"{base}/api/journal/sync/update", json={
+    base_ts = server_entry.get("lastModifiedAt")
+    assert base_ts, "seeded entry should have a server-stamped timestamp"
+
+    # Tiny sleep so the third-party POST's new stamp is strictly later than
+    # base_ts. The protocol's equal-timestamps-accept rule means an
+    # immediately-following POST in the same millisecond could match base_ts
+    # exactly and not actually advance the stored stamp.
+    time.sleep(0.05)
+
+    # Simulate a third-party write to the same entry.
+    third_party_payload = {
         "clientId": "remote-device",
         "config": [],
         "days": {today: {"tracker-e2e": {
-            "value": 99, "completed": True, "_baseVersion": server_version}}},
-    })
+            "value": 99, "completed": True,
+            "_baseLastModifiedAt": base_ts,
+        }}},
+    }
+    resp = http_requests.post(f"{base}/api/journal/sync/update", json=third_party_payload)
+    assert resp.status_code == 200
+    accepted = resp.json().get("acceptedEntries") or []
+    assert len(accepted) == 1, (
+        f"Third-party write rejected: {resp.json()}")
+    new_stamp = accepted[0]["lastModifiedAt"]
+    assert new_stamp > base_ts, (
+        f"Server stamp must advance after third-party write: {base_ts} → {new_stamp}")
 
-    # Edit locally to a different value — both sides now have diverged.
+    # Edit locally to a different value. The client's `_baseLastModifiedAt`
+    # for this row is still base_ts (stale), so the upload will be rejected
+    # by the server's optimistic-concurrency check.
     journal_page.set_tracker_value("Water Intake", 33)
+    # Blur the input so NumericInput's focused-while-editing guard releases
+    # — without this, sync-driven updates to the value prop are ignored.
+    water_row = page.locator(".tracker-item").filter(has_text="Water Intake")
+    water_row.locator("input[type='number']").blur()
 
     # Trigger a sync via visibility change (faster than waiting for poll)
     page.evaluate("""() => {
@@ -385,29 +416,94 @@ def test_multi_client_conflict_resolution(journal_page, app_server, seeded_journ
         document.dispatchEvent(new Event('visibilitychange'));
     }""")
 
-    # Conflict is detected → yellow dot + "Sync Conflict" notification
-    page.wait_for_selector(".sync-dot.yellow", timeout=10000)
-    resolve_btn = page.locator(".notification-action-btn").filter(has_text="Resolve")
-    resolve_btn.click()
+    # Wait for the debounced sync + in-cycle recovery to complete.
+    page.wait_for_timeout(6000)
 
-    # Conflict screen renders with both versions side by side
-    page.wait_for_selector(".conflict-screen", timeout=5000)
-    local_version = page.locator(".conflict-version.local")
-    server_version = page.locator(".conflict-version.server")
-    assert "33" in local_version.text_content()
-    assert "99" in server_version.text_content()
+    # The yellow sync status no longer exists in the new protocol
+    assert page.locator(".sync-dot.yellow").count() == 0, (
+        "Yellow conflict status should be retired in the new protocol")
 
-    # Keep the local version
-    local_version.locator("button").filter(has_text="Keep Mine").click()
-    page.wait_for_timeout(3000)
-
-    # Server should now have our value (33), not the remote's (99)
-    resp = http_requests.get(f"{base}/api/journal/sync/full")
+    # Server still has the third-party value (99). The client's stale upload
+    # was rejected and the client adopted the server's row.
+    resp = http_requests.get(f"{base}/api/journal/sync/delta")
     entry = resp.json().get("days", {}).get(today, {}).get("tracker-e2e")
     assert entry is not None
-    assert entry["value"] == 33, f"Local value should have won; server has {entry['value']}"
-    # Yellow dot clears once the conflict is resolved
-    page.wait_for_selector(".sync-dot.yellow", state="detached", timeout=5000)
+    assert entry["value"] == 99, (
+        f"Server row should be unchanged after stale rejection; got {entry['value']}")
+
+    # Client UI shows the server's value (99) — in-cycle recovery applied
+    # the rejected response's `serverRow` to local state.
+    page.wait_for_selector(".sync-dot.green", timeout=10000)
+    water_row = page.locator(".tracker-item").filter(has_text="Water Intake")
+    assert water_row.locator("input[type='number']").input_value() == "99"
+
+
+def test_forcesync_stale_upload_recovers_in_cycle(
+        journal_page, app_server, seeded_journal):
+    """Force Sync exercises the same in-cycle recovery as triggerSync:
+    a stale base token gets rejected, the serverRow is applied to local
+    state, and the dirty flag is cleared via generation snapshot.
+
+    forceSync runs a parallel code path from triggerSync; this confirms the
+    optimistic-concurrency contract is honored in both directions.
+    """
+    import time
+    from pages.app_shell import AppShellPage
+
+    page = journal_page.page
+    base = app_server["url"]
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    # Wait for initial sync
+    page.wait_for_selector(".sync-dot.green", timeout=10000)
+
+    # Read the seed's server stamp
+    current = http_requests.get(f"{base}/api/journal/sync/delta").json()
+    server_entry = current.get("days", {}).get(today, {}).get("tracker-e2e", {})
+    base_ts = server_entry.get("lastModifiedAt")
+    assert base_ts, "seeded entry should have a server-stamped timestamp"
+
+    # Third-party write to make the client's base token stale
+    time.sleep(0.05)
+    resp = http_requests.post(f"{base}/api/journal/sync/update", json={
+        "clientId": "remote-device",
+        "config": [],
+        "days": {today: {"tracker-e2e": {
+            "value": 77, "completed": True,
+            "_baseLastModifiedAt": base_ts,
+        }}},
+    })
+    assert resp.status_code == 200
+    assert len(resp.json().get("acceptedEntries") or []) == 1
+
+    # Local edit — dirty entry with stale base
+    journal_page.set_tracker_value("Water Intake", 42)
+    page.locator(".tracker-item").filter(
+        has_text="Water Intake").locator("input[type='number']").blur()
+
+    # Trigger Force Sync via the tools menu
+    page.once("dialog", lambda dialog: dialog.accept())
+    shell = AppShellPage(page)
+    shell.open_tools()
+    page.locator(".tools-item").filter(has_text="Force Sync").click()
+
+    # Wait for forceSync to complete: full pull + upload-with-rejection +
+    # serverRow applied + dirty cleared via generation check.
+    page.wait_for_timeout(5000)
+    page.wait_for_selector(".sync-dot.green", timeout=10000)
+
+    # Server unchanged — local stale upload was rejected
+    resp = http_requests.get(f"{base}/api/journal/sync/delta")
+    entry = resp.json().get("days", {}).get(today, {}).get("tracker-e2e")
+    assert entry is not None
+    assert entry["value"] == 77, (
+        f"Server should still have the third-party value (77); got {entry['value']}")
+
+    # Client UI adopted the serverRow in-cycle
+    water_row = page.locator(".tracker-item").filter(has_text="Water Intake")
+    assert water_row.locator("input[type='number']").input_value() == "77"
+    # No yellow status — the rejection was handled silently
+    assert page.locator(".sync-dot.yellow").count() == 0
 
 
 def _seed_disposable_tracker(app_server, seeded_journal, tracker_id, name):
@@ -416,7 +512,7 @@ def _seed_disposable_tracker(app_server, seeded_journal, tracker_id, name):
         "clientId": seeded_journal["client_id"],
         "config": [{
             "id": tracker_id, "name": name, "category": "disposable",
-            "type": "simple", "_baseVersion": 0,
+            "type": "simple",
         }],
         "days": {},
     })
@@ -448,7 +544,7 @@ def test_edit_tracker_via_config(journal_app_page, app_server, seeded_journal):
 
     assert journal_app_page.locator(".tracker-config-item").filter(
         has_text="Edited").is_visible()
-    resp = http_requests.get(f"{app_server['url']}/api/journal/sync/full")
+    resp = http_requests.get(f"{app_server['url']}/api/journal/sync/delta")
     tracker = next(
         t for t in resp.json().get("config", []) if t["id"] == "tracker-to-edit")
     assert tracker["name"] == "Edited"
@@ -476,7 +572,7 @@ def test_delete_tracker_via_config(journal_app_page, app_server, seeded_journal)
 
     assert journal_app_page.locator(".tracker-config-item").filter(
         has_text="Delete Me").count() == 0
-    resp = http_requests.get(f"{app_server['url']}/api/journal/sync/full")
+    resp = http_requests.get(f"{app_server['url']}/api/journal/sync/delta")
     tracker_ids = [t["id"] for t in resp.json().get("config", [])]
     assert "tracker-to-delete" not in tracker_ids
 

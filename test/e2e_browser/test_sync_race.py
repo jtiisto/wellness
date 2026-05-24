@@ -32,14 +32,12 @@ def seeded_journal_two_trackers(app_server):
         "category": "fitness",
         "type": "quantifiable",
         "unit": "steps",
-        "_baseVersion": 0,
     }
     tracker_simple = {
         "id": "tracker-race-simple",
         "name": "Meditation",
         "category": "fitness",
         "type": "simple",
-        "_baseVersion": 0,
     }
 
     http_requests.post(f"{base}/api/journal/sync/update", json={
@@ -53,8 +51,8 @@ def seeded_journal_two_trackers(app_server):
     today = datetime.now().strftime("%Y-%m-%d")
     days = {
         today: {
-            tracker_quant["id"]: {"value": 1000, "completed": True, "_baseVersion": 0},
-            tracker_simple["id"]: {"completed": False, "_baseVersion": 0},
+            tracker_quant["id"]: {"value": 1000, "completed": True},
+            tracker_simple["id"]: {"completed": False},
         }
     }
     http_requests.post(f"{base}/api/journal/sync/update", json={
@@ -106,8 +104,9 @@ def _delay_sync_endpoints(page, delay_s=SYNC_DELAY_MS / 1000):
 
 
 def _get_server_entry(app_server, tracker_id, date=None):
-    """Fetch a specific entry from the server."""
-    resp = http_requests.get(f"{app_server['url']}/api/journal/sync/full")
+    """Fetch a specific entry from the server via the full-pull endpoint
+    (/sync/delta with no `since` parameter)."""
+    resp = http_requests.get(f"{app_server['url']}/api/journal/sync/delta")
     data = resp.json()
     if date is None:
         date = datetime.now().strftime("%Y-%m-%d")
@@ -231,14 +230,15 @@ def test_edit_before_initial_sync_completes(
         page, app_server, seeded_journal_two_trackers):
     """Edit a tracker value while the initial (first-ever) sync is in flight.
 
-    Exercises the /full sync code path (lastServerSyncTime is null),
-    which no other race test covers — all others start from a synced state.
-    The edit must win once the initial sync completes.
+    Exercises the no-`since` /sync/delta code path (lastServerSyncTime is
+    null), which no other race test covers — all others start from a synced
+    state. The edit must win once the initial sync completes.
     """
     seed = seeded_journal_two_trackers
 
-    # Delay BOTH the initial /full fetch and any follow-up /update.
-    # Routes must be set before navigation so the initial sync is delayed.
+    # Delay both the initial full pull (delta with no `since`) and any
+    # follow-up /update. Routes must be set before navigation so the initial
+    # sync is delayed.
     def _delayed_continue(route):
         time.sleep(SYNC_DELAY_MS / 1000)
         try:
@@ -246,7 +246,6 @@ def test_edit_before_initial_sync_completes(
         except Exception:
             pass
 
-    page.route("**/api/journal/sync/full", _delayed_continue)
     page.route("**/api/journal/sync/delta*", _delayed_continue)
     page.route("**/api/journal/sync/update", _delayed_continue)
 
@@ -277,9 +276,10 @@ def test_forcesync_during_edit_preserves_latest(
         race_journal_page, app_server, seeded_journal_two_trackers):
     """Trigger Force Sync, then edit during its in-flight phase.
 
-    Regression for commit 0483635 (forceSync generation-based dirty clearing).
-    Before the fix, an edit made during forceSync could be cleared from dirty
-    state when the sync completed, leaving the new value unsynced.
+    Regression for the generation-counter snapshot in forceSync. Without the
+    snapshot, an edit made during forceSync could be cleared from dirty state
+    when the sync completed, leaving the new value unsynced. The post-LWW
+    forceSync preserves this snapshot-and-compare behavior.
     """
     page = race_journal_page.page
     seed = seeded_journal_two_trackers
@@ -293,7 +293,7 @@ def test_forcesync_during_edit_preserves_latest(
     shell.open_tools()
     page.locator(".tools-item").filter(has_text="Force Sync").click()
 
-    # Let forceSync start (it calls /full first)
+    # Let forceSync start (its first call is a full pull via /sync/delta)
     page.wait_for_timeout(1500)
 
     # Edit mid-forceSync — after the generation snapshot is taken

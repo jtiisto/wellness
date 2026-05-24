@@ -69,7 +69,7 @@ def test_debounced_upload_persists(journal_page, app_server):
     # Wait for debounce (2.5s) + sync
     page.wait_for_timeout(5000)
     # Verify data reached the server
-    resp = http_requests.get(f"{app_server['url']}/api/journal/sync/full")
+    resp = http_requests.get(f"{app_server['url']}/api/journal/sync/delta")
     data = resp.json()
     # Check if any entry has value 99
     found = False
@@ -92,7 +92,7 @@ def test_no_duplicate_sync_on_rapid_edits(journal_page, app_server):
     # Wait for debounce + sync
     page.wait_for_timeout(5000)
     # Server should have the final value (30)
-    resp = http_requests.get(f"{app_server['url']}/api/journal/sync/full")
+    resp = http_requests.get(f"{app_server['url']}/api/journal/sync/delta")
     data = resp.json()
     found_30 = False
     for date_entries in data.get("days", {}).values():
@@ -125,7 +125,7 @@ def test_sync_on_visibility(journal_page, app_server):
     # Wait for sync
     page.wait_for_timeout(3000)
     # Check server has the value
-    resp = http_requests.get(f"{app_server['url']}/api/journal/sync/full")
+    resp = http_requests.get(f"{app_server['url']}/api/journal/sync/delta")
     data = resp.json()
     found = False
     for date_entries in data.get("days", {}).values():
@@ -151,7 +151,7 @@ def test_online_recovery_triggers_sync(journal_page, app_server):
     # Wait for auto-sync
     page.wait_for_timeout(5000)
     # Check server has the value
-    resp = http_requests.get(f"{app_server['url']}/api/journal/sync/full")
+    resp = http_requests.get(f"{app_server['url']}/api/journal/sync/delta")
     data = resp.json()
     found = False
     for date_entries in data.get("days", {}).values():

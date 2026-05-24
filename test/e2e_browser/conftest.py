@@ -224,7 +224,6 @@ def seeded_journal(app_server):
         "type": "quantifiable",
         "unit": "glasses",
         "goal": 8,
-        "_baseVersion": 0,
     }
     http_requests.post(f"{base}/api/journal/sync/update", json={
         "clientId": client_id,
@@ -239,7 +238,7 @@ def seeded_journal(app_server):
     for i in range(3):
         date_str = (today - timedelta(days=i)).strftime("%Y-%m-%d")
         days[date_str] = {
-            tracker["id"]: {"value": 5 + i, "completed": i == 0, "_baseVersion": 0}
+            tracker["id"]: {"value": 5 + i, "completed": i == 0}
         }
     http_requests.post(f"{base}/api/journal/sync/update", json={
         "clientId": client_id,

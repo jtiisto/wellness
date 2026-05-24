@@ -64,7 +64,7 @@ def test_online_recovery_syncs(journal_page_online, app_server):
     # Wait for auto-sync
     page.wait_for_timeout(5000)
     # Check server has the value
-    resp = http_requests.get(f"{app_server['url']}/api/journal/sync/full")
+    resp = http_requests.get(f"{app_server['url']}/api/journal/sync/delta")
     data = resp.json()
     found = False
     for date_entries in data.get("days", {}).values():

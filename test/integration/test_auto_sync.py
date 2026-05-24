@@ -303,10 +303,15 @@ class TestJournalStoreScheduler:
         assert "error }" in catch_block or "error}" in catch_block
         assert "showNotification" not in catch_block
 
-    def test_conflict_notifications_preserved(self):
-        """Auto-merge and conflict notifications should still exist."""
-        assert "'Data Merged'" in self.source
-        assert "'Sync Conflict'" in self.source
+    def test_no_user_facing_conflict_notifications(self):
+        """Post-LWW, conflicts are resolved server-side and the client recovers
+        in-cycle via the returned serverRow — no user-facing 'Sync Conflict'
+        or 'Data Merged' notifications should exist anymore."""
+        assert "'Data Merged'" not in self.source
+        assert "'Sync Conflict'" not in self.source
+        # And the conflict resolver route is gone
+        assert "pendingConflicts" not in self.source
+        assert "resolveConflict" not in self.source
 
 
 class TestJournalMutationsScheduleUpload:

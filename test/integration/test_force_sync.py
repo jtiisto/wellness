@@ -118,7 +118,13 @@ class TestCoachForceSync:
 # ==================== Journal store forceSync ====================
 
 class TestJournalForceSync:
-    """Tests that journal/store.js has a forceSync export."""
+    """Tests that journal/store.js has a forceSync export wired against the
+    optimistic-concurrency protocol.
+
+    The post-LWW forceSync is server-arbitrated: full pull, then upload dirty
+    records using the same `_baseLastModifiedAt` token contract as normal
+    sync. The client never compares timestamps to decide a winner.
+    """
 
     @pytest.fixture(autouse=True)
     def load_source(self):
@@ -127,40 +133,77 @@ class TestJournalForceSync:
     def test_exports_force_sync(self):
         assert "export async function forceSync(" in self.source
 
-    def test_downloads_full_server_state(self):
-        """Should GET /full for complete server snapshot."""
-        assert "full" in self.source
+    def test_pulls_full_server_state_via_delta_endpoint(self):
+        """Journal's force sync pulls via pullServerChanges with `since=null`.
+        The legacy /sync/full endpoint was removed; /sync/delta with no `since`
+        is the unified full-pull entry point."""
+        assert "pullServerChanges(clientId, null)" in self.source
 
-    def test_compares_tracker_timestamps(self):
-        """Should compare tracker configs by _lastModifiedAt."""
-        assert "uploadConfig" in self.source
-        assert "acceptedConfig" in self.source
+    def test_uploads_dirty_with_base_token(self):
+        """Uploads go through buildUploadPayload which attaches
+        `_baseLastModifiedAt` (the server's prior stamp for each row) — never
+        the client wall clock."""
+        assert "buildUploadPayload()" in self.source
+        # And buildUploadPayload itself sets the base token from the stored stamp
+        assert "_baseLastModifiedAt = tracker.lastModifiedAt" in self.source
+        assert "_baseLastModifiedAt = entry.lastModifiedAt" in self.source
 
-    def test_compares_entry_timestamps(self):
-        """Should compare daily entries by _lastModifiedAt."""
-        assert "uploadDays" in self.source
-        assert "acceptedDays" in self.source
+    def test_applies_accepted_server_stamps(self):
+        """After upload, server-stamped timestamps are folded back into local
+        rows so subsequent edits use the correct base token."""
+        assert "applyAccepted(result.acceptedTrackers" in self.source
 
-    def test_sets_base_version_from_server(self):
-        """Client-winning uploads should use server's _version as _baseVersion."""
-        assert "_baseVersion: server._version" in self.source or \
-               "_baseVersion: serverEntry._version" in self.source
+    def test_applies_rejected_server_rows_for_in_cycle_recovery(self):
+        """Rejected uploads carry the current `serverRow`; the client adopts
+        it in-cycle rather than waiting for the next delta pull."""
+        assert "applyRejected(result.rejectedTrackers" in self.source
 
-    def test_handles_toctou_conflicts(self):
-        """Should accept server version for TOCTOU conflicts."""
-        assert "conflicts" in self.source
-        assert "entityType" in self.source
+    def test_no_client_side_timestamp_comparison(self):
+        """The legacy forceSync compared `localTs > serverTs` to pick a
+        winner. The new protocol delegates that decision to the server, so
+        no such comparison exists in the journal store."""
+        assert "localTs > serverTs" not in self.source
+        assert "serverTs > localTs" not in self.source
+
+    def test_no_legacy_base_version_token(self):
+        """The integer `_baseVersion` token is fully retired in favor of the
+        opaque `_baseLastModifiedAt` timestamp token. (The string is allowed
+        to appear in code comments that explain the migration.)"""
+        # No assignment of the field anywhere
+        assert "_baseVersion:" not in self.source
+        # No property access via dot notation
+        import re
+        assert re.search(r"\.\s*_baseVersion\b", self.source) is None
+        # No bracket-style access
+        assert "'_baseVersion'" not in self.source
+        assert '"_baseVersion"' not in self.source
+
+    def test_snapshots_generations_before_upload(self):
+        """Generation counters are snapshotted so a concurrent edit during
+        force sync stays dirty after the upload completes."""
+        assert "snapshotTrackerGens" in self.source
+        assert "snapshotEntryGens" in self.source
+
+    def test_clears_dirty_state_via_generation_check(self):
+        """Dirty state for resolved records is cleared only when the
+        generation counter still matches the pre-upload snapshot."""
+        assert "clearDirtyState(" in self.source
 
     def test_handles_deleted_trackers(self):
+        """Server-side tracker deletions are honored — pullServerChanges
+        routes through dropDeletedTrackerIds which also prunes the dirty
+        entries belonging to those trackers."""
         assert "deletedTrackers" in self.source
-
-    def test_resets_dirty_state(self):
-        assert "dirtyTrackers: []" in self.source
-        assert "dirtyEntries: []" in self.source
+        assert "dropDeletedTrackerIds" in self.source
 
     def test_returns_stats(self):
+        """Force sync returns uploaded / accepted / conflicts counts. The
+        `conflicts` name is preserved for the orchestrator UI even though
+        under the new protocol it actually counts rejected-and-recovered
+        rows rather than user-facing conflicts."""
         assert "uploaded" in self.source
-        assert "accepted" in self.source
+        assert "accepted: uploaded" in self.source
+        assert "conflicts:" in self.source
 
     def test_logs_force_sync_start(self):
         assert "debugLog('journal-sync', 'force sync start'" in self.source
@@ -171,11 +214,15 @@ class TestJournalForceSync:
     def test_logs_force_sync_error(self):
         assert "debugLog('journal-sync', 'force sync error'" in self.source
 
-    def test_clears_pending_conflicts(self):
-        assert "pendingConflicts.value = []" in self.source
-
     def test_prunes_deleted_trackers(self):
         assert "pruneDeletedTrackers" in self.source
+
+    def test_guards_offline(self):
+        assert "navigator.onLine" in self.source
+
+    def test_guards_concurrent_sync(self):
+        """Already-running sync should short-circuit, not double-pump."""
+        assert "isSyncing.value" in self.source
 
 
 # ==================== Tools menu ====================
