@@ -10,7 +10,6 @@ import { currentView, initializeStore } from './store.js';
 import { Header } from './components/Header.js';
 import { TrackerList } from './components/TrackerList.js';
 import { ConfigScreen } from './components/ConfigScreen.js';
-import { ConflictResolver } from './components/ConflictResolver.js';
 
 const html = htm.bind(h);
 
@@ -52,7 +51,6 @@ export default function JournalView() {
             <${Header} />
             ${view === 'home' && html`<${TrackerList} />`}
             ${view === 'config' && html`<${ConfigScreen} />`}
-            ${view === 'conflicts' && html`<${ConflictResolver} />`}
         </div>
     `;
 }

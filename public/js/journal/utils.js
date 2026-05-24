@@ -58,25 +58,6 @@ export function shouldShowTracker(tracker, dateStr) {
 }
 
 /**
- * Compare two ISO timestamps
- * @param {string} a - ISO timestamp
- * @param {string} b - ISO timestamp
- * @returns {number} -1 if a < b, 0 if equal, 1 if a > b
- */
-export function compareTimestamps(a, b) {
-    if (!a && !b) return 0;
-    if (!a) return -1;
-    if (!b) return 1;
-
-    const dateA = new Date(a).getTime();
-    const dateB = new Date(b).getTime();
-
-    if (dateA < dateB) return -1;
-    if (dateA > dateB) return 1;
-    return 0;
-}
-
-/**
  * Check if date is within the last N days
  * @param {string} dateStr - ISO date string
  * @param {number} days - Number of days
