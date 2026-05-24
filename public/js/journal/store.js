@@ -32,7 +32,17 @@ const KEYS = {
     CLIENT_ID: 'client_id',
     EXPANDED_CATEGORIES: 'expanded_categories',
     VALUE_UPDATED_TIMES: 'tracker_value_updated_times',
+    APP_SCHEMA_VERSION: 'app_schema_version',
 };
+
+// LocalForage schema version.
+// 1 (or absent) = pre-LWW (per-record integer versioning, conflict resolution)
+// 2 = LWW (optimistic concurrency on opaque _baseLastModifiedAt tokens)
+// On boot, a mismatch between this constant and the stored value triggers a
+// hard reset of LocalForage. Dirty edits from the prior schema cannot be
+// uploaded under the new protocol, so the migration refuses to proceed when
+// they exist and surfaces an `initError` signal for the UI to render.
+const JOURNAL_APP_SCHEMA_VERSION = 2;
 
 // ==================== Signals ====================
 
@@ -60,6 +70,10 @@ export const syncMetadata = signal({
 
 // Sync status indicator: 'green' | 'red' | 'gray'
 export const syncStatus = signal('gray');
+
+// Fatal initialization error (e.g. blocked schema migration). When set, the
+// app shell renders a recovery message instead of the normal UI.
+export const initError = signal(null);
 
 // Edit state for config screen
 export const editingTracker = signal(null);
@@ -101,10 +115,107 @@ async function getClientId() {
     return clientId;
 }
 
+// Internal: actually wipe LocalForage and stamp the new schema version.
+// Caller is responsible for handling whatever data loss this implies.
+async function _wipeAndStampSchema(fromVersion) {
+    debugLog('journal-sync', 'migrating LocalForage to LWW schema', {
+        from: fromVersion || '(none)',
+        to: JOURNAL_APP_SCHEMA_VERSION,
+    });
+    try {
+        await storage.clear();
+        await storage.setItem(KEYS.APP_SCHEMA_VERSION, JOURNAL_APP_SCHEMA_VERSION);
+    } catch (err) {
+        initError.value = {
+            kind: 'migration-failed',
+            message: `Storage upgrade failed: ${err?.message || err}. Try reloading; if it persists, clear this site's storage from your browser settings.`,
+        };
+        throw err;
+    }
+}
+
+// User-invoked recovery from the migration-blocked state. The unsynced edits
+// are discarded; the next sync is a full pull from the server. Reloads the
+// page so the boot path runs cleanly from scratch.
+export async function discardLocalAndContinue() {
+    try {
+        await _wipeAndStampSchema('(forced)');
+        window.location.reload();
+    } catch {
+        // _wipeAndStampSchema already set initError; nothing more to do.
+    }
+}
+
+// Check the LocalForage schema version against the current code's expectation.
+// Returns true if initialization should continue, false if it should bail out
+// because a migration error was surfaced to the UI via `initError`.
+async function checkAndMigrateSchema() {
+    let stored;
+    try {
+        stored = await storage.getItem(KEYS.APP_SCHEMA_VERSION);
+    } catch (err) {
+        initError.value = {
+            kind: 'storage-unavailable',
+            message: `Cannot read local storage: ${err?.message || err}. Try reloading the page.`,
+        };
+        return false;
+    }
+
+    if (stored === JOURNAL_APP_SCHEMA_VERSION) {
+        return true;
+    }
+
+    // Schema mismatch (or first run on a populated pre-version-tracking DB).
+    // Inspect the old metadata blob for dirty edits — under the prior schema
+    // those edits carry `_baseVersion` tokens the new server no longer
+    // understands, so they can't be re-uploaded as-is.
+    let oldMeta;
+    try {
+        oldMeta = await storage.getItem(KEYS.METADATA);
+    } catch (err) {
+        initError.value = {
+            kind: 'storage-unavailable',
+            message: `Cannot read local storage: ${err?.message || err}. Try reloading the page.`,
+        };
+        return false;
+    }
+    const dirtyTrackers = oldMeta?.dirtyTrackers || [];
+    const dirtyEntries = oldMeta?.dirtyEntries || [];
+
+    if (dirtyTrackers.length > 0 || dirtyEntries.length > 0) {
+        const total = dirtyTrackers.length + dirtyEntries.length;
+        debugLog('journal-sync', 'migration blocked: dirty edits from previous schema', {
+            dirtyTrackers: dirtyTrackers.length,
+            dirtyEntries: dirtyEntries.length,
+        });
+        initError.value = {
+            kind: 'migration-blocked',
+            message: `${total} unsynced change${total === 1 ? '' : 's'} from the previous app version cannot be uploaded under the new sync protocol. Discarding will lose those changes; the next sync will pull a fresh copy from the server.`,
+            recoverable: true,
+            dirtyCount: total,
+        };
+        return false;
+    }
+
+    // No dirty edits — safe to wipe and proceed. Next sync is a full pull.
+    try {
+        await _wipeAndStampSchema(stored);
+    } catch {
+        // initError already set by _wipeAndStampSchema
+        return false;
+    }
+    return true;
+}
+
 // Load all data from LocalForage on startup
 export async function initializeStore() {
     try {
         isLoading.value = true;
+
+        const proceed = await checkAndMigrateSchema();
+        if (!proceed) {
+            return;
+        }
 
         const [metadata, config, logs, clientId, expanded, valueUpdated] = await Promise.all([
             storage.getItem(KEYS.METADATA),
