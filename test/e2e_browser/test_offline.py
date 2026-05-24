@@ -19,7 +19,12 @@ def journal_page_online(journal_app_page):
 
 
 def test_offline_sync_indicator(journal_page_online):
-    """Going offline and triggering a sync attempt shows Offline label."""
+    """Going offline and triggering a sync attempt shows Offline/Pending label.
+
+    Polls the label so that a slow scheduler debounce or in-flight initial
+    sync settling can complete before we check — under coverage load the
+    transition can take 5-7s instead of the typical 2.5s debounce window.
+    """
     page = journal_page_online.page
     page.context.set_offline(True)
     # set_offline blocks network but does not always flip navigator.onLine in
@@ -27,12 +32,24 @@ def test_offline_sync_indicator(journal_page_online):
     page.evaluate("() => window.dispatchEvent(new Event('offline'))")
     # Edit a value to trigger a debounced sync attempt while offline
     journal_page_online.set_tracker_value("Water Intake", 77)
-    # Wait for debounce (2.5s) + sync attempt
-    page.wait_for_timeout(4000)
+
+    # Poll for the sync indicator to leave the green/Synced state. Either
+    # the offline-event-induced status change OR the failed sync attempt
+    # (which sets status=red on catch) should flip it within ~10s.
+    deadline_ms = 15000
+    poll_interval_ms = 250
+    elapsed = 0
     label = journal_page_online.get_sync_label()
+    while label == "Synced" and elapsed < deadline_ms:
+        page.wait_for_timeout(poll_interval_ms)
+        elapsed += poll_interval_ms
+        label = journal_page_online.get_sync_label()
+
     page.context.set_offline(False)
     page.evaluate("() => window.dispatchEvent(new Event('online'))")
-    assert label in ["Offline", "Pending"]
+    assert label in ["Offline", "Pending"], (
+        f"After offline edit, expected Offline or Pending, got {label!r} "
+        f"(elapsed {elapsed}ms)")
 
 
 def test_offline_data_entry(journal_page_online):
