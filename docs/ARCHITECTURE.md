@@ -64,34 +64,40 @@ The scheduler triggers sync automatically based on:
 
 Error handling uses exponential backoff (5s base, 120s max). Network errors retry silently; server errors show toast notifications. The scheduler pauses when the app is backgrounded or offline.
 
-### Journal: Version-Based Conflict Detection
+### Journal: Optimistic Concurrency on Opaque Timestamp Tokens
 
-The Journal tracks fine-grained daily data (supplements taken, habits checked) across multiple devices, where conflicting edits to the same record are possible and must be surfaced to the user.
+The Journal tracks fine-grained daily data (supplements taken, habits checked) for a single sequential client. Sync uses optimistic concurrency on an opaque server-issued timestamp token (`_baseLastModifiedAt`) — the client wall clock is never part of the server's comparator, so client clock skew cannot cause legitimate edits to be rejected.
 
 **Protocol:**
 
-1. **Client registers** with a unique ID (`POST /sync/register`)
-2. **Initial sync** fetches all tracker configs and 7 days of entries (`GET /sync/full`)
-3. **Subsequent syncs** fetch only records modified since last sync (`GET /sync/delta?since=<timestamp>&client_id=<id>`)
-4. **Client uploads** changed records with `_baseVersion` indicating the version the edit was based on (`POST /sync/update`)
-5. **Conflict detection:** If `server_version > client_base_version`, the record is returned as a conflict instead of being applied
-6. **Auto-merge:** Non-overlapping field changes are merged automatically (e.g., local value change + server completed change)
-7. **Conflict resolution:** Overlapping changes require user choice via the UI (`POST /sync/resolve-conflict`)
+1. **Client registers** with a unique ID (`POST /sync/register`) — debug breadcrumb only, no correctness dependency.
+2. **Pull** changes since last sync (`GET /sync/delta?since=<timestamp>`). Omitting `since` returns the full current sync window — all active trackers plus the last 7 days of entries — for initial pull / post-reinstall.
+3. **Upload** changed records (`POST /sync/update`). Each record carries `_baseLastModifiedAt` — the last server-issued stamp the client observed for that row. Brand-new records omit the field; the server treats absence as "INSERT only if no row exists with this key".
+4. **Per-record acceptance:** if `stored.last_modified_at <= incoming._baseLastModifiedAt`, the upload overwrites the stored row and the server stamps the new `last_modified_at`. Equal timestamps accept (the typical case: client pulled, then uploads an edit without any intervening server-side change).
+5. **Per-record rejection:** if the stored timestamp is strictly newer than the client's base token, the record is rejected with `errorKind: "stale"` (or `"missing"` when the server has no row matching a base-token-bearing upload). The reject response carries the current `serverRow` so the client recovers in-cycle without waiting for the next delta pull. This is also how the lost-response case settles: a retry after a successful-but-unacknowledged upload arrives with a now-stale base token, the server returns the current row, and the client adopts it — same-content edits converge.
 
-**Sync status:** green (clean), red (dirty data), yellow (unresolved conflicts), gray (never synced).
+**Sync status:** green (clean), red (dirty data), gray (offline / never synced).
 
 **Key design choices:**
-- Per-record versioning (each tracker and each entry has its own integer version)
-- Conflicts are explicit - the user must choose which version to keep (unless auto-mergeable)
-- Soft deletes via `_deleted` flag preserve version history
-- Conflict audit trail stored in `sync_conflicts` table (resolved conflicts older than 30 days are auto-pruned during sync)
+- Single-client deployment — no multi-client conflict surface, no user-visible conflict UI
+- Server is the only arbiter; the client never compares two client-generated timestamps
+- Soft deletes via `deleted` flag — entries persist server-side even after their tracker is soft-deleted, so MCP queries can analyze historical data
+- Tracker IDs are UUIDs (`crypto.randomUUID()`), so creating a new tracker with the same name as a deleted one mints a distinct row — old and new histories stay structurally separate
+- Sync delta filters `JOIN trackers ON t.deleted = 0` so the client only sees entries for active trackers; MCP read tools intentionally return entries for deleted trackers
+- Overwrites archive the prior row to `entries_archive` / `trackers_archive` with a 14-day retention window for manual SQL recovery
+- LocalForage carries an `app_schema_version` so a future protocol change can detect stale local data and force a clean re-pull
 
 **Data model:**
 ```
-trackers (id, name, category, type, meta_json, version, last_modified_by, last_modified_at, deleted)
-entries  (date, tracker_id, value, completed, version, last_modified_by, last_modified_at)
+trackers (id, name, category, type, meta_json, last_modified_at, deleted)
+entries  (date, tracker_id, value, completed, last_modified_at)
          PRIMARY KEY (date, tracker_id)
+
+entries_archive  (id, date, tracker_id, value, completed, last_modified_at, superseded_at)
+trackers_archive (id, tracker_id, name, category, type, meta_json, deleted, last_modified_at, superseded_at)
 ```
+
+The `trackers.version`, `trackers.last_modified_by`, `entries.version`, `entries.last_modified_by` columns and the `sync_conflicts` table remain in the schema as vestigial artifacts of the previous protocol — they are no longer read or written, and the physical drop is deferred indefinitely to avoid a risky `CREATE NEW + INSERT SELECT + DROP + RENAME` recreate cycle.
 
 ### Coach: Last-Write-Wins
 
@@ -292,7 +298,11 @@ This means the pre-workout hook won't fire when offline, which is intentional: t
 
 ### Force Sync
 
-Both modules support force sync (accessible from the settings menu) which performs a full bidirectional reconciliation by timestamp comparison. Force sync reports per-module counts of uploaded and accepted records. The Journal module accepts server versions on conflict during force sync rather than prompting the user. Both modules guard against overwriting server data during force sync: Coach skips logs without exercise content, and Journal snapshots generation counters before sync and only clears dirty state for items whose generation hasn't changed (preserving concurrent edits).
+Both modules support force sync (accessible from the settings menu). Force sync reports per-module counts of uploaded and accepted records.
+
+Coach's force sync performs a full bidirectional reconciliation by timestamp comparison and skips logs without exercise content to avoid clobbering real data with empty payloads.
+
+Journal's force sync is server-arbitrated: it does a full pull (delta with no `since`), then re-uploads all currently dirty records through the same `_baseLastModifiedAt` optimistic-concurrency contract used by normal sync. The client never decides a winner by comparing client-generated timestamps. Generation counters are snapshotted before the upload so concurrent edits during the force sync stay dirty and get picked up by the next cycle.
 
 ### Analysis: Offline Cache (No Sync)
 
