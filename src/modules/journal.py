@@ -3,6 +3,7 @@ Journal API Router - extracted from journal/src/server.py
 Conflict-aware versioning sync engine for personal journal trackers.
 """
 import json
+import logging
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -13,6 +14,9 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict
 
 from modules.db import get_db as _shared_get_db, get_utc_now, register_client as _db_register_client
+
+
+logger = logging.getLogger(__name__)
 
 
 # Module-level DB path, set by create_router()
@@ -26,105 +30,153 @@ def get_db():
         yield conn
 
 
+def _column_exists(cursor, table: str, column: str) -> bool:
+    cursor.execute(f"PRAGMA table_info({table})")
+    return any(row[1] == column for row in cursor.fetchall())
+
+
+def _migration_1_baseline(cursor):
+    """Baseline schema: clients, meta_sync, trackers, entries, sync_conflicts.
+
+    Idempotent: CREATE TABLE uses IF NOT EXISTS; column backfills are guarded by
+    PRAGMA table_info checks so DBs that already have the columns are unchanged.
+    """
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS clients (
+            id TEXT PRIMARY KEY,
+            name TEXT,
+            last_seen_at TEXT
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS meta_sync (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        )
+    """)
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS trackers (
+            id TEXT PRIMARY KEY,
+            name TEXT,
+            category TEXT,
+            type TEXT,
+            meta_json TEXT,
+            version INTEGER DEFAULT 1,
+            last_modified_by TEXT,
+            last_modified_at TEXT,
+            deleted INTEGER DEFAULT 0
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_trackers_name ON trackers(name)")
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS entries (
+            date TEXT,
+            tracker_id TEXT,
+            value REAL,
+            completed INTEGER,
+            version INTEGER DEFAULT 1,
+            last_modified_by TEXT,
+            last_modified_at TEXT,
+            PRIMARY KEY (date, tracker_id),
+            FOREIGN KEY (tracker_id) REFERENCES trackers(id)
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_entries_date ON entries(date)")
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS sync_conflicts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            entity_type TEXT,
+            entity_id TEXT,
+            client_id TEXT,
+            client_data TEXT,
+            server_data TEXT,
+            resolution TEXT,
+            resolved_at TEXT,
+            created_at TEXT
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_conflicts_resolved ON sync_conflicts(resolved_at)")
+
+    backfills = [
+        ("trackers", "version", "ALTER TABLE trackers ADD COLUMN version INTEGER DEFAULT 1"),
+        ("trackers", "last_modified_by", "ALTER TABLE trackers ADD COLUMN last_modified_by TEXT"),
+        ("trackers", "last_modified_at", "ALTER TABLE trackers ADD COLUMN last_modified_at TEXT"),
+        ("trackers", "deleted", "ALTER TABLE trackers ADD COLUMN deleted INTEGER DEFAULT 0"),
+        ("entries", "version", "ALTER TABLE entries ADD COLUMN version INTEGER DEFAULT 1"),
+        ("entries", "last_modified_by", "ALTER TABLE entries ADD COLUMN last_modified_by TEXT"),
+        ("entries", "last_modified_at", "ALTER TABLE entries ADD COLUMN last_modified_at TEXT"),
+    ]
+    for table, column, ddl in backfills:
+        if not _column_exists(cursor, table, column):
+            cursor.execute(ddl)
+
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_trackers_modified ON trackers(last_modified_at)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_entries_modified ON entries(last_modified_at)")
+
+
+# Ordered (target_version, migration_fn) pairs. Each migration is applied at
+# most once per DB, tracked via PRAGMA user_version. New schema changes are
+# added as a new entry with the next sequential version number.
+#
+# Constraint: migration functions must contain only DDL/DML statements. They
+# must NOT issue their own BEGIN / COMMIT / ROLLBACK — init_database() wraps
+# each migration in a single BEGIN IMMEDIATE transaction.
+MIGRATIONS = [
+    (1, _migration_1_baseline),
+]
+
+
 def init_database():
-    """Initialize the database with required tables including versioning."""
+    """Initialize the database, applying any pending migrations.
+
+    Migrations are versioned via PRAGMA user_version. Each migration runs inside
+    an explicit BEGIN IMMEDIATE transaction so concurrent server boots serialize
+    on the write lock and a partial-DDL failure rolls back atomically with the
+    version bump. The version is re-checked inside the transaction in case
+    another process applied the migration while we waited on the lock.
+    """
     with get_db() as conn:
+        # Switch to autocommit so we manage BEGIN/COMMIT/ROLLBACK explicitly.
+        previous_isolation = conn.isolation_level
+        conn.isolation_level = None
         cursor = conn.cursor()
-
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS clients (
-                id TEXT PRIMARY KEY,
-                name TEXT,
-                last_seen_at TEXT
-            )
-        """)
-
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS meta_sync (
-                key TEXT PRIMARY KEY,
-                value TEXT
-            )
-        """)
-
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS trackers (
-                id TEXT PRIMARY KEY,
-                name TEXT,
-                category TEXT,
-                type TEXT,
-                meta_json TEXT,
-                version INTEGER DEFAULT 1,
-                last_modified_by TEXT,
-                last_modified_at TEXT,
-                deleted INTEGER DEFAULT 0
-            )
-        """)
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_trackers_name ON trackers(name)")
-
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS entries (
-                date TEXT,
-                tracker_id TEXT,
-                value REAL,
-                completed INTEGER,
-                version INTEGER DEFAULT 1,
-                last_modified_by TEXT,
-                last_modified_at TEXT,
-                PRIMARY KEY (date, tracker_id),
-                FOREIGN KEY (tracker_id) REFERENCES trackers(id)
-            )
-        """)
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_entries_date ON entries(date)")
-
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS sync_conflicts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                entity_type TEXT,
-                entity_id TEXT,
-                client_id TEXT,
-                client_data TEXT,
-                server_data TEXT,
-                resolution TEXT,
-                resolved_at TEXT,
-                created_at TEXT
-            )
-        """)
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_conflicts_resolved ON sync_conflicts(resolved_at)")
-
-        # Add versioning columns to existing tables if missing (migration)
         try:
-            cursor.execute("ALTER TABLE trackers ADD COLUMN version INTEGER DEFAULT 1")
-        except sqlite3.OperationalError:
-            pass
-        try:
-            cursor.execute("ALTER TABLE trackers ADD COLUMN last_modified_by TEXT")
-        except sqlite3.OperationalError:
-            pass
-        try:
-            cursor.execute("ALTER TABLE trackers ADD COLUMN last_modified_at TEXT")
-        except sqlite3.OperationalError:
-            pass
-        try:
-            cursor.execute("ALTER TABLE trackers ADD COLUMN deleted INTEGER DEFAULT 0")
-        except sqlite3.OperationalError:
-            pass
-        try:
-            cursor.execute("ALTER TABLE entries ADD COLUMN version INTEGER DEFAULT 1")
-        except sqlite3.OperationalError:
-            pass
-        try:
-            cursor.execute("ALTER TABLE entries ADD COLUMN last_modified_by TEXT")
-        except sqlite3.OperationalError:
-            pass
-        try:
-            cursor.execute("ALTER TABLE entries ADD COLUMN last_modified_at TEXT")
-        except sqlite3.OperationalError:
-            pass
+            current_version = cursor.execute("PRAGMA user_version").fetchone()[0]
 
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_trackers_modified ON trackers(last_modified_at)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_entries_modified ON entries(last_modified_at)")
+            for target_version, migration in MIGRATIONS:
+                if current_version >= target_version:
+                    continue
 
-        conn.commit()
+                cursor.execute("BEGIN IMMEDIATE")
+                try:
+                    actual_version = cursor.execute("PRAGMA user_version").fetchone()[0]
+                    if actual_version >= target_version:
+                        # Another process applied this migration while we waited
+                        # on the write lock. Skip and continue.
+                        cursor.execute("ROLLBACK")
+                        current_version = actual_version
+                        continue
+
+                    logger.info(
+                        "Applying journal DB migration: %d -> %d",
+                        actual_version, target_version,
+                    )
+                    migration(cursor)
+                    cursor.execute(f"PRAGMA user_version = {target_version}")
+                    cursor.execute("COMMIT")
+                    current_version = target_version
+                except Exception:
+                    try:
+                        cursor.execute("ROLLBACK")
+                    except sqlite3.Error:
+                        pass
+                    raise
+        finally:
+            conn.isolation_level = previous_isolation
 
 
 # Pydantic models
