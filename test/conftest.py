@@ -135,7 +135,12 @@ def client(test_app):
 
 @pytest.fixture
 def sample_tracker():
-    """Sample tracker configuration for journal tests."""
+    """Sample tracker configuration for journal tests.
+
+    No `_baseLastModifiedAt` — the journal sync protocol treats absence of the
+    token as "INSERT only if no row exists with this key", which matches what
+    tests want when seeding a fresh tracker.
+    """
     return {
         "id": "tracker-001",
         "name": "Water Intake",
@@ -143,7 +148,6 @@ def sample_tracker():
         "type": "quantifiable",
         "unit": "glasses",
         "goal": 8,
-        "_baseVersion": 0
     }
 
 
@@ -155,7 +159,6 @@ def sample_simple_tracker():
         "name": "Exercise",
         "category": "health",
         "type": "simple",
-        "_baseVersion": 0
     }
 
 
@@ -168,7 +171,6 @@ def sample_entry(sample_tracker):
         "tracker_id": sample_tracker["id"],
         "value": 5,
         "completed": False,
-        "_baseVersion": 0
     }
 
 
@@ -200,7 +202,6 @@ def journal_seeded_database(client, journal_registered_client, sample_tracker):
             sample_tracker["id"]: {
                 "value": 5 + i,
                 "completed": i == 0,
-                "_baseVersion": 0
             }
         }
 

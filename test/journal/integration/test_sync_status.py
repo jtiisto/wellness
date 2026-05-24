@@ -41,31 +41,46 @@ class TestSyncStatus:
         assert "T" in timestamp
         assert timestamp.endswith("Z")
 
-    def test_timestamp_not_updated_on_conflict(self, client, journal_registered_client, sample_tracker):
-        """lastModified should not update when sync has conflicts."""
-        payload = {
-            "clientId": journal_registered_client,
-            "config": [sample_tracker],
-            "days": {}
-        }
-        client.post("/api/journal/sync/update", json=payload)
+    def test_timestamp_not_updated_when_all_records_rejected(
+        self, client, journal_registered_client, sample_tracker
+    ):
+        """lastModified should not advance when every record in an upload is rejected.
 
-        initial_timestamp = client.get("/api/journal/sync/status").json()["lastModified"]
+        meta_sync.last_server_sync_time is only set when at least one record is
+        accepted; a batch where all records are stale leaves it unchanged.
+        """
+        import time
 
-        updated = {**sample_tracker, "name": "Updated", "_baseVersion": 1}
+        # Initial create stamps the status
         client.post("/api/journal/sync/update", json={
             "clientId": journal_registered_client,
-            "config": [updated],
-            "days": {}
+            "config": [sample_tracker],
+            "days": {},
         })
+        first_status = client.get("/api/journal/sync/status").json()["lastModified"]
 
-        stale = {**sample_tracker, "name": "Stale", "_baseVersion": 1}
-        response = client.post("/api/journal/sync/update", json={
+        # Advance the row so a stale upload won't match
+        time.sleep(0.01)
+        adv_response = client.post("/api/journal/sync/update", json={
             "clientId": journal_registered_client,
-            "config": [stale],
-            "days": {}
+            "config": [{**sample_tracker, "name": "Advance",
+                        "_baseLastModifiedAt": first_status}],
+            "days": {},
         })
-        assert response.json()["success"] is False
+        post_advance_status = client.get("/api/journal/sync/status").json()["lastModified"]
+        assert post_advance_status >= first_status
 
-        final_timestamp = client.get("/api/journal/sync/status").json()["lastModified"]
-        assert final_timestamp is not None
+        # Now send an all-stale batch — every record references an old base token
+        time.sleep(0.01)
+        rejected_response = client.post("/api/journal/sync/update", json={
+            "clientId": journal_registered_client,
+            "config": [{**sample_tracker, "name": "Stale",
+                        "_baseLastModifiedAt": first_status}],
+            "days": {},
+        }).json()
+        assert rejected_response["acceptedTrackers"] == []
+        assert len(rejected_response["rejectedTrackers"]) == 1
+
+        # Status timestamp is unchanged from the prior accept
+        final_status = client.get("/api/journal/sync/status").json()["lastModified"]
+        assert final_status == post_advance_status

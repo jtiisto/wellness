@@ -53,13 +53,35 @@ class TestSyncPayload:
         payload = SyncPayload(clientId="client-001")
         assert payload.config == []
         assert payload.days == {}
-        assert payload.lastSyncTime is None
 
     def test_missing_client_id_raises(self, test_app):
         """Missing clientId should raise ValidationError."""
         from modules.journal import SyncPayload
         with pytest.raises(ValidationError):
             SyncPayload()
+
+
+@pytest.mark.unit
+class TestSyncResponse:
+    def test_default_empty_arrays(self, test_app):
+        """SyncResponse should default to empty accept/reject arrays."""
+        from modules.journal import SyncResponse
+        response = SyncResponse(serverTime="2026-05-24T18:00:00Z")
+        assert response.acceptedTrackers == []
+        assert response.acceptedEntries == []
+        assert response.rejectedTrackers == []
+        assert response.rejectedEntries == []
+
+    def test_carries_accepted_and_rejected(self, test_app):
+        """SyncResponse should carry both accept and reject items in one response."""
+        from modules.journal import SyncResponse
+        response = SyncResponse(
+            serverTime="2026-05-24T18:00:00Z",
+            acceptedTrackers=[{"id": "a", "lastModifiedAt": "2026-05-24T18:00:00Z"}],
+            rejectedTrackers=[{"id": "b", "errorKind": "stale", "serverRow": {"id": "b"}}],
+        )
+        assert response.acceptedTrackers[0]["id"] == "a"
+        assert response.rejectedTrackers[0]["errorKind"] == "stale"
 
 
 @pytest.mark.unit

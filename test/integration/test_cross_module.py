@@ -29,8 +29,8 @@ class TestCrossModuleSmoke:
 
     def test_all_modules_have_distinct_prefixes(self, client):
         """Verify each module responds on its own prefix without conflicts."""
-        # Journal
-        r1 = client.get("/api/journal/sync/full")
+        # Journal (full pull via delta with no `since`)
+        r1 = client.get("/api/journal/sync/delta")
         assert r1.status_code == 200
 
         # Coach (requires client_id)
@@ -58,7 +58,6 @@ class TestCrossModuleSmoke:
             "name": "Cross Test",
             "category": "test",
             "type": "simple",
-            "_baseVersion": 0
         }
         client.post("/api/journal/sync/update", json={
             "clientId": "shared-id",
@@ -67,7 +66,7 @@ class TestCrossModuleSmoke:
         })
 
         # Verify journal has the tracker
-        full = client.get("/api/journal/sync/full").json()
+        full = client.get("/api/journal/sync/delta").json()
         assert any(t["id"] == "cross-test" for t in full["config"])
 
         # Coach should not have journal data - plans should be empty

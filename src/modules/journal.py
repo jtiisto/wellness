@@ -253,60 +253,66 @@ def init_database():
 
 
 # Pydantic models
+#
+# The sync protocol uses optimistic concurrency on an opaque server-issued
+# timestamp token (`_baseLastModifiedAt`). The client wall clock is never part
+# of the comparator — only timestamps the server itself has stamped. Records
+# without a `_baseLastModifiedAt` are treated as "INSERT only if no row exists
+# with this key", which lets the client send brand-new records without first
+# round-tripping a server stamp.
+
 class TrackerEntry(BaseModel):
+    """Shape of a per-day entry value. Used for type hinting; the actual sync
+    payload uses raw dicts so extra fields like `_baseLastModifiedAt` pass
+    through untouched."""
     value: Optional[float] = None
     completed: Optional[bool] = None
-    _version: Optional[int] = None
-    _baseVersion: Optional[int] = None
 
 
 class TrackerConfig(BaseModel):
+    """Shape of a tracker config row. Extra fields are merged into meta_json."""
     model_config = ConfigDict(extra="allow")
 
     id: str
     name: str
     category: Optional[str] = ""
     type: Optional[str] = "simple"
-    _version: Optional[int] = None
-    _baseVersion: Optional[int] = None
-    _deleted: Optional[bool] = False
 
 
 class SyncPayload(BaseModel):
+    """Inbound sync upload.
+
+    `config` items are raw tracker dicts; `days[date][tracker_id]` are raw
+    entry dicts. Each record may carry a `_baseLastModifiedAt` opaque token
+    (the server-stamped timestamp the client last observed for this row) and
+    trackers may carry a `_deleted` boolean.
+    """
     clientId: str
     config: list[dict[str, Any]] = []
     days: dict[str, dict[str, dict[str, Any]]] = {}
-    lastSyncTime: Optional[str] = None
 
 
 class StatusResponse(BaseModel):
     lastModified: Optional[str] = None
 
 
-class FullSyncResponse(BaseModel):
-    config: list[dict[str, Any]]
-    days: dict[str, dict[str, dict[str, Any]]]
-    serverTime: str
-
-
-class ConflictInfo(BaseModel):
-    entityType: str
-    entityId: str
-    serverVersion: int
-    clientBaseVersion: int
-    serverData: dict[str, Any]
-
-
 class SyncResponse(BaseModel):
-    success: bool
-    conflicts: list[ConflictInfo] = []
-    appliedConfig: list[dict[str, Any]] = []
-    appliedDays: dict[str, dict[str, dict[str, Any]]] = {}
-    lastModified: Optional[str] = None
-    overwrittenData: list[dict[str, Any]] = []
+    """Outbound result of POST /sync/update.
+
+    Each accepted item carries the new server-stamped `lastModifiedAt`. Each
+    rejected item carries an `errorKind` and the current `serverRow` so the
+    client can recover in the same sync cycle without waiting for a delta pull.
+    """
+    serverTime: str
+    acceptedTrackers: list[dict[str, Any]] = []
+    acceptedEntries: list[dict[str, Any]] = []
+    rejectedTrackers: list[dict[str, Any]] = []
+    rejectedEntries: list[dict[str, Any]] = []
 
 
 class DeltaSyncResponse(BaseModel):
+    """Outbound result of GET /sync/delta. With `since` omitted this serves as
+    the full-sync response (initial pull / post-reinstall)."""
     config: list[dict[str, Any]]
     days: dict[str, dict[str, dict[str, Any]]]
     deletedTrackers: list[str]
@@ -315,6 +321,60 @@ class DeltaSyncResponse(BaseModel):
 
 # Router with all sync endpoints
 router = APIRouter()
+
+
+# Tracker fields owned by the sync protocol — excluded when capturing
+# free-form meta_json fields from a tracker upload. Includes both the new
+# top-level response keys (`lastModifiedAt`, `deleted`) and the legacy
+# underscore-prefixed names a client might still echo back during migration.
+_TRACKER_RESERVED_KEYS = frozenset({
+    "id", "name", "category", "type", "lastModifiedAt", "deleted",
+    "_version", "_baseVersion", "_baseLastModifiedAt",
+    "_lastModifiedBy", "_lastModifiedAt", "_deleted",
+})
+
+
+def _tracker_meta(item: dict) -> str:
+    """Serialize the non-reserved fields of a tracker upload to meta_json."""
+    return json.dumps({
+        k: v for k, v in item.items() if k not in _TRACKER_RESERVED_KEYS
+    })
+
+
+def _tracker_server_row(row, tracker_id: str) -> dict:
+    """Build the public-facing shape of a stored tracker row.
+
+    Protocol-owned fields (id, name, category, type, deleted, lastModifiedAt)
+    are written LAST so they always win over any stray field that might have
+    slipped into `meta_json` from an old client echo.
+    """
+    out = {}
+    if row["meta_json"]:
+        out.update(json.loads(row["meta_json"]))
+    out["id"] = tracker_id
+    out["name"] = row["name"]
+    out["category"] = row["category"]
+    out["type"] = row["type"]
+    out["deleted"] = bool(row["deleted"])
+    out["lastModifiedAt"] = row["last_modified_at"]
+    return out
+
+
+def _entry_server_row(row, date_str: str, tracker_id: str) -> dict:
+    """Build the public-facing shape of a stored entry row."""
+    return {
+        "date": date_str,
+        "trackerId": tracker_id,
+        "value": row["value"],
+        "completed": bool(row["completed"]) if row["completed"] is not None else None,
+        "lastModifiedAt": row["last_modified_at"],
+    }
+
+
+def _completed_to_int(completed):
+    if completed is None:
+        return None
+    return 1 if completed else 0
 
 
 @router.get("/sync/status", response_model=StatusResponse)
@@ -332,74 +392,37 @@ def sync_status():
 
 @router.post("/sync/register")
 def register_client(client_id: str, client_name: Optional[str] = None):
-    """Register or update a client."""
+    """Register or update a client. Debug breadcrumb only — no correctness
+    dependency on this in the optimistic-concurrency protocol."""
     with get_db() as conn:
         _db_register_client(conn, client_id, client_name)
         conn.commit()
         return {"status": "ok", "clientId": client_id}
 
 
-@router.get("/sync/full", response_model=FullSyncResponse)
-def sync_full():
-    """Get full data dump for client synchronization."""
+@router.get("/sync/delta", response_model=DeltaSyncResponse)
+def sync_delta(since: Optional[str] = None, client_id: Optional[str] = None):
+    """Return server data the client doesn't have yet.
+
+    When `since` is omitted, returns everything visible (initial pull /
+    post-reinstall). `client_id` is accepted as a debug breadcrumb but is not
+    load-bearing for correctness.
+
+    Entries are filtered to only those whose tracker is active (`deleted=0`).
+    The full entry history remains on the server for MCP queries; the client
+    only ever sees entries for trackers it can still display.
+    """
     with get_db() as conn:
         cursor = conn.cursor()
 
-        cursor.execute("SELECT * FROM trackers WHERE deleted = 0 OR deleted IS NULL")
-        tracker_rows = cursor.fetchall()
-
-        config = []
-        for row in tracker_rows:
-            tracker = {
-                "id": row["id"],
-                "name": row["name"],
-                "category": row["category"],
-                "type": row["type"],
-                "_version": row["version"] or 1,
-                "_lastModifiedBy": row["last_modified_by"],
-                "_lastModifiedAt": row["last_modified_at"]
-            }
-            if row["meta_json"]:
-                meta = json.loads(row["meta_json"])
-                tracker.update(meta)
-            config.append(tracker)
-
-        seven_days_ago = (datetime.now(timezone.utc) - timedelta(days=7)).strftime("%Y-%m-%d")
-        cursor.execute(
-            "SELECT * FROM entries WHERE date >= ?",
-            (seven_days_ago,)
-        )
-        entry_rows = cursor.fetchall()
-
-        days = {}
-        for row in entry_rows:
-            date_str = row["date"]
-            tracker_id = row["tracker_id"]
-
-            if date_str not in days:
-                days[date_str] = {}
-
-            days[date_str][tracker_id] = {
-                "value": row["value"],
-                "completed": bool(row["completed"]) if row["completed"] is not None else None,
-                "_version": row["version"] or 1,
-                "_lastModifiedBy": row["last_modified_by"],
-                "_lastModifiedAt": row["last_modified_at"]
-            }
-
-        return FullSyncResponse(config=config, days=days, serverTime=get_utc_now())
-
-
-@router.get("/sync/delta")
-def sync_delta(since: str, client_id: str):
-    """Get changes since a specific timestamp for incremental sync."""
-    with get_db() as conn:
-        cursor = conn.cursor()
-
-        cursor.execute("""
-            SELECT * FROM trackers
-            WHERE last_modified_at > ? OR last_modified_at IS NULL
-        """, (since,))
+        if since:
+            cursor.execute(
+                "SELECT * FROM trackers "
+                "WHERE last_modified_at > ? OR last_modified_at IS NULL",
+                (since,),
+            )
+        else:
+            cursor.execute("SELECT * FROM trackers")
         tracker_rows = cursor.fetchall()
 
         config = []
@@ -407,324 +430,278 @@ def sync_delta(since: str, client_id: str):
         for row in tracker_rows:
             if row["deleted"]:
                 deleted_trackers.append(row["id"])
-            else:
-                tracker = {
-                    "id": row["id"],
-                    "name": row["name"],
-                    "category": row["category"],
-                    "type": row["type"],
-                    "_version": row["version"] or 1,
-                    "_lastModifiedBy": row["last_modified_by"],
-                    "_lastModifiedAt": row["last_modified_at"]
-                }
-                if row["meta_json"]:
-                    meta = json.loads(row["meta_json"])
-                    tracker.update(meta)
-                config.append(tracker)
+                continue
+            tracker = {}
+            if row["meta_json"]:
+                tracker.update(json.loads(row["meta_json"]))
+            # Protocol-owned fields written LAST so they win over any stray
+            # field that might have slipped into meta_json.
+            tracker["id"] = row["id"]
+            tracker["name"] = row["name"]
+            tracker["category"] = row["category"]
+            tracker["type"] = row["type"]
+            tracker["lastModifiedAt"] = row["last_modified_at"]
+            config.append(tracker)
 
-        seven_days_ago = (datetime.now(timezone.utc) - timedelta(days=7)).strftime("%Y-%m-%d")
-        cursor.execute("""
-            SELECT * FROM entries
-            WHERE (last_modified_at > ? OR last_modified_at IS NULL)
-            AND date >= ?
-        """, (since, seven_days_ago))
+        seven_days_ago = (
+            datetime.now(timezone.utc) - timedelta(days=7)
+        ).strftime("%Y-%m-%d")
+        if since:
+            cursor.execute(
+                "SELECT e.* FROM entries e "
+                "JOIN trackers t ON e.tracker_id = t.id "
+                "WHERE (e.last_modified_at > ? OR e.last_modified_at IS NULL) "
+                "AND e.date >= ? AND t.deleted = 0",
+                (since, seven_days_ago),
+            )
+        else:
+            cursor.execute(
+                "SELECT e.* FROM entries e "
+                "JOIN trackers t ON e.tracker_id = t.id "
+                "WHERE e.date >= ? AND t.deleted = 0",
+                (seven_days_ago,),
+            )
         entry_rows = cursor.fetchall()
 
-        days = {}
+        days: dict[str, dict[str, dict[str, Any]]] = {}
         for row in entry_rows:
             date_str = row["date"]
             tracker_id = row["tracker_id"]
-
-            if date_str not in days:
-                days[date_str] = {}
-
-            days[date_str][tracker_id] = {
+            days.setdefault(date_str, {})[tracker_id] = {
                 "value": row["value"],
-                "completed": bool(row["completed"]) if row["completed"] is not None else None,
-                "_version": row["version"] or 1,
-                "_lastModifiedBy": row["last_modified_by"],
-                "_lastModifiedAt": row["last_modified_at"]
+                "completed": (
+                    bool(row["completed"]) if row["completed"] is not None else None
+                ),
+                "lastModifiedAt": row["last_modified_at"],
             }
 
         return DeltaSyncResponse(
             config=config,
             days=days,
             deletedTrackers=deleted_trackers,
-            serverTime=get_utc_now()
+            serverTime=get_utc_now(),
         )
 
 
-CONFLICT_RETENTION_DAYS = 30
+def _apply_tracker_upload(
+    cursor, item: dict, now: str,
+) -> tuple[Optional[dict], Optional[dict]]:
+    """Apply one tracker upload.
 
+    Returns (accepted, rejected). Exactly one is non-None. On accept the prior
+    row (if any) is copied to trackers_archive before the UPDATE.
+    """
+    tracker_id = item.get("id")
+    base_ts = item.get("_baseLastModifiedAt")
+    is_deleted = bool(item.get("_deleted", False))
 
-def _prune_old_conflicts(cursor):
-    """Remove resolved sync_conflicts rows older than the retention window."""
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=CONFLICT_RETENTION_DAYS)).isoformat()
     cursor.execute(
-        "DELETE FROM sync_conflicts WHERE resolved_at IS NOT NULL AND resolved_at < ?",
-        (cutoff,)
+        "SELECT name, category, type, meta_json, deleted, last_modified_at "
+        "FROM trackers WHERE id = ?",
+        (tracker_id,),
     )
+    row = cursor.fetchone()
+
+    if row is None:
+        if base_ts is not None:
+            return None, {
+                "id": tracker_id,
+                "errorKind": "missing",
+                "serverRow": None,
+            }
+        cursor.execute(
+            "INSERT INTO trackers "
+            "(id, name, category, type, meta_json, last_modified_at, deleted) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                tracker_id,
+                item.get("name"),
+                item.get("category", ""),
+                item.get("type", "simple"),
+                _tracker_meta(item),
+                now,
+                1 if is_deleted else 0,
+            ),
+        )
+        return {"id": tracker_id, "lastModifiedAt": now}, None
+
+    stored_ts = row["last_modified_at"]
+    # Compare opaque timestamp tokens. Equal accepts (covers idempotent retry
+    # after a lost response). Strictly-greater rejects. NULL stored_ts means a
+    # pre-LWW row that has no timestamp yet — accept and stamp.
+    if stored_ts is not None and (base_ts is None or stored_ts > base_ts):
+        return None, {
+            "id": tracker_id,
+            "errorKind": "stale",
+            "serverRow": _tracker_server_row(row, tracker_id),
+        }
+
+    # Archive the prior row before overwriting.
+    cursor.execute(
+        "INSERT INTO trackers_archive "
+        "(tracker_id, name, category, type, meta_json, deleted, "
+        " last_modified_at, superseded_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            tracker_id,
+            row["name"],
+            row["category"],
+            row["type"],
+            row["meta_json"],
+            row["deleted"] or 0,
+            stored_ts or now,
+            now,
+        ),
+    )
+    cursor.execute(
+        "UPDATE trackers SET name = ?, category = ?, type = ?, meta_json = ?, "
+        "deleted = ?, last_modified_at = ? WHERE id = ?",
+        (
+            item.get("name"),
+            item.get("category", ""),
+            item.get("type", "simple"),
+            _tracker_meta(item),
+            1 if is_deleted else 0,
+            now,
+            tracker_id,
+        ),
+    )
+    return {"id": tracker_id, "lastModifiedAt": now}, None
+
+
+def _apply_entry_upload(
+    cursor, date_str: str, tracker_id: str, data: dict, now: str,
+) -> tuple[Optional[dict], Optional[dict]]:
+    """Apply one entry upload. Same optimistic-concurrency rules as trackers."""
+    base_ts = data.get("_baseLastModifiedAt")
+    value = data.get("value")
+    completed_int = _completed_to_int(data.get("completed"))
+
+    cursor.execute(
+        "SELECT value, completed, last_modified_at FROM entries "
+        "WHERE date = ? AND tracker_id = ?",
+        (date_str, tracker_id),
+    )
+    row = cursor.fetchone()
+
+    if row is None:
+        if base_ts is not None:
+            return None, {
+                "date": date_str,
+                "trackerId": tracker_id,
+                "errorKind": "missing",
+                "serverRow": None,
+            }
+        cursor.execute(
+            "INSERT INTO entries (date, tracker_id, value, completed, last_modified_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (date_str, tracker_id, value, completed_int, now),
+        )
+        return {
+            "date": date_str,
+            "trackerId": tracker_id,
+            "lastModifiedAt": now,
+        }, None
+
+    stored_ts = row["last_modified_at"]
+    if stored_ts is not None and (base_ts is None or stored_ts > base_ts):
+        return None, {
+            "date": date_str,
+            "trackerId": tracker_id,
+            "errorKind": "stale",
+            "serverRow": _entry_server_row(row, date_str, tracker_id),
+        }
+
+    cursor.execute(
+        "INSERT INTO entries_archive "
+        "(date, tracker_id, value, completed, last_modified_at, superseded_at) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (
+            date_str,
+            tracker_id,
+            row["value"],
+            row["completed"],
+            stored_ts or now,
+            now,
+        ),
+    )
+    cursor.execute(
+        "UPDATE entries SET value = ?, completed = ?, last_modified_at = ? "
+        "WHERE date = ? AND tracker_id = ?",
+        (value, completed_int, now, date_str, tracker_id),
+    )
+    return {
+        "date": date_str,
+        "trackerId": tracker_id,
+        "lastModifiedAt": now,
+    }, None
 
 
 @router.post("/sync/update", response_model=SyncResponse)
 def sync_update(payload: SyncPayload):
-    """Update server with client data, with conflict detection."""
-    conflicts = []
-    applied_config = []
-    applied_days = {}
-    overwritten_data = []
+    """Upload client changes using optimistic concurrency on `_baseLastModifiedAt`.
+
+    Per record: if `stored.last_modified_at <= incoming._baseLastModifiedAt`
+    (or no stored row exists and no base token was provided), the upload
+    overwrites the stored row, the prior values are archived, and the new
+    server-stamped timestamp is returned. Otherwise the upload is rejected
+    with the current `serverRow` so the client can recover in-cycle without
+    waiting for a delta pull.
+    """
     now = get_utc_now()
     client_id = payload.clientId
 
+    accepted_trackers: list[dict] = []
+    accepted_entries: list[dict] = []
+    rejected_trackers: list[dict] = []
+    rejected_entries: list[dict] = []
+    had_accept = False
+
     with get_db() as conn:
         cursor = conn.cursor()
-
         _db_register_client(conn, client_id, now=now)
 
         try:
             for item in payload.config:
-                tracker_id = item.get("id")
-                client_base_version = item.get("_baseVersion", 0)
-                is_deleted = item.get("_deleted", False)
-
-                cursor.execute(
-                    "SELECT version, name, category, type, meta_json, deleted FROM trackers WHERE id = ?",
-                    (tracker_id,)
-                )
-                row = cursor.fetchone()
-                server_version = row["version"] if row else 0
-
-                if row and server_version > client_base_version:
-                    server_data = {
-                        "id": tracker_id,
-                        "name": row["name"],
-                        "category": row["category"],
-                        "type": row["type"],
-                        "_version": server_version
-                    }
-                    if row["meta_json"]:
-                        server_data.update(json.loads(row["meta_json"]))
-
-                    conflicts.append(ConflictInfo(
-                        entityType="tracker",
-                        entityId=tracker_id,
-                        serverVersion=server_version,
-                        clientBaseVersion=client_base_version,
-                        serverData=server_data
-                    ))
-                    continue
-
-                name = item.get("name")
-                category = item.get("category", "")
-                tracker_type = item.get("type", "simple")
-                new_version = server_version + 1
-
-                excluded_keys = {"id", "name", "category", "type", "_version", "_baseVersion",
-                               "_lastModifiedBy", "_lastModifiedAt", "_deleted"}
-                meta = {k: v for k, v in item.items() if k not in excluded_keys}
-
-                if is_deleted:
-                    cursor.execute("""
-                        UPDATE trackers SET deleted = 1, version = ?,
-                        last_modified_by = ?, last_modified_at = ?
-                        WHERE id = ?
-                    """, (new_version, client_id, now, tracker_id))
-                else:
-                    cursor.execute("""
-                        INSERT INTO trackers (id, name, category, type, meta_json, version,
-                                            last_modified_by, last_modified_at, deleted)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)
-                        ON CONFLICT(id) DO UPDATE SET
-                            name = excluded.name,
-                            category = excluded.category,
-                            type = excluded.type,
-                            meta_json = excluded.meta_json,
-                            version = excluded.version,
-                            last_modified_by = excluded.last_modified_by,
-                            last_modified_at = excluded.last_modified_at,
-                            deleted = 0
-                    """, (tracker_id, name, category, tracker_type, json.dumps(meta),
-                          new_version, client_id, now))
-
-                applied_config.append({
-                    **item,
-                    "_version": new_version,
-                    "_lastModifiedBy": client_id,
-                    "_lastModifiedAt": now
-                })
+                accepted, rejected = _apply_tracker_upload(cursor, item, now)
+                if accepted is not None:
+                    accepted_trackers.append(accepted)
+                    had_accept = True
+                if rejected is not None:
+                    rejected_trackers.append(rejected)
 
             for date_str, trackers_map in payload.days.items():
-                if date_str not in applied_days:
-                    applied_days[date_str] = {}
-
                 for tracker_id, data in trackers_map.items():
-                    client_base_version = data.get("_baseVersion", 0)
-
-                    cursor.execute(
-                        "SELECT version, value, completed FROM entries WHERE date = ? AND tracker_id = ?",
-                        (date_str, tracker_id)
+                    accepted, rejected = _apply_entry_upload(
+                        cursor, date_str, tracker_id, data, now,
                     )
-                    row = cursor.fetchone()
-                    server_version = row["version"] if row else 0
+                    if accepted is not None:
+                        accepted_entries.append(accepted)
+                        had_accept = True
+                    if rejected is not None:
+                        rejected_entries.append(rejected)
 
-                    if row and server_version > client_base_version:
-                        server_data = {
-                            "value": row["value"],
-                            "completed": bool(row["completed"]) if row["completed"] is not None else None,
-                            "_version": server_version
-                        }
-                        conflicts.append(ConflictInfo(
-                            entityType="entry",
-                            entityId=f"{date_str}|{tracker_id}",
-                            serverVersion=server_version,
-                            clientBaseVersion=client_base_version,
-                            serverData=server_data
-                        ))
-                        continue
+            if had_accept:
+                cursor.execute(
+                    "INSERT OR REPLACE INTO meta_sync (key, value) "
+                    "VALUES ('last_server_sync_time', ?)",
+                    (now,),
+                )
 
-                    value = data.get("value")
-                    completed = data.get("completed")
-                    completed_int = 1 if completed else 0 if completed is not None else None
-                    new_version = server_version + 1
-
-                    cursor.execute("""
-                        INSERT INTO entries (date, tracker_id, value, completed, version,
-                                           last_modified_by, last_modified_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
-                        ON CONFLICT(date, tracker_id) DO UPDATE SET
-                            value = excluded.value,
-                            completed = excluded.completed,
-                            version = excluded.version,
-                            last_modified_by = excluded.last_modified_by,
-                            last_modified_at = excluded.last_modified_at
-                    """, (date_str, tracker_id, value, completed_int, new_version, client_id, now))
-
-                    applied_days[date_str][tracker_id] = {
-                        "value": value,
-                        "completed": completed,
-                        "_version": new_version,
-                        "_lastModifiedBy": client_id,
-                        "_lastModifiedAt": now
-                    }
-
-            if not conflicts:
-                cursor.execute("""
-                    INSERT OR REPLACE INTO meta_sync (key, value)
-                    VALUES ('last_server_sync_time', ?)
-                """, (now,))
-
-            _prune_old_conflicts(cursor)
+            _purge_old_archives(conn)
             conn.commit()
 
             return SyncResponse(
-                success=len(conflicts) == 0,
-                conflicts=conflicts,
-                appliedConfig=applied_config,
-                appliedDays=applied_days,
-                lastModified=now if not conflicts else None,
-                overwrittenData=overwritten_data
+                serverTime=now,
+                acceptedTrackers=accepted_trackers,
+                acceptedEntries=accepted_entries,
+                rejectedTrackers=rejected_trackers,
+                rejectedEntries=rejected_entries,
             )
 
         except Exception as e:
             conn.rollback()
             raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.post("/sync/resolve-conflict")
-def resolve_conflict(
-    entity_type: str,
-    entity_id: str,
-    resolution: str,
-    client_id: str,
-    client_data: Optional[dict[str, Any]] = None
-):
-    """Resolve a specific conflict by choosing client or server version."""
-    now = get_utc_now()
-
-    with get_db() as conn:
-        cursor = conn.cursor()
-
-        if resolution == "client" and client_data:
-            if entity_type == "tracker":
-                cursor.execute("SELECT version FROM trackers WHERE id = ?", (entity_id,))
-                row = cursor.fetchone()
-                new_version = (row["version"] if row else 0) + 1
-
-                name = client_data.get("name")
-                category = client_data.get("category", "")
-                tracker_type = client_data.get("type", "simple")
-                excluded_keys = {"id", "name", "category", "type", "_version", "_baseVersion",
-                               "_lastModifiedBy", "_lastModifiedAt", "_deleted"}
-                meta = {k: v for k, v in client_data.items() if k not in excluded_keys}
-
-                cursor.execute("""
-                    INSERT OR REPLACE INTO trackers
-                    (id, name, category, type, meta_json, version, last_modified_by, last_modified_at, deleted)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)
-                """, (entity_id, name, category, tracker_type, json.dumps(meta),
-                      new_version, client_id, now))
-
-            elif entity_type == "entry":
-                date_str, tracker_id = entity_id.split("|")
-                cursor.execute(
-                    "SELECT version FROM entries WHERE date = ? AND tracker_id = ?",
-                    (date_str, tracker_id)
-                )
-                row = cursor.fetchone()
-                new_version = (row["version"] if row else 0) + 1
-
-                value = client_data.get("value")
-                completed = client_data.get("completed")
-                completed_int = 1 if completed else 0 if completed is not None else None
-
-                cursor.execute("""
-                    INSERT OR REPLACE INTO entries
-                    (date, tracker_id, value, completed, version, last_modified_by, last_modified_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                """, (date_str, tracker_id, value, completed_int, new_version, client_id, now))
-
-        cursor.execute("""
-            INSERT INTO sync_conflicts
-            (entity_type, entity_id, client_id, client_data, resolution, resolved_at, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, (entity_type, entity_id, client_id,
-              json.dumps(client_data) if client_data else None,
-              resolution, now, now))
-
-        cursor.execute("""
-            INSERT OR REPLACE INTO meta_sync (key, value)
-            VALUES ('last_server_sync_time', ?)
-        """, (now,))
-
-        conn.commit()
-
-        return {"status": "ok", "resolution": resolution, "entityId": entity_id}
-
-
-@router.get("/sync/conflicts")
-def get_unresolved_conflicts(client_id: str):
-    """Get unresolved conflicts for a client."""
-    with get_db() as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT * FROM sync_conflicts
-            WHERE client_id = ? AND resolved_at IS NULL
-            ORDER BY created_at DESC
-        """, (client_id,))
-        rows = cursor.fetchall()
-
-        conflicts = []
-        for row in rows:
-            conflicts.append({
-                "id": row["id"],
-                "entityType": row["entity_type"],
-                "entityId": row["entity_id"],
-                "clientData": json.loads(row["client_data"]) if row["client_data"] else None,
-                "serverData": json.loads(row["server_data"]) if row["server_data"] else None,
-                "createdAt": row["created_at"]
-            })
-
-        return {"conflicts": conflicts}
 
 
 def create_router(db_path: Path) -> APIRouter:
