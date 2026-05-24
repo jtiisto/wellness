@@ -299,9 +299,12 @@ def test_forcesync_during_edit_preserves_latest(
     # Edit mid-forceSync — after the generation snapshot is taken
     race_journal_page.set_tracker_value("Steps", 8888)
 
-    # Wait for forceSync to complete + any follow-up sync from the new dirty state
-    page.wait_for_timeout(SYNC_DELAY_MS * 2 + 6000)
-    page.wait_for_selector(".sync-dot.green", timeout=10000)
+    # Wait for forceSync to complete + the follow-up scheduler sync that picks
+    # up the still-dirty entry (because the generation snapshot caught the
+    # mid-sync edit). Under coverage instrumentation the timings drift, so we
+    # give a generous wait plus a poll on the sync indicator going green.
+    page.wait_for_timeout(SYNC_DELAY_MS * 3 + 4000)
+    page.wait_for_selector(".sync-dot.green", timeout=20000)
 
     entry = _get_server_entry(app_server, seed["trackers"][0]["id"], seed["today"])
     assert entry is not None

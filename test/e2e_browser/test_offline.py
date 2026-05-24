@@ -22,12 +22,16 @@ def test_offline_sync_indicator(journal_page_online):
     """Going offline and triggering a sync attempt shows Offline label."""
     page = journal_page_online.page
     page.context.set_offline(True)
+    # set_offline blocks network but does not always flip navigator.onLine in
+    # time — dispatch the event explicitly so updateSyncStatus sees the change.
+    page.evaluate("() => window.dispatchEvent(new Event('offline'))")
     # Edit a value to trigger a debounced sync attempt while offline
     journal_page_online.set_tracker_value("Water Intake", 77)
     # Wait for debounce (2.5s) + sync attempt
     page.wait_for_timeout(4000)
     label = journal_page_online.get_sync_label()
     page.context.set_offline(False)
+    page.evaluate("() => window.dispatchEvent(new Event('online'))")
     assert label in ["Offline", "Pending"]
 
 
