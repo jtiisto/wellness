@@ -30,8 +30,16 @@ def test_offline_sync_indicator(journal_page_online):
     # set_offline blocks network but does not always flip navigator.onLine in
     # time — dispatch the event explicitly so updateSyncStatus sees the change.
     page.evaluate("() => window.dispatchEvent(new Event('offline'))")
-    # Edit a value to trigger a debounced sync attempt while offline
-    journal_page_online.set_tracker_value("Water Intake", 77)
+
+    # Read the displayed Water Intake value and pick a different one so the
+    # fill() unambiguously produces an input event. Without this, prior tests
+    # that left the server's Water Intake at a particular value would make a
+    # hard-coded target a no-op fill and the dirty flag would never get set.
+    water_input = page.locator(".tracker-item").filter(
+        has_text="Water Intake").locator("input[type='number']")
+    current = water_input.input_value()
+    target = "13" if current != "13" else "14"
+    journal_page_online.set_tracker_value("Water Intake", target)
 
     # Poll for the sync indicator to leave the green/Synced state. Either
     # the offline-event-induced status change OR the failed sync attempt
