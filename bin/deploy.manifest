@@ -1,0 +1,50 @@
+# Deployment manifest — the single source of truth for what ships to production.
+#
+# Consumed by:
+#   - bin/deploy-prod.sh        (copies exactly what is listed here)
+#   - test/test_deploy_manifest.py  (fails if a tracked top-level entry or bin/
+#                                    script is not classified below)
+#
+# Format: "<action> <path>" per line. Blank lines and # comments are ignored.
+#   ship-dir <dir>      top-level dir, rsynced wholesale to prod (minus the
+#                       __pycache__/*.pyc/*.pyo/*.db excludes in deploy-prod.sh)
+#   ship-file <file>    top-level file copied to prod
+#   ship-bin <script>   bin/ script copied to prod (hooks are never clobbered)
+#   exclude <path>      top-level entry intentionally NOT deployed
+#   exclude-bin <name>  bin/ entry intentionally NOT deployed (dev tooling)
+#
+# To add a new file: add the matching line here. The guard test will fail until
+# every tracked top-level entry and bin/ script is listed, so nothing ships
+# (or fails to ship) by accident.
+
+# ---- Shipped to production ----
+ship-dir   src
+ship-dir   public
+ship-dir   mcp_servers
+ship-dir   data
+ship-file  requirements.txt
+
+ship-bin   server.sh
+ship-bin   pre-workout-hook.sh
+ship-bin   post-workout-hook.sh
+ship-bin   backup-databases.sh
+
+# ---- Intentionally NOT shipped (dev/test/docs/config) ----
+exclude    docs
+exclude    test
+exclude    README.md
+exclude    .gitignore
+exclude    .coveragerc
+exclude    pytest.ini
+# Untracked today, but listed so they stay excluded if ever committed:
+exclude    plans
+exclude    .claude
+exclude    CLAUDE.md
+
+# ---- bin/ entries that are dev-only ----
+exclude-bin  deploy-prod.sh
+exclude-bin  deploy.manifest
+exclude-bin  quick-deploy.sh
+exclude-bin  git-commit-push.sh
+exclude-bin  backup-gitignored.sh
+exclude-bin  weight_trend_chart.py

@@ -53,7 +53,7 @@ pytest test/e2e_browser/    # Playwright E2E browser tests
 ./bin/deploy-prod.sh /path/to/production [/path/to/llm-directory]
 ```
 
-This copies `src/`, `public/`, `mcp/`, `data/`, and `bin/` to the production directory. The optional LLM directory argument specifies where Claude Code CLI runs analysis queries (it must contain `CLAUDE.md` and `.claude/` with MCP configs).
+What gets deployed is driven entirely by **`bin/deploy.manifest`** (the single source of truth): `src/`, `public/`, `mcp_servers/`, `data/`, `requirements.txt`, and a curated allowlist of `bin/` scripts (`server.sh`, the workout hooks, `backup-databases.sh`). Dev tooling, `docs/`, `plans/`, and `test/` are intentionally excluded. To add or remove a deployed file, edit the manifest — the guard test `test/test_deploy_manifest.py` fails until every tracked top-level entry and `bin/` script is classified there, so nothing ships (or fails to ship) by accident. The optional LLM directory argument specifies where Claude Code CLI runs analysis queries (it must contain `CLAUDE.md` and `.claude/` with MCP configs).
 
 ### Manual production setup
 

@@ -116,42 +116,53 @@ copy_file() {
     fi
 }
 
-echo -e "${GREEN}Copying production files...${NC}"
+# All deployment is driven by bin/deploy.manifest — the single source of truth
+# for what ships to production. Nothing is copied unless it is listed there, so
+# dev tooling, docs, and tests can never leak in by accident (and the guard
+# test test/test_deploy_manifest.py fails if a tracked file isn't classified).
+MANIFEST="$PROJECT_ROOT/bin/deploy.manifest"
+if [ ! -f "$MANIFEST" ]; then
+    echo -e "${RED}Error: deploy manifest not found: $MANIFEST${NC}"
+    exit 1
+fi
+
+echo -e "${GREEN}Copying production files (per bin/deploy.manifest)...${NC}"
 echo ""
 
-# Copy source code
-sync_dir "$PROJECT_ROOT/src" "$PROD_DIR/src" "src/"
-
-# Copy public assets
-sync_dir "$PROJECT_ROOT/public" "$PROD_DIR/public" "public/"
-
-# Copy MCP tools
-sync_dir "$PROJECT_ROOT/mcp_servers" "$PROD_DIR/mcp_servers" "mcp_servers/"
-
-# Copy data files
-sync_dir "$PROJECT_ROOT/data" "$PROD_DIR/data" "data/"
-
-# Copy bin scripts (excluding deploy script).
-# Hook scripts are copied with --no-clobber to preserve production customizations.
-echo "  Syncing bin/..."
-mkdir -p "$PROD_DIR/bin"
-for script in "$PROJECT_ROOT/bin/"*; do
-    script_name="$(basename "$script")"
-    if [ "$script_name" = "deploy-prod.sh" ]; then
-        continue
-    fi
-    if [[ "$script_name" == *-workout-hook.sh ]]; then
-        if [ -f "$PROD_DIR/bin/$script_name" ]; then
-            echo "    Skipping $script_name (already exists in production)"
-            continue
-        fi
-    fi
-    cp "$script" "$PROD_DIR/bin/"
-    chmod +x "$PROD_DIR/bin/$script_name"
-done
-
-# Copy requirements.txt
-copy_file "$PROJECT_ROOT/requirements.txt" "$PROD_DIR/requirements.txt" "requirements.txt"
+while read -r action target _rest; do
+    # Skip blanks and comments
+    [[ -z "$action" || "$action" == \#* ]] && continue
+    case "$action" in
+        ship-dir)
+            sync_dir "$PROJECT_ROOT/$target" "$PROD_DIR/$target" "$target/"
+            ;;
+        ship-file)
+            copy_file "$PROJECT_ROOT/$target" "$PROD_DIR/$target" "$target"
+            ;;
+        ship-bin)
+            mkdir -p "$PROD_DIR/bin"
+            src="$PROJECT_ROOT/bin/$target"
+            if [ ! -f "$src" ]; then
+                echo -e "  ${YELLOW}Skipping bin/$target (not present locally)${NC}"
+                continue
+            fi
+            # Hook templates are never clobbered — preserve prod customizations.
+            if [[ "$target" == *-workout-hook.sh ]] && [ -f "$PROD_DIR/bin/$target" ]; then
+                echo "    Skipping bin/$target (already exists in production)"
+                continue
+            fi
+            echo "  Copying bin/$target..."
+            cp "$src" "$PROD_DIR/bin/$target"
+            chmod +x "$PROD_DIR/bin/$target"
+            ;;
+        exclude|exclude-bin)
+            : # Documented as intentionally not deployed; enforced by the guard test.
+            ;;
+        *)
+            echo -e "  ${YELLOW}Unknown manifest action '$action' (target: $target) — skipping${NC}"
+            ;;
+    esac
+done < "$MANIFEST"
 
 echo ""
 
