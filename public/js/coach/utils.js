@@ -178,7 +178,13 @@ export function getExerciseProgress(exercise, logData) {
 }
 
 /**
- * Check if an exercise is completed based on log data
+ * Check if an exercise is completed, derived from logged data.
+ *
+ * Completion is always derived from what was logged — there is no stored
+ * `completed` flag any more (it was unreliable; see
+ * docs/plan_workout_completion_derivation.md). Set-based types (strength,
+ * circuit, weighted_time) are complete once target sets are logged; checklist
+ * once all items are checked; cardio once a duration is logged.
  */
 export function isExerciseCompleted(exercise, logData) {
     if (!logData) return false;
@@ -188,12 +194,16 @@ export function isExerciseCompleted(exercise, logData) {
             const completed = logData.completed_items || [];
             return completed.length === (exercise.items?.length || 0);
         case 'strength':
+        case 'circuit':
+        case 'weighted_time':
             const sets = logData.sets || [];
             return sets.length >= (exercise.target_sets || 1);
         case 'duration':
         case 'interval':
             return logData.duration_min != null;
         default:
-            return logData.completed === true;
+            return (logData.sets?.length > 0)
+                || logData.duration_min != null
+                || (logData.completed_items?.length > 0);
     }
 }

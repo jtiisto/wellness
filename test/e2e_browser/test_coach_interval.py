@@ -223,3 +223,21 @@ def test_is_exercise_completed_interval_logged(app_page):
     assert _completed(
         app_page, {"type": "interval"}, {"duration_min": 12}
     ) is True
+
+
+def test_is_exercise_completed_circuit_derives_from_sets(app_page):
+    ex = {"type": "circuit", "target_sets": 3}
+    assert _completed(app_page, ex, {"sets": [{}, {}]}) is False
+    assert _completed(app_page, ex, {"sets": [{}, {}, {}]}) is True
+
+
+def test_is_exercise_completed_weighted_time_derives_from_sets(app_page):
+    ex = {"type": "weighted_time", "target_sets": 1}
+    assert _completed(app_page, ex, {}) is False
+    assert _completed(app_page, ex, {"sets": [{"duration_sec": 40}]}) is True
+
+
+def test_is_exercise_completed_unknown_type_derives_from_any_data(app_page):
+    assert _completed(app_page, {"type": "mystery"}, {}) is False
+    assert _completed(app_page, {"type": "mystery"}, {"sets": [{}]}) is True
+    assert _completed(app_page, {"type": "mystery"}, {"duration_min": 5}) is True

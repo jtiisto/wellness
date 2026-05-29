@@ -102,16 +102,21 @@ fully completed.
 - **Deploy note:** the live prod schema changes only when the new code is deployed to `~/proj/health/.wellness` and the service restarts (migration runs on startup, synchronized with the new writer). Do **not** hand-drop the prod column out of band.
 - **Interim cosmetic gap (until Phase 3):** circuit/weighted_time header checkmarks in the PWA won't light (they still read `logData.completed`); progress pills and all data are unaffected. No e2e test depends on it.
 
-### Phase 3 — PWA
-- [ ] `public/js/coach/utils.js:197` (`isExerciseCompleted` default branch) — derive circuit/weighted_time from sets (drop dependence on `logData.completed`).
-- [ ] `public/js/coach/components/ExerciseItem.js:33-36,114-121` — make the header checkbox a read-only derived indicator (remove the `{completed}` write). Keep the per-set ✓ in `SetEntry.js` (feeds `set_logs.completed`).
-- [ ] `public/js/coach/store.js:274` (`logHasExerciseContent`) — drop the now-dead `val.completed` term (sets/items/duration still gate content; circuit always has sets).
+### Phase 3 — PWA — **DONE (2026-05-29)**
+- [x] `public/js/coach/utils.js` (`isExerciseCompleted`) — circuit/weighted_time now derive from sets (folded into the strength case); the `default` branch derives from any logged data (sets/duration/items) instead of `logData.completed`.
+- [x] `public/js/coach/components/ExerciseItem.js` — header checkbox is now a read-only derived indicator (`disabled`, no `onChange`); removed the dead `handleCompletedChange` writer. Per-set ✓ in `SetEntry.js` kept (feeds `set_logs.completed`).
+- [x] `public/js/coach/store.js` (`logHasExerciseContent`) — dropped the dead `val.completed` term; content gated by sets/items/duration.
+- [x] Tests: added e2e `isExerciseCompleted` cases for circuit/weighted_time/unknown-type. **47 coach e2e pass.**
+- **UX consequence to note:** there is no longer a manual "tick exercise complete" affordance — completion follows logged data. A workout tracked only on Garmin (no in-app metrics, like the old `id 770`) now needs a `duration_min`/set logged in the PWA to read as completed. Residual harmless `entry.completed ||` terms remain in `CalendarPicker.js`/`WorkoutView.js` (always falsy now) — optional future cleanup.
 
-### Phase 4 — Docs
-- [ ] `docs/ARCHITECTURE.md` — data model (column dropped), completion semantics (attempted/completed/progress, exercise + session), note set-level retained.
-- [ ] `docs/bug_workout_log_completed_flag.md` — mark Resolved with confirmed findings + chosen approach.
-- [ ] Cross-repo handoff in `~/proj/health` (per repo-split convention): note in its `MCP_PATTERNS.md` that completion is now trustworthy via `attempted`/`completed`; retire the "infer from sets" workaround. Separate session edits prompts.
-- [ ] Native Android app (`/home/jtiisto/dev/native/wellness/`) consumes these MCP read shapes — leave a handoff note so its parsing is updated for the new fields.
+### Phase 4 — Docs & cross-repo handoffs
+- [x] `docs/ARCHITECTURE.md` — data model (column dropped), derived-completion semantics, set-level retained. (committed eb90ec2)
+- [x] `docs/bug_workout_log_completed_flag.md` — marked Resolved with confirmed findings + chosen approach. (committed eb90ec2)
+- [ ] **Cross-repo handoffs — READY TO APPLY, not yet applied** (kept here per the user's "don't touch other repos unprompted" instruction). Content below; apply in the respective repo when approved.
+
+**Handoff A — analysis corpus (`~/proj/health/MCP_PATTERNS.md`):** Update the Coach MCP section. The read tools now return, per exercise, `attempted` (any data logged), `completed` (planned target met; `null` if target unknown), and `progress` (`{done, target}`). `get_workout_logs` adds a session-level `session_completion`. `get_workout_summary` adds `sessions_fully_completed` + `full_completion_rate_percent` (`completed_workouts` stays = logged/presence count). **The per-exercise `completed` column was dropped** — do NOT reference `exercise_logs.completed` in `execute_sql_query` (it no longer exists); `set_logs.completed` still exists. Retire any "infer completion from set presence" guidance — trust `attempted`/`completed` now.
+
+**Handoff B — native app (`~/dev/native/wellness/`):** The coach exercise-log model should drop the exercise-level `completed: Boolean` field (server no longer sends it via sync, and the MCP read tools replaced it with `attempted`/`completed`/`progress`). Either consume the new MCP fields or derive locally (sets ≥ target / duration present / items checked), mirroring the PWA's `isExerciseCompleted`. Set-level `completed` on `set_logs` is unchanged. Journal `completed` fields are unrelated and unchanged.
 
 ### Phase 5 — Tests (developed alongside each phase; zero-tolerance for failures)
 - [ ] Unit: derive helpers across all types incl. partial sets, below-target duration, null target, checklist, unlinked.

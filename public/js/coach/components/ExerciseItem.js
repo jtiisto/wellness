@@ -30,11 +30,6 @@ export function ExerciseItem({ date, exercise, logData, block, isEditable = true
     const progress = getExerciseProgress(exercise, logData);
     const parsed = parseName(exercise.name);
 
-    const handleCompletedChange = (e) => {
-        if (!isEditable) return;
-        updateLog(date, exercise.id, { completed: e.target.checked });
-    };
-
     const handleNoteChange = (e) => {
         if (!isEditable) return;
         updateLog(date, exercise.id, { user_note: e.target.value });
@@ -115,8 +110,8 @@ export function ExerciseItem({ date, exercise, logData, block, isEditable = true
                     <input
                         type="checkbox"
                         checked=${completed}
-                        onChange=${handleCompletedChange}
-                        disabled=${!isEditable}
+                        disabled=${true}
+                        aria-label="Completed (derived from logged data)"
                     />
                 </div>
                 <span class="exercise-name">${parsed.base}</span>

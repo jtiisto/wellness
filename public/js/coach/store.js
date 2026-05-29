@@ -271,7 +271,9 @@ function logHasExerciseContent(log) {
     return Object.entries(log).some(([key, val]) => {
         if (['_lastModifiedAt', '_lastModifiedBy', 'session_feedback'].includes(key)) return false;
         if (typeof val !== 'object' || val === null) return false;
-        return val.completed || val.sets?.length > 0 || val.completed_items?.length > 0 || val.duration_min != null;
+        // Completion is derived from data now; an exercise has real content when
+        // it carries logged sets, checked items, or a duration.
+        return val.sets?.length > 0 || val.completed_items?.length > 0 || val.duration_min != null;
     });
 }
 
