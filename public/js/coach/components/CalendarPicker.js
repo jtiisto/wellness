@@ -41,9 +41,8 @@ function getWorkoutStatus(dateStr, plans, logs) {
             const hasAnyProgress = Object.keys(log).some(key => {
                 if (key === 'session_feedback' || key.startsWith('_')) return false;
                 const entry = log[key];
-                // Check for any logged data
-                return entry.completed ||
-                       entry.sets?.length > 0 ||
+                // Check for any logged data (completion is derived from this)
+                return entry.sets?.length > 0 ||
                        entry.completed_items?.length > 0 ||
                        entry.duration_min != null;
             });

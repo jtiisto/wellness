@@ -107,7 +107,8 @@ fully completed.
 - [x] `public/js/coach/components/ExerciseItem.js` — header checkbox is now a read-only derived indicator (`disabled`, no `onChange`); removed the dead `handleCompletedChange` writer. Per-set ✓ in `SetEntry.js` kept (feeds `set_logs.completed`).
 - [x] `public/js/coach/store.js` (`logHasExerciseContent`) — dropped the dead `val.completed` term; content gated by sets/items/duration.
 - [x] Tests: added e2e `isExerciseCompleted` cases for circuit/weighted_time/unknown-type. **47 coach e2e pass.**
-- **UX consequence to note:** there is no longer a manual "tick exercise complete" affordance — completion follows logged data. A workout tracked only on Garmin (no in-app metrics, like the old `id 770`) now needs a `duration_min`/set logged in the PWA to read as completed. Residual harmless `entry.completed ||` terms remain in `CalendarPicker.js`/`WorkoutView.js` (always falsy now) — optional future cleanup.
+- [x] Cleanup: removed the now-dead `entry.completed ||` terms from `CalendarPicker.js` (`getWorkoutStatus`) and `WorkoutView.js` (`hasExerciseData`); both gate on sets/items/duration only.
+- **UX consequence to note:** there is no longer a manual "tick exercise complete" affordance — completion follows logged data. A workout tracked only on Garmin (no in-app metrics, like the old `id 770`) now needs a `duration_min`/set logged in the PWA to read as completed.
 
 ### Phase 4 — Docs & cross-repo handoffs
 - [x] `docs/ARCHITECTURE.md` — data model (column dropped), derived-completion semantics, set-level retained. (committed eb90ec2)

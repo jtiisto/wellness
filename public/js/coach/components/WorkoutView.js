@@ -47,8 +47,7 @@ function hasExerciseData(log) {
     return Object.keys(log).some(key => {
         if (key === 'session_feedback' || key.startsWith('_')) return false;
         const entry = log[key];
-        return entry.completed ||
-               entry.sets?.length > 0 ||
+        return entry.sets?.length > 0 ||
                entry.completed_items?.length > 0 ||
                entry.duration_min != null;
     });
