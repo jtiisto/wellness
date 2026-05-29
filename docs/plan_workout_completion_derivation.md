@@ -104,7 +104,7 @@ fully completed.
 
 ### Phase 3 — PWA — **DONE (2026-05-29)**
 - [x] `public/js/coach/utils.js` (`isExerciseCompleted`) — circuit/weighted_time now derive from sets (folded into the strength case); the `default` branch derives from any logged data (sets/duration/items) instead of `logData.completed`.
-- [x] `public/js/coach/components/ExerciseItem.js` — header checkbox is now a read-only derived indicator (`disabled`, no `onChange`); removed the dead `handleCompletedChange` writer. Per-set ✓ in `SetEntry.js` kept (feeds `set_logs.completed`).
+- [x] `public/js/coach/components/ExerciseItem.js` — **removed the per-exercise header checkbox entirely** (2026-05-29): it was non-interactive and redundant with the progress pill + the row's `completed` styling. Removed the dead `handleCompletedChange` writer and the now-unused `.exercise-checkbox` CSS. Per-set ✓ in `SetEntry.js` kept (feeds `set_logs.completed`) — the user's gym execution tracker. Completion is still shown via the pill and row styling. (Note: cardio shows a pill only once a duration is logged — accepted as-is.)
 - [x] `public/js/coach/store.js` (`logHasExerciseContent`) — dropped the dead `val.completed` term; content gated by sets/items/duration.
 - [x] Tests: added e2e `isExerciseCompleted` cases for circuit/weighted_time/unknown-type. **47 coach e2e pass.**
 - [x] Cleanup: removed the now-dead `entry.completed ||` terms from `CalendarPicker.js` (`getWorkoutStatus`) and `WorkoutView.js` (`hasExerciseData`); both gate on sets/items/duration only.

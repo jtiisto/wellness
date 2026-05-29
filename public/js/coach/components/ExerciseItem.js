@@ -106,14 +106,6 @@ export function ExerciseItem({ date, exercise, logData, block, isEditable = true
                 tabIndex="0"
                 aria-expanded=${expanded}
             >
-                <div class="exercise-checkbox" onClick=${(e) => e.stopPropagation()}>
-                    <input
-                        type="checkbox"
-                        checked=${completed}
-                        disabled=${true}
-                        aria-label="Completed (derived from logged data)"
-                    />
-                </div>
                 <span class="exercise-name">${parsed.base}</span>
                 ${parsed.pills.map(p => html`
                     <span class="exercise-pill">${p}</span>

@@ -1684,17 +1684,6 @@ textarea:focus-visible,
     background-color: var(--bg-secondary);
 }
 
-.coach .exercise-checkbox {
-    flex-shrink: 0;
-}
-
-.coach .exercise-checkbox input[type="checkbox"] {
-    width: 24px;
-    height: 24px;
-    cursor: pointer;
-    accent-color: var(--app-accent);
-}
-
 .coach .exercise-name {
     flex: 1;
     font-weight: 500;
@@ -2290,10 +2279,6 @@ textarea:focus-visible,
     color: var(--text-secondary);
     cursor: not-allowed;
     opacity: 0.7;
-}
-
-.coach .workout-view.read-only .exercise-checkbox input:disabled {
-    opacity: 0.5;
 }
 
 /* ==================== Analysis Module ==================== */
