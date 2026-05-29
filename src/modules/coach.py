@@ -169,16 +169,6 @@ def init_database():
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_exercise_logs_session ON exercise_logs(session_log_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_exercise_logs_exercise ON exercise_logs(exercise_id)")
 
-    # Migration: drop the legacy per-exercise `completed` flag. Completion is
-    # now derived from logged data (sets / checklist items / duration); the
-    # stored flag was never set on the normal PWA logging path. The set-level
-    # `set_logs.completed` tick is the per-set "done" signal and is kept.
-    # See docs/plan_workout_completion_derivation.md.
-    try:
-        cursor.execute("ALTER TABLE exercise_logs DROP COLUMN completed")
-    except sqlite3.OperationalError:
-        pass  # already dropped, or a fresh DB created without the column
-
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS checklist_log_items (
             id              INTEGER PRIMARY KEY AUTOINCREMENT,

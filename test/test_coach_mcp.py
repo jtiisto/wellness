@@ -1502,8 +1502,8 @@ class TestGetExerciseHistory:
 
 
 @pytest.mark.integration
-class TestCompletedColumnMigration:
-    """The legacy exercise_logs.completed column is dropped idempotently on init."""
+class TestExerciseLogsSchema:
+    """exercise_logs has no completed column; set_logs keeps its per-set flag."""
 
     @pytest.fixture(autouse=True)
     def _setup(self, test_app, tmp_coach_db):
@@ -1524,24 +1524,20 @@ class TestCompletedColumnMigration:
         conn.close()
         assert "completed" in set_cols  # set-level flag is retained
 
-    def test_migration_drops_legacy_column_idempotently(self):
+    def test_init_tolerates_a_stray_legacy_completed_column(self):
+        # The one-shot drop migration was retired after deployment. Confirm a DB
+        # that somehow still has the legacy column doesn't break init — it is
+        # simply ignored (writer omits it, read path never selects it).
         import sqlite3
         import modules.coach as coach_mod
-        # Re-introduce the legacy column to mimic a pre-migration database.
         conn = sqlite3.connect(self.db_path)
         conn.execute("ALTER TABLE exercise_logs ADD COLUMN completed INTEGER DEFAULT 0")
         conn.commit()
         conn.close()
-        assert "completed" in self._exercise_log_columns()
 
-        # Re-init applies the idempotent drop.
         coach_mod._db_path = self.db_path
-        coach_mod.init_database()
-        assert "completed" not in self._exercise_log_columns()
-
-        # Running init again must not error (idempotent).
-        coach_mod.init_database()
-        assert "completed" not in self._exercise_log_columns()
+        coach_mod.init_database()  # must not raise; no longer drops the column
+        assert "completed" in self._exercise_log_columns()  # left as-is, harmless
 
 
 @pytest.mark.unit
