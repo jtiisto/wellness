@@ -158,7 +158,7 @@ class TestStaleWriteRejection:
         data = _download(client, coach_registered_client)
         assert today in data["logs"]
         assert "ex_1" in data["logs"][today]
-        assert data["logs"][today]["ex_1"]["completed"] is True
+        assert len(data["logs"][today]["ex_1"]["sets"]) == 2  # exercise data preserved
 
     def test_mixed_batch_partial_rejection(self, client, coach_registered_client):
         """In a batch upload, some logs can be accepted while others rejected."""
@@ -208,7 +208,7 @@ class TestContentGuard:
         # Verify exercise data survived
         data = _download(client, coach_registered_client)
         assert "ex_1" in data["logs"][today]
-        assert data["logs"][today]["ex_1"]["completed"] is True
+        assert len(data["logs"][today]["ex_1"]["sets"]) == 2  # exercise data preserved
 
     def test_newer_complete_payload_replaces(self, client, coach_registered_client):
         """Upload full log, then newer log with different exercises — should replace."""

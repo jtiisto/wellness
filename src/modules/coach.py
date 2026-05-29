@@ -158,7 +158,6 @@ def init_database():
             session_log_id  INTEGER NOT NULL REFERENCES workout_session_logs(id) ON DELETE CASCADE,
             exercise_id     INTEGER REFERENCES planned_exercises(id),
             exercise_key    TEXT NOT NULL,
-            completed       INTEGER DEFAULT 0,
             user_note       TEXT,
             duration_min    REAL,
             avg_hr          INTEGER,
@@ -169,6 +168,16 @@ def init_database():
     """)
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_exercise_logs_session ON exercise_logs(session_log_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_exercise_logs_exercise ON exercise_logs(exercise_id)")
+
+    # Migration: drop the legacy per-exercise `completed` flag. Completion is
+    # now derived from logged data (sets / checklist items / duration); the
+    # stored flag was never set on the normal PWA logging path. The set-level
+    # `set_logs.completed` tick is the per-set "done" signal and is kept.
+    # See docs/plan_workout_completion_derivation.md.
+    try:
+        cursor.execute("ALTER TABLE exercise_logs DROP COLUMN completed")
+    except sqlite3.OperationalError:
+        pass  # already dropped, or a fresh DB created without the column
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS checklist_log_items (
@@ -396,8 +405,6 @@ def _assemble_log(conn, log_row):
 
     for el in cursor.fetchall():
         entry = {}
-        if el["completed"]:
-            entry["completed"] = True
         if el["user_note"]:
             entry["user_note"] = el["user_note"]
         if el["duration_min"] is not None:
@@ -495,12 +502,14 @@ def _archive_existing_log(cursor, date_str, superseded_by, now):
         "SELECT * FROM exercise_logs WHERE session_log_id = ?", (row["id"],)
     ).fetchall()
     for ex in exercises:
+        # The archive table keeps its `completed` column for historical rows but
+        # is no longer populated (it defaults to 0); completion is derived now.
         cursor.execute("""
             INSERT INTO exercise_logs_archive
-            (original_id, session_log_id, exercise_key, completed, user_note,
+            (original_id, session_log_id, exercise_key, user_note,
              duration_min, avg_hr, max_hr, canonical_slug)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (ex["id"], ex["session_log_id"], ex["exercise_key"], ex["completed"],
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (ex["id"], ex["session_log_id"], ex["exercise_key"],
               ex["user_note"], ex["duration_min"], ex["avg_hr"], ex["max_hr"],
               ex["canonical_slug"]))
 
@@ -601,12 +610,11 @@ def _store_log(conn, date_str, log_data, client_id, now):
 
         cursor.execute("""
             INSERT INTO exercise_logs
-            (session_log_id, exercise_id, exercise_key, completed, user_note,
+            (session_log_id, exercise_id, exercise_key, user_note,
              duration_min, avg_hr, max_hr, canonical_slug)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             session_log_id, exercise_id, exercise_key,
-            1 if exercise_data.get("completed") else 0,
             exercise_data.get("user_note"),
             exercise_data.get("duration_min"),
             exercise_data.get("avg_hr"),

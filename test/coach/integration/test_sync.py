@@ -103,7 +103,9 @@ class TestSyncPostLogs:
 
         assert today in data["logs"]
         assert data["logs"][today]["session_feedback"]["pain_discomfort"] == "None"
-        assert data["logs"][today]["ex_1"]["completed"] is True
+        # Completion is derived now, not round-tripped via sync; assert the
+        # exercise data itself survives the round trip.
+        assert data["logs"][today]["ex_1"]["sets"][0]["weight"] == 24
 
 
 @pytest.mark.integration

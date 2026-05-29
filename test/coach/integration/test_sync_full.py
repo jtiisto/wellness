@@ -79,14 +79,13 @@ class TestSyncGetWithData:
         assert log["session_feedback"]["pain_discomfort"] == "None"
 
     def test_log_includes_exercise_data(self, client, coach_seeded_database):
-        """Logs should include per-exercise completion data."""
+        """Logs should include per-exercise set data (completion is derived, not synced)."""
         response = client.get(f"/api/coach/sync?client_id={coach_seeded_database['client_id']}")
         logs = response.json()["logs"]
 
         today = coach_seeded_database["dates"][0]
         log = logs[today]
         assert "ex_1" in log
-        assert log["ex_1"]["completed"] is True
         assert len(log["ex_1"]["sets"]) == 3
 
 

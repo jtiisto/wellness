@@ -633,6 +633,45 @@ class TestReadTools:
         with pytest.raises(ValueError, match="cannot exceed 365"):
             self.tools["get_workout_summary"](days=366)
 
+    def test_get_workout_logs_derives_completion(self):
+        today = self.seed["dates"][0]
+        result = self.tools["get_workout_logs"](start_date=today, end_date=today)
+        log = result[0]["log"]
+        # strength ex_1: 3 logged sets vs target 3
+        assert log["ex_1"]["attempted"] is True
+        assert log["ex_1"]["completed"] is True
+        assert log["ex_1"]["progress"] == {"done": 3, "target": 3}
+        # duration cardio_1: 16 min >= 15 min target
+        assert log["cardio_1"]["completed"] is True
+        # checklist warmup_0: both planned items logged
+        assert log["warmup_0"]["completed"] is True
+        # session rollup: all 3 planned exercises completed
+        assert log["session_completion"]["completed"] is True
+        assert log["session_completion"]["progress"] == {"done": 3, "target": 3}
+
+    def test_get_workout_summary_reports_full_completion(self):
+        result = self.tools["get_workout_summary"](days=30)
+        assert "sessions_fully_completed" in result
+        assert result["sessions_fully_completed"] >= 1
+        assert "full_completion_rate_percent" in result
+        # backward-compatible presence count still present
+        assert result["completed_workouts"] >= 1
+
+    def test_exercise_logs_has_no_completed_column(self, tmp_coach_db):
+        # The legacy exercise-level flag column is dropped; completion is
+        # derived. Confirm the column is gone and reads still derive completion.
+        import sqlite3
+        conn = sqlite3.connect(tmp_coach_db)
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(exercise_logs)").fetchall()]
+        conn.close()
+        assert "completed" not in cols
+
+        today = self.seed["dates"][0]
+        result = self.tools["get_workout_logs"](start_date=today, end_date=today)
+        log = result[0]["log"]
+        assert log["ex_1"]["completed"] is True       # derived from 3/3 sets
+        assert log["session_completion"]["completed"] is True
+
     def test_list_scheduled_dates(self):
         today = self.seed["dates"][0]
         yesterday = self.seed["dates"][1]
@@ -1425,6 +1464,84 @@ class TestGetExerciseHistory:
             exercise_slug="barbell_squat", limit=5
         )
         assert len(result["history"]) <= 5
+
+    def test_history_derives_completion(self, client):
+        # Log a fully-completed session for the registered squat, then confirm
+        # get_exercise_history derives attempted/completed/progress (no flag).
+        import sqlite3
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT exercise_key FROM planned_exercises WHERE canonical_slug = ? LIMIT 1",
+            ("barbell_squat",),
+        ).fetchone()
+        conn.close()
+        assert row is not None, "planned squat should carry a canonical_slug"
+        key = row["exercise_key"]
+
+        client.post("/api/coach/sync", json={
+            "clientId": self.seed["client_id"],
+            "logs": {
+                "2099-04-01": {
+                    "_lastModifiedAt": "2099-04-01T10:00:00Z",
+                    key: {"sets": [
+                        {"set_num": 1, "weight": 100, "reps": 5},
+                        {"set_num": 2, "weight": 100, "reps": 5},
+                        {"set_num": 3, "weight": 100, "reps": 5},
+                    ]},
+                }
+            },
+        })
+
+        result = self.tools["get_exercise_history"](exercise_slug="barbell_squat")
+        assert result["history"], "expected a logged session"
+        entry = result["history"][0]
+        assert entry["attempted"] is True
+        assert entry["completed"] is True
+        assert entry["progress"] == {"done": 3, "target": 3}
+
+
+@pytest.mark.integration
+class TestCompletedColumnMigration:
+    """The legacy exercise_logs.completed column is dropped idempotently on init."""
+
+    @pytest.fixture(autouse=True)
+    def _setup(self, test_app, tmp_coach_db):
+        self.db_path = tmp_coach_db
+
+    def _exercise_log_columns(self):
+        import sqlite3
+        conn = sqlite3.connect(self.db_path)
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(exercise_logs)").fetchall()]
+        conn.close()
+        return cols
+
+    def test_fresh_db_has_no_exercise_completed_but_keeps_set_completed(self):
+        import sqlite3
+        assert "completed" not in self._exercise_log_columns()
+        conn = sqlite3.connect(self.db_path)
+        set_cols = [r[1] for r in conn.execute("PRAGMA table_info(set_logs)").fetchall()]
+        conn.close()
+        assert "completed" in set_cols  # set-level flag is retained
+
+    def test_migration_drops_legacy_column_idempotently(self):
+        import sqlite3
+        import modules.coach as coach_mod
+        # Re-introduce the legacy column to mimic a pre-migration database.
+        conn = sqlite3.connect(self.db_path)
+        conn.execute("ALTER TABLE exercise_logs ADD COLUMN completed INTEGER DEFAULT 0")
+        conn.commit()
+        conn.close()
+        assert "completed" in self._exercise_log_columns()
+
+        # Re-init applies the idempotent drop.
+        coach_mod._db_path = self.db_path
+        coach_mod.init_database()
+        assert "completed" not in self._exercise_log_columns()
+
+        # Running init again must not error (idempotent).
+        coach_mod.init_database()
+        assert "completed" not in self._exercise_log_columns()
 
 
 @pytest.mark.unit

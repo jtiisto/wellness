@@ -39,7 +39,9 @@ _COACH_SCHEMA = (
     "- workout_session_logs: filter by date (TEXT, YYYY-MM-DD). Columns: "
     "pain_discomfort, general_notes. Join on session_id → workout_sessions.id.\n"
     "- exercise_logs: join on session_log_id → workout_session_logs.id. Columns: "
-    "exercise_key, completed, user_note, duration_min, avg_hr, max_hr.\n"
+    "exercise_key, user_note, duration_min, avg_hr, max_hr. (There is no "
+    "exercise-level completed flag: an exercise is completed if it has logged "
+    "sets/duration. Infer completion from set_logs / duration_min.)\n"
     "- set_logs: join on exercise_log_id → exercise_logs.id. Columns: "
     "set_num, weight, reps, rpe, unit, duration_sec, completed.\n"
 )

@@ -235,10 +235,22 @@ entry leaves that entry without a matching plan exercise.
 **Data model (logs):**
 ```
 workout_session_logs  (id, session_id, date, pain_discomfort, general_notes)
-exercise_logs         (id, session_log_id, exercise_id, exercise_key, completed, user_note)
-set_logs              (id, exercise_log_id, set_num, weight, reps, rpe, unit, duration_sec)
+exercise_logs         (id, session_log_id, exercise_id, exercise_key, user_note, duration_min, avg_hr, max_hr)
+set_logs              (id, exercise_log_id, set_num, weight, reps, rpe, unit, duration_sec, completed)
 checklist_log_items   (id, exercise_log_id, item_text)
 ```
+
+**Completion is derived, not stored.** There is no exercise- or session-level `completed`
+column. An exercise's completion is computed at read time from its logged data
+(`mcp_servers/coach_mcp/completion.py`): the read tools return `attempted` (any data logged),
+`completed` (the planned target met — `None` when the target is unknown), and `progress`
+(`{done, target}`). Rules by type: strength/circuit/weighted_time → done-sets vs `target_sets`;
+checklist → logged items vs planned items; duration/interval → `duration_min` vs
+`target_duration_min`. Sessions roll up to "fully completed" when every planned exercise is
+completed. The legacy per-exercise `completed` flag was dropped (2026-05) because it was a manual
+PWA checkbox decoupled from data entry and read false on real, fully-logged work; only the
+per-set `set_logs.completed` "done" tick is retained, as an input to the derivation. See
+`docs/plan_workout_completion_derivation.md`.
 
 **Data model (log archives — 14-day retention):**
 ```

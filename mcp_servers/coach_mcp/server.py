@@ -37,6 +37,7 @@ except ImportError:
         "Install with: pip install fastmcp"
     )
 
+from .completion import derive_exercise_completion, derive_session_completion
 from .config import MCPConfig
 from .exercise_registry import ExerciseRegistry, resolve_plan_exercises
 
@@ -583,12 +584,27 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
             """, [start_date, end_date])
             planned_count = plans_result[0]["count"] if plans_result else 0
 
-            # Count completed workouts
+            # Count logged workouts (presence-based: a session_log row means the
+            # user recorded something). Kept as `completed_workouts` for
+            # backward compatibility.
             logs_result = db_manager.execute_query("""
-                SELECT COUNT(*) as count FROM workout_session_logs
+                SELECT id, session_id FROM workout_session_logs
                 WHERE date >= ? AND date <= ?
             """, [start_date, end_date])
-            completed_count = logs_result[0]["count"] if logs_result else 0
+            completed_count = len(logs_result)
+
+            # Derived: sessions that were *fully* completed — every planned
+            # exercise met its target (see completion.py).
+            fully_completed_count = 0
+            with db_manager.get_connection(read_only=True) as conn:
+                cur = conn.cursor()
+                for lr in logs_result:
+                    assembled = _assemble_log_from_db(
+                        cur, lr["id"], session_id=lr["session_id"]
+                    )
+                    sc = assembled.get("session_completion")
+                    if sc and sc["completed"]:
+                        fully_completed_count += 1
 
             # Exercise type breakdown from recent plans
             exercise_types_result = db_manager.execute_query("""
@@ -614,12 +630,15 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
             """, [start_date, end_date])
 
             completion_rate = round(completed_count / planned_count * 100, 1) if planned_count > 0 else 0
+            full_completion_rate = round(fully_completed_count / planned_count * 100, 1) if planned_count > 0 else 0
 
             return {
                 "analysis_period_days": days,
                 "planned_workouts": planned_count,
                 "completed_workouts": completed_count,
                 "completion_rate_percent": completion_rate,
+                "sessions_fully_completed": fully_completed_count,
+                "full_completion_rate_percent": full_completion_rate,
                 "exercise_types_in_recent_plans": exercise_types,
                 "recent_plan_dates": [row["date"] for row in recent_dates_result]
             }
@@ -1700,18 +1719,27 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
 
             info = exercise_info[0]
 
-            # Get all logged sessions for this exercise
+            # Get all logged sessions for this exercise. Completion is derived
+            # from logged data (see completion.py), so we pull the planned
+            # target and item counts rather than the legacy `completed` flag.
             sessions = db_manager.execute_query("""
                 SELECT
                     wsl.date,
-                    el.completed,
                     el.user_note,
                     el.duration_min,
                     el.avg_hr,
                     el.max_hr,
-                    el.id as exercise_log_id
+                    el.id as exercise_log_id,
+                    pe.exercise_type as exercise_type,
+                    pe.target_sets as target_sets,
+                    pe.target_duration_min as target_duration_min,
+                    (SELECT COUNT(*) FROM checklist_items ci
+                       WHERE ci.exercise_id = pe.id) as planned_items,
+                    (SELECT COUNT(*) FROM checklist_log_items cli
+                       WHERE cli.exercise_log_id = el.id) as logged_items
                 FROM exercise_logs el
                 JOIN workout_session_logs wsl ON el.session_log_id = wsl.id
+                LEFT JOIN planned_exercises pe ON pe.id = el.exercise_id
                 WHERE el.canonical_slug = ?
                 ORDER BY wsl.date DESC
                 LIMIT ?
@@ -1727,9 +1755,20 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
                     ORDER BY set_num
                 """, [session["exercise_log_id"]])
 
+                completion = derive_exercise_completion(
+                    session["exercise_type"],
+                    sets=sets,
+                    duration_min=session["duration_min"],
+                    logged_items=session["logged_items"],
+                    planned_items=session["planned_items"],
+                    target_sets=session["target_sets"],
+                    target_duration_min=session["target_duration_min"],
+                )
                 entry = {
                     "date": session["date"],
-                    "completed": bool(session["completed"]),
+                    "attempted": completion["attempted"],
+                    "completed": completion["completed"],
+                    "progress": completion["progress"],
                 }
                 if session["user_note"]:
                     entry["user_note"] = session["user_note"]
@@ -1863,12 +1902,24 @@ def _assemble_log_from_db(cursor, session_log_id, session_id=None):
         feedback["general_notes"] = log_row["general_notes"]
     log["session_feedback"] = feedback
 
-    # Exercise logs
-    cursor.execute("SELECT * FROM exercise_logs WHERE session_log_id = ?", [session_log_id])
-    for el in cursor.fetchall():
+    # Exercise logs. Completion is derived from logged data (see completion.py),
+    # joining the planned target so we can report met-target completion.
+    cursor.execute("""
+        SELECT el.*,
+               pe.exercise_type AS pe_exercise_type,
+               pe.target_sets AS pe_target_sets,
+               pe.target_duration_min AS pe_target_duration_min,
+               (SELECT COUNT(*) FROM checklist_items ci
+                  WHERE ci.exercise_id = pe.id) AS planned_items
+        FROM exercise_logs el
+        LEFT JOIN planned_exercises pe ON pe.id = el.exercise_id
+        WHERE el.session_log_id = ?
+    """, [session_log_id])
+    exercise_rows = cursor.fetchall()
+
+    completion_results = []
+    for el in exercise_rows:
         entry = {}
-        if el["completed"]:
-            entry["completed"] = True
         if el["user_note"]:
             entry["user_note"] = el["user_note"]
         if el["duration_min"] is not None:
@@ -1909,7 +1960,35 @@ def _assemble_log_from_db(cursor, session_log_id, session_id=None):
         if items:
             entry["completed_items"] = [r["item_text"] for r in items]
 
+        # Derived completion (attempted / met-target / progress)
+        completion = derive_exercise_completion(
+            el["pe_exercise_type"],
+            sets=sets,
+            duration_min=el["duration_min"],
+            logged_items=len(items),
+            planned_items=el["planned_items"],
+            target_sets=el["pe_target_sets"],
+            target_duration_min=el["pe_target_duration_min"],
+        )
+        entry["attempted"] = completion["attempted"]
+        entry["completed"] = completion["completed"]
+        entry["progress"] = completion["progress"]
+        completion_results.append(completion)
+
         log[el["exercise_key"]] = entry
+
+    # Session-level rollup. Count planned exercises so a planned-but-unlogged
+    # exercise correctly counts against full completion.
+    planned_total = None
+    if session_id is not None:
+        row = cursor.execute(
+            "SELECT COUNT(*) AS n FROM planned_exercises WHERE session_id = ?",
+            [session_id],
+        ).fetchone()
+        planned_total = row["n"] if row else None
+    log["session_completion"] = derive_session_completion(
+        completion_results, planned_total=planned_total
+    )
 
     return log
 
