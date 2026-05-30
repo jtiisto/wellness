@@ -208,3 +208,24 @@ class TestStaticTraversal:
         assert code == 200
         code, _ = _raw_get(test_app, "/wellness/icons/icon-192.png")
         assert code == 200
+
+
+class TestServerVersion:
+    """The SW cache-bust token is derived from version.json's buildDate, so it is
+    stable across restarts and changes only when the build stamp does."""
+
+    def test_stable_and_derived_from_build_date(self, test_app, tmp_path, monkeypatch):
+        import server
+        monkeypatch.setattr(server, "PUBLIC_DIR", tmp_path)
+        (tmp_path / "version.json").write_text('{"buildDate":"2026-05-29T12:00:00Z"}')
+        v1 = server._compute_server_version()
+        assert v1 == server._compute_server_version()  # deterministic, restart-stable
+        assert len(v1) == 8
+        # A new build stamp yields a different token.
+        (tmp_path / "version.json").write_text('{"buildDate":"2026-06-01T00:00:00Z"}')
+        assert server._compute_server_version() != v1
+
+    def test_fallback_when_version_json_missing(self, test_app, tmp_path, monkeypatch):
+        import server
+        monkeypatch.setattr(server, "PUBLIC_DIR", tmp_path)  # no version.json
+        assert len(server._compute_server_version()) == 8
