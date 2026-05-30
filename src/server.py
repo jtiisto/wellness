@@ -2,6 +2,7 @@
 Wellness - Unified FastAPI server
 Mounts module API routers and serves the single-page PWA.
 """
+import importlib
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -65,19 +66,13 @@ app = StripPrefixMiddleware(_inner_app, BASE_PATH)
 
 _enabled_modules = get_enabled_modules()
 
+# Each module declares its router factory as "module.path:function" in config.
+# Adding a module is a config-only change — no edit needed here.
 for _module in _enabled_modules:
-    _mod_id = _module["id"]
     _db = get_db_path(_module)
-
-    if _mod_id == "journal":
-        from modules.journal import create_router as create_journal_router
-        _inner_app.include_router(create_journal_router(_db), prefix="/api/journal")
-    elif _mod_id == "coach":
-        from modules.coach import create_router as create_coach_router
-        _inner_app.include_router(create_coach_router(_db), prefix="/api/coach")
-    elif _mod_id == "analysis":
-        from modules.analysis import create_router as create_analysis_router
-        _inner_app.include_router(create_analysis_router(_db), prefix="/api/analysis")
+    _module_path, _factory_name = _module["router_factory"].split(":")
+    _create_router = getattr(importlib.import_module(_module_path), _factory_name)
+    _inner_app.include_router(_create_router(_db), prefix=_module["api_prefix"])
 
 
 # ==================== API Endpoints ====================
