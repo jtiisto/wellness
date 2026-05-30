@@ -23,6 +23,7 @@ from modules.db import (
     run_migrations,
     enable_wal,
     column_exists,
+    immediate_transaction,
 )
 
 logger = logging.getLogger(__name__)
@@ -836,17 +837,20 @@ def workout_sync_get(
 def workout_sync_post(payload: WorkoutSyncPayload):
     """Upload workout logs from client (last-write-wins with timestamp guard)."""
     with get_db() as conn:
-        cursor = conn.cursor()
         now = get_utc_now()
         client_id = payload.clientId
-
-        _db_register_client(conn, client_id, now=now)
 
         applied_logs = []
         rejected_logs = []
         content_rejected_logs = []
 
-        try:
+        # BEGIN IMMEDIATE: each _store_log reads the stored row, compares
+        # timestamps (LWW), then writes. Acquiring the write lock up front makes
+        # that check-then-write atomic against the coach MCP server, which writes
+        # plans to the same coach.db from a separate process.
+        with immediate_transaction(conn) as cursor:
+            _db_register_client(conn, client_id, now=now)
+
             for date_str, log_data in payload.logs.items():
                 result = _store_log(conn, date_str, log_data, client_id, now)
                 if result == "incomplete_content":
@@ -862,11 +866,6 @@ def workout_sync_post(payload: WorkoutSyncPayload):
             """, (now,))
 
             _purge_old_archives(cursor)
-
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
 
         return {
             "success": True,

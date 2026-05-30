@@ -51,6 +51,38 @@ def get_db(db_path, foreign_keys=False):
         conn.close()
 
 
+@contextmanager
+def immediate_transaction(conn):
+    """Run a block inside a ``BEGIN IMMEDIATE`` transaction.
+
+    IMMEDIATE acquires the write lock at transaction start rather than lazily on
+    the first write, so a check-then-write (read a row, compare, then update) is
+    atomic against a concurrent writer — there is no window for another process
+    to slip a write in between the check and the write, and no mid-transaction
+    SQLITE_BUSY-on-upgrade. With busy_timeout set, a competing writer waits for
+    the lock instead of failing. Commits on success, rolls back on any
+    exception; the caller owns the connection.
+
+    Only worth it for genuine check-then-write paths — wrapping read-mostly
+    endpoints would needlessly serialize them.
+    """
+    previous_isolation = conn.isolation_level
+    conn.isolation_level = None  # we manage BEGIN/COMMIT/ROLLBACK explicitly
+    cursor = conn.cursor()
+    cursor.execute("BEGIN IMMEDIATE")
+    try:
+        yield cursor
+        cursor.execute("COMMIT")
+    except BaseException:
+        try:
+            cursor.execute("ROLLBACK")
+        except sqlite3.Error:
+            pass
+        raise
+    finally:
+        conn.isolation_level = previous_isolation
+
+
 def enable_wal(conn):
     """Switch the database to WAL journal mode (readers concurrent with a single
     writer; fewer reader/writer stalls than the default rollback journal).

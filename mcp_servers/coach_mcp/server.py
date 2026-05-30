@@ -110,14 +110,25 @@ class DatabaseManager:
 
     @contextmanager
     def transaction(self):
-        """Get a cursor for multi-statement transactions."""
+        """Get a cursor for multi-statement transactions.
+
+        Uses BEGIN IMMEDIATE so the write lock is taken up front: plan save/
+        delete here read-then-write the same coach.db that the web server's sync
+        endpoint writes, so the check-then-write must be atomic across the two
+        processes. Commits on success, rolls back on error.
+        """
         with self.get_connection(read_only=False) as conn:
+            conn.isolation_level = None  # we manage BEGIN/COMMIT/ROLLBACK
             cursor = conn.cursor()
+            cursor.execute("BEGIN IMMEDIATE")
             try:
                 yield cursor
-                conn.commit()
+                cursor.execute("COMMIT")
             except Exception:
-                conn.rollback()
+                try:
+                    cursor.execute("ROLLBACK")
+                except sqlite3.Error:
+                    pass
                 raise
 
 
