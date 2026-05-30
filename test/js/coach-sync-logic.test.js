@@ -13,6 +13,9 @@ import {
     resolveForceSyncLogs,
     pruneOlderThan,
     maxPlanVersion,
+    rejectedDates,
+    applyAcceptedTokens,
+    adoptRejectedServerRows,
 } from '../../public/js/coach/sync-logic.js';
 
 // ---- content predicates --------------------------------------------------
@@ -93,6 +96,54 @@ test('selectLogsToUpload: sends content + feedback-only, skips empty/missing', (
     // The skipped/missing dates are NOT reported as uploaded → they stay dirty.
     assert.ok(!r.uploadedDates.includes('d2'));
     assert.ok(!r.uploadedDates.includes('d4'));
+});
+
+// ---- R1 token protocol ---------------------------------------------------
+
+test('selectLogsToUpload: echoes _lastModified as _baseLastModifiedAt; new date omits it', () => {
+    const logs = {
+        d1: { _lastModified: '2026-05-01T00:00:00Z', ex_1: { sets: [{ reps: 5 }] } },
+        d2: { ex_1: { sets: [{ reps: 3 }] } },  // brand-new local date, no server stamp
+    };
+    const { logsToUpload } = selectLogsToUpload(['d1', 'd2'], logs);
+    assert.equal(logsToUpload.d1._baseLastModifiedAt, '2026-05-01T00:00:00Z');
+    assert.ok(!('_baseLastModifiedAt' in logsToUpload.d2));  // insert-if-absent
+});
+
+test('rejectedDates: extracts dates from the structured rejectedLogs', () => {
+    assert.deepEqual(
+        rejectedDates([{ date: 'd1', serverRow: {} }, { date: 'd2', serverRow: null }]),
+        ['d1', 'd2'],
+    );
+    assert.deepEqual(rejectedDates(undefined), []);
+});
+
+test('applyAcceptedTokens: advances _lastModified to serverTime for applied dates only', () => {
+    const logs = {
+        d1: { _lastModified: 'old', ex_1: {} },
+        d2: { _lastModified: 'keep', ex_1: {} },
+    };
+    const next = applyAcceptedTokens(logs, ['d1'], 'srv-now');
+    assert.equal(next.d1._lastModified, 'srv-now');  // advanced
+    assert.equal(next.d2._lastModified, 'keep');     // untouched
+    assert.equal(logs.d1._lastModified, 'old');      // input not mutated
+});
+
+test('applyAcceptedTokens: no applied dates or no serverTime is a no-op', () => {
+    const logs = { d1: { _lastModified: 'old' } };
+    assert.equal(applyAcceptedTokens(logs, [], 'srv'), logs);
+    assert.equal(applyAcceptedTokens(logs, ['d1'], null), logs);
+});
+
+test('adoptRejectedServerRows: replaces local with serverRow; null serverRow left intact', () => {
+    const logs = { d1: { local: true }, d2: { local: true } };
+    const next = adoptRejectedServerRows(logs, [
+        { date: 'd1', serverRow: { server: true, _lastModified: 's1' } },
+        { date: 'd2', serverRow: null },
+    ]);
+    assert.deepEqual(next.d1, { server: true, _lastModified: 's1' });  // adopted
+    assert.deepEqual(next.d2, { local: true });                        // untouched
+    assert.deepEqual(logs.d1, { local: true });                        // input not mutated
 });
 
 // ---- nextDirtyAfterReject -------------------------------------------------

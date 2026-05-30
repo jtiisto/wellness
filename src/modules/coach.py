@@ -344,13 +344,18 @@ def _assemble_log(conn, log_row):
 
 
 def _assemble_log_for_date(cursor, date_str):
-    """The server's current log for `date_str` in the lean sync shape, or None if
-    there is none. Returned as the `serverRow` on a rejected upload so the client
-    can adopt it in-cycle (R1)."""
+    """The server's current log for `date_str` in the lean sync shape (plus its
+    `_lastModified` stamp), or None if there is none. Returned as the `serverRow`
+    on a rejected upload so the client adopts both the content and the fresh base
+    token in-cycle (R1)."""
     row = cursor.execute(
         "SELECT * FROM workout_session_logs WHERE date = ?", (date_str,)
     ).fetchone()
-    return assemble_log(cursor, row) if row else None
+    if not row:
+        return None
+    server_row = assemble_log(cursor, row)
+    server_row["_lastModified"] = row["last_modified"]
+    return server_row
 
 
 ARCHIVE_RETENTION_DAYS = 14

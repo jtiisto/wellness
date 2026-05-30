@@ -15,6 +15,9 @@ import {
     resolveForceSyncLogs,
     pruneOlderThan,
     maxPlanVersion,
+    rejectedDates,
+    applyAcceptedTokens,
+    adoptRejectedServerRows,
 } from './sync-logic.js';
 
 const API_BASE = '/wellness/api/coach';
@@ -313,12 +316,26 @@ async function triggerSync() {
 
             const uploadResult = await uploadResponse.json();
 
-            // Remove rejected dates from dirtyDates — server has newer data
+            // Token-rejected dates: adopt the server's current row in-cycle (R1)
+            // and drop the date from dirty — the local edit lost the optimistic
+            // concurrency check, so the server's version (with its fresh base
+            // token) wins.
             if (uploadResult.rejectedLogs?.length > 0) {
-                debugLog('coach-sync', 'server rejected stale logs', { rejected: uploadResult.rejectedLogs });
-                const pruned = nextDirtyAfterReject(meta.dirtyDates, meta.dirtyDateGenerations, uploadResult.rejectedLogs);
+                const rejDates = rejectedDates(uploadResult.rejectedLogs);
+                debugLog('coach-sync', 'server rejected stale logs', { rejected: rejDates });
+                workoutLogs.value = adoptRejectedServerRows(workoutLogs.value, uploadResult.rejectedLogs);
+                const pruned = nextDirtyAfterReject(meta.dirtyDates, meta.dirtyDateGenerations, rejDates);
                 meta.dirtyDates = pruned.dirtyDates;
                 meta.dirtyDateGenerations = pruned.dirtyDateGenerations;
+            }
+
+            // Accepted dates: the server stamped them with serverTime — record it
+            // as the per-date base token so the next edit echoes the latest stamp
+            // rather than a stale one (R1).
+            if (uploadResult.appliedLogs?.length > 0) {
+                workoutLogs.value = applyAcceptedTokens(
+                    workoutLogs.value, uploadResult.appliedLogs, uploadResult.serverTime,
+                );
             }
 
             // Notify user about content-rejected logs (incomplete payload blocked)
