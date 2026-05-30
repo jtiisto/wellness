@@ -1,20 +1,38 @@
-import sqlite3
+from modules.db import get_db, get_utc_now, run_migrations, enable_wal
 
-from modules.db import get_db, get_utc_now
+
+def _migration_1_baseline(cursor):
+    """Baseline analysis schema: the reports table and its indexes.
+
+    Idempotent (CREATE IF NOT EXISTS), so an existing unversioned production DB
+    adopts cleanly — the migration is a no-op that just stamps the version.
+    """
+    cursor.execute("""CREATE TABLE IF NOT EXISTS reports (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        query_id TEXT NOT NULL, query_label TEXT NOT NULL,
+        prompt_sent TEXT NOT NULL, response_markdown TEXT,
+        status TEXT NOT NULL DEFAULT 'pending',
+        created_at TEXT NOT NULL, completed_at TEXT, error_message TEXT,
+        cli_metadata TEXT)""")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_reports_status ON reports(status)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_reports_created ON reports(created_at)")
+
+
+# Ordered (target_version, fn) pairs — see db.run_migrations for the contract.
+MIGRATIONS = [
+    (1, _migration_1_baseline),
+]
 
 
 def init_database(db_path: str):
+    """Initialize the analysis database via the shared migration registry.
+
+    Enables WAL once (outside any transaction) then applies pending migrations
+    transactionally (see db.run_migrations).
+    """
     with get_db(db_path) as conn:
-        conn.execute("""CREATE TABLE IF NOT EXISTS reports (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            query_id TEXT NOT NULL, query_label TEXT NOT NULL,
-            prompt_sent TEXT NOT NULL, response_markdown TEXT,
-            status TEXT NOT NULL DEFAULT 'pending',
-            created_at TEXT NOT NULL, completed_at TEXT, error_message TEXT,
-            cli_metadata TEXT)""")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_reports_status ON reports(status)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_reports_created ON reports(created_at)")
-        conn.commit()
+        enable_wal(conn)
+        run_migrations(conn, MIGRATIONS, label="analysis DB")
 
 
 def create_report(db_path, query_id, query_label, prompt_sent) -> int:
