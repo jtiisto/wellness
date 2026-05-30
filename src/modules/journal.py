@@ -17,6 +17,7 @@ from modules.db import (
     utc_days_ago,
     register_client as _db_register_client,
     run_migrations,
+    enable_wal,
 )
 
 
@@ -207,9 +208,11 @@ def init_database():
 
     Migrations are versioned via PRAGMA user_version and applied transactionally
     by the shared db.run_migrations runner (see its docstring for the
-    BEGIN IMMEDIATE / in-lock re-check contract).
+    BEGIN IMMEDIATE / in-lock re-check contract). WAL is enabled once here
+    (outside any transaction).
     """
     with get_db() as conn:
+        enable_wal(conn)
         run_migrations(conn, MIGRATIONS, label="journal DB")
 
 

@@ -3,7 +3,7 @@ from modules.analysis_db import (
     init_database, create_report, update_report_running,
     update_report_completed, update_report_failed, get_report,
     list_reports, get_pending_reports, delete_report, has_active_report,
-    recover_stale_reports, get_utc_now, get_db
+    recover_stale_reports, get_utc_now, get_db, MIGRATIONS
 )
 
 
@@ -47,6 +47,31 @@ class TestInitDatabase:
                 "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_reports_status'"
             ).fetchone()
             assert row is not None
+
+    def test_stamps_user_version_and_enables_wal(self, tmp_analysis_db):
+        """R7: fresh analysis DB ends at the latest migration version with WAL on."""
+        init_database(str(tmp_analysis_db))
+        with get_db(str(tmp_analysis_db)) as conn:
+            assert conn.execute("PRAGMA user_version").fetchone()[0] == len(MIGRATIONS)
+            assert conn.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
+
+    def test_adopts_existing_unversioned_db(self, tmp_analysis_db):
+        """R7: an existing pre-registry analysis DB (reports table present,
+        user_version=0) upgrades cleanly with its data intact."""
+        init_database(str(tmp_analysis_db))
+        with get_db(str(tmp_analysis_db)) as conn:
+            conn.execute("PRAGMA user_version = 0")  # simulate pre-registry state
+            conn.execute(
+                "INSERT INTO reports (query_id, query_label, prompt_sent, status, created_at) "
+                "VALUES ('q', 'L', 'p', 'pending', '2026-01-01T00:00:00Z')"
+            )
+            conn.commit()
+
+        init_database(str(tmp_analysis_db))  # re-init must adopt without error
+
+        with get_db(str(tmp_analysis_db)) as conn:
+            assert conn.execute("PRAGMA user_version").fetchone()[0] == len(MIGRATIONS)
+            assert conn.execute("SELECT COUNT(*) FROM reports").fetchone()[0] == 1
 
 
 # ==================== create_report ====================

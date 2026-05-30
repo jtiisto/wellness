@@ -36,6 +36,13 @@ class TestInitDatabase:
         expected_tables = {'clients', 'meta_sync', 'trackers', 'entries', 'sync_conflicts'}
         assert expected_tables.issubset(tables)
 
+    def test_init_enables_wal(self, test_app):
+        """init_database switches the journal DB to WAL journal mode (R7)."""
+        import modules.journal as journal
+        with journal.get_db() as conn:
+            mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+        assert mode.lower() == "wal"
+
     def test_creates_required_indexes(self, test_app):
         """init_database should create performance indexes."""
         import modules.journal as journal
