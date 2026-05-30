@@ -14,7 +14,17 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 # Shared coach domain logic (src/ is placed on the path by coach_mcp/__init__).
-from modules.coach_plans import assemble_plan
+# Re-imported under the historical private names this module + its tests use.
+from modules.coach_plans import (
+    assemble_plan,
+    insert_block as _insert_block,
+    store_plan as _store_plan_to_db,
+    needs_transform as _needs_transform,
+    ensure_exercise_ids as _ensure_exercise_ids,
+    is_bodyweight_or_band as _is_bodyweight_or_band,
+    transform_block_to_exercises as _transform_block_to_exercises,
+    transform_block_plan as _transform_block_plan,
+)
 
 # Legacy pair-suffix pattern: rejects names like "Bench Press (Pair A)" so that
 # pair info is forced through the structured `superset_group` field instead of
@@ -143,113 +153,6 @@ def get_utc_now() -> str:
 # ==================== Plan Storage Helpers ====================
 
 
-def _insert_block(cursor, session_id, position, block):
-    """Insert one block (with its exercises and checklist items) at ``position``.
-
-    Exercises without an explicit ``id`` get a key derived from the block type
-    and position; callers needing collision-free keys across an existing
-    session should set ``id`` first. Returns the new ``session_blocks`` row id.
-    """
-    cursor.execute("""
-        INSERT INTO session_blocks
-        (session_id, position, block_type, title, duration_min, rest_guidance, rounds,
-         work_duration_sec, rest_duration_sec)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, [
-        session_id, position,
-        block.get("block_type", ""),
-        block.get("title"),
-        block.get("duration_min"),
-        block.get("rest_guidance", ""),
-        block.get("rounds"),
-        block.get("work_duration_sec"),
-        block.get("rest_duration_sec"),
-    ])
-    block_id = cursor.lastrowid
-
-    for j, ex in enumerate(block.get("exercises", [])):
-        exercise_key = ex.get("id") or f"{block.get('block_type', 'ex')}_{position}_{j}"
-        cursor.execute("""
-            INSERT INTO planned_exercises
-            (session_id, block_id, exercise_key, position, name, exercise_type,
-             target_sets, target_reps, target_duration_min, target_duration_sec,
-             rounds, work_duration_sec, rest_duration_sec,
-             guidance_note, hide_weight, show_time, superset_group, extra, canonical_slug)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, [
-            session_id, block_id, exercise_key, j,
-            ex.get("name", "Unknown"),
-            ex.get("type", "strength"),
-            ex.get("target_sets"),
-            ex.get("target_reps"),
-            ex.get("target_duration_min"),
-            ex.get("target_duration_sec"),
-            ex.get("rounds"),
-            ex.get("work_duration_sec"),
-            ex.get("rest_duration_sec"),
-            ex.get("guidance_note"),
-            1 if ex.get("hide_weight") else 0,
-            1 if ex.get("show_time") else 0,
-            ex.get("superset_group"),
-            json.dumps(ex["extra"]) if ex.get("extra") else None,
-            ex.get("canonical_slug"),
-        ])
-        exercise_id = cursor.lastrowid
-
-        # Checklist items
-        if ex.get("type") == "checklist":
-            for k, item in enumerate(ex.get("items", [])):
-                cursor.execute("""
-                    INSERT INTO checklist_items (exercise_id, position, item_text)
-                    VALUES (?, ?, ?)
-                """, [exercise_id, k, item])
-
-    return block_id
-
-
-def _store_plan_to_db(cursor, date_str, plan, modified_by="mcp"):
-    """Store a plan dict into normalized tables. Returns session_id."""
-    now = get_utc_now()
-
-    # Guard: refuse to replace plans that have workout logs attached.
-    # Use update_exercise/add_exercise/remove_exercise instead.
-    log_row = cursor.execute(
-        "SELECT id FROM workout_session_logs WHERE date = ?", [date_str]
-    ).fetchone()
-    if log_row:
-        raise ValueError(
-            f"Cannot replace plan for {date_str}: a workout log exists. "
-            f"Use update_exercise, add_exercise, or remove_exercise to edit in place."
-        )
-
-    # Delete existing session for this date (CASCADE cleans blocks, exercises, checklist)
-    cursor.execute("DELETE FROM workout_sessions WHERE date = ?", [date_str])
-    # Clear any tombstone if re-creating a plan for a previously deleted date
-    cursor.execute("DELETE FROM deleted_plans WHERE date = ?", [date_str])
-
-    # Insert workout_sessions row
-    cursor.execute("""
-        INSERT INTO workout_sessions
-        (date, day_name, location, phase, duration_min, last_modified, modified_by)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-    """, [
-        date_str,
-        plan.get("day_name", "Workout"),
-        plan.get("location"),
-        plan.get("phase"),
-        plan.get("total_duration_min"),
-        now,
-        modified_by,
-    ])
-    session_id = cursor.lastrowid
-
-    # Insert blocks and exercises
-    for i, block in enumerate(plan.get("blocks", [])):
-        _insert_block(cursor, session_id, i, block)
-
-    return session_id
-
-
 def _assemble_plan_from_db(cursor, session_id):
     """Fetch the session row and assemble its plan via the shared canonical
     reader (`coach_plans.assemble_plan`), which both transports delegate to
@@ -260,26 +163,6 @@ def _assemble_plan_from_db(cursor, session_id):
     if not session:
         return None
     return assemble_plan(cursor, session)
-
-
-def _needs_transform(plan):
-    """Check whether a block plan still holds raw LLM exercises.
-
-    A raw exercise is identified by a missing ``type`` — the field the
-    transform derives from ``block_type``. A missing ``id`` alone does NOT
-    require transformation: ids are filled in idempotently afterwards by
-    ``_ensure_exercise_ids``, so a pre-formed plan that merely lacks ids skips
-    the (lossy) transform entirely.
-    """
-    for block in plan.get("blocks", []):
-        for ex in block.get("exercises", []):
-            if "type" not in ex:
-                return True
-    # Cardio blocks with instructions (no exercises) also need transform
-    for block in plan.get("blocks", []):
-        if "instructions" in block and "exercises" not in block:
-            return True
-    return False
 
 
 def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
@@ -1935,200 +1818,6 @@ def _assemble_log_from_db(cursor, session_log_id, session_id=None):
     )
 
     return log
-
-
-# ==================== Transform Functions ====================
-
-
-def _is_bodyweight_or_band(name: str) -> bool:
-    """Check if an exercise is bodyweight or band-based (no meaningful weight)."""
-    keywords = [
-        "push-up", "pushup", "push up", "bodyweight", "band pull",
-        "banded", "jump squat", "plank", "dead hang", "wall sit",
-        "glute bridge",
-    ]
-    lower = name.lower()
-    return any(kw in lower for kw in keywords)
-
-
-def _transform_block_to_exercises(block: dict, block_index: int) -> list:
-    """Transform a block into a list of exercises with proper IDs and types."""
-    exercises = []
-    block_type = block.get("block_type", "")
-    title = block.get("title", "")
-    duration = block.get("duration_min", 0)
-
-    # Warmup blocks aggregate raw movements into a single checklist. An
-    # already-formed exercise (it carries a `type`) is preserved verbatim, so a
-    # pre-built checklist's `items` and metadata are never rebuilt from names.
-    if block_type == "warmup" and "exercises" in block:
-        raw_items = []
-        for ex in block["exercises"]:
-            if ex.get("type"):
-                exercises.append(dict(ex))
-                continue
-            name = ex.get("name", "Unknown")
-            reps = ex.get("reps", "")
-            if reps:
-                raw_items.append(f"{name} x{reps}" if isinstance(reps, int) else f"{name} {reps}")
-            else:
-                raw_items.append(name)
-
-        if raw_items:
-            exercises.append({
-                "id": f"warmup_{block_index}",
-                "name": title or "Warmup",
-                "type": "checklist",
-                "items": raw_items,
-            })
-
-    # Non-warmup blocks with an explicit exercise list. Each exercise is
-    # copied (no caller-provided field is dropped), then any missing canonical
-    # field is derived — an already-formed exercise passes through losslessly.
-    elif "exercises" in block:
-        block_rounds = block.get("rounds")
-
-        for idx, ex in enumerate(block["exercises"]):
-            exercise = dict(ex)
-            exercise.setdefault("name", "Unknown")
-
-            # Derive type from the block when the exercise doesn't carry one.
-            if not exercise.get("type"):
-                if block_type in ("circuit", "power"):
-                    exercise["type"] = "circuit"
-                elif block_type == "cardio":
-                    exercise["type"] = "duration"
-                else:  # strength / accessory / unknown
-                    exercise["type"] = "strength"
-
-            # Fold raw sets/reps onto the stored target_* fields.
-            if exercise.get("target_sets") is None:
-                if ex.get("sets"):
-                    exercise["target_sets"] = ex["sets"] if isinstance(ex["sets"], int) else 3
-                elif block_rounds:
-                    exercise["target_sets"] = block_rounds
-            if exercise.get("target_reps") is None and ex.get("reps") is not None:
-                reps_str = str(ex["reps"])
-                exercise["target_reps"] = reps_str
-                if "sec" in reps_str.lower():
-                    exercise.setdefault("show_time", True)
-
-            # Hide weight for bodyweight/band exercises, unless explicitly set.
-            if "hide_weight" not in exercise:
-                equipment = ex.get("equipment")
-                if equipment in ("bodyweight", "band"):
-                    exercise["hide_weight"] = True
-                elif not equipment and _is_bodyweight_or_band(exercise["name"]):
-                    exercise["hide_weight"] = True
-
-            # Build a guidance note from exercise-specific cues, unless the
-            # exercise already carries one. Block-level rest_guidance is never
-            # folded in here — it stays on the block.
-            if not exercise.get("guidance_note"):
-                notes = []
-                if ex.get("tempo"):
-                    notes.append(f"Tempo {ex['tempo']}")
-                if ex.get("load_guide"):
-                    notes.append(ex["load_guide"])
-                if ex.get("notes"):
-                    notes.append(ex["notes"])
-                if notes:
-                    exercise["guidance_note"] = ". ".join(notes)
-
-            # Drop raw input hints now folded into the canonical fields.
-            for raw_key in ("sets", "reps", "tempo", "load_guide", "notes", "equipment"):
-                exercise.pop(raw_key, None)
-
-            exercise.setdefault("id", f"{block_type}_{block_index}_{idx + 1}")
-            exercises.append(exercise)
-
-    # Handle blocks with instructions (cardio blocks)
-    elif "instructions" in block:
-        exercise_id = f"{block_type}_{block_index}_1"
-        instructions_text = " ".join(block["instructions"])
-
-        if "VO2" in instructions_text or "HARD" in instructions_text:
-            ex_type = "interval"
-            name = "VO2 Max Intervals"
-        else:
-            ex_type = "duration"
-            name = title or "Zone 2 Cardio"
-
-        # Block-level rounds/work/rest timing stays on the block (see
-        # _transform_block_plan); the synthesized exercise only carries the
-        # cardio-specific fields it owns.
-        exercise = {
-            "id": exercise_id,
-            "name": name,
-            "type": ex_type,
-            "target_duration_min": duration,
-            "guidance_note": " | ".join(block["instructions"])
-        }
-        exercises.append(exercise)
-
-    return exercises
-
-
-def _transform_block_plan(plan_data: dict) -> dict:
-    """Transform block-based plan to include blocks with transformed exercises."""
-    blocks = []
-
-    for i, block in enumerate(plan_data.get("blocks", [])):
-        existing = block.get("exercises")
-        # `type` is the marker of an already-formed exercise; a missing `id` is
-        # backfilled separately (see _ensure_exercise_ids) and does not by
-        # itself force a block through the (lossy) transform.
-        if existing and all("type" in ex for ex in existing):
-            block_exercises = existing
-        else:
-            block_exercises = _transform_block_to_exercises(block, i)
-
-        transformed_block = {
-            "block_index": i,
-            "block_type": block.get("block_type", ""),
-            "title": block.get("title", ""),
-            "duration_min": block.get("duration_min"),
-            "rest_guidance": block.get("rest_guidance", ""),
-            "rounds": block.get("rounds"),
-            "work_duration_sec": block.get("work_duration_sec"),
-            "rest_duration_sec": block.get("rest_duration_sec"),
-            "exercises": block_exercises
-        }
-        blocks.append(transformed_block)
-
-    return {
-        "day_name": plan_data.get("theme", plan_data.get("day_name", "Workout")),
-        "location": plan_data.get("location", "Home"),
-        "phase": plan_data.get("phase", "Foundation"),
-        "total_duration_min": plan_data.get("total_duration_min", 60),
-        "blocks": blocks,
-    }
-
-
-def _ensure_exercise_ids(plan):
-    """Assign a deterministic ``id`` to every exercise that lacks one.
-
-    Idempotent: exercises that already carry an ``id`` keep it, and generated
-    ids are disambiguated against ids already present in the same block.
-    Mutates ``plan`` in place and returns it. Keeping id assignment separate
-    from the raw->formed transform lets a pre-formed plan that is only missing
-    ids skip that (lossy) transform — see ``_needs_transform``.
-    """
-    for i, block in enumerate(plan.get("blocks", [])):
-        block_type = block.get("block_type", "ex")
-        block_exercises = block.get("exercises", [])
-        used = {ex["id"] for ex in block_exercises if ex.get("id")}
-        for j, ex in enumerate(block_exercises):
-            if ex.get("id"):
-                continue
-            n = j + 1
-            candidate = f"{block_type}_{i}_{n}"
-            while candidate in used:
-                n += 1
-                candidate = f"{block_type}_{i}_{n}"
-            ex["id"] = candidate
-            used.add(candidate)
-    return plan
 
 
 def _get_coach_plan_guide() -> str:
