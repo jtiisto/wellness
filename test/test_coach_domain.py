@@ -158,6 +158,46 @@ def test_log_lean_vs_rich_shapes(coach_seeded_database, tmp_coach_db):
 
 
 @pytest.mark.unit
+def test_migration_adds_exercise_log_token(test_app, tmp_coach_db):
+    """R3-0: migration 3 adds the per-exercise concurrency token column."""
+    conn = sqlite3.connect(tmp_coach_db)
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(exercise_logs)")}
+    conn.close()
+    assert "last_modified" in cols
+
+
+@pytest.mark.unit
+def test_assemble_log_emits_per_exercise_token(test_app, tmp_coach_db):
+    """R3-0: assemble_log surfaces each exercise's last_modified as _lastModified
+    (the per-exercise base token); a NULL stamp (pre-migration row) is omitted."""
+    from modules.coach_logs import assemble_log
+    conn = sqlite3.connect(tmp_coach_db)
+    conn.row_factory = sqlite3.Row
+    conn.execute(
+        "INSERT INTO workout_session_logs (date, last_modified, modified_by) "
+        "VALUES ('2026-06-01', '2026-06-01T00:00:00Z', 'test')"
+    )
+    slid = conn.execute(
+        "SELECT id FROM workout_session_logs WHERE date='2026-06-01'"
+    ).fetchone()["id"]
+    conn.execute(
+        "INSERT INTO exercise_logs (session_log_id, exercise_key, last_modified) "
+        "VALUES (?, 'ex_stamped', '2026-06-01T12:00:00Z')", (slid,)
+    )
+    conn.execute(
+        "INSERT INTO exercise_logs (session_log_id, exercise_key, last_modified) "
+        "VALUES (?, 'ex_null', NULL)", (slid,)
+    )
+    conn.commit()
+    row = conn.execute("SELECT * FROM workout_session_logs WHERE id=?", (slid,)).fetchone()
+    log = assemble_log(conn.cursor(), row)
+    conn.close()
+
+    assert log["ex_stamped"]["_lastModified"] == "2026-06-01T12:00:00Z"
+    assert "_lastModified" not in log["ex_null"]
+
+
+@pytest.mark.unit
 def test_should_accept_log_write_arbiter():
     """R1: the pure server-side arbiter compares server stamps only (no client
     clock). See plans/phase4-r1-coach-clock-skew.md."""

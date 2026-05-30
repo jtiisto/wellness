@@ -128,6 +128,11 @@ def assemble_log(cursor, log_row, *, session_id=None, derive_completion=False):
             entry["avg_hr"] = el["avg_hr"]
         if el["max_hr"] is not None:
             entry["max_hr"] = el["max_hr"]
+        # Per-exercise optimistic-concurrency token (R3): the server stamp the
+        # client echoes back as this exercise's _baseLastModifiedAt on upload.
+        # NULL on rows predating the migration (treated as "no base" by the arbiter).
+        if el["last_modified"] is not None:
+            entry["_lastModified"] = el["last_modified"]
 
         cursor.execute(
             "SELECT * FROM set_logs WHERE exercise_log_id = ? ORDER BY set_num",
