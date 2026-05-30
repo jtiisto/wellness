@@ -98,6 +98,26 @@ def list_modules():
 # Tailscale serve --set-path.
 
 
+def _safe_static_file(subdir: str, file_path: str) -> Path:
+    """Resolve PUBLIC_DIR/<subdir>/<file_path>, rejecting path traversal.
+
+    The `{file_path:path}` route parameter is untrusted: a non-normalizing HTTP
+    client can send `../` segments to escape the public directory. We resolve the
+    candidate and require it to stay within PUBLIC_DIR/<subdir> and be a regular
+    file. Returns the resolved Path on success; raises HTTPException(404)
+    otherwise (404 rather than 403 so the endpoint doesn't reveal whether a path
+    outside the root exists).
+    """
+    base = (PUBLIC_DIR / subdir).resolve()
+    try:
+        candidate = (base / file_path).resolve()
+    except (OSError, RuntimeError, ValueError):
+        raise HTTPException(status_code=404, detail="Not found")
+    if not candidate.is_relative_to(base) or not candidate.is_file():
+        raise HTTPException(status_code=404, detail="Not found")
+    return candidate
+
+
 @_inner_app.get("/")
 def serve_root():
     """Serve the main index.html with cache-busting version injected."""
@@ -131,14 +151,11 @@ def serve_css():
 @_inner_app.get("/js/{file_path:path}")
 def serve_js(file_path: str):
     """Serve JavaScript files."""
-    js_path = PUBLIC_DIR / "js" / file_path
-    if js_path.exists() and js_path.is_file():
-        return FileResponse(
-            js_path,
-            media_type="application/javascript",
-            headers={"Cache-Control": "no-cache, must-revalidate"}
-        )
-    raise HTTPException(status_code=404, detail=f"JS file not found: {file_path}")
+    return FileResponse(
+        _safe_static_file("js", file_path),
+        media_type="application/javascript",
+        headers={"Cache-Control": "no-cache, must-revalidate"}
+    )
 
 
 @_inner_app.get("/manifest.json")
@@ -191,32 +208,27 @@ def serve_sw():
 @_inner_app.get("/fonts/{file_path:path}")
 def serve_fonts(file_path: str):
     """Serve font files."""
-    font_path = PUBLIC_DIR / "fonts" / file_path
-    if font_path.exists() and font_path.is_file():
-        return FileResponse(
-            font_path,
-            media_type="font/woff2",
-            headers={"Cache-Control": "public, max-age=31536000, immutable"}
-        )
-    raise HTTPException(status_code=404, detail=f"Font not found: {file_path}")
+    return FileResponse(
+        _safe_static_file("fonts", file_path),
+        media_type="font/woff2",
+        headers={"Cache-Control": "public, max-age=31536000, immutable"}
+    )
 
 
 @_inner_app.get("/icons/{file_path:path}")
 def serve_icons(file_path: str):
     """Serve icon files."""
-    icon_path = PUBLIC_DIR / "icons" / file_path
-    if icon_path.exists() and icon_path.is_file():
-        media_type = "image/png"
-        if file_path.endswith(".svg"):
-            media_type = "image/svg+xml"
-        elif file_path.endswith(".ico"):
-            media_type = "image/x-icon"
-        return FileResponse(
-            icon_path,
-            media_type=media_type,
-            headers={"Cache-Control": "public, max-age=31536000, immutable"}
-        )
-    raise HTTPException(status_code=404, detail=f"Icon not found: {file_path}")
+    icon_path = _safe_static_file("icons", file_path)
+    media_type = "image/png"
+    if icon_path.suffix == ".svg":
+        media_type = "image/svg+xml"
+    elif icon_path.suffix == ".ico":
+        media_type = "image/x-icon"
+    return FileResponse(
+        icon_path,
+        media_type=media_type,
+        headers={"Cache-Control": "public, max-age=31536000, immutable"}
+    )
 
 
 if __name__ == "__main__":
