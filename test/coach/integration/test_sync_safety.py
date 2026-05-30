@@ -156,6 +156,8 @@ class TestStaleWriteRejection:
         assert today not in result["appliedLogs"]
         rej = next(r for r in result["rejectedLogs"] if r["date"] == today)
         assert rej["serverRow"] is not None and "ex_1" in rej["serverRow"]
+        # serverRow carries the fresh base token for in-cycle client recovery (R1)
+        assert "_lastModified" in rej["serverRow"]
 
     def test_first_upload_no_existing_accepted(self, client, coach_registered_client):
         """First upload for a date should always succeed regardless of timestamp."""

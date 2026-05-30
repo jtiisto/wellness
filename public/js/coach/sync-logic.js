@@ -77,9 +77,54 @@ export function selectLogsToUpload(dirtyDates, localLogs) {
         const log = localLogs[date];
         if (!log) continue;
         if (!logHasUploadableContent(log)) continue;
-        logsToUpload[date] = log;
+        // Echo the last server stamp as the optimistic-concurrency base token
+        // (R1). A brand-new local date has no `_lastModified`, so the token is
+        // omitted and the server inserts (no conflict).
+        logsToUpload[date] = log._lastModified
+            ? { ...log, _baseLastModifiedAt: log._lastModified }
+            : log;
     }
     return { logsToUpload, uploadedDates: Object.keys(logsToUpload) };
+}
+
+/** Dates from the structured rejectedLogs (`[{date, serverRow}]`) (R1). */
+export function rejectedDates(rejectedLogs) {
+    return (rejectedLogs || []).map(r => r.date);
+}
+
+/**
+ * Advance the per-date base token after an accepted upload. The server stamped
+ * every applied date with `serverTime`, so the local log must record that as its
+ * `_lastModified` — otherwise the next edit would echo a stale base token and be
+ * rejected (R1). Returns a new logs map; only applied dates present locally change.
+ *
+ * @returns {Object} next logs
+ */
+export function applyAcceptedTokens(localLogs, appliedDates, serverTime) {
+    if (!appliedDates || appliedDates.length === 0 || !serverTime) return localLogs;
+    const next = { ...localLogs };
+    for (const date of appliedDates) {
+        if (next[date]) next[date] = { ...next[date], _lastModified: serverTime };
+    }
+    return next;
+}
+
+/**
+ * Adopt the server's current row for each token-rejected date — R1 in-cycle
+ * recovery. The local edit lost the optimistic-concurrency check, so replace it
+ * with the server's version (which carries the fresh `_lastModified` base token).
+ * `rejectedLogs` is the structured `[{date, serverRow}]`; a null serverRow leaves
+ * the local log untouched. Returns a new logs map.
+ *
+ * @returns {Object} next logs
+ */
+export function adoptRejectedServerRows(localLogs, rejectedLogs) {
+    if (!rejectedLogs || rejectedLogs.length === 0) return localLogs;
+    const next = { ...localLogs };
+    for (const { date, serverRow } of rejectedLogs) {
+        if (serverRow) next[date] = serverRow;
+    }
+    return next;
 }
 
 /**
