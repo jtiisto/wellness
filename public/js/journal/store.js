@@ -17,6 +17,7 @@ import { isWithinLastNDays } from './utils.js';
 import { showNotification } from '../shared/notifications.js';
 import { log as debugLog } from '../shared/debug-log.js';
 import { SyncScheduler } from '../shared/sync-scheduler.js';
+import { computeUploadPayload, computeClearedDirtyState } from './sync-logic.js';
 
 // Dedicated LocalForage instance — avoids collisions with other modules
 const storage = localforage.createInstance({
@@ -477,42 +478,15 @@ function markEntryDirty(entryKey) {
 // has advanced and we keep it dirty so the next sync picks up the new edit.
 function clearDirtyState(uploadedTrackerIds = [], uploadedEntryKeys = [],
                          snapshotTrackerGens = null, snapshotEntryGens = null) {
-    const meta = { ...syncMetadata.value };
-
-    const uploadedTrackerSet = new Set(uploadedTrackerIds);
-    meta.dirtyTrackers = meta.dirtyTrackers.filter(id => {
-        if (!uploadedTrackerSet.has(id)) return true;
-        if (snapshotTrackerGens && meta.dirtyTrackerGenerations[id] !== snapshotTrackerGens[id]) {
-            return true; // re-modified during sync, keep dirty
-        }
-        return false;
+    const meta = syncMetadata.value;
+    const next = computeClearedDirtyState({
+        uploadedTrackerIds, uploadedEntryKeys, snapshotTrackerGens, snapshotEntryGens,
+        dirtyTrackers: meta.dirtyTrackers,
+        dirtyEntries: meta.dirtyEntries,
+        dirtyTrackerGenerations: meta.dirtyTrackerGenerations,
+        dirtyEntryGenerations: meta.dirtyEntryGenerations,
     });
-
-    const uploadedEntrySet = new Set(uploadedEntryKeys);
-    meta.dirtyEntries = meta.dirtyEntries.filter(key => {
-        if (!uploadedEntrySet.has(key)) return true;
-        if (snapshotEntryGens && meta.dirtyEntryGenerations[key] !== snapshotEntryGens[key]) {
-            return true; // re-modified during sync, keep dirty
-        }
-        return false;
-    });
-
-    // Clean up generation counters for items that were actually cleared
-    const trackerGens = { ...meta.dirtyTrackerGenerations };
-    const remainingTrackers = new Set(meta.dirtyTrackers);
-    for (const id of uploadedTrackerIds) {
-        if (!remainingTrackers.has(id)) delete trackerGens[id];
-    }
-    meta.dirtyTrackerGenerations = trackerGens;
-
-    const entryGens = { ...meta.dirtyEntryGenerations };
-    const remainingEntries = new Set(meta.dirtyEntries);
-    for (const key of uploadedEntryKeys) {
-        if (!remainingEntries.has(key)) delete entryGens[key];
-    }
-    meta.dirtyEntryGenerations = entryGens;
-
-    syncMetadata.value = meta;
+    syncMetadata.value = { ...meta, ...next };
     saveMetadata();
     updateSyncStatus();
 }
@@ -610,47 +584,7 @@ async function pullServerChanges(clientId, since) {
 // `_baseLastModifiedAt` (the server stamp from the last accept), which the
 // server compares against its stored timestamp.
 function buildUploadPayload() {
-    const meta = syncMetadata.value;
-    const payload = {
-        clientId: meta.clientId,
-        config: [],
-        days: {},
-    };
-    const dirtyTrackerIds = [];
-    const dirtyEntryKeys = [];
-
-    for (const trackerId of meta.dirtyTrackers) {
-        const tracker = trackerConfig.value.find(t => t.id === trackerId);
-        if (!tracker) continue;
-        const item = { ...tracker };
-        // Use the last server-stamped timestamp as the opaque concurrency token
-        if (tracker.lastModifiedAt) {
-            item._baseLastModifiedAt = tracker.lastModifiedAt;
-        }
-        // Don't echo the server's stamp back as a top-level field — the
-        // server treats `lastModifiedAt` as protocol-reserved.
-        delete item.lastModifiedAt;
-        payload.config.push(item);
-        dirtyTrackerIds.push(trackerId);
-    }
-
-    for (const entryKey of meta.dirtyEntries) {
-        const [date, trackerId] = entryKey.split('|');
-        const entry = dailyLogs.value[date]?.[trackerId];
-        if (!entry) continue;
-        if (!payload.days[date]) payload.days[date] = {};
-        const data = {
-            value: entry.value,
-            completed: entry.completed,
-        };
-        if (entry.lastModifiedAt) {
-            data._baseLastModifiedAt = entry.lastModifiedAt;
-        }
-        payload.days[date][trackerId] = data;
-        dirtyEntryKeys.push(entryKey);
-    }
-
-    return { payload, dirtyTrackerIds, dirtyEntryKeys };
+    return computeUploadPayload(syncMetadata.value, trackerConfig.value, dailyLogs.value);
 }
 
 // Apply the server-stamped timestamps from a successful upload back onto the
