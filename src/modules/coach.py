@@ -5,7 +5,6 @@ Workout plan management and log synchronization (last-write-wins).
 import asyncio
 import json
 import logging
-import sqlite3
 import subprocess
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
@@ -16,7 +15,15 @@ from fastapi import APIRouter, HTTPException, Query, Response
 from pydantic import BaseModel
 
 from config import get_hook_path
-from modules.db import get_db as _shared_get_db, get_utc_now, utc_days_ago, register_client as _db_register_client
+from modules.db import (
+    get_db as _shared_get_db,
+    get_utc_now,
+    utc_days_ago,
+    register_client as _db_register_client,
+    run_migrations,
+    enable_wal,
+    column_exists,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -36,13 +43,15 @@ def get_db():
         yield conn
 
 
-def init_database():
-    """Initialize the database with required tables."""
-    conn = sqlite3.connect(_db_path)
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
-    cursor.execute("PRAGMA foreign_keys = ON")
+def _migration_1_baseline(cursor):
+    """Baseline coach schema (the full pre-registry schema, minus the two
+    block-level interval columns which land in migration 2 to mirror the
+    original ALTER history).
 
+    Idempotent: every CREATE uses IF NOT EXISTS, so adopting an existing
+    unversioned (user_version=0) production DB is a clean no-op that just stamps
+    the version forward.
+    """
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS exercises (
             slug       TEXT PRIMARY KEY,
@@ -81,21 +90,10 @@ def init_database():
             duration_min      INTEGER,
             rest_guidance     TEXT,
             rounds            INTEGER,
-            work_duration_sec INTEGER,
-            rest_duration_sec INTEGER,
             UNIQUE(session_id, position)
         )
     """)
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_blocks_session ON session_blocks(session_id)")
-
-    # Migration: add block-level interval timing columns to pre-existing DBs.
-    # Circuit/interval timing (rounds/work/rest) is canonical at the block level;
-    # see _transform_block_plan / _transform_block_to_exercises in the coach MCP.
-    for _col, _decl in (("work_duration_sec", "INTEGER"), ("rest_duration_sec", "INTEGER")):
-        try:
-            cursor.execute(f"ALTER TABLE session_blocks ADD COLUMN {_col} {_decl}")
-        except sqlite3.OperationalError:
-            pass
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS planned_exercises (
@@ -289,8 +287,37 @@ def init_database():
         )
     """)
 
-    conn.commit()
-    conn.close()
+
+def _migration_2_block_interval_cols(cursor):
+    """Add block-level interval timing columns (rounds/work/rest are canonical at
+    the block level; see _transform_block_plan in the coach MCP). Guarded so a DB
+    that already has them — e.g. one adopted from the pre-registry CREATE+ALTER —
+    is unchanged.
+    """
+    for col, decl in (("work_duration_sec", "INTEGER"), ("rest_duration_sec", "INTEGER")):
+        if not column_exists(cursor, "session_blocks", col):
+            cursor.execute(f"ALTER TABLE session_blocks ADD COLUMN {col} {decl}")
+
+
+# Ordered (target_version, migration_fn) pairs — see db.run_migrations for the
+# transactional contract. Migration fns are DDL-only and must not manage their
+# own transactions.
+MIGRATIONS = [
+    (1, _migration_1_baseline),
+    (2, _migration_2_block_interval_cols),
+]
+
+
+def init_database():
+    """Initialize the coach database via the shared migration registry.
+
+    Enables WAL once (outside any transaction) then applies pending migrations
+    transactionally. See db.run_migrations for the BEGIN IMMEDIATE / in-lock
+    re-check contract.
+    """
+    with get_db() as conn:
+        enable_wal(conn)
+        run_migrations(conn, MIGRATIONS, label="coach DB")
 
 
 # ==================== Plan/Log Assembly Helpers ====================

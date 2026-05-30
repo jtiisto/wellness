@@ -94,3 +94,52 @@ def test_foreign_keys_enforced(test_app, tmp_coach_db):
         conn.commit()
 
     conn.close()
+
+
+# ==================== Migration registry (R7) ====================
+
+
+@pytest.mark.unit
+def test_fresh_db_stamped_at_latest_version(tmp_path, monkeypatch):
+    """A fresh coach DB ends at the latest migration version with WAL on and the
+    block interval columns present (added by migration 2)."""
+    import modules.coach as coach_mod
+    db_path = tmp_path / "coach.db"
+    monkeypatch.setattr(coach_mod, "_db_path", db_path)
+
+    coach_mod.init_database()
+
+    conn = sqlite3.connect(db_path)
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == len(coach_mod.MIGRATIONS)
+    assert conn.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
+    block_cols = {row[1] for row in conn.execute("PRAGMA table_info(session_blocks)")}
+    assert {"work_duration_sec", "rest_duration_sec"} <= block_cols
+    conn.close()
+
+
+@pytest.mark.unit
+def test_adopts_existing_unversioned_db(tmp_path, monkeypatch):
+    """An existing pre-registry DB (full schema, user_version=0) upgrades cleanly:
+    guarded migrations are no-ops, the version is stamped forward, and data is
+    untouched. This is the headline 'adopt production DB' safety path (R7)."""
+    import modules.coach as coach_mod
+    db_path = tmp_path / "coach.db"
+    monkeypatch.setattr(coach_mod, "_db_path", db_path)
+
+    # Build the current schema, then simulate the pre-registry state.
+    coach_mod.init_database()
+    seed = sqlite3.connect(db_path)
+    seed.execute("PRAGMA user_version = 0")  # pre-registry: schema present, unversioned
+    seed.execute("INSERT INTO meta_sync (key, value) VALUES ('marker', 'keepme')")
+    seed.commit()
+    seed.close()
+
+    # Re-init must adopt without error and preserve data.
+    coach_mod.init_database()
+
+    conn = sqlite3.connect(db_path)
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == len(coach_mod.MIGRATIONS)
+    assert conn.execute("SELECT value FROM meta_sync WHERE key='marker'").fetchone()[0] == "keepme"
+    block_cols = {row[1] for row in conn.execute("PRAGMA table_info(session_blocks)")}
+    assert {"work_duration_sec", "rest_duration_sec"} <= block_cols
+    conn.close()

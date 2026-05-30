@@ -51,6 +51,24 @@ def get_db(db_path, foreign_keys=False):
         conn.close()
 
 
+def enable_wal(conn):
+    """Switch the database to WAL journal mode (readers concurrent with a single
+    writer; fewer reader/writer stalls than the default rollback journal).
+
+    WAL is a persistent per-DB setting, so this only needs calling once at
+    init — but it must run OUTSIDE any transaction. Safe on the local-disk DBs
+    under data/ (WAL is unsupported only on networked filesystems). Adds the
+    -wal/-shm sidecar files next to the DB.
+    """
+    conn.execute("PRAGMA journal_mode=WAL")
+
+
+def column_exists(cursor, table: str, column: str) -> bool:
+    """True if `column` already exists on `table` (for guarded ALTER backfills)."""
+    cursor.execute(f"PRAGMA table_info({table})")
+    return any(row[1] == column for row in cursor.fetchall())
+
+
 def register_client(conn, client_id, client_name=None, now=None):
     """Register or update a client in the clients table."""
     if now is None:
