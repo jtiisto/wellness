@@ -117,7 +117,7 @@ The Coach module handles workout plans (authored server-side, typically by AI) a
 - **Content guard** — `_store_log()` rejects incoming logs that contain zero exercises when the existing log has exercise data. This prevents partial payloads (e.g., only `session_feedback`) from overwriting complete workout data via DELETE-then-INSERT. Rejected dates are returned in `contentRejectedLogs` and the client shows a warning toast.
 - **Batch transaction wrapping** — `workout_sync_post` wraps the multi-date `_store_log` loop in an explicit transaction with auto-rollback on failure, ensuring all-or-nothing semantics when uploading logs for multiple dates.
 - **Soft-delete archive** — Before deleting an existing log, all data (session log, exercise logs, set logs) is copied to `*_archive` tables with a `superseded_at` timestamp. Archives older than 14 days are purged during sync. This provides a recovery window for any unexpected data loss.
-- **Client upload validation** — The upload phase skips logs that contain no exercise data (only metadata/feedback or empty), preventing empty-storage scenarios from overwriting real data on the server. Both `triggerSync` and `forceSync` apply this guard.
+- **Client upload validation** — The upload phase skips only *truly-empty* logs (no exercise data **and** no session feedback). Logs carrying session feedback are uploaded even without exercise data; clobber protection is delegated to the server's content guard, which rejects a feedback-only payload that would overwrite an existing logged workout (returned in `contentRejectedLogs`). The set of dates whose dirty flag is cleared after an upload is exactly the set actually sent, so a skipped (empty) log stays dirty rather than being silently cleared. Both `triggerSync` and `forceSync` apply this guard.
 
 **Sync status:** green (clean), red (dirty logs), gray (offline).
 
@@ -325,7 +325,7 @@ The Analysis module has no bidirectional sync protocol — all authoritative sta
 - **Submitting new queries** requires server connectivity. If the server is unreachable, a toast notifies the user.
 - **Initialization** — if `loadQueries()`/`checkPending()` fail on init (server unreachable), the module opens to History view with cached data rather than showing an error.
 
-**Stale report recovery:** On startup, any reports left in `status='running'` from a previous server crash are marked as `status='failed'`. This prevents `has_active_report` from permanently blocking new queries with a 409.
+**Stale report recovery:** On startup, any reports left in `status='running'` or `status='pending'` from a previous server crash are marked as `status='failed'`. Recovery runs once at startup, before the server accepts requests, so a non-terminal row is necessarily orphaned (no async task survives a restart). This prevents `has_active_report` from permanently blocking new queries with a 409 — including the case where the crash landed in the brief `create_report`→`update_report_running` window, leaving a stuck `pending` row.
 
 **Flow:**
 1. User selects a pre-built query from the UI
