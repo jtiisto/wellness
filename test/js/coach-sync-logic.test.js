@@ -10,6 +10,9 @@ import {
     nextDirtyAfterApply,
     selectLogsToUpload,
     nextDirtyAfterReject,
+    resolveForceSyncLogs,
+    pruneOlderThan,
+    maxPlanVersion,
 } from '../../public/js/coach/sync-logic.js';
 
 // ---- content predicates --------------------------------------------------
@@ -102,4 +105,82 @@ test('nextDirtyAfterReject: drops rejected dates and their generations', () => {
     );
     assert.deepEqual(r.dirtyDates, ['d1', 'd3']);
     assert.deepEqual(r.dirtyDateGenerations, { d1: 1, d3: 2 });
+});
+
+// ---- resolveForceSyncLogs (force-sync LWW merge) -------------------------
+
+test('resolveForceSyncLogs: local newer w/ content uploads; local newer but empty does not clobber', () => {
+    const local = {
+        d1: { _lastModifiedAt: '2026-05-02T00:00:00Z', ex_1: { sets: [{ reps: 5 }] } },
+        d2: { _lastModifiedAt: '2026-05-02T00:00:00Z', session_feedback: {} },
+    };
+    const server = {
+        d1: { _lastModified: '2026-05-01T00:00:00Z', ex_1: { sets: [{ reps: 3 }] } },
+        d2: { _lastModified: '2026-05-01T00:00:00Z', ex_2: { sets: [{ reps: 8 }] } },
+    };
+    const { uploadLogs, mergedLogs, counts } = resolveForceSyncLogs(local, server, null);
+    assert.deepEqual(Object.keys(uploadLogs), ['d1']);
+    assert.equal(mergedLogs.d1, local.d1);    // local wins
+    assert.equal(mergedLogs.d2, server.d2);   // empty local does not clobber server
+    assert.equal(counts.uploaded, 1);
+    assert.equal(counts.accepted, 1);
+});
+
+test('resolveForceSyncLogs: server newer accepted; equal timestamp keeps local', () => {
+    const local = {
+        d1: { _lastModifiedAt: '2026-05-01T00:00:00Z', ex_1: { sets: [{ reps: 5 }] } },
+        d2: { _lastModifiedAt: '2026-05-02T00:00:00Z', ex_1: { sets: [{ reps: 5 }] } },
+    };
+    const server = {
+        d1: { _lastModified: '2026-05-03T00:00:00Z', ex_1: { sets: [{ reps: 9 }] } },
+        d2: { _lastModified: '2026-05-02T00:00:00Z', ex_1: { sets: [{ reps: 1 }] } },
+    };
+    const { mergedLogs, counts } = resolveForceSyncLogs(local, server, null);
+    assert.equal(mergedLogs.d1, server.d1);  // server newer
+    assert.equal(mergedLogs.d2, local.d2);   // equal -> keep local
+    assert.equal(counts.accepted, 1);
+    assert.equal(counts.skipped, 1);
+});
+
+test('resolveForceSyncLogs: local-only out-of-window kept but not uploaded; server-only accepted', () => {
+    const local = {
+        '2026-01-01': { _lastModifiedAt: '2026-01-01T00:00:00Z', ex_1: { sets: [{ reps: 5 }] } },
+    };
+    const server = {
+        '2026-05-01': { _lastModified: '2026-05-01T00:00:00Z', ex_1: { sets: [{ reps: 5 }] } },
+    };
+    const { uploadLogs, mergedLogs, counts } = resolveForceSyncLogs(local, server, '2026-03-01');
+    assert.deepEqual(Object.keys(uploadLogs), []);
+    assert.ok(mergedLogs['2026-01-01']);
+    assert.equal(mergedLogs['2026-05-01'], server['2026-05-01']);
+    assert.equal(counts.skipped, 1);
+    assert.equal(counts.accepted, 1);
+});
+
+test('resolveForceSyncLogs: local-only with content uploads; empty local-only kept not uploaded', () => {
+    const local = {
+        d1: { _lastModifiedAt: '2026-05-02T00:00:00Z', ex_1: { sets: [{ reps: 5 }] } },
+        d2: { _lastModifiedAt: '2026-05-02T00:00:00Z', session_feedback: {} },
+    };
+    const { uploadLogs, counts } = resolveForceSyncLogs(local, {}, null);
+    assert.deepEqual(Object.keys(uploadLogs), ['d1']);
+    assert.equal(counts.uploaded, 1);
+    assert.equal(counts.skipped, 1);
+});
+
+// ---- pruneOlderThan / maxPlanVersion -------------------------------------
+
+test('pruneOlderThan: keeps dates >= cutoff', () => {
+    const m = { '2026-04-30': 'a', '2026-05-01': 'b', '2026-05-02': 'c' };
+    assert.deepEqual(pruneOlderThan(m, '2026-05-01'), { '2026-05-01': 'b', '2026-05-02': 'c' });
+});
+
+test('maxPlanVersion: latest _lastModified, never below currentMax', () => {
+    const plans = {
+        d1: { _lastModified: '2026-05-01T00:00:00Z' },
+        d2: { _lastModified: '2026-05-03T00:00:00Z' },
+    };
+    assert.equal(maxPlanVersion(plans, null), '2026-05-03T00:00:00Z');
+    assert.equal(maxPlanVersion(plans, '2026-05-09T00:00:00Z'), '2026-05-09T00:00:00Z');
+    assert.equal(maxPlanVersion({}, '2026-05-01T00:00:00Z'), '2026-05-01T00:00:00Z');
 });
