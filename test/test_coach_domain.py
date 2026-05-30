@@ -158,6 +158,27 @@ def test_log_lean_vs_rich_shapes(coach_seeded_database, tmp_coach_db):
 
 
 @pytest.mark.unit
+def test_should_accept_log_write_arbiter():
+    """R1: the pure server-side arbiter compares server stamps only (no client
+    clock). See plans/phase4-r1-coach-clock-skew.md."""
+    from modules.coach_logs import should_accept_log_write
+
+    # No existing row → insert, token irrelevant.
+    assert should_accept_log_write(None, None) is True
+    assert should_accept_log_write(None, "2026-05-30T00:00:00Z") is True
+
+    # Existing row + token absent → reject (hard cutover).
+    assert should_accept_log_write("2026-05-30T00:00:00Z", None) is False
+
+    # Existing row + stored <= base → accept (client saw the latest; equal accepts).
+    assert should_accept_log_write("2026-05-30T00:00:00Z", "2026-05-30T00:00:00Z") is True
+    assert should_accept_log_write("2026-05-30T00:00:00Z", "2026-05-30T01:00:00Z") is True
+
+    # Existing row + stored > base → reject (client missed a newer server write).
+    assert should_accept_log_write("2026-05-30T02:00:00Z", "2026-05-30T01:00:00Z") is False
+
+
+@pytest.mark.unit
 def test_list_scheduled_dates_today_is_injectable(test_app, tmp_coach_db):
     """coach_queries takes an injected `today`, so its date-window logic is
     directly unit-testable without depending on the real clock (plans/ phase 3)."""

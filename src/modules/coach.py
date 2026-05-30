@@ -16,7 +16,7 @@ from pydantic import BaseModel
 
 from config import get_hook_path
 from modules.coach_plans import assemble_plan
-from modules.coach_logs import assemble_log
+from modules.coach_logs import assemble_log, should_accept_log_write
 from modules.db import (
     get_db as _shared_get_db,
     get_utc_now,
@@ -343,6 +343,16 @@ def _assemble_log(conn, log_row):
     return assemble_log(conn.cursor(), log_row)
 
 
+def _assemble_log_for_date(cursor, date_str):
+    """The server's current log for `date_str` in the lean sync shape, or None if
+    there is none. Returned as the `serverRow` on a rejected upload so the client
+    can adopt it in-cycle (R1)."""
+    row = cursor.execute(
+        "SELECT * FROM workout_session_logs WHERE date = ?", (date_str,)
+    ).fetchone()
+    return assemble_log(cursor, row) if row else None
+
+
 ARCHIVE_RETENTION_DAYS = 14
 
 
@@ -433,19 +443,21 @@ def _store_log(conn, date_str, log_data, client_id, now):
     """
     cursor = conn.cursor()
 
-    # Layer 1: Reject stale writes by comparing timestamps
-    incoming_modified = log_data.get("_lastModifiedAt")
-    if incoming_modified:
-        existing = cursor.execute(
-            "SELECT last_modified FROM workout_session_logs WHERE date = ?",
-            (date_str,)
-        ).fetchone()
-        if existing and existing["last_modified"] > incoming_modified:
-            logger.warning(
-                "Rejecting stale log for %s: server=%s > client=%s (client=%s)",
-                date_str, existing["last_modified"], incoming_modified, client_id,
-            )
-            return None
+    # Layer 1: server-token arbitration (R1). Compare the server's stored stamp
+    # against the server-issued base token the client echoed (_baseLastModifiedAt)
+    # — never the client's wall clock. See plans/phase4-r1-coach-clock-skew.md.
+    incoming_base = log_data.get("_baseLastModifiedAt")
+    existing = cursor.execute(
+        "SELECT last_modified FROM workout_session_logs WHERE date = ?",
+        (date_str,)
+    ).fetchone()
+    stored_lm = existing["last_modified"] if existing else None
+    if not should_accept_log_write(stored_lm, incoming_base):
+        logger.warning(
+            "Rejecting log for %s: stored=%s base=%s (client=%s)",
+            date_str, stored_lm, incoming_base, client_id,
+        )
+        return None
 
     # Layer 1b: Reject incomplete payloads that would destroy exercise data
     meta_keys = {"session_feedback", "_lastModifiedAt", "_lastModifiedBy"}
@@ -733,7 +745,12 @@ def workout_sync_post(payload: WorkoutSyncPayload):
                 if result == "incomplete_content":
                     content_rejected_logs.append(date_str)
                 elif result is None:
-                    rejected_logs.append(date_str)
+                    # Token arbitration rejected this write — return the server's
+                    # current log so the client adopts it in-cycle (R1).
+                    rejected_logs.append({
+                        "date": date_str,
+                        "serverRow": _assemble_log_for_date(cursor, date_str),
+                    })
                 else:
                     applied_logs.append(date_str)
 
