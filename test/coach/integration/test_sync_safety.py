@@ -426,3 +426,40 @@ class TestBatchUploadAtomicity:
         count = conn.execute("SELECT COUNT(*) FROM workout_session_logs").fetchone()[0]
         assert count == 0, f"Expected 0 logs after rollback, found {count}"
         conn.close()
+
+
+# ===========================================================================
+# R1: server-token arbitration (replaces client-clock LWW) — see
+# plans/phase4-r1-coach-clock-skew.md. The headline target, written against the
+# token protocol; xfail until R1-1 lands the server-side arbitration, then the
+# marker is removed (strict=True fails on XPASS so it can't be forgotten).
+# ===========================================================================
+
+@pytest.mark.integration
+@pytest.mark.xfail(
+    strict=True,
+    reason="R1 not yet implemented: coach still arbitrates on the client clock "
+           "(_lastModifiedAt), not the server-issued _baseLastModifiedAt token.",
+)
+def test_client_behind_clock_still_wins_with_token(client, coach_registered_client):
+    """R1 target invariant: a device whose wall clock is an hour BEHIND still has
+    its newer edit accepted, because the server compares its own stored stamp
+    against the server-issued base token the client echoed — never the client
+    clock. Fails today (client-time arbiter rejects the 'stale' edit)."""
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    # 1. Initial upload; the server stamps its own last_modified.
+    _upload(client, coach_registered_client, today, _make_log())
+
+    # 2. Client downloads and learns the server's token for this date.
+    server_stamp = _download(client, coach_registered_client)["logs"][today]["_lastModified"]
+
+    # 3. A genuine new edit that echoes the server token as its base — but the
+    #    device clock is an hour behind, so its client _lastModifiedAt looks "old".
+    edit = _make_log(exercises=True, timestamp=_past_ts())
+    edit["_baseLastModifiedAt"] = server_stamp
+
+    # 4. Target: accepted (stored == base => stored <= base), despite the behind clock.
+    result = _upload(client, coach_registered_client, today, edit)
+    assert today in result["appliedLogs"]
+    assert today not in result.get("rejectedLogs", [])
