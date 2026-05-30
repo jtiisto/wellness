@@ -1,5 +1,8 @@
 """Tests for Coach MCP server tools and helpers."""
 
+import os
+import subprocess
+import sys
 import sqlite3
 from datetime import date, timedelta
 from pathlib import Path
@@ -17,6 +20,31 @@ from coach_mcp.server import (
     _transform_block_to_exercises,
     create_mcp_server,
 )
+
+
+# ==================== Phase 3: shared-package import boundary ====================
+
+
+@pytest.mark.unit
+class TestMcpSrcBootstrap:
+    """P3-1: importing the coach_mcp package must put src/ on sys.path so the
+    shared `modules.*` domain code resolves — including in the REAL MCP process
+    (python -m coach_mcp, cwd=mcp_servers, src/ not otherwise on the path).
+
+    Runs in a subprocess with PYTHONPATH cleared so it can't lean on pytest's
+    conftest path setup; this is what actually proves the bootstrap works."""
+
+    def test_importing_package_makes_modules_importable(self):
+        repo_root = Path(__file__).resolve().parents[1]
+        mcp_dir = repo_root / "mcp_servers"
+        env = {**os.environ, "PYTHONPATH": ""}  # mimic the bare MCP launch env
+        result = subprocess.run(
+            [sys.executable, "-c",
+             "import coach_mcp; import modules.db as d; print('OK', bool(d.run_migrations))"],
+            cwd=str(mcp_dir), env=env, capture_output=True, text=True,
+        )
+        assert result.returncode == 0, f"stderr:\n{result.stderr}"
+        assert result.stdout.strip().endswith("OK True"), result.stdout
 
 
 # ==================== Unit 1: Pure Function Unit Tests ====================
