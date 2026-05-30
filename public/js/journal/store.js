@@ -17,7 +17,14 @@ import { isWithinLastNDays } from './utils.js';
 import { showNotification } from '../shared/notifications.js';
 import { log as debugLog } from '../shared/debug-log.js';
 import { SyncScheduler } from '../shared/sync-scheduler.js';
-import { computeUploadPayload, computeClearedDirtyState } from './sync-logic.js';
+import {
+    computeUploadPayload,
+    computeClearedDirtyState,
+    computeAcceptedApply,
+    computeRejectedApply,
+    computeDropDeletedTrackers,
+    computePruneDeletedTrackers,
+} from './sync-logic.js';
 
 // Dedicated LocalForage instance — avoids collisions with other modules
 const storage = localforage.createInstance({
@@ -313,32 +320,15 @@ export function deleteTracker(trackerId) {
 
 // Drop deleted trackers locally — and any entries belonging to them — after a
 // successful sync. Called after both upload and download paths.
+// Thin wrapper: pure prune in sync-logic.js, signal assigns + persistence here.
 function pruneDeletedTrackers() {
-    const deletedIds = trackerConfig.value
-        .filter(t => t._deleted)
-        .map(t => t.id);
-    if (deletedIds.length === 0) {
+    const next = computePruneDeletedTrackers(trackerConfig.value, dailyLogs.value);
+    if (!next) {
         return;
     }
-    trackerConfig.value = trackerConfig.value.filter(t => !t._deleted);
-    const logs = { ...dailyLogs.value };
-    let logsChanged = false;
-    for (const date of Object.keys(logs)) {
-        const day = { ...logs[date] };
-        let dayChanged = false;
-        for (const id of deletedIds) {
-            if (id in day) {
-                delete day[id];
-                dayChanged = true;
-            }
-        }
-        if (dayChanged) {
-            logs[date] = day;
-            logsChanged = true;
-        }
-    }
-    if (logsChanged) {
-        dailyLogs.value = logs;
+    trackerConfig.value = next.trackerConfig;
+    if (next.logsChanged) {
+        dailyLogs.value = next.dailyLogs;
         saveLogs();
     }
     saveConfig();
@@ -347,58 +337,21 @@ function pruneDeletedTrackers() {
 // Apply a server-side tracker delete locally: drop from config, drop all
 // matching entries from dailyLogs, and purge any dirty state (tracker AND
 // entry-level) that would otherwise leave the client stuck "red" forever.
+// Thin wrapper: pure compute in sync-logic.js, conditional signal assigns here.
+// No save — callers (pullServerChanges / triggerSync) persist via Promise.all.
 function dropDeletedTrackerIds(deletedIds) {
     if (!deletedIds || deletedIds.length === 0) {
         return;
     }
-    const idSet = new Set(deletedIds);
-
-    trackerConfig.value = trackerConfig.value.filter(t => !idSet.has(t.id));
-
-    const logs = { ...dailyLogs.value };
-    let changed = false;
-    for (const date of Object.keys(logs)) {
-        const day = { ...logs[date] };
-        let dayChanged = false;
-        for (const id of deletedIds) {
-            if (id in day) {
-                delete day[id];
-                dayChanged = true;
-            }
-        }
-        if (dayChanged) {
-            logs[date] = day;
-            changed = true;
-        }
+    const next = computeDropDeletedTrackers(
+        deletedIds, trackerConfig.value, dailyLogs.value, syncMetadata.value,
+    );
+    trackerConfig.value = next.trackerConfig;
+    if (next.logsChanged) {
+        dailyLogs.value = next.dailyLogs;
     }
-    if (changed) {
-        dailyLogs.value = logs;
-    }
-
-    // Prune dirty state for the deleted trackers and any of their entries.
-    const meta = { ...syncMetadata.value };
-    const beforeT = meta.dirtyTrackers.length;
-    const beforeE = meta.dirtyEntries.length;
-
-    meta.dirtyTrackers = meta.dirtyTrackers.filter(id => !idSet.has(id));
-    meta.dirtyEntries = meta.dirtyEntries.filter(key => {
-        const trackerId = key.split('|')[1];
-        return !idSet.has(trackerId);
-    });
-
-    if (meta.dirtyTrackers.length !== beforeT || meta.dirtyEntries.length !== beforeE) {
-        const tGens = { ...meta.dirtyTrackerGenerations };
-        for (const id of deletedIds) delete tGens[id];
-        meta.dirtyTrackerGenerations = tGens;
-
-        const eGens = { ...meta.dirtyEntryGenerations };
-        for (const key of Object.keys(eGens)) {
-            const trackerId = key.split('|')[1];
-            if (idSet.has(trackerId)) delete eGens[key];
-        }
-        meta.dirtyEntryGenerations = eGens;
-
-        syncMetadata.value = meta;
+    if (next.dirtyChanged) {
+        syncMetadata.value = next.meta;
     }
 }
 
@@ -589,29 +542,14 @@ function buildUploadPayload() {
 
 // Apply the server-stamped timestamps from a successful upload back onto the
 // local rows so the next edit's upload uses the correct base token.
+// Thin wrapper: pure stamp in sync-logic.js, batched signal assigns here.
 function applyAccepted(acceptedTrackers, acceptedEntries) {
+    const next = computeAcceptedApply(
+        acceptedTrackers, acceptedEntries, trackerConfig.value, dailyLogs.value,
+    );
     batch(() => {
-        if (acceptedTrackers.length > 0) {
-            const stampById = new Map(acceptedTrackers.map(a => [a.id, a.lastModifiedAt]));
-            trackerConfig.value = trackerConfig.value.map(t => {
-                const stamp = stampById.get(t.id);
-                return stamp ? { ...t, lastModifiedAt: stamp } : t;
-            });
-        }
-        if (acceptedEntries.length > 0) {
-            const logs = { ...dailyLogs.value };
-            for (const acc of acceptedEntries) {
-                if (!logs[acc.date]?.[acc.trackerId]) continue;
-                logs[acc.date] = {
-                    ...logs[acc.date],
-                    [acc.trackerId]: {
-                        ...logs[acc.date][acc.trackerId],
-                        lastModifiedAt: acc.lastModifiedAt,
-                    },
-                };
-            }
-            dailyLogs.value = logs;
-        }
+        trackerConfig.value = next.trackerConfig;
+        dailyLogs.value = next.dailyLogs;
     });
 }
 
@@ -619,45 +557,19 @@ function applyAccepted(acceptedTrackers, acceptedEntries) {
 // without needing a follow-up delta pull. If the server's row is itself a
 // soft-deleted tracker, route through the full delete cleanup so we drop the
 // tracker, its entries, and any associated dirty state.
+// Thin wrapper: pure upsert in sync-logic.js, batched signal assigns here; the
+// soft-deleted ids it returns are routed through dropDeletedTrackerIds AFTER
+// the batch (the delete cleanup touches syncMetadata, not just config/logs).
 function applyRejected(rejectedTrackers, rejectedEntries) {
-    const trackerIdsToDelete = [];
+    const next = computeRejectedApply(
+        rejectedTrackers, rejectedEntries, trackerConfig.value, dailyLogs.value,
+    );
     batch(() => {
-        if (rejectedTrackers.length > 0) {
-            const updated = [...trackerConfig.value];
-            for (const rej of rejectedTrackers) {
-                if (!rej.serverRow) continue;
-                if (rej.serverRow.deleted) {
-                    trackerIdsToDelete.push(rej.id);
-                    continue;
-                }
-                const idx = updated.findIndex(t => t.id === rej.id);
-                if (idx >= 0) {
-                    updated[idx] = { ...rej.serverRow };
-                } else {
-                    updated.push({ ...rej.serverRow });
-                }
-            }
-            trackerConfig.value = updated;
-        }
-        if (rejectedEntries.length > 0) {
-            const logs = { ...dailyLogs.value };
-            for (const rej of rejectedEntries) {
-                if (!rej.serverRow) continue;
-                if (!logs[rej.date]) logs[rej.date] = {};
-                logs[rej.date] = {
-                    ...logs[rej.date],
-                    [rej.trackerId]: {
-                        value: rej.serverRow.value,
-                        completed: rej.serverRow.completed,
-                        lastModifiedAt: rej.serverRow.lastModifiedAt,
-                    },
-                };
-            }
-            dailyLogs.value = logs;
-        }
+        trackerConfig.value = next.trackerConfig;
+        dailyLogs.value = next.dailyLogs;
     });
-    if (trackerIdsToDelete.length > 0) {
-        dropDeletedTrackerIds(trackerIdsToDelete);
+    if (next.trackerIdsToDelete.length > 0) {
+        dropDeletedTrackerIds(next.trackerIdsToDelete);
     }
 }
 
