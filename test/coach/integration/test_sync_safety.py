@@ -463,6 +463,34 @@ class TestBatchUploadAtomicity:
 # ===========================================================================
 
 @pytest.mark.integration
+def test_reject_then_recover_with_returned_token(client, coach_registered_client):
+    """R1 in-cycle recovery: a stale-base write is rejected with the server's
+    current row; re-uploading while echoing that row's `_lastModified` as the
+    base token is then accepted — proving the client can recover without a
+    separate pull (mirrors journal's serverRow recovery)."""
+    today = datetime.now().strftime("%Y-%m-%d")
+    _upload(client, coach_registered_client, today, _make_log())
+
+    # Stale-base write → rejected, server returns its current row + token.
+    stale = _make_log(exercises=True)
+    stale["_baseLastModifiedAt"] = _past_ts()
+    rejected = _upload(client, coach_registered_client, today, stale)
+    rej = next(r for r in rejected["rejectedLogs"] if r["date"] == today)
+    recovered_token = rej["serverRow"]["_lastModified"]
+
+    # Re-upload echoing the returned token → accepted (stored == base).
+    retry = _make_log(exercises=True)
+    retry["ex_1"]["user_note"] = "after recovery"
+    retry["_baseLastModifiedAt"] = recovered_token
+    result = _upload(client, coach_registered_client, today, retry)
+    assert today in result["appliedLogs"]
+    assert today not in _reject_dates(result)
+
+    data = _download(client, coach_registered_client)
+    assert data["logs"][today]["ex_1"]["user_note"] == "after recovery"
+
+
+@pytest.mark.integration
 def test_client_behind_clock_still_wins_with_token(client, coach_registered_client):
     """R1 target invariant: a device whose wall clock is an hour BEHIND still has
     its newer edit accepted, because the server compares its own stored stamp
