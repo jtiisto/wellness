@@ -302,12 +302,23 @@ def _migration_2_block_interval_cols(cursor):
             cursor.execute(f"ALTER TABLE session_blocks ADD COLUMN {col} {decl}")
 
 
+def _migration_3_exercise_log_token(cursor):
+    """Add the per-exercise optimistic-concurrency token (R3). Each exercise_logs
+    row gets its own server stamp so log writes arbitrate per exercise, not by
+    whole-day replace. Guarded; existing rows backfill to NULL, which the
+    arbiter treats as "accept the client's write" (then it gets a real stamp).
+    """
+    if not column_exists(cursor, "exercise_logs", "last_modified"):
+        cursor.execute("ALTER TABLE exercise_logs ADD COLUMN last_modified TEXT")
+
+
 # Ordered (target_version, migration_fn) pairs — see db.run_migrations for the
 # transactional contract. Migration fns are DDL-only and must not manage their
 # own transactions.
 MIGRATIONS = [
     (1, _migration_1_baseline),
     (2, _migration_2_block_interval_cols),
+    (3, _migration_3_exercise_log_token),
 ]
 
 
