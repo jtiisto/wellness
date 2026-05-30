@@ -160,14 +160,23 @@ class TestRecoverStaleReports:
         assert report["error_message"] == "Server restarted during execution"
         assert report["completed_at"] is not None
 
-    def test_pending_reports_not_touched(self, analysis_initialized_db):
-        """PENDING reports should remain PENDING after recovery."""
+    def test_pending_reports_marked_failed(self, analysis_initialized_db):
+        """PENDING reports are orphaned by a restart and must be recovered.
+
+        recover_stale_reports runs only at startup, before requests are served,
+        so a pending row can have no live task behind it. Leaving it pending
+        would wedge has_active_report() and block new queries forever.
+        """
         report_id = create_report(analysis_initialized_db, "test", "Test", "prompt")
         assert get_report(analysis_initialized_db, report_id)["status"] == "pending"
 
         recover_stale_reports(analysis_initialized_db)
 
-        assert get_report(analysis_initialized_db, report_id)["status"] == "pending"
+        report = get_report(analysis_initialized_db, report_id)
+        assert report["status"] == "failed"
+        assert report["error_message"] == "Server restarted during execution"
+        # The queue is no longer wedged.
+        assert has_active_report(analysis_initialized_db) is False
 
     def test_has_active_report_false_after_recovery(self, analysis_initialized_db):
         """After recovery, has_active_report should return False if only RUNNING existed."""
