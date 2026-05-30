@@ -9,7 +9,7 @@ import os
 import re
 import sqlite3
 from contextlib import contextmanager
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -26,6 +26,7 @@ from modules.coach_plans import (
     transform_block_plan as _transform_block_plan,
 )
 from modules.coach_logs import assemble_log, workout_stats as _get_workout_stats
+from modules import coach_queries
 
 # Legacy pair-suffix pattern: rejects names like "Bench Press (Pair A)" so that
 # pair info is forced through the structured `superset_group` field instead of
@@ -51,7 +52,6 @@ except ImportError:
         "Install with: pip install fastmcp"
     )
 
-from modules.coach_completion import derive_exercise_completion
 from .config import MCPConfig
 from .exercise_registry import ExerciseRegistry, resolve_plan_exercises
 
@@ -402,74 +402,7 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
             raise ValueError("Days cannot exceed 365")
 
         try:
-            start_date = (date.today() - timedelta(days=days)).isoformat()
-            end_date = date.today().isoformat()
-
-            # Count planned workouts
-            plans_result = db_manager.execute_query("""
-                SELECT COUNT(*) as count FROM workout_sessions
-                WHERE date >= ? AND date <= ?
-            """, [start_date, end_date])
-            planned_count = plans_result[0]["count"] if plans_result else 0
-
-            # Count logged workouts (presence-based: a session_log row means the
-            # user recorded something). Kept as `completed_workouts` for
-            # backward compatibility.
-            logs_result = db_manager.execute_query("""
-                SELECT id, session_id FROM workout_session_logs
-                WHERE date >= ? AND date <= ?
-            """, [start_date, end_date])
-            completed_count = len(logs_result)
-
-            # Derived: sessions that were *fully* completed — every planned
-            # exercise met its target (see completion.py).
-            fully_completed_count = 0
-            with db_manager.get_connection(read_only=True) as conn:
-                cur = conn.cursor()
-                for lr in logs_result:
-                    assembled = _assemble_log_from_db(
-                        cur, lr["id"], session_id=lr["session_id"]
-                    )
-                    sc = assembled.get("session_completion")
-                    if sc and sc["completed"]:
-                        fully_completed_count += 1
-
-            # Exercise type breakdown from recent plans
-            exercise_types_result = db_manager.execute_query("""
-                SELECT pe.exercise_type, COUNT(*) as count
-                FROM planned_exercises pe
-                JOIN workout_sessions ws ON pe.session_id = ws.id
-                WHERE ws.date >= ? AND ws.date <= ?
-                GROUP BY pe.exercise_type
-                ORDER BY count DESC
-                LIMIT 7
-            """, [start_date, end_date])
-
-            exercise_types = {}
-            for row in exercise_types_result:
-                exercise_types[row["exercise_type"]] = row["count"]
-
-            # Recent plan dates
-            recent_dates_result = db_manager.execute_query("""
-                SELECT date FROM workout_sessions
-                WHERE date >= ? AND date <= ?
-                ORDER BY date DESC
-                LIMIT 7
-            """, [start_date, end_date])
-
-            completion_rate = round(completed_count / planned_count * 100, 1) if planned_count > 0 else 0
-            full_completion_rate = round(fully_completed_count / planned_count * 100, 1) if planned_count > 0 else 0
-
-            return {
-                "analysis_period_days": days,
-                "planned_workouts": planned_count,
-                "completed_workouts": completed_count,
-                "completion_rate_percent": completion_rate,
-                "sessions_fully_completed": fully_completed_count,
-                "full_completion_rate_percent": full_completion_rate,
-                "exercise_types_in_recent_plans": exercise_types,
-                "recent_plan_dates": [row["date"] for row in recent_dates_result]
-            }
+            return coach_queries.workout_summary(db_manager, days=days, today=date.today())
         except Exception as e:
             raise ValueError(f"Failed to generate summary: {str(e)}")
 
@@ -490,18 +423,9 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
             List of dates (YYYY-MM-DD) that have plans
         """
         try:
-            if not start_date:
-                start_date = date.today().isoformat()
-            if not end_date:
-                end_date = (date.today() + timedelta(weeks=6)).isoformat()
-
-            results = db_manager.execute_query("""
-                SELECT date FROM workout_sessions
-                WHERE date >= ? AND date <= ?
-                ORDER BY date
-            """, [start_date, end_date])
-
-            return [row["date"] for row in results]
+            return coach_queries.list_scheduled_dates(
+                db_manager, start_date=start_date, end_date=end_date, today=date.today()
+            )
         except Exception as e:
             raise ValueError(f"Failed to list scheduled dates: {str(e)}")
 
@@ -1474,49 +1398,9 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
             List of matching exercises with slug, name, equipment, category, and usage count
         """
         try:
-            # Build SQL query with optional filters
-            conditions = ["1=1"]
-            params = []
-
-            if equipment:
-                conditions.append("e.equipment = ?")
-                params.append(equipment)
-            if category:
-                conditions.append("e.category = ?")
-                params.append(category)
-
-            where_clause = " AND ".join(conditions)
-
-            results = db_manager.execute_query(f"""
-                SELECT e.slug, e.name, e.equipment, e.category,
-                       COUNT(pe.id) as usage_count
-                FROM exercises e
-                LEFT JOIN planned_exercises pe ON pe.canonical_slug = e.slug
-                WHERE {where_clause}
-                GROUP BY e.slug
-                ORDER BY e.name
-            """, params)
-
-            # Apply fuzzy name filtering in Python
-            if query.strip():
-                from difflib import SequenceMatcher
-                query_lower = query.lower()
-                scored = []
-                for row in results:
-                    name_lower = row["name"].lower()
-                    # Substring match gets high priority
-                    if query_lower in name_lower:
-                        score = 100
-                    else:
-                        score = SequenceMatcher(None, query_lower, name_lower).ratio() * 100
-                    if score >= 50:
-                        scored.append((score, row))
-                scored.sort(key=lambda x: (-x[0], x[1]["name"]))
-                results = [row for _, row in scored[:limit]]
-            else:
-                results = results[:limit]
-
-            return results
+            return coach_queries.search_exercises(
+                db_manager, query=query, equipment=equipment, category=category, limit=limit
+            )
         except Exception as e:
             raise ValueError(f"Failed to search exercises: {str(e)}")
 
@@ -1538,89 +1422,9 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
             Exercise info and list of logged sessions with set data
         """
         try:
-            # Get exercise info
-            exercise_info = db_manager.execute_query(
-                "SELECT * FROM exercises WHERE slug = ?", [exercise_slug]
+            return coach_queries.exercise_history(
+                db_manager, exercise_slug=exercise_slug, limit=limit
             )
-            if not exercise_info:
-                raise ValueError(f"Exercise not found: {exercise_slug}")
-
-            info = exercise_info[0]
-
-            # Get all logged sessions for this exercise. Completion is derived
-            # from logged data (see completion.py), so we pull the planned
-            # target and item counts rather than the legacy `completed` flag.
-            sessions = db_manager.execute_query("""
-                SELECT
-                    wsl.date,
-                    el.user_note,
-                    el.duration_min,
-                    el.avg_hr,
-                    el.max_hr,
-                    el.id as exercise_log_id,
-                    pe.exercise_type as exercise_type,
-                    pe.target_sets as target_sets,
-                    pe.target_duration_min as target_duration_min,
-                    (SELECT COUNT(*) FROM checklist_items ci
-                       WHERE ci.exercise_id = pe.id) as planned_items,
-                    (SELECT COUNT(*) FROM checklist_log_items cli
-                       WHERE cli.exercise_log_id = el.id) as logged_items
-                FROM exercise_logs el
-                JOIN workout_session_logs wsl ON el.session_log_id = wsl.id
-                LEFT JOIN planned_exercises pe ON pe.id = el.exercise_id
-                WHERE el.canonical_slug = ?
-                ORDER BY wsl.date DESC
-                LIMIT ?
-            """, [exercise_slug, limit])
-
-            # For each session, get set data
-            history = []
-            for session in sessions:
-                sets = db_manager.execute_query("""
-                    SELECT set_num, weight, reps, rpe, unit, duration_sec, completed
-                    FROM set_logs
-                    WHERE exercise_log_id = ?
-                    ORDER BY set_num
-                """, [session["exercise_log_id"]])
-
-                completion = derive_exercise_completion(
-                    session["exercise_type"],
-                    sets=sets,
-                    duration_min=session["duration_min"],
-                    logged_items=session["logged_items"],
-                    planned_items=session["planned_items"],
-                    target_sets=session["target_sets"],
-                    target_duration_min=session["target_duration_min"],
-                )
-                entry = {
-                    "date": session["date"],
-                    "attempted": completion["attempted"],
-                    "completed": completion["completed"],
-                    "progress": completion["progress"],
-                }
-                if session["user_note"]:
-                    entry["user_note"] = session["user_note"]
-                if session["duration_min"] is not None:
-                    entry["duration_min"] = session["duration_min"]
-                if session["avg_hr"] is not None:
-                    entry["avg_hr"] = session["avg_hr"]
-                if session["max_hr"] is not None:
-                    entry["max_hr"] = session["max_hr"]
-                if sets:
-                    entry["sets"] = sets
-
-                history.append(entry)
-
-            return {
-                "exercise": {
-                    "slug": info["slug"],
-                    "name": info["name"],
-                    "equipment": info["equipment"],
-                    "category": info["category"],
-                },
-                "total_sessions": len(history),
-                "history": history,
-            }
         except Exception as e:
             raise ValueError(f"Failed to get exercise history: {str(e)}")
 
