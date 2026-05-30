@@ -443,6 +443,12 @@ ARCHIVE_RETENTION_DAYS = 14
 
 def _purge_old_archives(cursor):
     """Remove archive rows older than the retention window."""
+    # `superseded_at` is stored Z-suffixed (get_utc_now); this cutoff is
+    # +00:00-suffixed (isoformat). The mismatch is benign: the datetime prefix
+    # dominates the lexical compare, so the suffix only matters at exact-µs
+    # equality, where `<` keeps the row either way. Left as-is deliberately —
+    # the durable fix is centralizing UTC formatting (see plans/ R5); do not
+    # swap formats here in isolation.
     cutoff = (datetime.now(timezone.utc) - timedelta(days=ARCHIVE_RETENTION_DAYS)).isoformat()
     old_rows = cursor.execute(
         "SELECT id, original_id FROM workout_session_logs_archive WHERE superseded_at < ?",
@@ -730,6 +736,11 @@ def workout_sync_get(
             UPDATE clients SET last_seen_at = ? WHERE id = ?
         """, (now, client_id))
 
+        # Sync-window boundary as a date-only string (YYYY-MM-DD). It is compared
+        # against the `date` columns below, which hold the client's *local*
+        # calendar dates (convention: instants are UTC `Z`, calendar dates are
+        # local to match the browser's new Date()). Deliberately date-only — do
+        # not reformat. Also reused by the tombstone prune below (see note there).
         cutoff = (datetime.now(timezone.utc) - timedelta(days=SYNC_WINDOW_DAYS)).strftime("%Y-%m-%d")
 
         if last_sync_time:
@@ -781,7 +792,13 @@ def workout_sync_get(
             """, (last_sync_time,))
             deleted_plan_dates = [row["date"] for row in cursor.fetchall()]
 
-        # Prune tombstones older than the sync window
+        # Prune tombstones older than the sync window. `cutoff` is date-only
+        # (YYYY-MM-DD) while `deleted_at` is a full Z timestamp; comparing them
+        # lexically prunes tombstones whose *date* precedes the cutoff and keeps
+        # the whole cutoff day. This errs safe (keeps tombstones a bit longer →
+        # deletion propagation still works). Do NOT "fix" this to
+        # `cutoff + "T00:00:00Z"`: deleted_at carries sub-second precision, so a
+        # fraction-less cutoff would prune the first instant after midnight early.
         cursor.execute("DELETE FROM deleted_plans WHERE deleted_at < ?", (cutoff,))
 
         conn.commit()
