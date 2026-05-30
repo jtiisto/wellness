@@ -1,15 +1,23 @@
 """Integration tests for static file serving in the unified Wellness app."""
+import asyncio
 import json
 import re
+import threading
+
 import pytest
 
 
-async def _raw_get(app, path):
+def _raw_get(app, path):
     """Drive the ASGI app with a raw scope so `..` segments are NOT normalized.
 
     TestClient/httpx collapses `../` before sending, which would mask path
     traversal. A raw scope reproduces what a non-normalizing client (curl
     --path-as-is, scripts, native HTTP stacks) actually puts on the wire.
+
+    The coroutine runs in a dedicated thread with its own event loop, so this
+    helper is independent of whatever asyncio/event-loop state other plugins
+    (pytest-playwright, pytest-asyncio) have left on the main thread — running
+    these as `async def` tests fails once playwright is loaded in the session.
     """
     scope = {"type": "http", "http_version": "1.1", "method": "GET",
              "path": path, "raw_path": path.encode(), "query_string": b"",
@@ -26,7 +34,19 @@ async def _raw_get(app, path):
         elif ev["type"] == "http.response.body":
             body.extend(ev.get("body", b""))
 
-    await app(scope, receive, send)
+    error = {}
+
+    def _runner():
+        try:
+            asyncio.run(app(scope, receive, send))
+        except BaseException as exc:  # surface the failure in the calling thread
+            error["exc"] = exc
+
+    thread = threading.Thread(target=_runner)
+    thread.start()
+    thread.join()
+    if "exc" in error:
+        raise error["exc"]
     return status["code"], bytes(body)
 
 
@@ -159,25 +179,25 @@ class TestStaticTraversal:
     containment check fired rather than the file merely being absent.
     """
 
-    async def test_js_traversal_blocked(self, test_app, tmp_path):
+    def test_js_traversal_blocked(self, test_app, tmp_path):
         (tmp_path / "secret.txt").write_text("TOP SECRET")
-        code, _ = await _raw_get(test_app, "/wellness/js/../../secret.txt")
+        code, _ = _raw_get(test_app, "/wellness/js/../../secret.txt")
         assert code == 404
 
-    async def test_deep_traversal_blocked(self, test_app):
-        code, _ = await _raw_get(
+    def test_deep_traversal_blocked(self, test_app):
+        code, _ = _raw_get(
             test_app, "/wellness/js/../../../../../../../../etc/passwd"
         )
         assert code == 404
 
-    async def test_fonts_and_icons_traversal_blocked(self, test_app, tmp_path):
+    def test_fonts_and_icons_traversal_blocked(self, test_app, tmp_path):
         (tmp_path / "secret.txt").write_text("x")
         for prefix in ("/wellness/fonts", "/wellness/icons"):
-            code, _ = await _raw_get(test_app, f"{prefix}/../../secret.txt")
+            code, _ = _raw_get(test_app, f"{prefix}/../../secret.txt")
             assert code == 404
 
-    async def test_normal_assets_still_served(self, test_app):
-        code, _ = await _raw_get(test_app, "/wellness/js/app.js")
+    def test_normal_assets_still_served(self, test_app):
+        code, _ = _raw_get(test_app, "/wellness/js/app.js")
         assert code == 200
-        code, _ = await _raw_get(test_app, "/wellness/icons/icon-192.png")
+        code, _ = _raw_get(test_app, "/wellness/icons/icon-192.png")
         assert code == 200
