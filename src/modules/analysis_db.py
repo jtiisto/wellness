@@ -78,11 +78,17 @@ def has_active_report(db_path) -> bool:
 
 
 def recover_stale_reports(db_path):
-    """Mark any RUNNING reports as FAILED on startup (server restarted mid-execution)."""
+    """Mark RUNNING or PENDING reports as FAILED on startup.
+
+    Called once at startup (create_router), before the server accepts requests,
+    so any report still 'running' or 'pending' is necessarily orphaned by the
+    restart — no async task survives it. Leaving a 'pending' row would wedge
+    has_active_report() and block every new query with a 409.
+    """
     with get_db(db_path) as conn:
         conn.execute(
             "UPDATE reports SET status='failed', error_message='Server restarted during execution', completed_at=? "
-            "WHERE status='running'",
+            "WHERE status IN ('running', 'pending')",
             (get_utc_now(),)
         )
         conn.commit()
