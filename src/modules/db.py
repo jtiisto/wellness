@@ -1,9 +1,12 @@
 """
 Shared database utilities for wellness modules.
 """
+import logging
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+
+logger = logging.getLogger(__name__)
 
 
 def _iso_z(dt: datetime) -> str:
@@ -57,3 +60,59 @@ def register_client(conn, client_id, client_name=None, now=None):
         INSERT OR REPLACE INTO clients (id, name, last_seen_at)
         VALUES (?, ?, ?)
     """, (client_id, client_name or f"Client-{client_id[:8]}", now))
+
+
+def run_migrations(conn, migrations, *, label="DB"):
+    """Apply ordered ``(target_version, fn)`` migrations via PRAGMA user_version.
+
+    Each pending migration runs inside its own explicit ``BEGIN IMMEDIATE``
+    transaction so concurrent server boots serialize on the write lock and a
+    partial-DDL failure rolls back atomically with the version bump. The version
+    is re-checked *inside* the transaction in case another process applied the
+    migration while we waited on the lock.
+
+    ``migrations`` is an ordered list of ``(target_version, migration_fn)`` pairs;
+    each ``migration_fn`` receives a cursor and must contain only DDL/DML — it
+    must NOT issue its own BEGIN / COMMIT / ROLLBACK (this runner owns the
+    transaction). ``label`` is used only in the applied-migration log line.
+
+    Extracted from the journal module so coach and analysis share one safe,
+    versioned init path (see plans/ R7).
+    """
+    # Switch to autocommit so we manage BEGIN/COMMIT/ROLLBACK explicitly.
+    previous_isolation = conn.isolation_level
+    conn.isolation_level = None
+    cursor = conn.cursor()
+    try:
+        current_version = cursor.execute("PRAGMA user_version").fetchone()[0]
+
+        for target_version, migration in migrations:
+            if current_version >= target_version:
+                continue
+
+            cursor.execute("BEGIN IMMEDIATE")
+            try:
+                actual_version = cursor.execute("PRAGMA user_version").fetchone()[0]
+                if actual_version >= target_version:
+                    # Another process applied this migration while we waited on
+                    # the write lock. Skip and continue.
+                    cursor.execute("ROLLBACK")
+                    current_version = actual_version
+                    continue
+
+                logger.info(
+                    "Applying %s migration: %d -> %d",
+                    label, actual_version, target_version,
+                )
+                migration(cursor)
+                cursor.execute(f"PRAGMA user_version = {target_version}")
+                cursor.execute("COMMIT")
+                current_version = target_version
+            except Exception:
+                try:
+                    cursor.execute("ROLLBACK")
+                except sqlite3.Error:
+                    pass
+                raise
+    finally:
+        conn.isolation_level = previous_isolation

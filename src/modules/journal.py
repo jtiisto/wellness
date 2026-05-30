@@ -3,8 +3,6 @@ Journal API Router - extracted from journal/src/server.py
 Conflict-aware versioning sync engine for personal journal trackers.
 """
 import json
-import logging
-import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -13,10 +11,13 @@ from typing import Any, Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict
 
-from modules.db import get_db as _shared_get_db, get_utc_now, utc_days_ago, register_client as _db_register_client
-
-
-logger = logging.getLogger(__name__)
+from modules.db import (
+    get_db as _shared_get_db,
+    get_utc_now,
+    utc_days_ago,
+    register_client as _db_register_client,
+    run_migrations,
+)
 
 
 # Module-level DB path, set by create_router()
@@ -204,50 +205,12 @@ def _purge_old_archives(conn):
 def init_database():
     """Initialize the database, applying any pending migrations.
 
-    Migrations are versioned via PRAGMA user_version. Each migration runs inside
-    an explicit BEGIN IMMEDIATE transaction so concurrent server boots serialize
-    on the write lock and a partial-DDL failure rolls back atomically with the
-    version bump. The version is re-checked inside the transaction in case
-    another process applied the migration while we waited on the lock.
+    Migrations are versioned via PRAGMA user_version and applied transactionally
+    by the shared db.run_migrations runner (see its docstring for the
+    BEGIN IMMEDIATE / in-lock re-check contract).
     """
     with get_db() as conn:
-        # Switch to autocommit so we manage BEGIN/COMMIT/ROLLBACK explicitly.
-        previous_isolation = conn.isolation_level
-        conn.isolation_level = None
-        cursor = conn.cursor()
-        try:
-            current_version = cursor.execute("PRAGMA user_version").fetchone()[0]
-
-            for target_version, migration in MIGRATIONS:
-                if current_version >= target_version:
-                    continue
-
-                cursor.execute("BEGIN IMMEDIATE")
-                try:
-                    actual_version = cursor.execute("PRAGMA user_version").fetchone()[0]
-                    if actual_version >= target_version:
-                        # Another process applied this migration while we waited
-                        # on the write lock. Skip and continue.
-                        cursor.execute("ROLLBACK")
-                        current_version = actual_version
-                        continue
-
-                    logger.info(
-                        "Applying journal DB migration: %d -> %d",
-                        actual_version, target_version,
-                    )
-                    migration(cursor)
-                    cursor.execute(f"PRAGMA user_version = {target_version}")
-                    cursor.execute("COMMIT")
-                    current_version = target_version
-                except Exception:
-                    try:
-                        cursor.execute("ROLLBACK")
-                    except sqlite3.Error:
-                        pass
-                    raise
-        finally:
-            conn.isolation_level = previous_isolation
+        run_migrations(conn, MIGRATIONS, label="journal DB")
 
 
 # Pydantic models
