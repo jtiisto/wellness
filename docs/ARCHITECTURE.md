@@ -99,21 +99,21 @@ trackers_archive (id, tracker_id, name, category, type, meta_json, deleted, last
 
 The `trackers.version`, `trackers.last_modified_by`, `entries.version`, `entries.last_modified_by` columns and the `sync_conflicts` table remain in the schema as vestigial artifacts of the previous protocol — they are no longer read or written, and the physical drop is deferred indefinitely to avoid a risky `CREATE NEW + INSERT SELECT + DROP + RENAME` recreate cycle.
 
-### Coach: Last-Write-Wins
+### Coach: Server-Token Arbitration
 
-The Coach module handles workout plans (authored server-side, typically by AI) and workout logs (written by the user during a session). Plans flow one-way from server to client. Logs flow from client to server with timestamp-guarded last-write-wins semantics.
+The Coach module handles workout plans (authored server-side, typically by AI) and workout logs (written by the user during a session). Plans flow one-way from server to client. Log writes are arbitrated by a **server-issued per-date token** — symmetric with Journal's `_baseLastModifiedAt` scheme — so client clock skew can never reject a legitimate edit (R1). The client echoes the last server `_lastModified` stamp it saw for a date as `_baseLastModifiedAt`; the server compares its own *stored* stamp against that *server-issued* base, never the client's wall clock.
 
 **Protocol:**
 
 1. **Client registers** (`POST /register`)
 2. **Sync pull** fetches plans (all or since last sync) and logs (30 days or since last sync) (`GET /sync?client_id=<id>&last_sync_time=<timestamp>`)
-3. **Log upload** sends completed workout logs (`POST /sync`). The server compares the incoming `_lastModifiedAt` against its stored `last_modified` — if the incoming timestamp is older, the write is rejected and the date is returned in `rejectedLogs`. Accepted logs replace the existing data (delete + insert). Before deletion, the existing log is archived to `*_archive` tables for 14-day recovery.
+3. **Log upload** sends completed workout logs (`POST /sync`), each carrying `_baseLastModifiedAt` (the server stamp the client last saw for that date). The server accepts iff there is no existing row, or `stored.last_modified <= base` (equal accepts); otherwise — including a token-absent write to an existing date (**hard cutover**, no legacy compat) — it rejects. Rejected entries are returned in `rejectedLogs` as structured `{date, serverRow}` objects so the client adopts the server's current log in-cycle. Accepted logs replace the existing data (delete + insert); before deletion the existing log is archived to `*_archive` tables for 14-day recovery. (`_lastModifiedAt` is retained as an advisory/display field only — it is **not** the arbiter.)
 4. **Plan change detection** via `GET /plans-version`, which returns `MAX(last_modified)` from `workout_sessions`. The scheduler polls this endpoint every 30 seconds, triggering a full sync when the version changes.
 5. **Plan deletion propagation** — When a plan is deleted via MCP, a tombstone is written to `deleted_plans`. Incremental sync includes a `deletedPlanDates` array for tombstones newer than `last_sync_time`. The client removes those dates from local storage. Tombstones are pruned automatically when they age out of the sync window. Only future/unlogged plans can be deleted — plans with workout logs are immutable.
 
 **Sync safety layers:**
 - **HTTP cache prevention** — `GET /sync` returns `Cache-Control: no-cache, no-store, must-revalidate`; client fetch calls use `cache: 'no-store'`. Prevents stale sync responses from being served from browser HTTP cache (e.g., after Android storage clear).
-- **Timestamp-based rejection** — `_store_log()` compares the client's `_lastModifiedAt` against the server's `last_modified`. Stale writes are rejected; the POST response includes `rejectedLogs` so the client can clear those from `dirtyDates` and download fresh data.
+- **Token-based rejection** — `_store_log()` arbitrates via the pure `coach_logs.should_accept_log_write(stored, base)`: server-stamp vs server-issued base token, no client clock (R1). Rejected writes return `{date, serverRow}` so the client adopts the server's current log and clears the date from `dirtyDates` in-cycle.
 - **Content guard** — `_store_log()` rejects incoming logs that contain zero exercises when the existing log has exercise data. This prevents partial payloads (e.g., only `session_feedback`) from overwriting complete workout data via DELETE-then-INSERT. Rejected dates are returned in `contentRejectedLogs` and the client shows a warning toast.
 - **Batch transaction wrapping** — `workout_sync_post` wraps the multi-date `_store_log` loop in an explicit transaction with auto-rollback on failure, ensuring all-or-nothing semantics when uploading logs for multiple dates.
 - **Soft-delete archive** — Before deleting an existing log, all data (session log, exercise logs, set logs) is copied to `*_archive` tables with a `superseded_at` timestamp. Archives older than 14 days are purged during sync. This provides a recovery window for any unexpected data loss.
@@ -123,7 +123,7 @@ The Coach module handles workout plans (authored server-side, typically by AI) a
 
 **Key design choices:**
 - Plans are read-only from the client's perspective (created via MCP or direct DB access)
-- Logs use timestamp-guarded last-write-wins (stale writes rejected, not silently applied)
+- Logs use server-token arbitration (R1): a server-issued per-date base token, never the client clock — symmetric with Journal (stale writes rejected, not silently applied)
 - Relational plan structure: session -> blocks -> exercises -> checklist items
 - Relational log structure: session log -> exercise logs -> set logs
 - Canonical exercise slugs link planned exercises to logged exercises and the exercise registry
@@ -242,7 +242,7 @@ checklist_log_items   (id, exercise_log_id, item_text)
 
 **Completion is derived, not stored.** There is no exercise- or session-level `completed`
 column. An exercise's completion is computed at read time from its logged data
-(`mcp_servers/coach_mcp/completion.py`): the read tools return `attempted` (any data logged),
+(`src/modules/coach_completion.py`): the read tools return `attempted` (any data logged),
 `completed` (the planned target met — `None` when the target is unknown), and `progress`
 (`{done, target}`). Rules by type: strength/circuit/weighted_time → done-sets vs `target_sets`;
 checklist → logged items vs planned items; duration/interval → `duration_min` vs

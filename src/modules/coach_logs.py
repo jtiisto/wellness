@@ -13,6 +13,27 @@ from modules.coach_completion import (
 )
 
 
+def should_accept_log_write(stored_last_modified, base_token):
+    """Decide whether an incoming coach log write wins — server-side, WITHOUT
+    consulting any client clock (R1; see plans/phase4-r1-coach-clock-skew.md).
+
+    Both operands are *server-issued* Z-suffixed instants, so the comparison is
+    skew-free and byte-lexical:
+
+    * no existing row (`stored_last_modified is None`) → accept (insert).
+    * existing row, `base_token` present, `stored <= base_token` → accept: the
+      client echoed the latest server stamp it saw, so its edit is newer.
+    * else → reject: either the client missed a newer server write
+      (`stored > base_token`), or it sent no token against an existing row
+      (hard cutover — the token is required to overwrite).
+    """
+    if stored_last_modified is None:
+        return True
+    if base_token is None:
+        return False
+    return stored_last_modified <= base_token
+
+
 def workout_stats(cursor, session_id):
     """Fetch pre/post workout stats for a session from hook result tables.
 

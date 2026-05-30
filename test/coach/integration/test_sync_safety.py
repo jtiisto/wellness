@@ -67,6 +67,25 @@ def _download(client, client_id):
     return resp.json()
 
 
+def _server_token(client, client_id, date):
+    """The server's current `_lastModified` stamp for `date` (the R1 base token)."""
+    return _download(client, client_id)["logs"].get(date, {}).get("_lastModified")
+
+
+def _upload_with_token(client, client_id, date, log):
+    """Upload echoing the server's current stamp as `_baseLastModifiedAt` (R1) —
+    for a 2nd+ write to an existing date so it passes token arbitration."""
+    base = _server_token(client, client_id, date)
+    if base:
+        log["_baseLastModifiedAt"] = base
+    return _upload(client, client_id, date, log)
+
+
+def _reject_dates(result):
+    """Dates in the structured rejectedLogs (`[{date, serverRow}]`) (R1)."""
+    return [r["date"] for r in result.get("rejectedLogs", [])]
+
+
 # ===========================================================================
 # Layer 0: Cache-Control headers
 # ===========================================================================
@@ -96,44 +115,47 @@ class TestCacheControlHeaders:
 
 @pytest.mark.integration
 class TestStaleWriteRejection:
-    def test_stale_timestamp_rejected(self, client, coach_registered_client):
-        """A log with an older _lastModifiedAt than the server's should be rejected."""
+    def test_stale_base_token_rejected(self, client, coach_registered_client):
+        """A log echoing a base token OLDER than the server's stored stamp (the
+        client missed a newer server write) is rejected (R1)."""
         today = datetime.now().strftime("%Y-%m-%d")
 
         # First upload — server stamps its own now as last_modified
         result1 = _upload(client, coach_registered_client, today, _make_log())
         assert today in result1["appliedLogs"]
 
-        # Second upload with a past timestamp — older than server's last_modified
-        result2 = _upload(client, coach_registered_client, today,
-                          _make_log(exercises=False, timestamp=_past_ts()))
-        assert today in result2["rejectedLogs"]
+        # Second upload echoing a stale base — older than the stored stamp
+        stale = _make_log(exercises=False)
+        stale["_baseLastModifiedAt"] = _past_ts()
+        result2 = _upload(client, coach_registered_client, today, stale)
+        assert today in _reject_dates(result2)
         assert today not in result2["appliedLogs"]
 
-    def test_newer_timestamp_accepted(self, client, coach_registered_client):
-        """A log with a newer _lastModifiedAt should overwrite the existing one."""
+    def test_current_base_token_accepted(self, client, coach_registered_client):
+        """A log echoing the server's current stamp as its base token is accepted (R1)."""
         today = datetime.now().strftime("%Y-%m-%d")
 
         # First upload
         _upload(client, coach_registered_client, today, _make_log())
 
-        # Second upload with a future timestamp — newer than server's last_modified
-        result = _upload(client, coach_registered_client, today,
-                         _make_log(timestamp=_future_ts()))
+        # Second upload echoing the current server stamp — accepted
+        result = _upload_with_token(client, coach_registered_client, today, _make_log())
         assert today in result["appliedLogs"]
-        assert today not in result.get("rejectedLogs", [])
+        assert today not in _reject_dates(result)
 
-    def test_missing_timestamp_accepted(self, client, coach_registered_client):
-        """A log without _lastModifiedAt should always be accepted (backward compat)."""
+    def test_missing_token_rejected_for_existing_date(self, client, coach_registered_client):
+        """Hard cutover (R1): a token-absent upload to an EXISTING date is rejected
+        (no compat path); the server returns its current row for in-cycle recovery."""
         today = datetime.now().strftime("%Y-%m-%d")
 
-        # Upload with timestamp first
         _upload(client, coach_registered_client, today, _make_log())
 
-        # Upload without timestamp — should be accepted (no comparison possible)
-        result = _upload(client, coach_registered_client, today,
-                         _make_log(timestamp=None))
-        assert today in result["appliedLogs"]
+        # Upload without a base token — rejected against the existing row
+        result = _upload(client, coach_registered_client, today, _make_log(timestamp=None))
+        assert today in _reject_dates(result)
+        assert today not in result["appliedLogs"]
+        rej = next(r for r in result["rejectedLogs"] if r["date"] == today)
+        assert rej["serverRow"] is not None and "ex_1" in rej["serverRow"]
 
     def test_first_upload_no_existing_accepted(self, client, coach_registered_client):
         """First upload for a date should always succeed regardless of timestamp."""
@@ -150,9 +172,10 @@ class TestStaleWriteRejection:
         _upload(client, coach_registered_client, today,
                 _make_log(exercises=True))
 
-        # Try to overwrite with empty log (stale timestamp)
-        _upload(client, coach_registered_client, today,
-                _make_log(exercises=False, timestamp=_past_ts()))
+        # Try to overwrite with empty log echoing a stale base — rejected
+        stale = _make_log(exercises=False)
+        stale["_baseLastModifiedAt"] = _past_ts()
+        _upload(client, coach_registered_client, today, stale)
 
         # Verify original data is intact
         data = _download(client, coach_registered_client)
@@ -168,19 +191,21 @@ class TestStaleWriteRejection:
         # Upload today first — server stamps now
         _upload(client, coach_registered_client, today, _make_log())
 
-        # Batch: stale today + fresh yesterday
+        # Batch: stale-base today (rejected) + fresh new-date yesterday (accepted)
+        today_stale = _make_log(exercises=False)
+        today_stale["_baseLastModifiedAt"] = _past_ts()
         result = client.post(
             "/api/coach/sync",
             json={
                 "clientId": coach_registered_client,
                 "logs": {
-                    today: _make_log(exercises=False, timestamp=_past_ts()),
-                    yesterday: _make_log(timestamp=_future_ts()),
+                    today: today_stale,
+                    yesterday: _make_log(),
                 },
             },
         ).json()
 
-        assert today in result["rejectedLogs"]
+        assert today in _reject_dates(result)
         assert yesterday in result["appliedLogs"]
 
 
@@ -197,13 +222,14 @@ class TestContentGuard:
         # Upload full workout with exercises
         _upload(client, coach_registered_client, today, _make_log(exercises=True))
 
-        # Upload newer log with only session_feedback (no exercises)
-        result = _upload(client, coach_registered_client, today,
-                         _make_log(exercises=False, timestamp=_future_ts()))
+        # Feedback-only upload with a VALID base token — passes token arbitration,
+        # so it reaches (and is caught by) the content guard.
+        result = _upload_with_token(client, coach_registered_client, today,
+                                    _make_log(exercises=False))
 
         assert today in result["contentRejectedLogs"]
         assert today not in result["appliedLogs"]
-        assert today not in result["rejectedLogs"]
+        assert today not in _reject_dates(result)
 
         # Verify exercise data survived
         data = _download(client, coach_registered_client)
@@ -217,10 +243,10 @@ class TestContentGuard:
         # Upload initial workout
         _upload(client, coach_registered_client, today, _make_log(exercises=True))
 
-        # Upload newer log with exercises — should be accepted
-        new_log = _make_log(exercises=True, timestamp=_future_ts())
+        # Upload newer log with exercises echoing the current token — accepted
+        new_log = _make_log(exercises=True)
         new_log["ex_1"]["user_note"] = "Updated note"
-        result = _upload(client, coach_registered_client, today, new_log)
+        result = _upload_with_token(client, coach_registered_client, today, new_log)
 
         assert today in result["appliedLogs"]
         assert today not in result.get("contentRejectedLogs", [])
@@ -254,9 +280,9 @@ class TestSoftDeleteArchive:
         _upload(client, coach_registered_client, today,
                 _make_log(exercises=True))
 
-        # Upload replacement (future timestamp so it's accepted)
-        _upload(client, coach_registered_client, today,
-                _make_log(exercises=True, timestamp=_future_ts()))
+        # Upload replacement echoing the current token so it's accepted
+        _upload_with_token(client, coach_registered_client, today,
+                           _make_log(exercises=True))
 
         # Check archive tables directly
         conn = sqlite3.connect(tmp_coach_db)
@@ -361,10 +387,9 @@ class TestSoftDeleteArchive:
         """Archive rows within the retention window should NOT be purged."""
         today = datetime.now().strftime("%Y-%m-%d")
 
-        # Upload + overwrite to create a recent archive
+        # Upload + overwrite (echoing the current token) to create a recent archive
         _upload(client, coach_registered_client, today, _make_log())
-        _upload(client, coach_registered_client, today,
-                _make_log(timestamp=_future_ts()))
+        _upload_with_token(client, coach_registered_client, today, _make_log())
 
         # Trigger another sync to run cleanup
         yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
@@ -436,11 +461,6 @@ class TestBatchUploadAtomicity:
 # ===========================================================================
 
 @pytest.mark.integration
-@pytest.mark.xfail(
-    strict=True,
-    reason="R1 not yet implemented: coach still arbitrates on the client clock "
-           "(_lastModifiedAt), not the server-issued _baseLastModifiedAt token.",
-)
 def test_client_behind_clock_still_wins_with_token(client, coach_registered_client):
     """R1 target invariant: a device whose wall clock is an hour BEHIND still has
     its newer edit accepted, because the server compares its own stored stamp
