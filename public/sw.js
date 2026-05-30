@@ -32,6 +32,7 @@ const APP_SHELL_URLS = [
   // Journal module
   B + '/js/journal/JournalView.js',
   B + '/js/journal/store.js',
+  B + '/js/journal/sync-logic.js',
   B + '/js/journal/utils.js',
   B + '/js/journal/components/ConfigScreen.js',
   B + '/js/journal/components/Header.js',

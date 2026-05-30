@@ -128,7 +128,14 @@ class TestJournalForceSync:
 
     @pytest.fixture(autouse=True)
     def load_source(self):
-        self.source = (JS_DIR / "journal" / "store.js").read_text()
+        # The pure dirty-clearing + upload-payload logic now lives in
+        # journal/sync-logic.js (unit-tested in test/js); read both files so
+        # these wiring assertions find the strings regardless of which file they
+        # landed in. The store keeps thin same-named wrappers.
+        self.source = (
+            (JS_DIR / "journal" / "store.js").read_text()
+            + (JS_DIR / "journal" / "sync-logic.js").read_text()
+        )
 
     def test_exports_force_sync(self):
         assert "export async function forceSync(" in self.source
