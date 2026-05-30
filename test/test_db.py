@@ -2,8 +2,16 @@
 from datetime import datetime, timezone
 from pathlib import Path
 
+import sqlite3
+
 import pytest
-from src.modules.db import get_db, get_utc_now, run_migrations, utc_days_ago
+from src.modules.db import (
+    get_db,
+    get_utc_now,
+    immediate_transaction,
+    run_migrations,
+    utc_days_ago,
+)
 
 _SRC_MODULES = Path(__file__).parent.parent / "src" / "modules"
 
@@ -189,3 +197,50 @@ class TestRunMigrations:
             names = _table_names(conn)
             assert "a" in names
             assert "b" not in names
+
+
+class TestImmediateTransaction:
+    """R7 §3.13: immediate_transaction takes the write lock up front."""
+
+    def _make_table(self, db_path):
+        with get_db(db_path) as conn:
+            conn.execute("CREATE TABLE t (id INTEGER)")
+            conn.commit()
+
+    def test_commits_on_success(self, tmp_path):
+        db_path = tmp_path / "t.db"
+        self._make_table(db_path)
+        with get_db(db_path) as conn:
+            with immediate_transaction(conn) as cur:
+                cur.execute("INSERT INTO t (id) VALUES (1)")
+        with get_db(db_path) as conn:
+            assert conn.execute("SELECT COUNT(*) FROM t").fetchone()[0] == 1
+
+    def test_rolls_back_on_exception(self, tmp_path):
+        db_path = tmp_path / "t.db"
+        self._make_table(db_path)
+        with get_db(db_path) as conn:
+            with pytest.raises(RuntimeError):
+                with immediate_transaction(conn) as cur:
+                    cur.execute("INSERT INTO t (id) VALUES (1)")
+                    raise RuntimeError("boom")
+        with get_db(db_path) as conn:
+            assert conn.execute("SELECT COUNT(*) FROM t").fetchone()[0] == 0
+
+    def test_acquires_write_lock_eagerly(self, tmp_path):
+        """A second connection cannot take the write lock while the IMMEDIATE
+        transaction is open — proving the lock is held from BEGIN, not lazily on
+        first write (busy_timeout=0 makes the contender fail fast)."""
+        db_path = tmp_path / "t.db"
+        self._make_table(db_path)
+        with get_db(db_path) as conn_a:
+            with immediate_transaction(conn_a) as cur_a:
+                cur_a.execute("INSERT INTO t (id) VALUES (1)")
+                conn_b = sqlite3.connect(db_path)
+                conn_b.execute("PRAGMA busy_timeout = 0")
+                with pytest.raises(sqlite3.OperationalError):
+                    conn_b.execute("BEGIN IMMEDIATE")
+                conn_b.close()
+        # lock released after commit → writes succeed again
+        with get_db(db_path) as conn:
+            assert conn.execute("SELECT COUNT(*) FROM t").fetchone()[0] == 1
