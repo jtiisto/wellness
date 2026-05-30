@@ -170,6 +170,13 @@ class TestCORS:
         assert resp.status_code == 200
         assert "access-control-allow-origin" in resp.headers
 
+    def test_no_credentials_header(self, client):
+        """Wildcard origins must not advertise credentials (an invalid combo)."""
+        resp = client.get(
+            "/api/modules", headers={"Origin": "http://example.com"}
+        )
+        assert "access-control-allow-credentials" not in resp.headers
+
 
 class TestStaticTraversal:
     """Path-traversal containment for the {file_path:path} static handlers.
