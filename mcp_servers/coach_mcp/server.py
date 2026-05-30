@@ -13,6 +13,9 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+# Shared coach domain logic (src/ is placed on the path by coach_mcp/__init__).
+from modules.coach_plans import assemble_plan
+
 # Legacy pair-suffix pattern: rejects names like "Bench Press (Pair A)" so that
 # pair info is forced through the structured `superset_group` field instead of
 # leaking into canonical_slug.
@@ -248,85 +251,15 @@ def _store_plan_to_db(cursor, date_str, plan, modified_by="mcp"):
 
 
 def _assemble_plan_from_db(cursor, session_id):
-    """Assemble a plan dict from relational tables."""
+    """Fetch the session row and assemble its plan via the shared canonical
+    reader (`coach_plans.assemble_plan`), which both transports delegate to
+    (plans/ phase 3). Returns None if the session does not exist.
+    """
     cursor.execute("SELECT * FROM workout_sessions WHERE id = ?", [session_id])
     session = cursor.fetchone()
     if not session:
         return None
-
-    cursor.execute("""
-        SELECT * FROM session_blocks WHERE session_id = ? ORDER BY position
-    """, [session_id])
-    block_rows = cursor.fetchall()
-
-    blocks = []
-    for br in block_rows:
-        cursor.execute("""
-            SELECT * FROM planned_exercises WHERE block_id = ? ORDER BY position
-        """, [br["id"]])
-        ex_rows = cursor.fetchall()
-
-        exercises = []
-        for er in ex_rows:
-            exercise = {
-                "id": er["exercise_key"],
-                "name": er["name"],
-                "type": er["exercise_type"],
-            }
-            if er["target_sets"] is not None:
-                exercise["target_sets"] = er["target_sets"]
-            if er["target_reps"] is not None:
-                exercise["target_reps"] = er["target_reps"]
-            if er["target_duration_min"] is not None:
-                exercise["target_duration_min"] = er["target_duration_min"]
-            if er["target_duration_sec"] is not None:
-                exercise["target_duration_sec"] = er["target_duration_sec"]
-            if er["rounds"] is not None:
-                exercise["rounds"] = er["rounds"]
-            if er["work_duration_sec"] is not None:
-                exercise["work_duration_sec"] = er["work_duration_sec"]
-            if er["rest_duration_sec"] is not None:
-                exercise["rest_duration_sec"] = er["rest_duration_sec"]
-            if er["guidance_note"]:
-                exercise["guidance_note"] = er["guidance_note"]
-            if er["hide_weight"]:
-                exercise["hide_weight"] = True
-            if er["show_time"]:
-                exercise["show_time"] = True
-            if er["superset_group"]:
-                exercise["superset_group"] = er["superset_group"]
-
-            if er["canonical_slug"]:
-                exercise["canonical_slug"] = er["canonical_slug"]
-
-            if er["exercise_type"] == "checklist":
-                cursor.execute("""
-                    SELECT item_text FROM checklist_items
-                    WHERE exercise_id = ? ORDER BY position
-                """, [er["id"]])
-                exercise["items"] = [r["item_text"] for r in cursor.fetchall()]
-
-            exercises.append(exercise)
-
-        blocks.append({
-            "block_index": br["position"],
-            "block_type": br["block_type"],
-            "title": br["title"],
-            "duration_min": br["duration_min"],
-            "rest_guidance": br["rest_guidance"] or "",
-            "rounds": br["rounds"],
-            "work_duration_sec": br["work_duration_sec"],
-            "rest_duration_sec": br["rest_duration_sec"],
-            "exercises": exercises,
-        })
-
-    return {
-        "day_name": session["day_name"],
-        "location": session["location"],
-        "phase": session["phase"],
-        "total_duration_min": session["duration_min"],
-        "blocks": blocks,
-    }
+    return assemble_plan(cursor, session)
 
 
 def _needs_transform(plan):
