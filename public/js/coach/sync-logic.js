@@ -178,7 +178,11 @@ export function resolveForceSyncLogs(localLogs, serverLogs, earliestDate) {
             const serverTs = serverLog._lastModified || '';
             if (localTs > serverTs) {
                 if (logHasUploadableContent(localLog)) {
-                    uploadLogs[date] = localLog;
+                    // Echo the server's current stamp as the base token so the
+                    // server's token arbitration accepts this forced overwrite (R1).
+                    uploadLogs[date] = serverLog._lastModified
+                        ? { ...localLog, _baseLastModifiedAt: serverLog._lastModified }
+                        : localLog;
                     mergedLogs[date] = localLog;
                     uploaded++;
                 } else {

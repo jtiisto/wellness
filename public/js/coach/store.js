@@ -473,10 +473,12 @@ export async function forceSync() {
         if (!response.ok) throw new Error('Failed to download server data');
         const data = await response.json();
 
-        // Phase 2: Resolve local-vs-server per date (pure last-write-wins merge).
-        const { uploadLogs, mergedLogs, counts } = resolveForceSyncLogs(
+        // Phase 2: Resolve local-vs-server per date (client-side reconcile).
+        const resolved = resolveForceSyncLogs(
             workoutLogs.value, data.logs, data.earliestDate,
         );
+        const { uploadLogs, counts } = resolved;
+        let mergedLogs = resolved.mergedLogs;  // reassigned by the R1 token handling below
         const { uploaded, accepted, skipped } = counts;
 
         // Phase 3: Upload client-winning logs
@@ -505,6 +507,18 @@ export async function forceSync() {
                     message: `Workout data for ${dates} was not overwritten. Fetch the full workout before adding notes.`,
                     duration: 8000,
                 });
+            }
+
+            // Token-rejected (server changed under us, e.g. an MCP write between
+            // our download and upload): adopt the server's returned row (R1).
+            if (uploadResult.rejectedLogs?.length > 0) {
+                debugLog('coach-sync', 'force sync: server rejected stale logs', { rejected: rejectedDates(uploadResult.rejectedLogs) });
+                mergedLogs = adoptRejectedServerRows(mergedLogs, uploadResult.rejectedLogs);
+            }
+
+            // Accepted: advance the per-date base token to the server's stamp.
+            if (uploadResult.appliedLogs?.length > 0) {
+                mergedLogs = applyAcceptedTokens(mergedLogs, uploadResult.appliedLogs, uploadResult.serverTime);
             }
         }
 
