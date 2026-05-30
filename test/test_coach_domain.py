@@ -155,3 +155,32 @@ def test_log_lean_vs_rich_shapes(coach_seeded_database, tmp_coach_db):
     # The shared raw core is identical across transports.
     assert lean["ex_1"].get("sets") == rich["ex_1"].get("sets")
     assert lean["session_feedback"] == rich["session_feedback"]
+
+
+@pytest.mark.unit
+def test_list_scheduled_dates_today_is_injectable(test_app, tmp_coach_db):
+    """coach_queries takes an injected `today`, so its date-window logic is
+    directly unit-testable without depending on the real clock (plans/ phase 3)."""
+    from datetime import date as _date
+    from coach_mcp.config import MCPConfig
+    from coach_mcp.server import DatabaseManager
+    from modules import coach_queries
+
+    conn = sqlite3.connect(tmp_coach_db)
+    for d in ("2026-06-10", "2026-06-20"):
+        conn.execute(
+            "INSERT INTO workout_sessions (date, day_name, last_modified, modified_by) "
+            "VALUES (?, 'X', 't', 't')", (d,)
+        )
+    conn.commit()
+    conn.close()
+
+    db = DatabaseManager(MCPConfig.from_db_path(tmp_coach_db))
+
+    # today=06-01 → default window 06-01 .. +6wk includes both.
+    wide = coach_queries.list_scheduled_dates(db, today=_date(2026, 6, 1))
+    assert "2026-06-10" in wide and "2026-06-20" in wide
+
+    # today=06-15 → window starts 06-15, so 06-10 falls before it.
+    narrow = coach_queries.list_scheduled_dates(db, today=_date(2026, 6, 15))
+    assert "2026-06-10" not in narrow and "2026-06-20" in narrow
