@@ -16,6 +16,9 @@ For each exercise we report three things:
 
 The set-level ``set_logs.completed`` tick remains a reliable, separate signal
 and is left untouched; it is an *input* to the derivation, not part of the bug.
+
+Pure functions, no DB — shared coach domain logic delegated to by the MCP read
+tools and the log assembler (`modules.coach_logs`); see plans/ phase 3.
 """
 
 # Fields whose presence means a set was actually performed.

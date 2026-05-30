@@ -25,6 +25,7 @@ from modules.coach_plans import (
     transform_block_to_exercises as _transform_block_to_exercises,
     transform_block_plan as _transform_block_plan,
 )
+from modules.coach_logs import assemble_log, workout_stats as _get_workout_stats
 
 # Legacy pair-suffix pattern: rejects names like "Bench Press (Pair A)" so that
 # pair info is forced through the structured `superset_group` field instead of
@@ -50,7 +51,7 @@ except ImportError:
         "Install with: pip install fastmcp"
     )
 
-from .completion import derive_exercise_completion, derive_session_completion
+from modules.coach_completion import derive_exercise_completion
 from .config import MCPConfig
 from .exercise_registry import ExerciseRegistry, resolve_plan_exercises
 
@@ -1669,155 +1670,17 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
 # ==================== Log Assembly Helper ====================
 
 
-def _get_workout_stats(cursor, session_id):
-    """Fetch pre/post workout stats for a session from hook result tables.
-
-    Returns a dict with 'pre' and/or 'post' keys, each containing
-    fired_at timestamp, status, and collected data key/value pairs.
-    Returns None if no stats exist for the session.
-    """
-    stats = {}
-    for hook_type, label in (("pre", "pre"), ("post", "post")):
-        cursor.execute(
-            "SELECT id, fired_at, exit_code FROM workout_hook_results "
-            "WHERE session_id = ? AND hook_type = ?",
-            (session_id, hook_type),
-        )
-        row = cursor.fetchone()
-        if not row:
-            continue
-
-        entry = {"fired_at": row["fired_at"]}
-        if row["exit_code"] is not None:
-            entry["status"] = "ok" if row["exit_code"] == 0 else "error"
-        else:
-            entry["status"] = "pending"
-
-        cursor.execute(
-            "SELECT key, value FROM workout_hook_data WHERE result_id = ?",
-            (row["id"],),
-        )
-        data = {r["key"]: r["value"] for r in cursor.fetchall()}
-        if data:
-            entry["data"] = data
-
-        stats[label] = entry
-
-    return stats if stats else None
-
-
 def _assemble_log_from_db(cursor, session_log_id, session_id=None):
-    """Assemble log dict from relational tables."""
+    """Fetch the session-log row and assemble it via the shared canonical reader
+    in its RICH mode (hook workout_stats + per-exercise completion +
+    session_completion rollup for LLM analysis). Returns {} if the log is
+    absent. See coach_logs.assemble_log (plans/ phase 3).
+    """
     cursor.execute("SELECT * FROM workout_session_logs WHERE id = ?", [session_log_id])
     log_row = cursor.fetchone()
     if not log_row:
         return {}
-
-    log = {}
-
-    # Pre/post workout stats (from hook results)
-    if session_id is not None:
-        workout_stats = _get_workout_stats(cursor, session_id)
-        if workout_stats:
-            log["workout_stats"] = workout_stats
-
-    # Session feedback
-    feedback = {}
-    if log_row["pain_discomfort"]:
-        feedback["pain_discomfort"] = log_row["pain_discomfort"]
-    if log_row["general_notes"]:
-        feedback["general_notes"] = log_row["general_notes"]
-    log["session_feedback"] = feedback
-
-    # Exercise logs. Completion is derived from logged data (see completion.py),
-    # joining the planned target so we can report met-target completion.
-    cursor.execute("""
-        SELECT el.*,
-               pe.exercise_type AS pe_exercise_type,
-               pe.target_sets AS pe_target_sets,
-               pe.target_duration_min AS pe_target_duration_min,
-               (SELECT COUNT(*) FROM checklist_items ci
-                  WHERE ci.exercise_id = pe.id) AS planned_items
-        FROM exercise_logs el
-        LEFT JOIN planned_exercises pe ON pe.id = el.exercise_id
-        WHERE el.session_log_id = ?
-    """, [session_log_id])
-    exercise_rows = cursor.fetchall()
-
-    completion_results = []
-    for el in exercise_rows:
-        entry = {}
-        if el["user_note"]:
-            entry["user_note"] = el["user_note"]
-        if el["duration_min"] is not None:
-            entry["duration_min"] = el["duration_min"]
-        if el["avg_hr"] is not None:
-            entry["avg_hr"] = el["avg_hr"]
-        if el["max_hr"] is not None:
-            entry["max_hr"] = el["max_hr"]
-
-        # Sets
-        cursor.execute("""
-            SELECT * FROM set_logs WHERE exercise_log_id = ? ORDER BY set_num
-        """, [el["id"]])
-        sets = cursor.fetchall()
-        if sets:
-            entry["sets"] = []
-            for s in sets:
-                set_dict = {"set_num": s["set_num"]}
-                if s["weight"] is not None:
-                    set_dict["weight"] = s["weight"]
-                if s["reps"] is not None:
-                    set_dict["reps"] = s["reps"]
-                if s["rpe"] is not None:
-                    set_dict["rpe"] = s["rpe"]
-                if s["unit"]:
-                    set_dict["unit"] = s["unit"]
-                if s["duration_sec"] is not None:
-                    set_dict["duration_sec"] = s["duration_sec"]
-                if s["completed"]:
-                    set_dict["completed"] = True
-                entry["sets"].append(set_dict)
-
-        # Checklist items
-        cursor.execute("""
-            SELECT item_text FROM checklist_log_items WHERE exercise_log_id = ?
-        """, [el["id"]])
-        items = cursor.fetchall()
-        if items:
-            entry["completed_items"] = [r["item_text"] for r in items]
-
-        # Derived completion (attempted / met-target / progress)
-        completion = derive_exercise_completion(
-            el["pe_exercise_type"],
-            sets=sets,
-            duration_min=el["duration_min"],
-            logged_items=len(items),
-            planned_items=el["planned_items"],
-            target_sets=el["pe_target_sets"],
-            target_duration_min=el["pe_target_duration_min"],
-        )
-        entry["attempted"] = completion["attempted"]
-        entry["completed"] = completion["completed"]
-        entry["progress"] = completion["progress"]
-        completion_results.append(completion)
-
-        log[el["exercise_key"]] = entry
-
-    # Session-level rollup. Count planned exercises so a planned-but-unlogged
-    # exercise correctly counts against full completion.
-    planned_total = None
-    if session_id is not None:
-        row = cursor.execute(
-            "SELECT COUNT(*) AS n FROM planned_exercises WHERE session_id = ?",
-            [session_id],
-        ).fetchone()
-        planned_total = row["n"] if row else None
-    log["session_completion"] = derive_session_completion(
-        completion_results, planned_total=planned_total
-    )
-
-    return log
+    return assemble_log(cursor, log_row, session_id=session_id, derive_completion=True)
 
 
 def _get_coach_plan_guide() -> str:
