@@ -202,12 +202,20 @@ class TestStoreEarliestDate:
         assert "data.earliestDate" in self.source
 
     def test_prunes_plans_older_than_earliest_date(self):
-        """Should filter out plans older than earliestDate after sync."""
-        assert "prunedPlans" in self.source
+        """Should filter out plans older than earliestDate after sync.
+
+        The pruning rule itself is unit-tested in test/js (pruneOlderThan); here
+        we just assert the store wires it to the plans map.
+        """
+        assert "pruneOlderThan(workoutPlans.value" in self.source
 
     def test_prunes_logs_older_than_earliest_date(self):
-        """Should filter out logs older than earliestDate after sync."""
-        assert "prunedLogs" in self.source
+        """Should filter out logs older than earliestDate after sync.
+
+        The pruning rule itself is unit-tested in test/js (pruneOlderThan); here
+        we just assert the store wires it to the logs map.
+        """
+        assert "pruneOlderThan(workoutLogs.value" in self.source
 
 
 # ==================== Client: CalendarPicker.js ====================

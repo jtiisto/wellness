@@ -95,3 +95,92 @@ export function nextDirtyAfterReject(dirtyDates, dirtyDateGenerations, rejectedD
     for (const d of rejectedDates) delete nextGens[d];
     return { dirtyDates: nextDirty, dirtyDateGenerations: nextGens };
 }
+
+// ---- Force-sync merge + window pruning -----------------------------------
+
+/**
+ * Force-sync per-date resolution (client-side last-write-wins).
+ * For each date across local+server logs, decide upload / accept-server / skip:
+ *   - local-only & older than the window  -> keep local, don't upload (skip)
+ *   - both present, local newer & uploadable -> upload local
+ *   - both present, local newer but empty   -> take server (clobber guard)
+ *   - both present, server newer            -> take server
+ *   - both present, equal timestamp         -> keep local
+ *   - local-only & uploadable               -> upload local
+ *   - local-only & empty                    -> keep local, don't upload
+ *   - server-only                           -> take server
+ *
+ * @returns {{uploadLogs: Object, mergedLogs: Object, counts: {uploaded:number, accepted:number, skipped:number}}}
+ */
+export function resolveForceSyncLogs(localLogs, serverLogs, earliestDate) {
+    const uploadLogs = {};
+    const mergedLogs = {};
+    let uploaded = 0, accepted = 0, skipped = 0;
+    const allDates = new Set([...Object.keys(localLogs), ...Object.keys(serverLogs)]);
+
+    for (const date of allDates) {
+        const localLog = localLogs[date];
+        const serverLog = serverLogs[date];
+
+        if (!serverLog && earliestDate && date < earliestDate) {
+            mergedLogs[date] = localLog;  // local-only outside window
+            skipped++;
+            continue;
+        }
+
+        if (localLog && serverLog) {
+            const localTs = localLog._lastModifiedAt || '';
+            const serverTs = serverLog._lastModified || '';
+            if (localTs > serverTs) {
+                if (logHasUploadableContent(localLog)) {
+                    uploadLogs[date] = localLog;
+                    mergedLogs[date] = localLog;
+                    uploaded++;
+                } else {
+                    mergedLogs[date] = serverLog;  // newer but empty: don't clobber
+                    accepted++;
+                }
+            } else if (serverTs > localTs) {
+                mergedLogs[date] = serverLog;
+                accepted++;
+            } else {
+                mergedLogs[date] = localLog;       // equal: keep local
+                skipped++;
+            }
+        } else if (localLog) {
+            if (logHasUploadableContent(localLog)) {
+                uploadLogs[date] = localLog;
+                mergedLogs[date] = localLog;
+                uploaded++;
+            } else {
+                mergedLogs[date] = localLog;       // local-only empty: keep, no upload
+                skipped++;
+            }
+        } else {
+            mergedLogs[date] = serverLog;
+            accepted++;
+        }
+    }
+
+    return { uploadLogs, mergedLogs, counts: { uploaded, accepted, skipped } };
+}
+
+/** Keep only entries whose date key is >= cutoff (server sync-window boundary). */
+export function pruneOlderThan(dateKeyedMap, cutoff) {
+    const out = {};
+    for (const [date, value] of Object.entries(dateKeyedMap)) {
+        if (date >= cutoff) out[date] = value;
+    }
+    return out;
+}
+
+/** Latest plan `_lastModified` across plans, not below `currentMax`. */
+export function maxPlanVersion(plans, currentMax) {
+    let max = currentMax;
+    for (const plan of Object.values(plans)) {
+        if (plan._lastModified && (!max || plan._lastModified > max)) {
+            max = plan._lastModified;
+        }
+    }
+    return max;
+}

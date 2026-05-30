@@ -9,10 +9,12 @@ import { showNotification } from '../shared/notifications.js';
 import { log as debugLog } from '../shared/debug-log.js';
 import { SyncScheduler } from '../shared/sync-scheduler.js';
 import {
-    logHasUploadableContent,
     nextDirtyAfterApply,
     selectLogsToUpload,
     nextDirtyAfterReject,
+    resolveForceSyncLogs,
+    pruneOlderThan,
+    maxPlanVersion,
 } from './sync-logic.js';
 
 const API_BASE = '/wellness/api/coach';
@@ -374,12 +376,7 @@ async function triggerSync() {
                     ...data.plans
                 };
                 // Track the latest plan version for change detection
-                let maxVersion = lastKnownPlansVersion;
-                for (const plan of Object.values(data.plans)) {
-                    if (plan._lastModified && (!maxVersion || plan._lastModified > maxVersion)) {
-                        maxVersion = plan._lastModified;
-                    }
-                }
+                const maxVersion = maxPlanVersion(data.plans, lastKnownPlansVersion);
                 if (maxVersion) lastKnownPlansVersion = maxVersion;
             }
 
@@ -409,17 +406,8 @@ async function triggerSync() {
             // Prune plans and logs older than the server's sync window
             if (earliestDate.value) {
                 const cutoff = earliestDate.value;
-                const prunedPlans = {};
-                for (const [date, plan] of Object.entries(workoutPlans.value)) {
-                    if (date >= cutoff) prunedPlans[date] = plan;
-                }
-                workoutPlans.value = prunedPlans;
-
-                const prunedLogs = {};
-                for (const [date, log] of Object.entries(workoutLogs.value)) {
-                    if (date >= cutoff) prunedLogs[date] = log;
-                }
-                workoutLogs.value = prunedLogs;
+                workoutPlans.value = pruneOlderThan(workoutPlans.value, cutoff);
+                workoutLogs.value = pruneOlderThan(workoutLogs.value, cutoff);
             }
         });
 
@@ -468,62 +456,11 @@ export async function forceSync() {
         if (!response.ok) throw new Error('Failed to download server data');
         const data = await response.json();
 
-        // Phase 2: Compare logs by timestamp
-        const uploadLogs = {};
-        const mergedLogs = {};
-        let uploaded = 0, accepted = 0, skipped = 0;
-
-        const allDates = new Set([
-            ...Object.keys(workoutLogs.value),
-            ...Object.keys(data.logs)
-        ]);
-
-        for (const date of allDates) {
-            const localLog = workoutLogs.value[date];
-            const serverLog = data.logs[date];
-
-            // Skip local-only logs outside server's sync window
-            if (!serverLog && data.earliestDate && date < data.earliestDate) {
-                mergedLogs[date] = localLog;
-                skipped++;
-                continue;
-            }
-
-            if (localLog && serverLog) {
-                const localTs = localLog._lastModifiedAt || '';
-                const serverTs = serverLog._lastModified || '';
-                if (localTs > serverTs) {
-                    if (logHasUploadableContent(localLog)) {
-                        uploadLogs[date] = localLog;
-                        mergedLogs[date] = localLog;
-                        uploaded++;
-                    } else {
-                        debugLog('coach-sync', 'force sync: skip upload, no exercise data', { date });
-                        mergedLogs[date] = serverLog;
-                        accepted++;
-                    }
-                } else if (serverTs > localTs) {
-                    mergedLogs[date] = serverLog;
-                    accepted++;
-                } else {
-                    mergedLogs[date] = localLog;
-                    skipped++;
-                }
-            } else if (localLog) {
-                if (logHasUploadableContent(localLog)) {
-                    uploadLogs[date] = localLog;
-                    mergedLogs[date] = localLog;
-                    uploaded++;
-                } else {
-                    debugLog('coach-sync', 'force sync: skip upload, no exercise data', { date });
-                    mergedLogs[date] = localLog;
-                    skipped++;
-                }
-            } else {
-                mergedLogs[date] = serverLog;
-                accepted++;
-            }
-        }
+        // Phase 2: Resolve local-vs-server per date (pure last-write-wins merge).
+        const { uploadLogs, mergedLogs, counts } = resolveForceSyncLogs(
+            workoutLogs.value, data.logs, data.earliestDate,
+        );
+        const { uploaded, accepted, skipped } = counts;
 
         // Phase 3: Upload client-winning logs
         const uploadedDates = Object.keys(uploadLogs);
@@ -560,12 +497,7 @@ export async function forceSync() {
             workoutPlans.value = { ...data.plans };
 
             // Track latest plan version for polling
-            let maxVersion = lastKnownPlansVersion;
-            for (const plan of Object.values(data.plans)) {
-                if (plan._lastModified && (!maxVersion || plan._lastModified > maxVersion)) {
-                    maxVersion = plan._lastModified;
-                }
-            }
+            const maxVersion = maxPlanVersion(data.plans, lastKnownPlansVersion);
             if (maxVersion) lastKnownPlansVersion = maxVersion;
 
             // Logs: merged result
