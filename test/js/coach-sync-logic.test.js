@@ -226,6 +226,19 @@ test('pruneOlderThan: keeps dates >= cutoff', () => {
     assert.deepEqual(pruneOlderThan(m, '2026-05-01'), { '2026-05-01': 'b', '2026-05-02': 'c' });
 });
 
+test('resolveForceSyncLogs: forced upload echoes the server stamp as the base token (R1)', () => {
+    const local = { d1: { _lastModifiedAt: '2026-05-02T00:00:00Z', ex_1: { sets: [{ reps: 5 }] } } };
+    const server = { d1: { _lastModified: '2026-05-01T00:00:00Z', ex_1: { sets: [{ reps: 3 }] } } };
+    const { uploadLogs } = resolveForceSyncLogs(local, server, null);
+    assert.equal(uploadLogs.d1._baseLastModifiedAt, '2026-05-01T00:00:00Z');
+});
+
+test('resolveForceSyncLogs: local-only forced upload omits the base token (insert)', () => {
+    const local = { d1: { _lastModifiedAt: '2026-05-02T00:00:00Z', ex_1: { sets: [{ reps: 5 }] } } };
+    const { uploadLogs } = resolveForceSyncLogs(local, {}, null);
+    assert.ok(!('_baseLastModifiedAt' in uploadLogs.d1));
+});
+
 test('maxPlanVersion: latest _lastModified, never below currentMax', () => {
     const plans = {
         d1: { _lastModified: '2026-05-01T00:00:00Z' },
