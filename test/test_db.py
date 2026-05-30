@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
-from src.modules.db import get_db, get_utc_now, utc_days_ago
+from src.modules.db import get_db, get_utc_now, run_migrations, utc_days_ago
 
 _SRC_MODULES = Path(__file__).parent.parent / "src" / "modules"
 
@@ -121,3 +121,71 @@ class TestInstantFormattingRoutedThroughHelpers:
             f"{module_file} formats an instant inline; route it through "
             "db.get_utc_now()/db.utc_days_ago() instead (R5)."
         )
+
+
+def _table_names(conn) -> set:
+    return {r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'")}
+
+
+class TestRunMigrations:
+    """R7: the shared transactional migration runner extracted from journal."""
+
+    def test_applies_in_order_and_stamps_version(self, tmp_path):
+        db_path = tmp_path / "m.db"
+        order = []
+
+        def m1(cur):
+            order.append(1)
+            cur.execute("CREATE TABLE a (id INTEGER)")
+
+        def m2(cur):
+            order.append(2)
+            cur.execute("CREATE TABLE b (id INTEGER)")
+
+        with get_db(db_path) as conn:
+            run_migrations(conn, [(1, m1), (2, m2)], label="test")
+
+        assert order == [1, 2]
+        with get_db(db_path) as conn:
+            assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
+            assert {"a", "b"} <= _table_names(conn)
+            # isolation_level restored to the sqlite3 default after the runner
+            assert conn.isolation_level == ""
+
+    def test_is_idempotent(self, tmp_path):
+        db_path = tmp_path / "m.db"
+        runs = []
+
+        def m1(cur):
+            runs.append("ran")
+            cur.execute("CREATE TABLE a (id INTEGER)")
+
+        migrations = [(1, m1)]
+        with get_db(db_path) as conn:
+            run_migrations(conn, migrations, label="test")
+        with get_db(db_path) as conn:
+            run_migrations(conn, migrations, label="test")  # second run: no-op
+
+        assert runs == ["ran"]  # migration body executed exactly once
+
+    def test_rolls_back_failed_migration_atomically(self, tmp_path):
+        db_path = tmp_path / "m.db"
+
+        def good(cur):
+            cur.execute("CREATE TABLE a (id INTEGER)")
+
+        def boom(cur):
+            cur.execute("CREATE TABLE b (id INTEGER)")  # partial DDL...
+            raise RuntimeError("fail mid-migration")     # ...must be rolled back
+
+        with get_db(db_path) as conn:
+            with pytest.raises(RuntimeError):
+                run_migrations(conn, [(1, good), (2, boom)], label="test")
+
+        with get_db(db_path) as conn:
+            # migration 1 committed (version 1); migration 2 rolled back whole
+            assert conn.execute("PRAGMA user_version").fetchone()[0] == 1
+            names = _table_names(conn)
+            assert "a" in names
+            assert "b" not in names
