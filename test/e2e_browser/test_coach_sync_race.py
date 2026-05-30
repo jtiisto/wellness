@@ -171,8 +171,8 @@ def test_feedback_edit_during_sync_keeps_latest(coach_sync_page, app_server):
     coach.start_workout()
     coach.expand_exercise("KB Goblet Squat")
     page.wait_for_timeout(300)
-    # Fill a set so the log has exercise content — feedback-only logs are
-    # blocked by the content guard and never reach the server.
+    # Fill a set so this case exercises the exercise+feedback path specifically.
+    # (Feedback-only uploads are covered by test_feedback_only_log_reaches_server.)
     coach.fill_set_weight(0, 20)
     page.wait_for_timeout(4000)  # let this sync complete before delaying
 
@@ -199,6 +199,31 @@ def test_feedback_edit_during_sync_keeps_latest(coach_sync_page, app_server):
     # UI still shows final text
     notes_field = page.locator(".feedback-field").filter(has_text="General Notes")
     assert notes_field.locator("textarea").input_value() == "final version"
+
+
+def test_feedback_only_log_reaches_server(coach_sync_page, app_server):
+    """A session-feedback-only edit (no sets/items/duration) must sync to the
+    server, not be silently dropped.
+
+    Regression for the bug where feedback-only dirty dates were skipped from the
+    upload payload but still cleared from dirty state, so the feedback never
+    reached the server and was lost on the next device wipe. The seeded day has a
+    plan but no server-side log, so a feedback-only first upload is accepted.
+    """
+    coach = coach_sync_page
+    page = coach.page
+    today = coach._seed_info["dates"][0]
+
+    coach.start_workout()                       # unlock; adds no log content
+    coach.fill_feedback("General Notes", "solo feedback note")
+    page.wait_for_timeout(5000)                 # debounce (2.5s) + upload
+    page.wait_for_selector(".sync-dot.green", timeout=10000)
+
+    server_log = _get_server_log(app_server, today)
+    assert server_log is not None, "Feedback-only log never reached the server"
+    feedback = server_log.get("session_feedback", {})
+    assert feedback.get("general_notes") == "solo feedback note", (
+        f"Feedback-only log not persisted server-side; server has {feedback!r}")
 
 
 def test_checklist_edit_during_sync_preserves_both(coach_sync_page, app_server):

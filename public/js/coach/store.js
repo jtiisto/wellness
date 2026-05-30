@@ -277,6 +277,23 @@ function logHasExerciseContent(log) {
     });
 }
 
+function hasFeedbackContent(log) {
+    const fb = log.session_feedback;
+    return !!fb && (
+        (fb.pain_discomfort && fb.pain_discomfort.trim()) ||
+        (fb.general_notes && fb.general_notes.trim())
+    );
+}
+
+// A log is worth uploading if it carries real exercise data OR non-empty session
+// feedback. Truly-empty logs are still skipped. Feedback-only logs upload safely:
+// the server's content guard authoritatively rejects (via contentRejectedLogs) a
+// feedback-only payload that would overwrite an existing logged workout, so the
+// client doesn't need to second-guess it here.
+function logHasUploadableContent(log) {
+    return logHasExerciseContent(log) || hasFeedbackContent(log);
+}
+
 // ==================== Sync ====================
 
 async function triggerSync() {
@@ -309,9 +326,11 @@ async function triggerSync() {
                     debugLog('coach-sync', 'skip upload: no local data', { date });
                     return;
                 }
-                // Guard: only upload logs that contain actual exercise data
-                if (!logHasExerciseContent(log)) {
-                    debugLog('coach-sync', 'skip upload: no exercise data', { date });
+                // Guard: skip only truly-empty logs (no exercise data and no
+                // feedback). Feedback-only logs are uploaded; the server's
+                // content guard protects existing workout data.
+                if (!logHasUploadableContent(log)) {
+                    debugLog('coach-sync', 'skip upload: empty log', { date });
                     return;
                 }
                 logsToUpload[date] = log;
@@ -361,7 +380,9 @@ async function triggerSync() {
             }
 
             debugLog('coach-sync', 'upload success', { applied: uploadResult.appliedLogs?.length, rejected: uploadResult.rejectedLogs?.length });
-            uploadedDates = [...meta.dirtyDates];
+            // Clear dirty only for the dates actually sent. A date skipped above
+            // (empty log) must stay dirty rather than be silently cleared.
+            uploadedDates = Object.keys(logsToUpload);
         }
 
         // Step 2: Download new plans and logs
@@ -517,7 +538,7 @@ export async function forceSync() {
                 const localTs = localLog._lastModifiedAt || '';
                 const serverTs = serverLog._lastModified || '';
                 if (localTs > serverTs) {
-                    if (logHasExerciseContent(localLog)) {
+                    if (logHasUploadableContent(localLog)) {
                         uploadLogs[date] = localLog;
                         mergedLogs[date] = localLog;
                         uploaded++;
@@ -534,7 +555,7 @@ export async function forceSync() {
                     skipped++;
                 }
             } else if (localLog) {
-                if (logHasExerciseContent(localLog)) {
+                if (logHasUploadableContent(localLog)) {
                     uploadLogs[date] = localLog;
                     mergedLogs[date] = localLog;
                     uploaded++;
