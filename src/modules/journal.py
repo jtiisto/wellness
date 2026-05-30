@@ -13,7 +13,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict
 
-from modules.db import get_db as _shared_get_db, get_utc_now, register_client as _db_register_client
+from modules.db import get_db as _shared_get_db, get_utc_now, utc_days_ago, register_client as _db_register_client
 
 
 logger = logging.getLogger(__name__)
@@ -191,9 +191,7 @@ def _purge_old_archives(conn):
     Not yet wired in; the call site is added when sync endpoints start writing
     archive rows.
     """
-    cutoff = (
-        datetime.now(timezone.utc) - timedelta(days=ARCHIVE_RETENTION_DAYS)
-    ).isoformat().replace("+00:00", "Z")
+    cutoff = utc_days_ago(ARCHIVE_RETENTION_DAYS)
     cursor = conn.cursor()
     cursor.execute(
         "DELETE FROM entries_archive WHERE superseded_at < ?", (cutoff,)
