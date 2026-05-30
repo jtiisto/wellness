@@ -7,7 +7,7 @@ import pytest
 
 import modules.coach as coach_mod
 from modules.coach_plans import assemble_plan, store_plan
-from coach_mcp.server import _assemble_plan_from_db
+from coach_mcp.server import _assemble_plan_from_db, _assemble_log_from_db
 
 
 def _seed_plan(db_path):
@@ -121,3 +121,37 @@ def test_store_plan_round_trips_via_assemble(test_app, tmp_coach_db):
     assert [e["id"] for e in blk["exercises"]] == ["row_1", "wu"]
     assert blk["exercises"][0]["target_sets"] == 4
     assert blk["exercises"][1]["items"] == ["Band x10"]
+
+
+@pytest.mark.unit
+def test_log_lean_vs_rich_shapes(coach_seeded_database, tmp_coach_db):
+    """§3.15 for logs: both transports share the raw per-exercise core, but the
+    sync path stays LEAN (no derived completion/stats — the PWA derives it) while
+    the MCP path is RICH (adds per-exercise completion + session_completion)."""
+    conn = sqlite3.connect(tmp_coach_db)
+    conn.row_factory = sqlite3.Row
+    log_row = conn.execute(
+        "SELECT * FROM workout_session_logs ORDER BY date DESC LIMIT 1"
+    ).fetchone()
+    sess = conn.execute(
+        "SELECT id FROM workout_sessions WHERE date = ?", (log_row["date"],)
+    ).fetchone()
+    session_id = sess["id"] if sess else None
+
+    lean = coach_mod._assemble_log(conn, log_row)
+    rich = _assemble_log_from_db(conn.cursor(), log_row["id"], session_id)
+    conn.close()
+
+    # Sync shape: feedback + raw entries, NO derived completion / stats.
+    assert "session_feedback" in lean
+    assert "session_completion" not in lean
+    assert "workout_stats" not in lean
+    assert "ex_1" in lean and "completed" not in lean["ex_1"]
+
+    # MCP shape: same raw entries PLUS derived completion.
+    assert "session_completion" in rich
+    assert "ex_1" in rich and "completed" in rich["ex_1"]
+
+    # The shared raw core is identical across transports.
+    assert lean["ex_1"].get("sets") == rich["ex_1"].get("sets")
+    assert lean["session_feedback"] == rich["session_feedback"]

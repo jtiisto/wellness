@@ -16,6 +16,7 @@ from pydantic import BaseModel
 
 from config import get_hook_path
 from modules.coach_plans import assemble_plan
+from modules.coach_logs import assemble_log
 from modules.db import (
     get_db as _shared_get_db,
     get_utc_now,
@@ -335,64 +336,11 @@ def _assemble_plan(conn, session_row):
 
 
 def _assemble_log(conn, log_row):
-    """Assemble log dict from relational tables for sync response."""
-    cursor = conn.cursor()
-    log = {}
-
-    feedback = {}
-    if log_row["pain_discomfort"]:
-        feedback["pain_discomfort"] = log_row["pain_discomfort"]
-    if log_row["general_notes"]:
-        feedback["general_notes"] = log_row["general_notes"]
-    log["session_feedback"] = feedback
-
-    cursor.execute("""
-        SELECT * FROM exercise_logs WHERE session_log_id = ?
-    """, (log_row["id"],))
-
-    for el in cursor.fetchall():
-        entry = {}
-        if el["user_note"]:
-            entry["user_note"] = el["user_note"]
-        if el["duration_min"] is not None:
-            entry["duration_min"] = el["duration_min"]
-        if el["avg_hr"] is not None:
-            entry["avg_hr"] = el["avg_hr"]
-        if el["max_hr"] is not None:
-            entry["max_hr"] = el["max_hr"]
-
-        cursor.execute("""
-            SELECT * FROM set_logs WHERE exercise_log_id = ? ORDER BY set_num
-        """, (el["id"],))
-        sets = cursor.fetchall()
-        if sets:
-            entry["sets"] = []
-            for s in sets:
-                set_dict = {"set_num": s["set_num"]}
-                if s["weight"] is not None:
-                    set_dict["weight"] = s["weight"]
-                if s["reps"] is not None:
-                    set_dict["reps"] = s["reps"]
-                if s["rpe"] is not None:
-                    set_dict["rpe"] = s["rpe"]
-                if s["unit"]:
-                    set_dict["unit"] = s["unit"]
-                if s["duration_sec"] is not None:
-                    set_dict["duration_sec"] = s["duration_sec"]
-                if s["completed"]:
-                    set_dict["completed"] = True
-                entry["sets"].append(set_dict)
-
-        cursor.execute("""
-            SELECT item_text FROM checklist_log_items WHERE exercise_log_id = ?
-        """, (el["id"],))
-        items = cursor.fetchall()
-        if items:
-            entry["completed_items"] = [r["item_text"] for r in items]
-
-        log[el["exercise_key"]] = entry
-
-    return log
+    """Assemble log dict for the sync response (lean shape — the PWA derives
+    completion client-side). Thin adapter over the shared canonical reader
+    `coach_logs.assemble_log` (plans/ phase 3).
+    """
+    return assemble_log(conn.cursor(), log_row)
 
 
 ARCHIVE_RETENTION_DAYS = 14

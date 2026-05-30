@@ -1,4 +1,4 @@
-"""Unit tests for derived workout completion (mcp_servers/coach_mcp/completion.py).
+"""Unit tests for derived workout completion (src/modules/coach_completion.py).
 
 These are pure-function tests — no database. They pin the derive rules from
 docs/plan_workout_completion_derivation.md, including the user's rule that a
@@ -6,7 +6,7 @@ below-target duration is attempted but NOT completed.
 """
 import pytest
 
-from coach_mcp.completion import (
+from modules.coach_completion import (
     set_has_data,
     derive_exercise_completion,
     derive_session_completion,
