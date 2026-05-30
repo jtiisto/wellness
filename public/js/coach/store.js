@@ -8,6 +8,12 @@ import { getToday, getUtcNow, generateId, deepClone } from '../shared/utils.js';
 import { showNotification } from '../shared/notifications.js';
 import { log as debugLog } from '../shared/debug-log.js';
 import { SyncScheduler } from '../shared/sync-scheduler.js';
+import {
+    logHasUploadableContent,
+    nextDirtyAfterApply,
+    selectLogsToUpload,
+    nextDirtyAfterReject,
+} from './sync-logic.js';
 
 const API_BASE = '/wellness/api/coach';
 
@@ -181,26 +187,15 @@ function markDateDirty(date) {
 }
 
 function clearAppliedDirtyDates(appliedDates, snapshotGens) {
-    const meta = { ...syncMetadata.value };
-    const appliedSet = new Set(appliedDates);
-
-    meta.dirtyDates = meta.dirtyDates.filter(date => {
-        if (!appliedSet.has(date)) return true;  // not applied, keep dirty
-        if (snapshotGens && meta.dirtyDateGenerations[date] !== snapshotGens[date]) {
-            return true;  // re-modified during sync, keep dirty
-        }
-        return false;  // applied and not re-modified, clear
-    });
-
-    // Clean up generation counters for dates actually cleared
-    const gens = { ...meta.dirtyDateGenerations };
-    const remaining = new Set(meta.dirtyDates);
-    for (const date of appliedDates) {
-        if (!remaining.has(date)) delete gens[date];
-    }
-    meta.dirtyDateGenerations = gens;
-
-    syncMetadata.value = meta;
+    const meta = syncMetadata.value;
+    const next = nextDirtyAfterApply(
+        appliedDates, snapshotGens, meta.dirtyDates, meta.dirtyDateGenerations,
+    );
+    syncMetadata.value = {
+        ...meta,
+        dirtyDates: next.dirtyDates,
+        dirtyDateGenerations: next.dirtyDateGenerations,
+    };
     saveMetadata();
     updateSyncStatus();
 }
@@ -265,34 +260,8 @@ export const scheduler = new SyncScheduler({
     pollCheckFn
 });
 
-// ==================== Helpers ====================
-
-function logHasExerciseContent(log) {
-    return Object.entries(log).some(([key, val]) => {
-        if (['_lastModifiedAt', '_lastModifiedBy', 'session_feedback'].includes(key)) return false;
-        if (typeof val !== 'object' || val === null) return false;
-        // Completion is derived from data now; an exercise has real content when
-        // it carries logged sets, checked items, or a duration.
-        return val.sets?.length > 0 || val.completed_items?.length > 0 || val.duration_min != null;
-    });
-}
-
-function hasFeedbackContent(log) {
-    const fb = log.session_feedback;
-    return !!fb && (
-        (fb.pain_discomfort && fb.pain_discomfort.trim()) ||
-        (fb.general_notes && fb.general_notes.trim())
-    );
-}
-
-// A log is worth uploading if it carries real exercise data OR non-empty session
-// feedback. Truly-empty logs are still skipped. Feedback-only logs upload safely:
-// the server's content guard authoritatively rejects (via contentRejectedLogs) a
-// feedback-only payload that would overwrite an existing logged workout, so the
-// client doesn't need to second-guess it here.
-function logHasUploadableContent(log) {
-    return logHasExerciseContent(log) || hasFeedbackContent(log);
-}
+// Pure content predicates and dirty-state transitions live in ./sync-logic.js
+// (unit-tested in test/js/coach-sync-logic.test.js).
 
 // ==================== Sync ====================
 
@@ -319,22 +288,10 @@ async function triggerSync() {
 
         // Step 1: Upload dirty logs first
         if (meta.dirtyDates.length > 0) {
-            const logsToUpload = {};
-            meta.dirtyDates.forEach(date => {
-                const log = workoutLogs.value[date];
-                if (!log) {
-                    debugLog('coach-sync', 'skip upload: no local data', { date });
-                    return;
-                }
-                // Guard: skip only truly-empty logs (no exercise data and no
-                // feedback). Feedback-only logs are uploaded; the server's
-                // content guard protects existing workout data.
-                if (!logHasUploadableContent(log)) {
-                    debugLog('coach-sync', 'skip upload: empty log', { date });
-                    return;
-                }
-                logsToUpload[date] = log;
-            });
+            // Pure: include each dirty date whose local log carries uploadable
+            // content (exercise data or feedback); truly-empty/missing logs are
+            // skipped and so stay dirty.
+            const { logsToUpload } = selectLogsToUpload(meta.dirtyDates, workoutLogs.value);
 
             debugLog('coach-sync', 'upload attempt', { dates: meta.dirtyDates, logCount: Object.keys(logsToUpload).length });
 
@@ -357,19 +314,17 @@ async function triggerSync() {
             // Remove rejected dates from dirtyDates — server has newer data
             if (uploadResult.rejectedLogs?.length > 0) {
                 debugLog('coach-sync', 'server rejected stale logs', { rejected: uploadResult.rejectedLogs });
-                meta.dirtyDates = meta.dirtyDates.filter(d => !uploadResult.rejectedLogs.includes(d));
-                for (const d of uploadResult.rejectedLogs) {
-                    delete meta.dirtyDateGenerations[d];
-                }
+                const pruned = nextDirtyAfterReject(meta.dirtyDates, meta.dirtyDateGenerations, uploadResult.rejectedLogs);
+                meta.dirtyDates = pruned.dirtyDates;
+                meta.dirtyDateGenerations = pruned.dirtyDateGenerations;
             }
 
             // Notify user about content-rejected logs (incomplete payload blocked)
             if (uploadResult.contentRejectedLogs?.length > 0) {
                 debugLog('coach-sync', 'server rejected incomplete logs', { rejected: uploadResult.contentRejectedLogs });
-                meta.dirtyDates = meta.dirtyDates.filter(d => !uploadResult.contentRejectedLogs.includes(d));
-                for (const d of uploadResult.contentRejectedLogs) {
-                    delete meta.dirtyDateGenerations[d];
-                }
+                const pruned = nextDirtyAfterReject(meta.dirtyDates, meta.dirtyDateGenerations, uploadResult.contentRejectedLogs);
+                meta.dirtyDates = pruned.dirtyDates;
+                meta.dirtyDateGenerations = pruned.dirtyDateGenerations;
                 const dates = uploadResult.contentRejectedLogs.join(', ');
                 showNotification({
                     type: 'warning',

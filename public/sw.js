@@ -40,6 +40,7 @@ const APP_SHELL_URLS = [
   // Coach module
   B + '/js/coach/CoachView.js',
   B + '/js/coach/store.js',
+  B + '/js/coach/sync-logic.js',
   B + '/js/coach/utils.js',
   B + '/js/coach/components/BlockView.js',
   B + '/js/coach/components/CalendarPicker.js',
