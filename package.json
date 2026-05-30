@@ -1,0 +1,9 @@
+{
+  "name": "wellness",
+  "private": true,
+  "type": "module",
+  "description": "Config-only: enables `node --test test/js/` to import the ESM frontend sync-logic modules. No build step, no runtime dependencies.",
+  "scripts": {
+    "test:js": "node --test test/js/*.test.js"
+  }
+}
