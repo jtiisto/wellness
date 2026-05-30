@@ -6,7 +6,7 @@ import sqlite3
 import pytest
 
 import modules.coach as coach_mod
-from modules.coach_plans import assemble_plan
+from modules.coach_plans import assemble_plan, store_plan
 from coach_mcp.server import _assemble_plan_from_db
 
 
@@ -88,3 +88,36 @@ def test_assemble_plan_shape(test_app, tmp_coach_db):
     assert checklist["items"] == ["Cat-Cow x10"]
     # absent optional fields are omitted, not null
     assert "target_duration_min" not in strength
+
+
+@pytest.mark.unit
+def test_store_plan_round_trips_via_assemble(test_app, tmp_coach_db):
+    """The moved write helpers (store_plan -> insert_block) round-trip through
+    the canonical reader — directly unit-testable now, no MCP boot needed."""
+    plan = {
+        "day_name": "Pull", "location": "Gym", "phase": "Build",
+        "total_duration_min": 50,
+        "blocks": [{
+            "block_type": "strength", "title": "Main", "rest_guidance": "Rest 2 min",
+            "exercises": [
+                {"id": "row_1", "name": "Row", "type": "strength",
+                 "target_sets": 4, "target_reps": "8"},
+                {"id": "wu", "name": "Warmup", "type": "checklist", "items": ["Band x10"]},
+            ],
+        }],
+    }
+    conn = sqlite3.connect(tmp_coach_db)
+    conn.row_factory = sqlite3.Row
+    sid = store_plan(conn.cursor(), "2026-06-01", plan, modified_by="test")
+    conn.commit()
+    row = conn.execute("SELECT * FROM workout_sessions WHERE id = ?", (sid,)).fetchone()
+    got = assemble_plan(conn.cursor(), row)
+    conn.close()
+
+    assert got["day_name"] == "Pull"
+    assert got["total_duration_min"] == 50
+    blk = got["blocks"][0]
+    assert blk["block_type"] == "strength" and blk["rest_guidance"] == "Rest 2 min"
+    assert [e["id"] for e in blk["exercises"]] == ["row_1", "wu"]
+    assert blk["exercises"][0]["target_sets"] == 4
+    assert blk["exercises"][1]["items"] == ["Band x10"]
