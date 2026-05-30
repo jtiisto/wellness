@@ -2,7 +2,9 @@
 Wellness - Unified FastAPI server
 Mounts module API routers and serves the single-page PWA.
 """
+import hashlib
 import importlib
+import json
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -14,7 +16,24 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from config import get_enabled_modules, get_db_path, PUBLIC_DIR
 
 
-SERVER_VERSION = uuid.uuid4().hex[:8]
+def _compute_server_version() -> str:
+    """Cache-bust token derived from the committed build stamp.
+
+    Stable across restarts (so the service worker doesn't re-precache the whole
+    app shell on every boot) and changes only when public/version.json is
+    re-stamped at commit time. Falls back to a random token in dev when
+    version.json is absent.
+    """
+    try:
+        data = json.loads((PUBLIC_DIR / "version.json").read_text())
+        if data.get("buildDate"):
+            return hashlib.sha256(data["buildDate"].encode()).hexdigest()[:8]
+    except (OSError, ValueError, KeyError):
+        pass
+    return uuid.uuid4().hex[:8]
+
+
+SERVER_VERSION = _compute_server_version()
 BASE_PATH = "/wellness"
 
 
