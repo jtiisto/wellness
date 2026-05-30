@@ -16,7 +16,7 @@ from fastapi import APIRouter, HTTPException, Query, Response
 from pydantic import BaseModel
 
 from config import get_hook_path
-from modules.db import get_db as _shared_get_db, get_utc_now, register_client as _db_register_client
+from modules.db import get_db as _shared_get_db, get_utc_now, utc_days_ago, register_client as _db_register_client
 
 logger = logging.getLogger(__name__)
 
@@ -443,13 +443,10 @@ ARCHIVE_RETENTION_DAYS = 14
 
 def _purge_old_archives(cursor):
     """Remove archive rows older than the retention window."""
-    # `superseded_at` is stored Z-suffixed (get_utc_now); this cutoff is
-    # +00:00-suffixed (isoformat). The mismatch is benign: the datetime prefix
-    # dominates the lexical compare, so the suffix only matters at exact-µs
-    # equality, where `<` keeps the row either way. Left as-is deliberately —
-    # the durable fix is centralizing UTC formatting (see plans/ R5); do not
-    # swap formats here in isolation.
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=ARCHIVE_RETENTION_DAYS)).isoformat()
+    # Both `superseded_at` (stored via get_utc_now) and this cutoff are now
+    # Z-suffixed UTC instants from the same formatter, so the lexical compare is
+    # exact (R5 — was the +00:00 vs Z drift documented as deferred bugfix #4/#5).
+    cutoff = utc_days_ago(ARCHIVE_RETENTION_DAYS)
     old_rows = cursor.execute(
         "SELECT id, original_id FROM workout_session_logs_archive WHERE superseded_at < ?",
         (cutoff,)

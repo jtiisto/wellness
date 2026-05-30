@@ -3,12 +3,32 @@ Shared database utilities for wellness modules.
 """
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+
+
+def _iso_z(dt: datetime) -> str:
+    """Format an aware UTC datetime as a Z-suffixed ISO-8601 string.
+
+    The one formatting authority for stored/compared *instants* — keeps
+    get_utc_now() and utc_days_ago() from drifting (see plans/ R5).
+    """
+    return dt.isoformat().replace("+00:00", "Z")
 
 
 def get_utc_now() -> str:
-    """Return current UTC time as ISO-8601 string."""
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    """Return the current UTC time as a Z-suffixed ISO-8601 instant string."""
+    return _iso_z(datetime.now(timezone.utc))
+
+
+def utc_days_ago(n: int) -> str:
+    """Return (now - n days) as a Z-suffixed UTC instant string.
+
+    Same formatter as get_utc_now(); for *instant* cutoffs only (e.g. archive
+    retention windows). Do NOT use this for calendar-date window cutoffs — those
+    are intentionally local date-only comparisons formatted with
+    strftime("%Y-%m-%d") to match the browser's getToday() (see plans/ R5).
+    """
+    return _iso_z(datetime.now(timezone.utc) - timedelta(days=n))
 
 
 @contextmanager
