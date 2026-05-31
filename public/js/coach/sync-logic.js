@@ -77,69 +77,77 @@ export function selectLogsToUpload(dirtyDates, localLogs) {
         const log = localLogs[date];
         if (!log) continue;
         if (!logHasUploadableContent(log)) continue;
-        // Echo the last server stamp as the optimistic-concurrency base token
-        // (R1). A brand-new local date has no `_lastModified`, so the token is
-        // omitted and the server inserts (no conflict).
-        logsToUpload[date] = log._lastModified
-            ? { ...log, _baseLastModifiedAt: log._lastModified }
-            : log;
+        logsToUpload[date] = withBaseTokens(log);
     }
     return { logsToUpload, uploadedDates: Object.keys(logsToUpload) };
 }
 
-/** Dates from the structured rejectedLogs (`[{date, serverRow}]`) (R1). */
-export function rejectedDates(rejectedLogs) {
-    return (rejectedLogs || []).map(r => r.date);
+/**
+ * Echo the last-seen server stamps as base tokens for upload (R3): the day's
+ * `_lastModified` becomes the feedback record's `_baseLastModifiedAt`, and each
+ * exercise's `_lastModified` becomes that exercise's `_baseLastModifiedAt`. A
+ * record with no stamp (a brand-new local date or exercise) omits the token, so
+ * the server inserts it (no conflict). Pure; returns a shallow copy.
+ */
+export function withBaseTokens(log) {
+    const out = {};
+    for (const [key, val] of Object.entries(log)) {
+        if (val && typeof val === 'object' && val._lastModified) {
+            out[key] = { ...val, _baseLastModifiedAt: val._lastModified };
+        } else {
+            out[key] = val;
+        }
+    }
+    if (log._lastModified) out._baseLastModifiedAt = log._lastModified;
+    return out;
 }
 
 /**
- * Advance the per-date base token after an accepted upload. The server stamped
- * every applied date with `serverTime`, so the local log must record that as its
- * `_lastModified` — otherwise the next edit would echo a stale base token and be
- * rejected (R1). Returns a new logs map; only applied dates present locally change.
+ * Adopt the merged server day returned per uploaded date (R3 `results`). For each
+ * date NOT re-modified mid-sync (its generation still matches the pre-sync
+ * snapshot), replace the local log with the reconciled `serverRow` — which embeds
+ * each record's fresh `_lastModified` token. A re-modified date keeps its local
+ * log (it stays dirty and re-uploads next cycle). Replaces R1-2a's
+ * applyAcceptedTokens + adoptRejectedServerRows with one mechanism.
  *
  * @returns {Object} next logs
  */
-export function applyAcceptedTokens(localLogs, appliedDates, serverTime) {
-    if (!appliedDates || appliedDates.length === 0 || !serverTime) return localLogs;
+export function adoptUploadResults(localLogs, results, snapshotGens, dirtyDateGenerations) {
+    if (!results) return localLogs;
     const next = { ...localLogs };
-    for (const date of appliedDates) {
-        if (next[date]) next[date] = { ...next[date], _lastModified: serverTime };
+    for (const [date, serverRow] of Object.entries(results)) {
+        if (!serverRow) continue;
+        if (snapshotGens && dirtyDateGenerations[date] !== snapshotGens[date]) {
+            continue;  // re-modified mid-sync → keep local, stay dirty
+        }
+        next[date] = serverRow;
     }
     return next;
 }
 
 /**
- * Adopt the server's current row for each token-rejected date — R1 in-cycle
- * recovery. The local edit lost the optimistic-concurrency check, so replace it
- * with the server's version (which carries the fresh `_lastModified` base token).
- * `rejectedLogs` is the structured `[{date, serverRow}]`; a null serverRow leaves
- * the local log untouched. Returns a new logs map.
- *
- * @returns {Object} next logs
+ * Force-sync upload payload: stamp the local log's records with the SERVER's
+ * current tokens (`serverLog`'s day + per-exercise `_lastModified`) so each
+ * forced overwrite passes per-record arbitration. A record the server lacks gets
+ * no base (inserted). Distinct from `withBaseTokens` (which echoes the local
+ * log's own last-seen tokens for the normal sync path). Pure shallow copy.
  */
-export function adoptRejectedServerRows(localLogs, rejectedLogs) {
-    if (!rejectedLogs || rejectedLogs.length === 0) return localLogs;
-    const next = { ...localLogs };
-    for (const { date, serverRow } of rejectedLogs) {
-        if (serverRow) next[date] = serverRow;
+export function withServerTokens(localLog, serverLog) {
+    const srv = serverLog || {};
+    const out = {};
+    for (const [key, val] of Object.entries(localLog)) {
+        const srvRec = srv[key];
+        if (val && typeof val === 'object' && srvRec && srvRec._lastModified) {
+            out[key] = { ...val, _baseLastModifiedAt: srvRec._lastModified };
+        } else {
+            out[key] = val;
+        }
     }
-    return next;
+    if (srv._lastModified) out._baseLastModifiedAt = srv._lastModified;
+    return out;
 }
 
-/**
- * Drop server-rejected dates (stale or content-rejected) from dirty state and
- * their generation counters. Same shape for both rejection kinds.
- *
- * @returns {{dirtyDates: string[], dirtyDateGenerations: Object}}
- */
-export function nextDirtyAfterReject(dirtyDates, dirtyDateGenerations, rejectedDates) {
-    const rejectedSet = new Set(rejectedDates);
-    const nextDirty = dirtyDates.filter(d => !rejectedSet.has(d));
-    const nextGens = { ...dirtyDateGenerations };
-    for (const d of rejectedDates) delete nextGens[d];
-    return { dirtyDates: nextDirty, dirtyDateGenerations: nextGens };
-}
+
 
 // ---- Force-sync merge + window pruning -----------------------------------
 
@@ -178,11 +186,10 @@ export function resolveForceSyncLogs(localLogs, serverLogs, earliestDate) {
             const serverTs = serverLog._lastModified || '';
             if (localTs > serverTs) {
                 if (logHasUploadableContent(localLog)) {
-                    // Echo the server's current stamp as the base token so the
-                    // server's token arbitration accepts this forced overwrite (R1).
-                    uploadLogs[date] = serverLog._lastModified
-                        ? { ...localLog, _baseLastModifiedAt: serverLog._lastModified }
-                        : localLog;
+                    // Echo the server's CURRENT per-record tokens so each forced
+                    // overwrite passes per-record arbitration (R3). The reconciled
+                    // day comes back in `results` and is adopted by the caller.
+                    uploadLogs[date] = withServerTokens(localLog, serverLog);
                     mergedLogs[date] = localLog;
                     uploaded++;
                 } else {
@@ -198,7 +205,7 @@ export function resolveForceSyncLogs(localLogs, serverLogs, earliestDate) {
             }
         } else if (localLog) {
             if (logHasUploadableContent(localLog)) {
-                uploadLogs[date] = localLog;
+                uploadLogs[date] = withServerTokens(localLog, undefined);  // local-only → insert
                 mergedLogs[date] = localLog;
                 uploaded++;
             } else {

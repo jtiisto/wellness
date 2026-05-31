@@ -11,13 +11,10 @@ import { SyncScheduler } from '../shared/sync-scheduler.js';
 import {
     nextDirtyAfterApply,
     selectLogsToUpload,
-    nextDirtyAfterReject,
     resolveForceSyncLogs,
     pruneOlderThan,
     maxPlanVersion,
-    rejectedDates,
-    applyAcceptedTokens,
-    adoptRejectedServerRows,
+    adoptUploadResults,
 } from './sync-logic.js';
 
 const API_BASE = '/wellness/api/coach';
@@ -316,44 +313,16 @@ async function triggerSync() {
 
             const uploadResult = await uploadResponse.json();
 
-            // Token-rejected dates: adopt the server's current row in-cycle (R1)
-            // and drop the date from dirty — the local edit lost the optimistic
-            // concurrency check, so the server's version (with its fresh base
-            // token) wins.
-            if (uploadResult.rejectedLogs?.length > 0) {
-                const rejDates = rejectedDates(uploadResult.rejectedLogs);
-                debugLog('coach-sync', 'server rejected stale logs', { rejected: rejDates });
-                workoutLogs.value = adoptRejectedServerRows(workoutLogs.value, uploadResult.rejectedLogs);
-                const pruned = nextDirtyAfterReject(meta.dirtyDates, meta.dirtyDateGenerations, rejDates);
-                meta.dirtyDates = pruned.dirtyDates;
-                meta.dirtyDateGenerations = pruned.dirtyDateGenerations;
-            }
+            // R3: the server reconciled each uploaded date per-record and returned
+            // the merged day in `results[date]` (carrying fresh per-record tokens).
+            // Adopt it for each date not re-modified mid-sync (generation check) —
+            // one mechanism covering accepted upserts AND server-wins records.
+            const results = uploadResult.results || {};
+            workoutLogs.value = adoptUploadResults(
+                workoutLogs.value, results, snapshotGens, meta.dirtyDateGenerations,
+            );
 
-            // Accepted dates: the server stamped them with serverTime — record it
-            // as the per-date base token so the next edit echoes the latest stamp
-            // rather than a stale one (R1).
-            if (uploadResult.appliedLogs?.length > 0) {
-                workoutLogs.value = applyAcceptedTokens(
-                    workoutLogs.value, uploadResult.appliedLogs, uploadResult.serverTime,
-                );
-            }
-
-            // Notify user about content-rejected logs (incomplete payload blocked)
-            if (uploadResult.contentRejectedLogs?.length > 0) {
-                debugLog('coach-sync', 'server rejected incomplete logs', { rejected: uploadResult.contentRejectedLogs });
-                const pruned = nextDirtyAfterReject(meta.dirtyDates, meta.dirtyDateGenerations, uploadResult.contentRejectedLogs);
-                meta.dirtyDates = pruned.dirtyDates;
-                meta.dirtyDateGenerations = pruned.dirtyDateGenerations;
-                const dates = uploadResult.contentRejectedLogs.join(', ');
-                showNotification({
-                    type: 'warning',
-                    title: 'Sync skipped',
-                    message: `Workout data for ${dates} was not overwritten. Fetch the full workout before adding notes.`,
-                    duration: 8000,
-                });
-            }
-
-            debugLog('coach-sync', 'upload success', { applied: uploadResult.appliedLogs?.length, rejected: uploadResult.rejectedLogs?.length });
+            debugLog('coach-sync', 'upload success', { dates: Object.keys(results).length });
             // Clear dirty only for the dates actually sent. A date skipped above
             // (empty log) must stay dirty rather than be silently cleared.
             uploadedDates = Object.keys(logsToUpload);
@@ -492,34 +461,14 @@ export async function forceSync() {
             if (!uploadResponse.ok) throw new Error('Failed to upload logs');
 
             const uploadResult = await uploadResponse.json();
-            if (uploadResult.contentRejectedLogs?.length > 0) {
-                debugLog('coach-sync', 'force sync: server rejected incomplete logs', { rejected: uploadResult.contentRejectedLogs });
-                // Use server data for content-rejected dates instead of local
-                for (const d of uploadResult.contentRejectedLogs) {
-                    if (data.logs[d]) {
-                        mergedLogs[d] = data.logs[d];
-                    }
-                }
-                const dates = uploadResult.contentRejectedLogs.join(', ');
-                showNotification({
-                    type: 'warning',
-                    title: 'Sync skipped',
-                    message: `Workout data for ${dates} was not overwritten. Fetch the full workout before adding notes.`,
-                    duration: 8000,
-                });
-            }
-
-            // Token-rejected (server changed under us, e.g. an MCP write between
-            // our download and upload): adopt the server's returned row (R1).
-            if (uploadResult.rejectedLogs?.length > 0) {
-                debugLog('coach-sync', 'force sync: server rejected stale logs', { rejected: rejectedDates(uploadResult.rejectedLogs) });
-                mergedLogs = adoptRejectedServerRows(mergedLogs, uploadResult.rejectedLogs);
-            }
-
-            // Accepted: advance the per-date base token to the server's stamp.
-            if (uploadResult.appliedLogs?.length > 0) {
-                mergedLogs = applyAcceptedTokens(mergedLogs, uploadResult.appliedLogs, uploadResult.serverTime);
-            }
+            // R3: the server returns the reconciled day per uploaded date in
+            // `results` (merged per-record — forced overwrites applied, any
+            // server-only records preserved, conflicts server-won). Adopt it over
+            // the optimistic local merge so mergedLogs reflects the real outcome.
+            mergedLogs = adoptUploadResults(
+                mergedLogs, uploadResult.results || {}, snapshotGens,
+                syncMetadata.value.dirtyDateGenerations,
+            );
         }
 
         // Apply merged state locally
