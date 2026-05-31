@@ -18,11 +18,6 @@ from .analysis_db import (init_database, create_report, update_report_running,
 from .analysis_queries import get_query, list_queries, build_prompt
 
 
-# Module-level state, set by create_router()
-_db_path: Path = None
-_llm_dir: Path = None
-
-
 # ==================== Claude CLI Execution ====================
 
 QUERY_TIMEOUT = 180  # seconds (default, can be overridden per query)
@@ -48,7 +43,7 @@ def _find_claude_binary() -> str:
     raise FileNotFoundError("claude CLI not found in PATH or ~/.local/bin/claude")
 
 
-async def execute_claude_query(prompt: str, extra_tools: list[str] | None = None, timeout: int | None = None) -> str:
+async def execute_claude_query(prompt: str, extra_tools: list[str] | None = None, timeout: int | None = None, llm_dir: Path | None = None) -> str:
     env = os.environ.copy()
     env["CLAUDECODE"] = ""
 
@@ -69,7 +64,7 @@ async def execute_claude_query(prompt: str, extra_tools: list[str] | None = None
         stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
-        cwd=str(_llm_dir),
+        cwd=str(llm_dir),
         env=env,
     )
 
@@ -90,7 +85,7 @@ async def execute_claude_query(prompt: str, extra_tools: list[str] | None = None
     raw = stdout.decode("utf-8", errors="replace").strip()
 
     # Save full stream for debugging
-    debug_path = Path(_llm_dir) / ".wellness" / "data" / "last_stream.jsonl"
+    debug_path = Path(llm_dir) / ".wellness" / "data" / "last_stream.jsonl"
     try:
         debug_path.write_text(raw)
     except Exception:
@@ -107,12 +102,14 @@ async def execute_claude_query(prompt: str, extra_tools: list[str] | None = None
         return raw, None
 
 
-async def run_report(report_id: int, prompt: str, extra_tools: list[str] | None = None, timeout: int | None = None):
-    """Background task: execute Claude query and update report status."""
-    db_path = str(_db_path)
+async def run_report(report_id: int, prompt: str, extra_tools, timeout, db_path: str, llm_dir: Path):
+    """Background task: execute Claude query and update report status.
+
+    ``db_path`` (a string) and ``llm_dir`` are injected by create_router rather
+    than read from a module global (R2)."""
     update_report_running(db_path, report_id)
     try:
-        response_text, cli_meta = await execute_claude_query(prompt, extra_tools, timeout)
+        response_text, cli_meta = await execute_claude_query(prompt, extra_tools, timeout, llm_dir=llm_dir)
         meta_json = None
         if cli_meta:
             meta_json = json.dumps({
@@ -134,60 +131,6 @@ class SubmitQueryRequest(BaseModel):
     location: str | None = None
 
 
-# ==================== Router ====================
-
-router = APIRouter()
-
-
-@router.get("/queries")
-def api_list_queries():
-    return JSONResponse(content=list_queries())
-
-
-@router.post("/reports")
-async def api_submit_query(req: SubmitQueryRequest):
-    query = get_query(req.query_id)
-    if not query:
-        raise HTTPException(status_code=404, detail=f"Unknown query_id: {req.query_id}")
-    if has_active_report(str(_db_path)):
-        raise HTTPException(status_code=409, detail="A query is already in progress.")
-    prompt = build_prompt(query, req.location)
-    extra_tools = query.get("extra_allowed_tools")
-    timeout = query.get("timeout")
-    report_id = create_report(str(_db_path), query["id"], query["label"], prompt)
-    asyncio.create_task(run_report(report_id, prompt, extra_tools, timeout))
-    return JSONResponse(content={"id": report_id, "status": "pending"}, status_code=201)
-
-
-@router.get("/reports/pending")
-def api_pending_reports():
-    return JSONResponse(content=get_pending_reports(str(_db_path)))
-
-
-@router.get("/reports")
-def api_list_reports():
-    reports = list_reports(str(_db_path))
-    return JSONResponse(content=[
-        {k: r[k] for k in ("id", "query_id", "query_label", "status", "created_at", "completed_at")}
-        for r in reports
-    ])
-
-
-@router.get("/reports/{report_id}")
-def api_get_report(report_id: int):
-    report = get_report(str(_db_path), report_id)
-    if not report:
-        raise HTTPException(status_code=404, detail="Report not found")
-    return JSONResponse(content=report)
-
-
-@router.delete("/reports/{report_id}")
-def api_delete_report(report_id: int):
-    if not delete_report(str(_db_path), report_id):
-        raise HTTPException(status_code=404, detail="Report not found")
-    return JSONResponse(content={"deleted": True})
-
-
 def _get_llm_dir() -> Path:
     """Resolve LLM working directory: env var > .llm-dir file > project root."""
     env_dir = os.environ.get("ANALYSIS_LLM_DIR")
@@ -201,10 +144,57 @@ def _get_llm_dir() -> Path:
 
 
 def create_router(db_path: Path) -> APIRouter:
-    """Factory: set the DB path, initialize tables, and return the router."""
-    global _db_path, _llm_dir
-    _db_path = db_path
-    _llm_dir = _get_llm_dir()
-    init_database(str(db_path))
-    recover_stale_reports(str(db_path))
+    """Factory: capture the DB path + LLM working dir, initialize tables, recover
+    stale reports, and return a fresh router whose handlers close over them
+    (R2 — no module-global state, so two routers can target different DBs in one
+    process). The analysis_db helpers take a string path, so we pass db_path_str."""
+    db_path_str = str(db_path)
+    llm_dir = _get_llm_dir()
+    init_database(db_path_str)
+    recover_stale_reports(db_path_str)
+    router = APIRouter()
+
+    @router.get("/queries")
+    def api_list_queries():
+        return JSONResponse(content=list_queries())
+
+    @router.post("/reports")
+    async def api_submit_query(req: SubmitQueryRequest):
+        query = get_query(req.query_id)
+        if not query:
+            raise HTTPException(status_code=404, detail=f"Unknown query_id: {req.query_id}")
+        if has_active_report(db_path_str):
+            raise HTTPException(status_code=409, detail="A query is already in progress.")
+        prompt = build_prompt(query, req.location)
+        extra_tools = query.get("extra_allowed_tools")
+        timeout = query.get("timeout")
+        report_id = create_report(db_path_str, query["id"], query["label"], prompt)
+        asyncio.create_task(run_report(report_id, prompt, extra_tools, timeout, db_path_str, llm_dir))
+        return JSONResponse(content={"id": report_id, "status": "pending"}, status_code=201)
+
+    @router.get("/reports/pending")
+    def api_pending_reports():
+        return JSONResponse(content=get_pending_reports(db_path_str))
+
+    @router.get("/reports")
+    def api_list_reports():
+        reports = list_reports(db_path_str)
+        return JSONResponse(content=[
+            {k: r[k] for k in ("id", "query_id", "query_label", "status", "created_at", "completed_at")}
+            for r in reports
+        ])
+
+    @router.get("/reports/{report_id}")
+    def api_get_report(report_id: int):
+        report = get_report(db_path_str, report_id)
+        if not report:
+            raise HTTPException(status_code=404, detail="Report not found")
+        return JSONResponse(content=report)
+
+    @router.delete("/reports/{report_id}")
+    def api_delete_report(report_id: int):
+        if not delete_report(db_path_str, report_id):
+            raise HTTPException(status_code=404, detail="Report not found")
+        return JSONResponse(content={"deleted": True})
+
     return router
