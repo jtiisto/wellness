@@ -117,12 +117,34 @@ export function adoptUploadResults(localLogs, results, snapshotGens, dirtyDateGe
     const next = { ...localLogs };
     for (const [date, serverRow] of Object.entries(results)) {
         if (!serverRow) continue;
-        if (snapshotGens && dirtyDateGenerations[date] !== snapshotGens[date]) {
-            continue;  // re-modified mid-sync → keep local, stay dirty
+        const reModified = snapshotGens && dirtyDateGenerations[date] !== snapshotGens[date];
+        if (reModified) {
+            // Re-modified mid-sync: keep the local re-edit (it stays dirty and
+            // re-uploads), but ADVANCE each record's token to the server's stamp
+            // so the next upload echoes a fresh base rather than the stale
+            // pre-sync one (which the now-advanced server would reject, losing the
+            // re-edit). Content is kept; only `_lastModified` tokens move forward.
+            next[date] = advanceRecordTokens(localLogs[date], serverRow);
+        } else {
+            next[date] = serverRow;  // not re-modified → adopt the merged day wholesale
         }
-        next[date] = serverRow;
     }
     return next;
+}
+
+/** Copy the server row's `_lastModified` tokens (day + per-record) onto the local
+ *  log, keeping all local content. For a re-modified-mid-sync date (see
+ *  adoptUploadResults). Pure shallow copy. */
+function advanceRecordTokens(localLog, serverRow) {
+    const out = { ...localLog };
+    if (serverRow._lastModified) out._lastModified = serverRow._lastModified;
+    for (const [key, val] of Object.entries(localLog)) {
+        const srvRec = serverRow[key];
+        if (val && typeof val === 'object' && srvRec && srvRec._lastModified) {
+            out[key] = { ...val, _lastModified: srvRec._lastModified };
+        }
+    }
+    return out;
 }
 
 /**
