@@ -446,6 +446,74 @@ class TestBatchUploadAtomicity:
 
 
 # ===========================================================================
+# R3 per-record merge — the blast-radius wins (multi-device, offline insert, set edit)
+# ===========================================================================
+
+@pytest.mark.integration
+class TestPerRecordMerge:
+    def test_multi_device_merge_preserves_unmentioned(self, client, coach_registered_client):
+        """Headline (failed under the old delete-rebuild): device B uploading
+        {ex_1, ex_3} over server {ex_1, ex_2} merges to {ex_1, ex_2, ex_3} —
+        ex_2 (un-mentioned by B) is preserved, not dropped."""
+        today = datetime.now().strftime("%Y-%m-%d")
+        # Device A establishes {ex_1, ex_2}.
+        a = {"session_feedback": {}, "ex_1": {"sets": [{"set_num": 1, "weight": 100, "reps": 5}]},
+             "ex_2": {"sets": [{"set_num": 1, "weight": 50, "reps": 8}]}}
+        _upload(client, coach_registered_client, today, a)
+
+        # Device B knows only ex_1; edits it and logs a new ex_3.
+        server = _server_day(client, coach_registered_client, today)
+        b = {"session_feedback": {},
+             "ex_1": {"sets": [{"set_num": 1, "weight": 105, "reps": 5}],
+                      "_baseLastModifiedAt": server["ex_1"]["_lastModified"]},
+             "ex_3": {"sets": [{"set_num": 1, "weight": 20, "reps": 12}]},  # new → insert
+             "_baseLastModifiedAt": server["_lastModified"]}
+        day = _results(_upload(client, coach_registered_client, today, b))[today]
+
+        assert "ex_1" in day and "ex_2" in day and "ex_3" in day  # ex_2 preserved!
+        assert day["ex_1"]["sets"][0]["weight"] == 105            # ex_1 updated
+
+    def test_offline_behind_insert_merges(self, client, coach_registered_client):
+        """A behind client (stale day base) that inserts a new exercise AND edits
+        an existing one: the insert applies (no base → no conflict), the stale edit
+        is kept-server, and an un-mentioned exercise is untouched (R3)."""
+        today = datetime.now().strftime("%Y-%m-%d")
+        base = {"session_feedback": {},
+                "ex_1": {"sets": [{"set_num": 1, "weight": 100, "reps": 5}], "user_note": "v1"},
+                "ex_2": {"sets": [{"set_num": 1, "weight": 50, "reps": 8}]}}
+        _upload(client, coach_registered_client, today, base)
+
+        behind = {"session_feedback": {},
+                  "ex_1": {"user_note": "stale edit", "_baseLastModifiedAt": _past_ts()},  # stale → kept
+                  "ex_3": {"sets": [{"set_num": 1, "weight": 20, "reps": 12}]},  # new → insert
+                  "_baseLastModifiedAt": _past_ts()}  # stale day base — must not block ex_3
+        day = _results(_upload(client, coach_registered_client, today, behind))[today]
+
+        assert day["ex_1"]["user_note"] == "v1"   # stale edit rejected (kept server)
+        assert "ex_2" in day                       # untouched
+        assert "ex_3" in day                       # inserted despite the stale day base
+
+    def test_set_edit_replaces_only_that_exercises_sets(self, client, coach_registered_client):
+        """Editing an exercise's sets (here, removing one) replaces that exercise's
+        sets; a different exercise's sets are untouched (R3)."""
+        today = datetime.now().strftime("%Y-%m-%d")
+        log = {"session_feedback": {},
+               "ex_1": {"sets": [{"set_num": i, "weight": 100, "reps": 5} for i in (1, 2, 3)]},
+               "ex_2": {"sets": [{"set_num": 1, "weight": 50, "reps": 8}]}}
+        _upload(client, coach_registered_client, today, log)
+
+        server = _server_day(client, coach_registered_client, today)
+        edit = {"session_feedback": {},
+                "ex_1": {"sets": [{"set_num": i, "weight": 100, "reps": 6} for i in (1, 2)],
+                         "_baseLastModifiedAt": server["ex_1"]["_lastModified"]},
+                "_baseLastModifiedAt": server["_lastModified"]}
+        day = _results(_upload(client, coach_registered_client, today, edit))[today]
+
+        assert len(day["ex_1"]["sets"]) == 2   # ex_1's sets replaced (3 → 2)
+        assert len(day["ex_2"]["sets"]) == 1   # ex_2 untouched
+
+
+# ===========================================================================
 # Server-token arbitration end-to-end (R1 invariants under R3 per-record) — see
 # plans/phase4-r1-coach-clock-skew.md + phase4-r3-coach-upsert.md.
 # ===========================================================================
