@@ -39,7 +39,7 @@ Wellness is a modular, self-hosted health application with three independent mod
 
 ## Design Principles
 
-**Module isolation.** Each module has its own database, API prefix, frontend state, and sync logic. Modules share only the FastAPI process, static file serving, and frontend shell (tab navigation). A module can be disabled without affecting others via `WELLNESS_DISABLED_MODULES`.
+**Module isolation.** Each module has its own database, API prefix, frontend state, and sync logic. Modules share only the FastAPI process, static file serving, and frontend shell (tab navigation). A module can be disabled without affecting others via `WELLNESS_DISABLED_MODULES`. Data-layer isolation is **structural, not by-convention**: each router captures its own injected `DbAccessor` (no module-global DB path), so nothing at module scope can leak one module's — or one instance's — database into another's.
 
 **Offline-first.** The entire app works offline after at least one online visit. The service worker precaches the app shell (HTML, CSS, JS, CDN dependencies). Journal and Coach persist all data locally in IndexedDB via LocalForage. The modules list is cached in localStorage so the app shell loads offline. The Analysis module caches report history and individual reports in LocalForage for offline viewing; new queries require server connectivity and show a toast if unreachable. Sync happens automatically when the server is reachable.
 
@@ -349,11 +349,11 @@ The `public/js/shared/` directory contains cross-module utilities:
 
 ### Backend
 
-**FastAPI** serves as the unified web framework. Each module contributes an `APIRouter` via a factory function (`create_router(db_path)`) that initializes its database and returns the router. The main `server.py` mounts them at `/api/journal`, `/api/coach`, and `/api/analysis`.
+**FastAPI** serves as the unified web framework. Each module contributes an `APIRouter` via a factory function (`create_router(db_path)`) that initializes its database and returns the router. The factory builds a `DbAccessor` (Journal/Coach) or captures the db_path (Analysis) and binds the route handlers to it as closures — the module holds **no mutable global DB path**, so two routers for the same module can target different databases in one process (proven by `test/test_module_isolation.py`). `server.create_app(db_path_overrides=None)` builds the inner ASGI app and mounts every enabled module's router at `/api/journal`, `/api/coach`, and `/api/analysis`; production calls `create_app()` once, while tests call it per-test with temp-path overrides to get fully isolated app+DB instances without poking module state.
 
 **Path-based routing.** The app runs under a `/wellness` URL prefix (`BASE_PATH` in `server.py`). All frontend paths are prefixed (e.g., `/wellness/api/journal/sync`), while backend routes stay at root (`/api/journal/sync`). A `StripPrefixMiddleware` ASGI wrapper strips the prefix from incoming requests, enabling the app to work both behind Tailscale `serve --set-path /wellness` (which also strips the prefix) and via direct access at `localhost:9000/wellness/`. The server injects `$BASE_PATH$` into `sw.js` at serve time for service worker path matching.
 
-**SQLite** is used directly (no ORM) with one database file per module. This keeps modules fully isolated at the data layer and simplifies deployment (no database server required). Foreign key constraints are enforced via `PRAGMA foreign_keys = ON` in the Coach module where relational integrity matters. Both the main server (`get_db`) and Coach MCP configure `PRAGMA busy_timeout = 5000` (5 seconds) to handle concurrent database access gracefully instead of immediately throwing `SQLITE_BUSY`.
+**SQLite** is used directly (no ORM) with one database file per module. This keeps modules fully isolated at the data layer and simplifies deployment (no database server required). Foreign key constraints are enforced via `PRAGMA foreign_keys = ON` in the Coach module where relational integrity matters (the Coach `DbAccessor` is constructed with `foreign_keys=True`). Both the shared `db.get_db` (used directly and through each module's `DbAccessor`) and Coach MCP configure `PRAGMA busy_timeout = 5000` (5 seconds) to handle concurrent database access gracefully instead of immediately throwing `SQLITE_BUSY`.
 
 **Uvicorn** runs the ASGI application. The server control script (`bin/server.sh`) manages the process via PID files and port detection.
 
