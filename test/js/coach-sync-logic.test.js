@@ -131,17 +131,27 @@ test('withServerTokens: stamps local records with the SERVER\'s tokens (force-sy
     assert.ok(!('_baseLastModifiedAt' in out.ex_new));      // server lacks it → insert
 });
 
-test('adoptUploadResults: adopts merged serverRow for non-re-modified dates only', () => {
-    const local = { d1: { ex_1: { local: true } }, d2: { ex_1: { local: true } } };
-    const results = {
-        d1: { ex_1: { server: true, _lastModified: 's1' } },
-        d2: { ex_1: { server: true, _lastModified: 's2' } },
-    };
-    // d2 was re-modified mid-sync (gen advanced) → keep local, stay dirty.
-    const next = adoptUploadResults(local, results, { d1: 1, d2: 1 }, { d1: 1, d2: 2 });
-    assert.deepEqual(next.d1, results.d1);     // adopted
-    assert.deepEqual(next.d2, local.d2);       // kept local (re-modified)
+test('adoptUploadResults: adopts merged serverRow for non-re-modified dates', () => {
+    const local = { d1: { ex_1: { local: true } } };
+    const results = { d1: { ex_1: { server: true, _lastModified: 's1' } } };
+    const next = adoptUploadResults(local, results, { d1: 1 }, { d1: 1 });
+    assert.deepEqual(next.d1, results.d1);                   // adopted wholesale
     assert.deepEqual(local.d1, { ex_1: { local: true } });  // input not mutated
+});
+
+test('adoptUploadResults: re-modified date keeps local content but advances tokens', () => {
+    const local = {
+        d2: { _lastModified: 'old-day', ex_1: { reps: 32, _lastModified: 'old-ex' } },
+    };
+    const results = {
+        d2: { _lastModified: 'srv-day', ex_1: { reps: 28, _lastModified: 'srv-ex' } },
+    };
+    // d2 re-modified mid-sync (gen advanced) → keep local reps (32) but take the
+    // server's tokens, so the next upload echoes a fresh base (the race-loss fix).
+    const next = adoptUploadResults(local, results, { d2: 1 }, { d2: 2 });
+    assert.equal(next.d2.ex_1.reps, 32);                  // local re-edit kept
+    assert.equal(next.d2.ex_1._lastModified, 'srv-ex');   // token advanced
+    assert.equal(next.d2._lastModified, 'srv-day');       // day token advanced
 });
 
 // ---- resolveForceSyncLogs (force-sync LWW merge) -------------------------

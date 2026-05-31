@@ -318,8 +318,13 @@ async function triggerSync() {
             // Adopt it for each date not re-modified mid-sync (generation check) —
             // one mechanism covering accepted upserts AND server-wins records.
             const results = uploadResult.results || {};
+            // Use the LIVE generations (markDateDirty replaces syncMetadata.value,
+            // so `meta` captured at sync start is stale): a date re-modified mid-
+            // sync must be detected here so its re-edit is kept (tokens advanced)
+            // rather than clobbered by the server's now-stale row.
             workoutLogs.value = adoptUploadResults(
-                workoutLogs.value, results, snapshotGens, meta.dirtyDateGenerations,
+                workoutLogs.value, results, snapshotGens,
+                syncMetadata.value.dirtyDateGenerations,
             );
 
             debugLog('coach-sync', 'upload success', { dates: Object.keys(results).length });
