@@ -3,6 +3,8 @@
 import pytest
 import sqlite3
 
+from modules.db import DbAccessor
+
 
 @pytest.mark.unit
 def test_database_tables_created(test_app, tmp_coach_db):
@@ -100,14 +102,13 @@ def test_foreign_keys_enforced(test_app, tmp_coach_db):
 
 
 @pytest.mark.unit
-def test_fresh_db_stamped_at_latest_version(tmp_path, monkeypatch):
+def test_fresh_db_stamped_at_latest_version(tmp_path):
     """A fresh coach DB ends at the latest migration version with WAL on and the
     block interval columns present (added by migration 2)."""
     import modules.coach as coach_mod
     db_path = tmp_path / "coach.db"
-    monkeypatch.setattr(coach_mod, "_db_path", db_path)
 
-    coach_mod.init_database()
+    coach_mod.init_database(DbAccessor(db_path, foreign_keys=True))
 
     conn = sqlite3.connect(db_path)
     assert conn.execute("PRAGMA user_version").fetchone()[0] == len(coach_mod.MIGRATIONS)
@@ -118,16 +119,16 @@ def test_fresh_db_stamped_at_latest_version(tmp_path, monkeypatch):
 
 
 @pytest.mark.unit
-def test_adopts_existing_unversioned_db(tmp_path, monkeypatch):
+def test_adopts_existing_unversioned_db(tmp_path):
     """An existing pre-registry DB (full schema, user_version=0) upgrades cleanly:
     guarded migrations are no-ops, the version is stamped forward, and data is
     untouched. This is the headline 'adopt production DB' safety path (R7)."""
     import modules.coach as coach_mod
     db_path = tmp_path / "coach.db"
-    monkeypatch.setattr(coach_mod, "_db_path", db_path)
+    accessor = DbAccessor(db_path, foreign_keys=True)
 
     # Build the current schema, then simulate the pre-registry state.
-    coach_mod.init_database()
+    coach_mod.init_database(accessor)
     seed = sqlite3.connect(db_path)
     seed.execute("PRAGMA user_version = 0")  # pre-registry: schema present, unversioned
     seed.execute("INSERT INTO meta_sync (key, value) VALUES ('marker', 'keepme')")
@@ -135,7 +136,7 @@ def test_adopts_existing_unversioned_db(tmp_path, monkeypatch):
     seed.close()
 
     # Re-init must adopt without error and preserve data.
-    coach_mod.init_database()
+    coach_mod.init_database(accessor)
 
     conn = sqlite3.connect(db_path)
     assert conn.execute("PRAGMA user_version").fetchone()[0] == len(coach_mod.MIGRATIONS)
