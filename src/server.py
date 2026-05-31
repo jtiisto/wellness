@@ -9,7 +9,7 @@ import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import APIRouter, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 
@@ -43,16 +43,6 @@ async def lifespan(app):
     yield
 
 
-_inner_app = FastAPI(title="Wellness", lifespan=lifespan)
-
-_inner_app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-
 class StripPrefixMiddleware:
     """ASGI middleware that strips BASE_PATH prefix from incoming requests.
 
@@ -78,37 +68,12 @@ class StripPrefixMiddleware:
         await self.app(scope, receive, send)
 
 
-app = StripPrefixMiddleware(_inner_app, BASE_PATH)
-
-
-# ==================== Module Registration ====================
-
-_enabled_modules = get_enabled_modules()
-
-# Each module declares its router factory as "module.path:function" in config.
-# Adding a module is a config-only change — no edit needed here.
-for _module in _enabled_modules:
-    _db = get_db_path(_module)
-    _module_path, _factory_name = _module["router_factory"].split(":")
-    _create_router = getattr(importlib.import_module(_module_path), _factory_name)
-    _inner_app.include_router(_create_router(_db), prefix=_module["api_prefix"])
-
-
-# ==================== API Endpoints ====================
-
-@_inner_app.get("/api/modules")
-def list_modules():
-    """Return list of enabled modules for the frontend."""
-    return JSONResponse(content=[
-        {"id": m["id"], "name": m["name"], "icon": m["icon"], "color": m["color"]}
-        for m in _enabled_modules
-    ])
-
-
 # ==================== Static File Serving ====================
 # Backend routes stay at root. The StripPrefixMiddleware handles stripping
 # /wellness from incoming requests, so the app works both directly and behind
-# Tailscale serve --set-path.
+# Tailscale serve --set-path. These handlers read only module-level state
+# (PUBLIC_DIR, SERVER_VERSION, BASE_PATH), so they live on a shared router that
+# every app built by create_app() mounts.
 
 
 def _safe_static_file(subdir: str, file_path: str) -> Path:
@@ -131,7 +96,10 @@ def _safe_static_file(subdir: str, file_path: str) -> Path:
     return candidate
 
 
-@_inner_app.get("/")
+static_router = APIRouter()
+
+
+@static_router.get("/")
 def serve_root():
     """Serve the main index.html with cache-busting version injected."""
     index_path = PUBLIC_DIR / "index.html"
@@ -148,7 +116,7 @@ def serve_root():
     )
 
 
-@_inner_app.get("/styles.css")
+@static_router.get("/styles.css")
 def serve_css():
     """Serve the stylesheet."""
     css_path = PUBLIC_DIR / "styles.css"
@@ -161,7 +129,7 @@ def serve_css():
     raise HTTPException(status_code=404, detail="styles.css not found")
 
 
-@_inner_app.get("/js/{file_path:path}")
+@static_router.get("/js/{file_path:path}")
 def serve_js(file_path: str):
     """Serve JavaScript files."""
     return FileResponse(
@@ -171,7 +139,7 @@ def serve_js(file_path: str):
     )
 
 
-@_inner_app.get("/manifest.json")
+@static_router.get("/manifest.json")
 def serve_manifest():
     """Serve the PWA manifest."""
     manifest_path = PUBLIC_DIR / "manifest.json"
@@ -184,7 +152,7 @@ def serve_manifest():
     raise HTTPException(status_code=404, detail="manifest.json not found")
 
 
-@_inner_app.get("/version.json")
+@static_router.get("/version.json")
 def serve_version():
     """Serve the build version stamp (written by pre-commit hook)."""
     version_path = PUBLIC_DIR / "version.json"
@@ -197,7 +165,7 @@ def serve_version():
     raise HTTPException(status_code=404, detail="version.json not found")
 
 
-@_inner_app.get("/sw.js")
+@static_router.get("/sw.js")
 def serve_sw():
     """Serve the service worker with version injected for cache invalidation."""
     sw_path = PUBLIC_DIR / "sw.js"
@@ -218,7 +186,7 @@ def serve_sw():
     )
 
 
-@_inner_app.get("/fonts/{file_path:path}")
+@static_router.get("/fonts/{file_path:path}")
 def serve_fonts(file_path: str):
     """Serve font files."""
     return FileResponse(
@@ -228,7 +196,7 @@ def serve_fonts(file_path: str):
     )
 
 
-@_inner_app.get("/icons/{file_path:path}")
+@static_router.get("/icons/{file_path:path}")
 def serve_icons(file_path: str):
     """Serve icon files."""
     icon_path = _safe_static_file("icons", file_path)
@@ -242,6 +210,55 @@ def serve_icons(file_path: str):
         media_type=media_type,
         headers={"Cache-Control": "public, max-age=31536000, immutable"}
     )
+
+
+# ==================== App Factory ====================
+
+
+def create_app(db_path_overrides=None):
+    """Build a fully-wired Wellness ASGI app.
+
+    Each enabled module declares its router factory as "module.path:function" in
+    config; the factory takes a db_path and returns an APIRouter whose handlers
+    capture that path (R2 — no module-global DB path). Adding a module is a
+    config-only change.
+
+    ``db_path_overrides`` maps a module id ("journal"/"coach"/"analysis") to a
+    DB path that supersedes the configured one. Production calls
+    ``create_app()`` with no overrides; tests pass per-test temp paths so each
+    test gets a fully isolated app+DB without poking module globals.
+    """
+    inner_app = FastAPI(title="Wellness", lifespan=lifespan)
+
+    inner_app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    overrides = db_path_overrides or {}
+    enabled_modules = get_enabled_modules()
+    for module in enabled_modules:
+        db = overrides.get(module["id"], get_db_path(module))
+        module_path, factory_name = module["router_factory"].split(":")
+        create_router = getattr(importlib.import_module(module_path), factory_name)
+        inner_app.include_router(create_router(db), prefix=module["api_prefix"])
+
+    @inner_app.get("/api/modules")
+    def list_modules():
+        """Return list of enabled modules for the frontend."""
+        return JSONResponse(content=[
+            {"id": m["id"], "name": m["name"], "icon": m["icon"], "color": m["color"]}
+            for m in enabled_modules
+        ])
+
+    inner_app.include_router(static_router)
+
+    return StripPrefixMiddleware(inner_app, BASE_PATH)
+
+
+app = create_app()
 
 
 if __name__ == "__main__":

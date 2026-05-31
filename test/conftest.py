@@ -86,42 +86,32 @@ def test_app(tmp_path, tmp_journal_db, tmp_coach_db, tmp_analysis_db, monkeypatc
         return sig + ihdr + idat + iend
     (icons_dir / "icon-192.png").write_bytes(_make_png())
 
-    # Set env vars so modules pick up temp DBs
+    # Env vars guard the one-time module-level `app = create_app()` that runs on
+    # first `import server`: if this fixture is the first importer, they keep that
+    # production-app build off the real data/ DBs. The per-test app below is built
+    # explicitly with temp-path overrides, so it doesn't depend on these.
     monkeypatch.setenv("JOURNAL_DB_PATH", str(tmp_journal_db))
     monkeypatch.setenv("COACH_DB_PATH", str(tmp_coach_db))
     monkeypatch.setenv("ANALYSIS_DB_PATH", str(tmp_analysis_db))
 
-    # Patch PUBLIC_DIR in config before server imports it
+    # Patch PUBLIC_DIR before building the app (the static handlers read the
+    # server module-global, which we patch below).
     import config
     monkeypatch.setattr(config, "PUBLIC_DIR", public_dir)
 
-    # Force re-import of server module so it picks up patched config
-    # We need to build a fresh app each time
-    import importlib
-    import modules.journal as journal_mod
-    import modules.coach as coach_mod
-    import modules.analysis as analysis_mod
-
-    # Reset module-level DB paths and reinitialize databases
-    journal_mod._db_path = tmp_journal_db
-    journal_mod.init_database()
-
-    coach_mod._db_path = tmp_coach_db
-    coach_mod.init_database()
-
-    # Analysis uses string paths
-    from modules.analysis_db import init_database as init_analysis_db
-    init_analysis_db(str(tmp_analysis_db))
-    analysis_mod._db_path = tmp_analysis_db
-
-    # Now import the server (which has module routers already mounted).
-    # Since routers are already mounted at import time, we just need to patch the
-    # module-level vars. The routers use the module-level _db_path, which we've
-    # already set above.
     import server
     monkeypatch.setattr(server, "PUBLIC_DIR", public_dir)
 
-    yield server.app
+    # Build a fresh, fully-wired app pointed at this test's isolated temp DBs
+    # via create_app's per-module overrides (R2) — no module-global poking. Each
+    # module's create_router initializes its own temp DB.
+    app = server.create_app(db_path_overrides={
+        "journal": tmp_journal_db,
+        "coach": tmp_coach_db,
+        "analysis": tmp_analysis_db,
+    })
+
+    yield app
 
 
 @pytest.fixture(scope="function")
