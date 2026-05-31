@@ -1,8 +1,7 @@
 """Unit tests for derived workout completion (src/modules/coach_completion.py).
 
-These are pure-function tests — no database. They pin the derive rules from
-docs/plan_workout_completion_derivation.md, including the user's rule that a
-below-target duration is attempted but NOT completed.
+These are pure-function tests — no database. They pin the derive rules,
+including the rule that a below-target duration is attempted but NOT completed.
 """
 import pytest
 

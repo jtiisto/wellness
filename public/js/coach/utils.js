@@ -181,8 +181,7 @@ export function getExerciseProgress(exercise, logData) {
  * Check if an exercise is completed, derived from logged data.
  *
  * Completion is always derived from what was logged — there is no stored
- * `completed` flag any more (it was unreliable; see
- * docs/plan_workout_completion_derivation.md). Set-based types (strength,
+ * `completed` flag any more (it was unreliable). Set-based types (strength,
  * circuit, weighted_time) are complete once target sets are logged; checklist
  * once all items are checked; cardio once a duration is logged.
  */

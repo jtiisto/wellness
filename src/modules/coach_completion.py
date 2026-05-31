@@ -5,7 +5,7 @@ items, and cardio duration — not read from a stored exercise-level flag. The
 legacy ``exercise_logs.completed`` column was unreliable: the PWA header
 checkbox is display-derived for strength/checklist/duration, so it auto-shows
 checked and the user never toggles it, leaving the stored flag 0 on real,
-fully-logged work. See ``docs/plan_workout_completion_derivation.md``.
+fully-logged work.
 
 For each exercise we report three things:
 
