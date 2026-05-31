@@ -32,6 +32,7 @@ ship-bin   backup-databases.sh
 # ---- Intentionally NOT shipped (dev/test/docs/config) ----
 exclude    docs
 exclude    test
+exclude    githooks
 exclude    README.md
 exclude    .gitignore
 exclude    .coveragerc

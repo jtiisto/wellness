@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Pre-commit hook: run fast unit tests, then stamp version file
+set -e
+
+echo "Running unit tests..."
+python3 -m pytest test/ -m "unit or not (integration or e2e)" --ignore=test/integration --cov=src --cov=mcp_servers --cov-report=term-missing 2>&1
+
+# Stamp version.json with build date.
+BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+VERSION_FILE="public/version.json"
+
+cat > "$VERSION_FILE" <<EOF
+{"buildDate":"${BUILD_DATE}"}
+EOF
+
+git add "$VERSION_FILE"
+
+echo "Pre-commit checks passed."
