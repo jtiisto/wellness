@@ -10,6 +10,8 @@ import pytest
 import time
 from datetime import datetime, timezone
 
+from modules.db import get_db
+
 
 def _upload(client, client_id, *, config=None, days=None):
     """Helper: post a sync_update and return the parsed response body."""
@@ -241,10 +243,8 @@ class TestSyncUpdateClockSkewAndArchive:
             "comparator must use the server-issued base token, not client wall clock"
         )
 
-    def test_archive_row_inserted_on_overwrite(self, client, journal_registered_client, sample_tracker):
+    def test_archive_row_inserted_on_overwrite(self, client, journal_registered_client, sample_tracker, tmp_journal_db):
         """Overwriting a tracker should snapshot the prior row into trackers_archive."""
-        import modules.journal as journal
-
         data = _upload(client, journal_registered_client, config=[sample_tracker])
         stamp = data["acceptedTrackers"][0]["lastModifiedAt"]
 
@@ -252,7 +252,7 @@ class TestSyncUpdateClockSkewAndArchive:
         update = {**sample_tracker, "name": "After", "_baseLastModifiedAt": stamp}
         _upload(client, journal_registered_client, config=[update])
 
-        with journal.get_db() as conn:
+        with get_db(tmp_journal_db) as conn:
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT tracker_id, name, last_modified_at, superseded_at "
@@ -264,10 +264,8 @@ class TestSyncUpdateClockSkewAndArchive:
             assert archived[0]["name"] == sample_tracker["name"]  # the OLD name
             assert archived[0]["last_modified_at"] == stamp
 
-    def test_archive_row_inserted_on_entry_overwrite(self, client, journal_registered_client, sample_tracker):
+    def test_archive_row_inserted_on_entry_overwrite(self, client, journal_registered_client, sample_tracker, tmp_journal_db):
         """Overwriting an entry should snapshot the prior value into entries_archive."""
-        import modules.journal as journal
-
         _upload(client, journal_registered_client, config=[sample_tracker])
         today = datetime.now().strftime("%Y-%m-%d")
         data = _upload(
@@ -282,7 +280,7 @@ class TestSyncUpdateClockSkewAndArchive:
             days={today: {sample_tracker["id"]: {"value": 9, "_baseLastModifiedAt": stamp}}},
         )
 
-        with journal.get_db() as conn:
+        with get_db(tmp_journal_db) as conn:
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT value, last_modified_at FROM entries_archive "

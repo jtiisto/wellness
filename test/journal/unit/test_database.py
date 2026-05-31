@@ -2,33 +2,20 @@
 import pytest
 import sqlite3
 
+from modules.db import get_db
 
-@pytest.mark.unit
-class TestGetDb:
-    def test_returns_connection_with_row_factory(self, test_app):
-        """get_db should return connection with sqlite3.Row factory."""
-        import modules.journal as journal
-        with journal.get_db() as conn:
-            assert conn.row_factory == sqlite3.Row
-
-    def test_connection_closes_after_context(self, test_app):
-        """Connection should be closed after context manager exits."""
-        import modules.journal as journal
-        conn_ref = None
-        with journal.get_db() as conn:
-            conn_ref = conn
-            cursor = conn.cursor()
-            cursor.execute("SELECT 1")
-        with pytest.raises(sqlite3.ProgrammingError):
-            conn_ref.execute("SELECT 1")
+# get_db()'s own behavior (Row factory, auto-close, busy_timeout) is covered by
+# test_db.py; journal now connects through the shared db.get_db(path) directly,
+# so these tests open the test's journal DB by its temp path (R2 — no module
+# global to bind a no-arg get_db()).
 
 
 @pytest.mark.unit
 class TestInitDatabase:
-    def test_creates_all_required_tables(self, test_app):
+    def test_creates_all_required_tables(self, test_app, tmp_journal_db):
         """init_database should create all required tables."""
         import modules.journal as journal
-        with journal.get_db() as conn:
+        with get_db(tmp_journal_db) as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
             tables = {row[0] for row in cursor.fetchall()}
@@ -36,17 +23,17 @@ class TestInitDatabase:
         expected_tables = {'clients', 'meta_sync', 'trackers', 'entries', 'sync_conflicts'}
         assert expected_tables.issubset(tables)
 
-    def test_init_enables_wal(self, test_app):
+    def test_init_enables_wal(self, test_app, tmp_journal_db):
         """init_database switches the journal DB to WAL journal mode (R7)."""
         import modules.journal as journal
-        with journal.get_db() as conn:
+        with get_db(tmp_journal_db) as conn:
             mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
         assert mode.lower() == "wal"
 
-    def test_creates_required_indexes(self, test_app):
+    def test_creates_required_indexes(self, test_app, tmp_journal_db):
         """init_database should create performance indexes."""
         import modules.journal as journal
-        with journal.get_db() as conn:
+        with get_db(tmp_journal_db) as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT name FROM sqlite_master WHERE type='index'")
             indexes = {row[0] for row in cursor.fetchall()}
@@ -60,10 +47,10 @@ class TestInitDatabase:
         }
         assert expected_indexes.issubset(indexes)
 
-    def test_trackers_table_has_versioning_columns(self, test_app):
+    def test_trackers_table_has_versioning_columns(self, test_app, tmp_journal_db):
         """trackers table should have versioning columns."""
         import modules.journal as journal
-        with journal.get_db() as conn:
+        with get_db(tmp_journal_db) as conn:
             cursor = conn.cursor()
             cursor.execute("PRAGMA table_info(trackers)")
             columns = {row[1] for row in cursor.fetchall()}
@@ -73,10 +60,10 @@ class TestInitDatabase:
         assert 'last_modified_at' in columns
         assert 'deleted' in columns
 
-    def test_archive_tables_exist(self, test_app):
+    def test_archive_tables_exist(self, test_app, tmp_journal_db):
         """Migration 2 should create archive tables with the expected columns."""
         import modules.journal as journal
-        with journal.get_db() as conn:
+        with get_db(tmp_journal_db) as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
             tables = {row[0] for row in cursor.fetchall()}
@@ -97,16 +84,16 @@ class TestInitDatabase:
                 'deleted', 'last_modified_at', 'superseded_at',
             }
 
-    def test_user_version_set_to_latest_migration(self, test_app):
+    def test_user_version_set_to_latest_migration(self, test_app, tmp_journal_db):
         """PRAGMA user_version should reflect the latest applied migration."""
         import modules.journal as journal
-        with journal.get_db() as conn:
+        with get_db(tmp_journal_db) as conn:
             cursor = conn.cursor()
             current = cursor.execute("PRAGMA user_version").fetchone()[0]
             expected = max(v for v, _ in journal.MIGRATIONS)
             assert current == expected
 
-    def test_purge_old_archives_removes_aged_rows(self, test_app):
+    def test_purge_old_archives_removes_aged_rows(self, test_app, tmp_journal_db):
         """_purge_old_archives should delete archive rows older than the retention window in both archive tables."""
         import modules.journal as journal
         from datetime import datetime, timedelta, timezone
@@ -114,7 +101,7 @@ class TestInitDatabase:
         old_ts = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat().replace("+00:00", "Z")
         fresh_ts = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat().replace("+00:00", "Z")
 
-        with journal.get_db() as conn:
+        with get_db(tmp_journal_db) as conn:
             cursor = conn.cursor()
             # entries_archive: one old, one fresh
             cursor.execute(

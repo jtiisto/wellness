@@ -1,6 +1,8 @@
 """Integration tests for POST /api/journal/sync/register endpoint."""
 import pytest
 
+from modules.db import get_db
+
 
 @pytest.mark.integration
 class TestSyncRegister:
@@ -44,13 +46,12 @@ class TestSyncRegister:
         response = client.post("/api/journal/sync/register")
         assert response.status_code == 422
 
-    def test_default_name_generated(self, client):
+    def test_default_name_generated(self, client, tmp_journal_db):
         """Should generate default name from client ID prefix."""
-        import modules.journal as journal
         client_id = "abcd1234-5678-90ab-cdef"
         client.post(f"/api/journal/sync/register?client_id={client_id}")
 
-        with journal.get_db() as conn:
+        with get_db(tmp_journal_db) as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT name FROM clients WHERE id = ?", (client_id,))
             row = cursor.fetchone()

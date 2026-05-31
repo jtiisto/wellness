@@ -6,6 +6,7 @@ import pytest
 
 from journal_mcp.server import QueryValidator, create_mcp_server
 from journal_mcp.config import MCPConfig
+from modules.db import get_db
 
 
 # ==================== Unit Tests ====================
@@ -161,9 +162,8 @@ class TestJournalMCPTools:
         Historical analysis prompts need to see retired trackers to attribute
         their entries correctly.
         """
-        import modules.journal as journal
         # Mark the seeded tracker as deleted directly in the DB
-        with journal.get_db() as conn:
+        with get_db(self.db_path) as conn:
             conn.execute(
                 "UPDATE trackers SET deleted = 1 WHERE id = ?",
                 (self.seed_data["tracker"]["id"],),
@@ -201,10 +201,9 @@ class TestJournalMCPTools:
         Each entry carries `tracker_deleted` so the analysis prompt can
         distinguish entries from a now-retired tracker.
         """
-        import modules.journal as journal
         dates = self.seed_data["dates"]
 
-        with journal.get_db() as conn:
+        with get_db(self.db_path) as conn:
             conn.execute(
                 "UPDATE trackers SET deleted = 1 WHERE id = ?",
                 (self.seed_data["tracker"]["id"],),

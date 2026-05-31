@@ -9,6 +9,8 @@ import pytest
 import time
 from datetime import datetime, timedelta, timezone
 
+from modules.db import get_db
+
 
 def _upload(client, client_id, *, config=None, days=None):
     payload = {
@@ -181,11 +183,9 @@ class TestSyncDeltaDeletedTrackerFiltering:
             assert sample_tracker["id"] not in date_entries
 
     def test_entries_for_deleted_tracker_still_in_server_db(
-        self, client, journal_registered_client, sample_tracker
+        self, client, journal_registered_client, sample_tracker, tmp_journal_db
     ):
         """Entries persist server-side for MCP; only the sync delta filters them."""
-        import modules.journal as journal
-
         data1 = _upload(client, journal_registered_client, config=[sample_tracker])
         tracker_stamp = data1["acceptedTrackers"][0]["lastModifiedAt"]
 
@@ -198,7 +198,7 @@ class TestSyncDeltaDeletedTrackerFiltering:
                 config=[{**sample_tracker, "_deleted": True,
                          "_baseLastModifiedAt": tracker_stamp}])
 
-        with journal.get_db() as conn:
+        with get_db(tmp_journal_db) as conn:
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT value FROM entries WHERE date = ? AND tracker_id = ?",
