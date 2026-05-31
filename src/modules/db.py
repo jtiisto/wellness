@@ -51,6 +51,25 @@ def get_db(db_path, foreign_keys=False):
         conn.close()
 
 
+class DbAccessor:
+    """An explicit, injected handle to a module's database (R2).
+
+    Replaces the per-module mutable `_db_path` module-global: `create_router`
+    builds one and the route handlers capture it, so two instances can coexist
+    in one process and tests isolate by constructing accessors rather than poking
+    globals. Wraps the shared `get_db` semantics (busy_timeout, optional foreign
+    keys); `.path` exposes the path for callers that take it as a string
+    (e.g. the analysis module's `analysis_db` functions).
+    """
+
+    def __init__(self, db_path, *, foreign_keys=False):
+        self.path = db_path
+        self._foreign_keys = foreign_keys
+
+    def get_db(self):
+        return get_db(self.path, foreign_keys=self._foreign_keys)
+
+
 @contextmanager
 def immediate_transaction(conn):
     """Run a block inside a ``BEGIN IMMEDIATE`` transaction.
