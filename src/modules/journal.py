@@ -3,7 +3,6 @@ Journal API Router - extracted from journal/src/server.py
 Conflict-aware versioning sync engine for personal journal trackers.
 """
 import json
-from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -12,24 +11,13 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict
 
 from modules.db import (
-    get_db as _shared_get_db,
+    DbAccessor,
     get_utc_now,
     utc_days_ago,
     register_client as _db_register_client,
     run_migrations,
     enable_wal,
 )
-
-
-# Module-level DB path, set by create_router()
-_db_path: Path = None
-
-
-@contextmanager
-def get_db():
-    """Module-scoped wrapper that binds the module's DB path."""
-    with _shared_get_db(_db_path) as conn:
-        yield conn
 
 
 def _column_exists(cursor, table: str, column: str) -> bool:
@@ -203,7 +191,7 @@ def _purge_old_archives(conn):
     )
 
 
-def init_database():
+def init_database(accessor):
     """Initialize the database, applying any pending migrations.
 
     Migrations are versioned via PRAGMA user_version and applied transactionally
@@ -211,7 +199,7 @@ def init_database():
     BEGIN IMMEDIATE / in-lock re-check contract). WAL is enabled once here
     (outside any transaction).
     """
-    with get_db() as conn:
+    with accessor.get_db() as conn:
         enable_wal(conn)
         run_migrations(conn, MIGRATIONS, label="journal DB")
 
@@ -284,9 +272,6 @@ class DeltaSyncResponse(BaseModel):
 
 
 # Router with all sync endpoints
-router = APIRouter()
-
-
 # Tracker fields owned by the sync protocol — excluded when capturing
 # free-form meta_json fields from a tracker upload. Includes both the new
 # top-level response keys (`lastModifiedAt`, `deleted`) and the legacy
@@ -341,8 +326,7 @@ def _completed_to_int(completed):
     return 1 if completed else 0
 
 
-@router.get("/sync/status", response_model=StatusResponse)
-def sync_status():
+def _sync_status(get_db):
     """Get the last server sync time."""
     with get_db() as conn:
         cursor = conn.cursor()
@@ -354,8 +338,7 @@ def sync_status():
         return StatusResponse(lastModified=None)
 
 
-@router.post("/sync/register")
-def register_client(client_id: str, client_name: Optional[str] = None):
+def _register_client(get_db, client_id, client_name=None):
     """Register or update a client. Debug breadcrumb only — no correctness
     dependency on this in the optimistic-concurrency protocol."""
     with get_db() as conn:
@@ -364,8 +347,7 @@ def register_client(client_id: str, client_name: Optional[str] = None):
         return {"status": "ok", "clientId": client_id}
 
 
-@router.get("/sync/delta", response_model=DeltaSyncResponse)
-def sync_delta(since: Optional[str] = None, client_id: Optional[str] = None):
+def _sync_delta(get_db, since=None, client_id=None):
     """Return server data the client doesn't have yet.
 
     When `since` is omitted, returns everything visible (initial pull /
@@ -601,8 +583,7 @@ def _apply_entry_upload(
     }, None
 
 
-@router.post("/sync/update", response_model=SyncResponse)
-def sync_update(payload: SyncPayload):
+def _sync_update(get_db, payload):
     """Upload client changes using optimistic concurrency on `_baseLastModifiedAt`.
 
     Per record: if `stored.last_modified_at <= incoming._baseLastModifiedAt`
@@ -669,8 +650,28 @@ def sync_update(payload: SyncPayload):
 
 
 def create_router(db_path: Path) -> APIRouter:
-    """Factory: set the DB path, initialize tables, and return the router."""
-    global _db_path
-    _db_path = db_path
-    init_database()
+    """Factory: build an injected DB accessor, initialize tables, and return a
+    fresh router whose handlers capture the accessor (R2 — no module-global DB
+    path, so two routers can target different DBs in one process)."""
+    accessor = DbAccessor(db_path)
+    init_database(accessor)
+    get_db = accessor.get_db
+    router = APIRouter()
+
+    @router.get("/sync/status", response_model=StatusResponse)
+    def sync_status():
+        return _sync_status(get_db)
+
+    @router.post("/sync/register")
+    def register_client(client_id: str, client_name: Optional[str] = None):
+        return _register_client(get_db, client_id, client_name)
+
+    @router.get("/sync/delta", response_model=DeltaSyncResponse)
+    def sync_delta(since: Optional[str] = None, client_id: Optional[str] = None):
+        return _sync_delta(get_db, since, client_id)
+
+    @router.post("/sync/update", response_model=SyncResponse)
+    def sync_update(payload: SyncPayload):
+        return _sync_update(get_db, payload)
+
     return router
