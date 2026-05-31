@@ -259,6 +259,10 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
 
         IMPORTANT: Only SELECT and WITH queries are allowed for security.
 
+        If unsure of column names, call get_table_details(table_name); do not
+        guess. Trackers are soft-deleted (filter deleted = 0), and tracker_id is
+        a UUID — same-named re-created trackers are distinct rows.
+
         Args:
             query: SQL SELECT query
             params: Optional list of parameters for ? placeholders in query
