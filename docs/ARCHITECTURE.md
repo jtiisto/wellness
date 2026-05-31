@@ -249,8 +249,7 @@ checklist → logged items vs planned items; duration/interval → `duration_min
 `target_duration_min`. Sessions roll up to "fully completed" when every planned exercise is
 completed. The legacy per-exercise `completed` flag was dropped (2026-05) because it was a manual
 PWA checkbox decoupled from data entry and read false on real, fully-logged work; only the
-per-set `set_logs.completed` "done" tick is retained, as an input to the derivation. See
-`docs/plan_workout_completion_derivation.md`.
+per-set `set_logs.completed` "done" tick is retained, as an input to the derivation.
 
 **Data model (log archives — 14-day retention):**
 ```
