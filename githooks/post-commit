@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Post-commit dispatcher (tracked, intentionally generic — no machine-specific
+# content). Runs a machine-local post-commit hook if one exists at
+# .git/hooks-local/post-commit. Keep personal/environment-specific actions
+# (e.g. off-machine backups) there, untracked; absent on a fresh clone this is
+# a clean no-op.
+set -u
+local_hook="$(git rev-parse --git-dir)/hooks-local/post-commit"
+[ -x "$local_hook" ] && "$local_hook" "$@"
+exit 0

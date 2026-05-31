@@ -57,6 +57,7 @@ wellness/
 │   ├── integration/        # Integration tests
 │   └── e2e_browser/        # Playwright E2E browser tests
 ├── bin/                    # Server control, deployment, and hook scripts
+├── githooks/               # Shared git hooks (enable: git config core.hooksPath githooks)
 ├── data/                   # SQLite databases (runtime)
 └── requirements.txt
 ```
