@@ -6,6 +6,7 @@ import sqlite3
 
 import pytest
 from src.modules.db import (
+    DbAccessor,
     get_db,
     get_utc_now,
     immediate_transaction,
@@ -73,6 +74,41 @@ class TestBusyTimeout:
         with get_db(db_path) as conn:
             timeout = conn.execute("PRAGMA busy_timeout").fetchone()[0]
             assert timeout == 5000
+
+
+class TestDbAccessor:
+    """R2: the injected DB handle replacing the per-module _db_path global."""
+
+    def test_exposes_path_and_opens_connection(self, tmp_path):
+        db_path = tmp_path / "a.db"
+        acc = DbAccessor(db_path)
+        assert acc.path == db_path
+        with acc.get_db() as conn:
+            assert conn.row_factory == sqlite3.Row
+            assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == 5000
+
+    def test_foreign_keys_flag(self, tmp_path):
+        on = DbAccessor(tmp_path / "fk_on.db", foreign_keys=True)
+        off = DbAccessor(tmp_path / "fk_off.db")
+        with on.get_db() as conn:
+            assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+        with off.get_db() as conn:
+            assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 0
+
+    def test_two_accessors_are_isolated(self, tmp_path):
+        """Two accessors with different paths don't cross-contaminate — the R2
+        property that the module-global made impossible."""
+        a = DbAccessor(tmp_path / "one.db")
+        b = DbAccessor(tmp_path / "two.db")
+        for acc in (a, b):
+            with acc.get_db() as conn:
+                conn.execute("CREATE TABLE t (v TEXT)")
+                conn.commit()
+        with a.get_db() as conn:
+            conn.execute("INSERT INTO t (v) VALUES ('a-only')")
+            conn.commit()
+        with b.get_db() as conn:
+            assert conn.execute("SELECT COUNT(*) FROM t").fetchone()[0] == 0
 
 
 class TestUtcDaysAgo:
