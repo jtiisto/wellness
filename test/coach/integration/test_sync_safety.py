@@ -67,23 +67,34 @@ def _download(client, client_id):
     return resp.json()
 
 
+def _results(resp):
+    """The R3 per-record upload response: {date: merged serverRow}."""
+    return resp["results"]
+
+
+def _server_day(client, client_id, date):
+    """The server's current merged log for `date` (carries the day + per-exercise
+    `_lastModified` tokens)."""
+    return _download(client, client_id)["logs"].get(date, {})
+
+
 def _server_token(client, client_id, date):
-    """The server's current `_lastModified` stamp for `date` (the R1 base token)."""
-    return _download(client, client_id)["logs"].get(date, {}).get("_lastModified")
+    """The server's current day-level `_lastModified` stamp for `date`."""
+    return _server_day(client, client_id, date).get("_lastModified")
 
 
 def _upload_with_token(client, client_id, date, log):
-    """Upload echoing the server's current stamp as `_baseLastModifiedAt` (R1) —
-    for a 2nd+ write to an existing date so it passes token arbitration."""
-    base = _server_token(client, client_id, date)
-    if base:
-        log["_baseLastModifiedAt"] = base
+    """Upload echoing the server's current day **and per-exercise** stamps as base
+    tokens (R3) — i.e. an up-to-date client. A 2nd+ write to an existing record
+    passes arbitration; a new exercise (no server token) inserts."""
+    server = _server_day(client, client_id, date)
+    if server.get("_lastModified"):
+        log["_baseLastModifiedAt"] = server["_lastModified"]
+    for key, val in log.items():
+        srv_ex = server.get(key)
+        if isinstance(val, dict) and isinstance(srv_ex, dict) and srv_ex.get("_lastModified"):
+            val["_baseLastModifiedAt"] = srv_ex["_lastModified"]
     return _upload(client, client_id, date, log)
-
-
-def _reject_dates(result):
-    """Dates in the structured rejectedLogs (`[{date, serverRow}]`) (R1)."""
-    return [r["date"] for r in result.get("rejectedLogs", [])]
 
 
 # ===========================================================================
@@ -115,56 +126,52 @@ class TestCacheControlHeaders:
 
 @pytest.mark.integration
 class TestStaleWriteRejection:
-    def test_stale_base_token_rejected(self, client, coach_registered_client):
-        """A log echoing a base token OLDER than the server's stored stamp (the
-        client missed a newer server write) is rejected (R1)."""
+    def test_stale_exercise_base_keeps_server(self, client, coach_registered_client):
+        """An exercise edit echoing a base OLDER than the server's stamp is
+        rejected per-exercise — the server keeps its version (R3)."""
         today = datetime.now().strftime("%Y-%m-%d")
-
-        # First upload — server stamps its own now as last_modified
-        result1 = _upload(client, coach_registered_client, today, _make_log())
-        assert today in result1["appliedLogs"]
-
-        # Second upload echoing a stale base — older than the stored stamp
-        stale = _make_log(exercises=False)
-        stale["_baseLastModifiedAt"] = _past_ts()
-        result2 = _upload(client, coach_registered_client, today, stale)
-        assert today in _reject_dates(result2)
-        assert today not in result2["appliedLogs"]
-
-    def test_current_base_token_accepted(self, client, coach_registered_client):
-        """A log echoing the server's current stamp as its base token is accepted (R1)."""
-        today = datetime.now().strftime("%Y-%m-%d")
-
-        # First upload
         _upload(client, coach_registered_client, today, _make_log())
 
-        # Second upload echoing the current server stamp — accepted
-        result = _upload_with_token(client, coach_registered_client, today, _make_log())
-        assert today in result["appliedLogs"]
-        assert today not in _reject_dates(result)
+        stale = _make_log(exercises=True)
+        stale["ex_1"]["user_note"] = "should not win"
+        stale["ex_1"]["_baseLastModifiedAt"] = _past_ts()
+        stale["_baseLastModifiedAt"] = _server_token(client, coach_registered_client, today)
+        result = _upload(client, coach_registered_client, today, stale)
 
-    def test_missing_token_rejected_for_existing_date(self, client, coach_registered_client):
-        """Hard cutover (R1): a token-absent upload to an EXISTING date is rejected
-        (no compat path); the server returns its current row for in-cycle recovery."""
+        # ex_1 kept the server's version (the stale edit lost).
+        assert _results(result)[today]["ex_1"]["user_note"] == "Felt strong"
+
+    def test_current_exercise_base_accepted(self, client, coach_registered_client):
+        """An exercise edit echoing the server's current per-exercise stamp wins (R3)."""
         today = datetime.now().strftime("%Y-%m-%d")
-
         _upload(client, coach_registered_client, today, _make_log())
 
-        # Upload without a base token — rejected against the existing row
-        result = _upload(client, coach_registered_client, today, _make_log(timestamp=None))
-        assert today in _reject_dates(result)
-        assert today not in result["appliedLogs"]
-        rej = next(r for r in result["rejectedLogs"] if r["date"] == today)
-        assert rej["serverRow"] is not None and "ex_1" in rej["serverRow"]
-        # serverRow carries the fresh base token for in-cycle client recovery (R1)
-        assert "_lastModified" in rej["serverRow"]
+        edit = _make_log(exercises=True)
+        edit["ex_1"]["user_note"] = "updated"
+        result = _upload_with_token(client, coach_registered_client, today, edit)
 
-    def test_first_upload_no_existing_accepted(self, client, coach_registered_client):
-        """First upload for a date should always succeed regardless of timestamp."""
+        assert _results(result)[today]["ex_1"]["user_note"] == "updated"
+
+    def test_missing_exercise_token_keeps_server(self, client, coach_registered_client):
+        """Editing an existing exercise without echoing its token is rejected for
+        that exercise — the server keeps its version (R3 hard cutover)."""
         today = datetime.now().strftime("%Y-%m-%d")
-        result = _upload(client, coach_registered_client, today,
-                         _make_log(timestamp=_past_ts()))
-        assert today in result["appliedLogs"]
+        _upload(client, coach_registered_client, today, _make_log())
+
+        edit = _make_log(exercises=True)
+        edit["ex_1"]["user_note"] = "no token"
+        edit["_baseLastModifiedAt"] = _server_token(client, coach_registered_client, today)
+        # ex_1 carries no _baseLastModifiedAt → kept server.
+        result = _upload(client, coach_registered_client, today, edit)
+
+        assert _results(result)[today]["ex_1"]["user_note"] == "Felt strong"
+
+    def test_first_upload_new_date_inserts(self, client, coach_registered_client):
+        """First upload for a date inserts everything regardless of tokens (R3)."""
+        today = datetime.now().strftime("%Y-%m-%d")
+        result = _upload(client, coach_registered_client, today, _make_log())
+        assert today in _results(result)
+        assert "ex_1" in _results(result)[today]
 
     def test_rejected_log_preserves_data(self, client, coach_registered_client):
         """After a stale write is rejected, the original data should be intact."""
@@ -185,87 +192,65 @@ class TestStaleWriteRejection:
         assert "ex_1" in data["logs"][today]
         assert len(data["logs"][today]["ex_1"]["sets"]) == 2  # exercise data preserved
 
-    def test_mixed_batch_partial_rejection(self, client, coach_registered_client):
-        """In a batch upload, some logs can be accepted while others rejected."""
+    def test_batch_per_exercise_arbitration(self, client, coach_registered_client):
+        """Each exercise is arbitrated independently within one upload: a stale
+        edit is kept-server while a brand-new exercise on the same date inserts (R3)."""
         today = datetime.now().strftime("%Y-%m-%d")
-        yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+        _upload(client, coach_registered_client, today, _make_log())  # ex_1, warmup_0
 
-        # Upload today first — server stamps now
-        _upload(client, coach_registered_client, today, _make_log())
+        upd = _make_log(exercises=True)
+        upd["ex_1"]["user_note"] = "stale loser"
+        upd["ex_1"]["_baseLastModifiedAt"] = _past_ts()           # stale → kept server
+        upd["ex_new"] = {"sets": [{"set_num": 1, "weight": 50, "reps": 5}]}  # new → insert
+        upd["_baseLastModifiedAt"] = _server_token(client, coach_registered_client, today)
+        result = _upload(client, coach_registered_client, today, upd)
 
-        # Batch: stale-base today (rejected) + fresh new-date yesterday (accepted)
-        today_stale = _make_log(exercises=False)
-        today_stale["_baseLastModifiedAt"] = _past_ts()
-        result = client.post(
-            "/api/coach/sync",
-            json={
-                "clientId": coach_registered_client,
-                "logs": {
-                    today: today_stale,
-                    yesterday: _make_log(),
-                },
-            },
-        ).json()
-
-        assert today in _reject_dates(result)
-        assert yesterday in result["appliedLogs"]
+        day = _results(result)[today]
+        assert day["ex_1"]["user_note"] == "Felt strong"   # stale edit rejected
+        assert "ex_new" in day                              # new exercise inserted
+        assert len(day["ex_new"]["sets"]) == 1
 
 
 # ===========================================================================
-# Layer 1b: Content guard (reject incomplete payloads)
+# Feedback-only uploads (content guard removed in R3 — upsert preserves exercises)
 # ===========================================================================
 
 @pytest.mark.integration
-class TestContentGuard:
-    def test_newer_partial_payload_preserves_exercises(self, client, coach_registered_client):
-        """Upload full log, then newer feedback-only log — exercises should survive."""
+class TestFeedbackOnlyUpsert:
+    def test_feedback_only_accepted_preserves_exercises(self, client, coach_registered_client):
+        """R3: a feedback-only upload is accepted (content guard removed) and the
+        un-mentioned exercises are preserved structurally by per-exercise upsert."""
         today = datetime.now().strftime("%Y-%m-%d")
-
-        # Upload full workout with exercises
         _upload(client, coach_registered_client, today, _make_log(exercises=True))
 
-        # Feedback-only upload with a VALID base token — passes token arbitration,
-        # so it reaches (and is caught by) the content guard.
-        result = _upload_with_token(client, coach_registered_client, today,
-                                    _make_log(exercises=False))
+        # Feedback-only upload echoing the current day token — accepted; ex_1 (not
+        # in the payload) is untouched, not wiped.
+        fb = _make_log(exercises=False)
+        fb["_baseLastModifiedAt"] = _server_token(client, coach_registered_client, today)
+        result = _upload(client, coach_registered_client, today, fb)
 
-        assert today in result["contentRejectedLogs"]
-        assert today not in result["appliedLogs"]
-        assert today not in _reject_dates(result)
+        day = _results(result)[today]
+        assert day["session_feedback"]["general_notes"] == "Good session"  # feedback applied
+        assert "ex_1" in day                                               # exercise preserved
+        assert len(day["ex_1"]["sets"]) == 2
 
-        # Verify exercise data survived
-        data = _download(client, coach_registered_client)
-        assert "ex_1" in data["logs"][today]
-        assert len(data["logs"][today]["ex_1"]["sets"]) == 2  # exercise data preserved
-
-    def test_newer_complete_payload_replaces(self, client, coach_registered_client):
-        """Upload full log, then newer log with different exercises — should replace."""
+    def test_complete_payload_replaces_exercise(self, client, coach_registered_client):
+        """A full edit echoing current tokens updates the exercise in place (R3)."""
         today = datetime.now().strftime("%Y-%m-%d")
-
-        # Upload initial workout
         _upload(client, coach_registered_client, today, _make_log(exercises=True))
 
-        # Upload newer log with exercises echoing the current token — accepted
         new_log = _make_log(exercises=True)
         new_log["ex_1"]["user_note"] = "Updated note"
         result = _upload_with_token(client, coach_registered_client, today, new_log)
 
-        assert today in result["appliedLogs"]
-        assert today not in result.get("contentRejectedLogs", [])
-
-        # Verify the updated data is present
-        data = _download(client, coach_registered_client)
-        assert data["logs"][today]["ex_1"]["user_note"] == "Updated note"
+        assert _results(result)[today]["ex_1"]["user_note"] == "Updated note"
 
     def test_first_upload_feedback_only_accepted(self, client, coach_registered_client):
-        """First upload with only feedback (no existing data) should be accepted."""
+        """First upload with only feedback (no existing data) is accepted (R3)."""
         today = datetime.now().strftime("%Y-%m-%d")
-
-        result = _upload(client, coach_registered_client, today,
-                         _make_log(exercises=False))
-
-        assert today in result["appliedLogs"]
-        assert today not in result.get("contentRejectedLogs", [])
+        result = _upload(client, coach_registered_client, today, _make_log(exercises=False))
+        assert today in _results(result)
+        assert _results(result)[today]["session_feedback"]["general_notes"] == "Good session"
 
 
 # ===========================================================================
@@ -325,23 +310,28 @@ class TestSoftDeleteArchive:
         assert count == 0
         conn.close()
 
-    def test_rejected_write_no_archive(self, client, coach_registered_client, tmp_coach_db):
-        """A rejected stale write should NOT create an archive entry."""
+    def test_upload_archives_existing_day_defensively(self, client, coach_registered_client, tmp_coach_db):
+        """R3 archives the existing day before per-record upsert (defensive net, so
+        any overwrite is recoverable), while a stale per-exercise edit still leaves
+        the server's exercise intact."""
         today = datetime.now().strftime("%Y-%m-%d")
-
         _upload(client, coach_registered_client, today, _make_log())
 
-        # Stale write — rejected, should not archive
-        _upload(client, coach_registered_client, today,
-                _make_log(exercises=False, timestamp=_past_ts()))
+        stale = _make_log(exercises=True)
+        stale["ex_1"]["user_note"] = "stale"
+        stale["ex_1"]["_baseLastModifiedAt"] = _past_ts()
+        stale["_baseLastModifiedAt"] = _server_token(client, coach_registered_client, today)
+        result = _upload(client, coach_registered_client, today, stale)
 
+        # ex_1 kept the server's version (stale per-exercise edit rejected)...
+        assert _results(result)[today]["ex_1"]["user_note"] == "Felt strong"
+        # ...and the day was archived defensively before the upsert.
         conn = sqlite3.connect(tmp_coach_db)
         count = conn.execute(
-            "SELECT COUNT(*) FROM workout_session_logs_archive WHERE date = ?",
-            (today,)
+            "SELECT COUNT(*) FROM workout_session_logs_archive WHERE date = ?", (today,)
         ).fetchone()[0]
-        assert count == 0
         conn.close()
+        assert count >= 1
 
     def test_archive_cleanup(self, client, coach_registered_client, tmp_coach_db):
         """Archive rows older than 14 days should be purged during sync."""
@@ -456,60 +446,49 @@ class TestBatchUploadAtomicity:
 
 
 # ===========================================================================
-# R1: server-token arbitration (replaces client-clock LWW) — see
-# plans/phase4-r1-coach-clock-skew.md. The headline target, written against the
-# token protocol; xfail until R1-1 lands the server-side arbitration, then the
-# marker is removed (strict=True fails on XPASS so it can't be forgotten).
+# Server-token arbitration end-to-end (R1 invariants under R3 per-record) — see
+# plans/phase4-r1-coach-clock-skew.md + phase4-r3-coach-upsert.md.
 # ===========================================================================
 
 @pytest.mark.integration
 def test_reject_then_recover_with_returned_token(client, coach_registered_client):
-    """R1 in-cycle recovery: a stale-base write is rejected with the server's
-    current row; re-uploading while echoing that row's `_lastModified` as the
-    base token is then accepted — proving the client can recover without a
-    separate pull (mirrors journal's serverRow recovery)."""
+    """In-cycle recovery: a stale per-exercise edit is rejected (server keeps its
+    version); the merged serverRow carries that exercise's current token, and a
+    re-upload echoing it is accepted — recovery without a separate pull."""
     today = datetime.now().strftime("%Y-%m-%d")
     _upload(client, coach_registered_client, today, _make_log())
 
-    # Stale-base write → rejected, server returns its current row + token.
+    # Stale-base edit on ex_1 → rejected per-exercise; merged result carries the token.
     stale = _make_log(exercises=True)
-    stale["_baseLastModifiedAt"] = _past_ts()
+    stale["ex_1"]["user_note"] = "stale"
+    stale["ex_1"]["_baseLastModifiedAt"] = _past_ts()
+    stale["_baseLastModifiedAt"] = _server_token(client, coach_registered_client, today)
     rejected = _upload(client, coach_registered_client, today, stale)
-    rej = next(r for r in rejected["rejectedLogs"] if r["date"] == today)
-    recovered_token = rej["serverRow"]["_lastModified"]
+    recovered_token = _results(rejected)[today]["ex_1"]["_lastModified"]
 
     # Re-upload echoing the returned token → accepted (stored == base).
     retry = _make_log(exercises=True)
     retry["ex_1"]["user_note"] = "after recovery"
-    retry["_baseLastModifiedAt"] = recovered_token
+    retry["ex_1"]["_baseLastModifiedAt"] = recovered_token
+    retry["_baseLastModifiedAt"] = _server_token(client, coach_registered_client, today)
     result = _upload(client, coach_registered_client, today, retry)
-    assert today in result["appliedLogs"]
-    assert today not in _reject_dates(result)
-
-    data = _download(client, coach_registered_client)
-    assert data["logs"][today]["ex_1"]["user_note"] == "after recovery"
+    assert _results(result)[today]["ex_1"]["user_note"] == "after recovery"
 
 
 @pytest.mark.integration
 def test_client_behind_clock_still_wins_with_token(client, coach_registered_client):
-    """R1 target invariant: a device whose wall clock is an hour BEHIND still has
-    its newer edit accepted, because the server compares its own stored stamp
-    against the server-issued base token the client echoed — never the client
-    clock. Fails today (client-time arbiter rejects the 'stale' edit)."""
+    """Invariant: a device whose wall clock is an hour BEHIND still has its edit
+    accepted, because arbitration uses the server-issued per-exercise token, never
+    the client clock (`_lastModifiedAt` is advisory only)."""
     today = datetime.now().strftime("%Y-%m-%d")
-
-    # 1. Initial upload; the server stamps its own last_modified.
     _upload(client, coach_registered_client, today, _make_log())
 
-    # 2. Client downloads and learns the server's token for this date.
-    server_stamp = _download(client, coach_registered_client)["logs"][today]["_lastModified"]
+    server = _server_day(client, coach_registered_client, today)
+    edit = _make_log(exercises=True)
+    edit["ex_1"]["user_note"] = "behind-clock edit"
+    edit["ex_1"]["_lastModifiedAt"] = _past_ts()                  # behind clock (advisory)
+    edit["ex_1"]["_baseLastModifiedAt"] = server["ex_1"]["_lastModified"]  # current token
+    edit["_baseLastModifiedAt"] = server["_lastModified"]
 
-    # 3. A genuine new edit that echoes the server token as its base — but the
-    #    device clock is an hour behind, so its client _lastModifiedAt looks "old".
-    edit = _make_log(exercises=True, timestamp=_past_ts())
-    edit["_baseLastModifiedAt"] = server_stamp
-
-    # 4. Target: accepted (stored == base => stored <= base), despite the behind clock.
     result = _upload(client, coach_registered_client, today, edit)
-    assert today in result["appliedLogs"]
-    assert today not in result.get("rejectedLogs", [])
+    assert _results(result)[today]["ex_1"]["user_note"] == "behind-clock edit"

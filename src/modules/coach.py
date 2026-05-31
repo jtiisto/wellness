@@ -451,103 +451,112 @@ def _archive_existing_log(cursor, date_str, superseded_by, now):
 
 
 def _store_log(conn, date_str, log_data, client_id, now):
-    """Decompose a log dict into relational tables.
+    """Apply a coach log upload at per-record granularity (R3).
 
-    Returns the session_log_id on success, None if the write was rejected
-    (incoming timestamp older than server's), or "incomplete_content" if the
-    incoming payload has no exercises but the server already has exercise data.
+    Upserts the session-log (feedback) row — arbitrated on the session token —
+    and each exercise independently on its own per-exercise token: a brand-new or
+    NULL-stamped exercise inserts; `stored <= base` updates (replacing that
+    exercise's sets/items, since the client's list is authoritative for an
+    exercise it sent); a stale base leaves the server's exercise untouched.
+    Exercises absent from the payload are never touched. Never whole-rejects.
+    Returns the reconciled day (merged serverRow, carrying per-exercise + day
+    tokens) for the client to adopt. See plans/phase4-r3-coach-upsert.md.
     """
     cursor = conn.cursor()
+    meta_keys = {"session_feedback", "_lastModifiedAt", "_lastModifiedBy", "_baseLastModifiedAt"}
 
-    # Layer 1: server-token arbitration (R1). Compare the server's stored stamp
-    # against the server-issued base token the client echoed (_baseLastModifiedAt)
-    # — never the client's wall clock. See plans/phase4-r1-coach-clock-skew.md.
-    incoming_base = log_data.get("_baseLastModifiedAt")
-    existing = cursor.execute(
-        "SELECT last_modified FROM workout_session_logs WHERE date = ?",
-        (date_str,)
+    # Layer 2: archive the existing day before mutating (safety net).
+    _archive_existing_log(cursor, date_str, client_id, now)
+
+    # Link to the plan session for this date (for exercise_id / canonical_slug).
+    session_row = cursor.execute(
+        "SELECT id FROM workout_sessions WHERE date = ?", (date_str,)
     ).fetchone()
-    stored_lm = existing["last_modified"] if existing else None
-    if not should_accept_log_write(stored_lm, incoming_base):
-        logger.warning(
-            "Rejecting log for %s: stored=%s base=%s (client=%s)",
-            date_str, stored_lm, incoming_base, client_id,
-        )
-        return None
+    session_id = session_row["id"] if session_row else None
 
-    # Layer 1b: Reject incomplete payloads that would destroy exercise data
-    meta_keys = {"session_feedback", "_lastModifiedAt", "_lastModifiedBy"}
-    incoming_exercise_count = sum(
-        1 for k, v in log_data.items()
-        if k not in meta_keys and isinstance(v, dict)
-    )
-    if incoming_exercise_count == 0:
-        existing_count = cursor.execute(
-            """SELECT COUNT(*) FROM exercise_logs el
-               JOIN workout_session_logs wsl ON el.session_log_id = wsl.id
-               WHERE wsl.date = ?""",
-            (date_str,)
-        ).fetchone()[0]
-        if existing_count > 0:
-            logger.warning(
-                "Rejecting incomplete log for %s: incoming has 0 exercises, "
-                "server has %d (client=%s)",
-                date_str, existing_count, client_id,
-            )
-            return "incomplete_content"
-
+    # --- Feedback record: upsert the session_log, arbitrated on the session token.
+    session_base = log_data.get("_baseLastModifiedAt")
     feedback = log_data.get("session_feedback", {})
     pain = feedback.get("pain_discomfort")
     notes = feedback.get("general_notes")
 
-    cursor.execute("SELECT id FROM workout_sessions WHERE date = ?", (date_str,))
-    session_row = cursor.fetchone()
-    session_id = session_row["id"] if session_row else None
+    existing_sl = cursor.execute(
+        "SELECT id, last_modified FROM workout_session_logs WHERE date = ?", (date_str,)
+    ).fetchone()
+    if existing_sl is None:
+        cursor.execute("""
+            INSERT INTO workout_session_logs
+            (session_id, date, pain_discomfort, general_notes, last_modified, modified_by)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (session_id, date_str, pain, notes, now, client_id))
+        session_log_id = cursor.lastrowid
+    else:
+        session_log_id = existing_sl["id"]
+        if should_accept_log_write(existing_sl["last_modified"], session_base):
+            cursor.execute("""
+                UPDATE workout_session_logs
+                SET session_id = ?, pain_discomfort = ?, general_notes = ?,
+                    last_modified = ?, modified_by = ?
+                WHERE id = ?
+            """, (session_id, pain, notes, now, client_id, session_log_id))
+        # else: feedback's base is stale → keep the server's feedback row.
 
-    # Layer 2: Archive existing log before deletion
-    _archive_existing_log(cursor, date_str, client_id, now)
-
-    cursor.execute("DELETE FROM workout_session_logs WHERE date = ?", (date_str,))
-
-    cursor.execute("""
-        INSERT INTO workout_session_logs
-        (session_id, date, pain_discomfort, general_notes, last_modified, modified_by)
-        VALUES (?, ?, ?, ?, ?, ?)
-    """, (session_id, date_str, pain, notes, now, client_id))
-    session_log_id = cursor.lastrowid
-
+    # --- Exercise records: arbitrate + upsert each independently.
     for exercise_key, exercise_data in log_data.items():
-        if exercise_key in meta_keys:
+        if exercise_key in meta_keys or not isinstance(exercise_data, dict):
             continue
-        if not isinstance(exercise_data, dict):
-            continue
+
+        existing_ex = cursor.execute(
+            "SELECT id, last_modified FROM exercise_logs "
+            "WHERE session_log_id = ? AND exercise_key = ?",
+            (session_log_id, exercise_key),
+        ).fetchone()
+        if existing_ex is not None and not should_accept_log_write(
+            existing_ex["last_modified"], exercise_data.get("_baseLastModifiedAt")
+        ):
+            continue  # stale base → keep the server's version of this exercise
 
         exercise_id = None
         canonical_slug = None
         if session_id:
-            cursor.execute("""
-                SELECT id, canonical_slug FROM planned_exercises
-                WHERE session_id = ? AND exercise_key = ?
-            """, (session_id, exercise_key))
-            ex_row = cursor.fetchone()
-            if ex_row:
-                exercise_id = ex_row["id"]
-                canonical_slug = ex_row["canonical_slug"]
+            pe = cursor.execute(
+                "SELECT id, canonical_slug FROM planned_exercises "
+                "WHERE session_id = ? AND exercise_key = ?",
+                (session_id, exercise_key),
+            ).fetchone()
+            if pe:
+                exercise_id = pe["id"]
+                canonical_slug = pe["canonical_slug"]
 
-        cursor.execute("""
-            INSERT INTO exercise_logs
-            (session_log_id, exercise_id, exercise_key, user_note,
-             duration_min, avg_hr, max_hr, canonical_slug)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            session_log_id, exercise_id, exercise_key,
-            exercise_data.get("user_note"),
-            exercise_data.get("duration_min"),
-            exercise_data.get("avg_hr"),
-            exercise_data.get("max_hr"),
-            canonical_slug,
-        ))
-        exercise_log_id = cursor.lastrowid
+        if existing_ex is None:
+            cursor.execute("""
+                INSERT INTO exercise_logs
+                (session_log_id, exercise_id, exercise_key, user_note,
+                 duration_min, avg_hr, max_hr, canonical_slug, last_modified)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                session_log_id, exercise_id, exercise_key,
+                exercise_data.get("user_note"), exercise_data.get("duration_min"),
+                exercise_data.get("avg_hr"), exercise_data.get("max_hr"),
+                canonical_slug, now,
+            ))
+            exercise_log_id = cursor.lastrowid
+        else:
+            exercise_log_id = existing_ex["id"]
+            cursor.execute("""
+                UPDATE exercise_logs
+                SET exercise_id = ?, user_note = ?, duration_min = ?, avg_hr = ?,
+                    max_hr = ?, canonical_slug = ?, last_modified = ?
+                WHERE id = ?
+            """, (
+                exercise_id, exercise_data.get("user_note"),
+                exercise_data.get("duration_min"), exercise_data.get("avg_hr"),
+                exercise_data.get("max_hr"), canonical_slug, now, exercise_log_id,
+            ))
+            # The client's set/checklist list is authoritative for an exercise it
+            # sent → replace them.
+            cursor.execute("DELETE FROM set_logs WHERE exercise_log_id = ?", (exercise_log_id,))
+            cursor.execute("DELETE FROM checklist_log_items WHERE exercise_log_id = ?", (exercise_log_id,))
 
         for s in exercise_data.get("sets", []):
             cursor.execute("""
@@ -560,14 +569,13 @@ def _store_log(conn, date_str, log_data, client_id, now):
                 s.get("unit", "lbs"), s.get("duration_sec"),
                 1 if s.get("completed") else 0,
             ))
-
         for item in exercise_data.get("completed_items", []):
             cursor.execute("""
                 INSERT INTO checklist_log_items (exercise_log_id, item_text)
                 VALUES (?, ?)
             """, (exercise_log_id, item))
 
-    return session_log_id
+    return _assemble_log_for_date(cursor, date_str)
 
 
 # Pydantic models
@@ -740,35 +748,27 @@ def workout_sync_get(
 
 @router.post("/sync")
 def workout_sync_post(payload: WorkoutSyncPayload):
-    """Upload workout logs from client (last-write-wins with timestamp guard)."""
+    """Upload workout logs from client (per-record upsert; R3).
+
+    Each date is reconciled at exercise granularity (see _store_log) and the
+    merged server day is returned in `results[date]` for the client to adopt —
+    there is no whole-upload reject. `results` carries each exercise's
+    `_lastModified` token so the client advances/recovers per exercise.
+    """
     with get_db() as conn:
         now = get_utc_now()
         client_id = payload.clientId
+        results = {}
 
-        applied_logs = []
-        rejected_logs = []
-        content_rejected_logs = []
-
-        # BEGIN IMMEDIATE: each _store_log reads the stored row, compares
-        # timestamps (LWW), then writes. Acquiring the write lock up front makes
-        # that check-then-write atomic against the coach MCP server, which writes
+        # BEGIN IMMEDIATE: each _store_log reads stored rows, arbitrates per
+        # record, then writes. Acquiring the write lock up front makes that
+        # check-then-write atomic against the coach MCP server, which writes
         # plans to the same coach.db from a separate process.
         with immediate_transaction(conn) as cursor:
             _db_register_client(conn, client_id, now=now)
 
             for date_str, log_data in payload.logs.items():
-                result = _store_log(conn, date_str, log_data, client_id, now)
-                if result == "incomplete_content":
-                    content_rejected_logs.append(date_str)
-                elif result is None:
-                    # Token arbitration rejected this write — return the server's
-                    # current log so the client adopts it in-cycle (R1).
-                    rejected_logs.append({
-                        "date": date_str,
-                        "serverRow": _assemble_log_for_date(cursor, date_str),
-                    })
-                else:
-                    applied_logs.append(date_str)
+                results[date_str] = _store_log(conn, date_str, log_data, client_id, now)
 
             cursor.execute("""
                 INSERT OR REPLACE INTO meta_sync (key, value)
@@ -777,13 +777,7 @@ def workout_sync_post(payload: WorkoutSyncPayload):
 
             _purge_old_archives(cursor)
 
-        return {
-            "success": True,
-            "appliedLogs": applied_logs,
-            "rejectedLogs": rejected_logs,
-            "contentRejectedLogs": content_rejected_logs,
-            "serverTime": now
-        }
+        return {"success": True, "results": results, "serverTime": now}
 
 
 async def _run_hook(result_id: int, script_path: Path):

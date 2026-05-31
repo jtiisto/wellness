@@ -50,7 +50,9 @@ class TestSyncPostLogs:
         assert response.status_code == 200
         data = response.json()
         assert data["success"] is True
-        assert today in data["appliedLogs"]
+        # R3: per-record upsert returns the reconciled day per uploaded date.
+        assert today in data["results"]
+        assert "ex_1" in data["results"][today]
 
     def test_upload_multiple_logs(self, client, sample_log, coach_registered_client):
         """Should handle multiple logs in single upload."""
@@ -70,7 +72,7 @@ class TestSyncPostLogs:
         data = response.json()
 
         assert data["success"] is True
-        assert len(data["appliedLogs"]) == 2
+        assert len(data["results"]) == 2
 
     def test_upload_empty_logs(self, client, coach_registered_client):
         """Should handle empty logs payload."""
@@ -84,7 +86,7 @@ class TestSyncPostLogs:
         assert response.status_code == 200
         data = response.json()
         assert data["success"] is True
-        assert data["appliedLogs"] == []
+        assert data["results"] == {}
 
     def test_log_roundtrip(self, client, sample_log, coach_registered_client):
         """Test uploading and then downloading a log."""
