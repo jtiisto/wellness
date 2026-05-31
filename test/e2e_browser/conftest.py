@@ -62,24 +62,22 @@ def app_server(tmp_path_factory):
     original_public = config.PUBLIC_DIR
     config.PUBLIC_DIR = PUBLIC_DIR
 
-    import modules.journal as journal_mod
-    import modules.coach as coach_mod
-    import modules.analysis as analysis_mod
-    from modules.analysis_db import init_database as init_analysis_db
-
-    journal_mod._db_path = Path(env_vars["JOURNAL_DB_PATH"])
-    journal_mod.init_database()
-    coach_mod._db_path = Path(env_vars["COACH_DB_PATH"])
-    coach_mod.init_database()
-    init_analysis_db(env_vars["ANALYSIS_DB_PATH"])
-    analysis_mod._db_path = Path(env_vars["ANALYSIS_DB_PATH"])
-
     import server
     server.PUBLIC_DIR = PUBLIC_DIR
 
+    # Build a fresh app bound to the e2e temp DBs via create_app overrides (R2):
+    # deterministic regardless of any earlier `import server` in the process, with
+    # no reliance on the module-level app or global DB-path poking. Each module's
+    # create_router initializes its own temp DB.
+    app = server.create_app(db_path_overrides={
+        "journal": Path(env_vars["JOURNAL_DB_PATH"]),
+        "coach": Path(env_vars["COACH_DB_PATH"]),
+        "analysis": Path(env_vars["ANALYSIS_DB_PATH"]),
+    })
+
     port = _find_free_port()
     uvicorn_config = uvicorn.Config(
-        server.app, host="127.0.0.1", port=port, log_level="warning"
+        app, host="127.0.0.1", port=port, log_level="warning"
     )
     uv_server = uvicorn.Server(uvicorn_config)
     thread = threading.Thread(target=uv_server.run, daemon=True)

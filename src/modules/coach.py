@@ -6,7 +6,6 @@ import asyncio
 import json
 import logging
 import subprocess
-from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -18,7 +17,7 @@ from config import get_hook_path
 from modules.coach_plans import assemble_plan
 from modules.coach_logs import assemble_log, should_accept_log_write
 from modules.db import (
-    get_db as _shared_get_db,
+    DbAccessor,
     get_utc_now,
     utc_days_ago,
     register_client as _db_register_client,
@@ -31,19 +30,9 @@ from modules.db import (
 logger = logging.getLogger(__name__)
 
 
-# Module-level DB path, set by create_router()
-_db_path: Path = None
-
 # Sync window: only send plans/logs within this many days to clients.
 # Server retains all data permanently.
 SYNC_WINDOW_DAYS = 60
-
-
-@contextmanager
-def get_db():
-    """Module-scoped wrapper that binds the module's DB path with foreign keys enabled."""
-    with _shared_get_db(_db_path, foreign_keys=True) as conn:
-        yield conn
 
 
 def _migration_1_baseline(cursor):
@@ -322,14 +311,14 @@ MIGRATIONS = [
 ]
 
 
-def init_database():
+def init_database(accessor):
     """Initialize the coach database via the shared migration registry.
 
     Enables WAL once (outside any transaction) then applies pending migrations
     transactionally. See db.run_migrations for the BEGIN IMMEDIATE / in-lock
     re-check contract.
     """
-    with get_db() as conn:
+    with accessor.get_db() as conn:
         enable_wal(conn)
         run_migrations(conn, MIGRATIONS, label="coach DB")
 
@@ -621,11 +610,7 @@ class WorkoutConfigResponse(BaseModel):
 
 
 # Router with all workout endpoints
-router = APIRouter()
-
-
-@router.get("/status", response_model=StatusResponse)
-def workout_status():
+def _workout_status(get_db):
     """Get the last server sync time."""
     with get_db() as conn:
         cursor = conn.cursor()
@@ -637,8 +622,7 @@ def workout_status():
         return StatusResponse(lastModified=None)
 
 
-@router.get("/plans-version", response_model=PlansVersionResponse)
-def plans_version():
+def _plans_version(get_db):
     """Return the latest plan modification timestamp (cheap version check)."""
     with get_db() as conn:
         cursor = conn.cursor()
@@ -647,8 +631,7 @@ def plans_version():
         return PlansVersionResponse(version=row["v"] if row else None)
 
 
-@router.post("/register")
-def register_client(client_id: str, client_name: Optional[str] = None):
+def _register_client(get_db, client_id, client_name=None):
     """Register or update a client."""
     with get_db() as conn:
         _db_register_client(conn, client_id, client_name)
@@ -656,12 +639,7 @@ def register_client(client_id: str, client_name: Optional[str] = None):
         return {"status": "ok", "clientId": client_id}
 
 
-@router.get("/sync", response_model=WorkoutSyncResponse)
-def workout_sync_get(
-    response: Response,
-    client_id: str = Query(...),
-    last_sync_time: Optional[str] = Query(None),
-):
+def _workout_sync_get(get_db, response, client_id, last_sync_time=None):
     """Fetch workout plans and logs."""
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     response.headers["Pragma"] = "no-cache"
@@ -746,8 +724,7 @@ def workout_sync_get(
         )
 
 
-@router.post("/sync")
-def workout_sync_post(payload: WorkoutSyncPayload):
+def _workout_sync_post(get_db, payload):
     """Upload workout logs from client (per-record upsert; R3).
 
     Each date is reconciled at exercise granularity (see _store_log) and the
@@ -780,7 +757,7 @@ def workout_sync_post(payload: WorkoutSyncPayload):
         return {"success": True, "results": results, "serverTime": now}
 
 
-async def _run_hook(result_id: int, script_path: Path):
+async def _run_hook(get_db, result_id: int, script_path: Path):
     """Run a hook script asynchronously and store results in the database."""
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -838,7 +815,7 @@ async def _run_hook(result_id: int, script_path: Path):
             conn.commit()
 
 
-async def _start_or_end_workout(session_id: int, hook_type: str, action_label: str):
+async def _start_or_end_workout(get_db, session_id: int, hook_type: str, action_label: str):
     """Shared logic for start/end workout endpoints."""
     script_path = get_hook_path(hook_type)
     if not script_path or not script_path.exists():
@@ -871,12 +848,12 @@ async def _start_or_end_workout(session_id: int, hook_type: str, action_label: s
 
         conn.commit()
 
-    asyncio.create_task(_run_hook(result_id, script_path))
+    asyncio.create_task(_run_hook(get_db, result_id, script_path))
 
     return WorkoutActionResponse(status=action_label, result_id=result_id)
 
 
-def _undo_workout_action(session_id: int, hook_type: str):
+def _undo_workout_action(get_db, session_id: int, hook_type: str):
     """Shared logic for undoing start/end workout."""
     with get_db() as conn:
         cursor = conn.cursor()
@@ -891,41 +868,7 @@ def _undo_workout_action(session_id: int, hook_type: str):
     return {"status": "deleted"}
 
 
-@router.post("/workout/{session_id}/start", response_model=WorkoutActionResponse)
-async def start_workout(session_id: int):
-    """Notify the server that a workout is starting."""
-    return await _start_or_end_workout(session_id, "pre", "started")
-
-
-@router.post("/workout/{session_id}/end", response_model=WorkoutActionResponse)
-async def end_workout(session_id: int):
-    """Notify the server that a workout has ended."""
-    return await _start_or_end_workout(session_id, "post", "ended")
-
-
-@router.delete("/workout/{session_id}/start")
-def undo_start_workout(session_id: int):
-    """Undo a workout start notification."""
-    return _undo_workout_action(session_id, "pre")
-
-
-@router.delete("/workout/{session_id}/end")
-def undo_end_workout(session_id: int):
-    """Undo a workout end notification."""
-    return _undo_workout_action(session_id, "post")
-
-
-@router.get("/workout/config", response_model=WorkoutConfigResponse)
-def get_workout_config():
-    """Get available workout actions."""
-    return WorkoutConfigResponse(
-        start=_is_hook_available("pre"),
-        end=_is_hook_available("post"),
-    )
-
-
-@router.get("/workout/{session_id}/status", response_model=WorkoutStatusResponse)
-def get_workout_status(session_id: int):
+def _get_workout_status(get_db, session_id: int):
     """Get workout status for a session."""
     with get_db() as conn:
         cursor = conn.cursor()
@@ -964,8 +907,69 @@ def _is_hook_available(hook_type: str) -> bool:
 
 
 def create_router(db_path: Path) -> APIRouter:
-    """Factory: set the DB path, initialize tables, and return the router."""
-    global _db_path
-    _db_path = db_path
-    init_database()
+    """Factory: build an injected DB accessor, initialize tables, and return a
+    fresh router whose handlers capture the accessor (R2 — no module-global DB
+    path, so two routers can target different DBs in one process). Foreign keys
+    are enabled for coach's relational schema."""
+    accessor = DbAccessor(db_path, foreign_keys=True)
+    init_database(accessor)
+    get_db = accessor.get_db
+    router = APIRouter()
+
+    @router.get("/status", response_model=StatusResponse)
+    def workout_status():
+        return _workout_status(get_db)
+
+    @router.get("/plans-version", response_model=PlansVersionResponse)
+    def plans_version():
+        return _plans_version(get_db)
+
+    @router.post("/register")
+    def register_client(client_id: str, client_name: Optional[str] = None):
+        return _register_client(get_db, client_id, client_name)
+
+    @router.get("/sync", response_model=WorkoutSyncResponse)
+    def workout_sync_get(
+        response: Response,
+        client_id: str = Query(...),
+        last_sync_time: Optional[str] = Query(None),
+    ):
+        return _workout_sync_get(get_db, response, client_id, last_sync_time)
+
+    @router.post("/sync")
+    def workout_sync_post(payload: WorkoutSyncPayload):
+        return _workout_sync_post(get_db, payload)
+
+    @router.post("/workout/{session_id}/start", response_model=WorkoutActionResponse)
+    async def start_workout(session_id: int):
+        """Notify the server that a workout is starting."""
+        return await _start_or_end_workout(get_db, session_id, "pre", "started")
+
+    @router.post("/workout/{session_id}/end", response_model=WorkoutActionResponse)
+    async def end_workout(session_id: int):
+        """Notify the server that a workout has ended."""
+        return await _start_or_end_workout(get_db, session_id, "post", "ended")
+
+    @router.delete("/workout/{session_id}/start")
+    def undo_start_workout(session_id: int):
+        """Undo a workout start notification."""
+        return _undo_workout_action(get_db, session_id, "pre")
+
+    @router.delete("/workout/{session_id}/end")
+    def undo_end_workout(session_id: int):
+        """Undo a workout end notification."""
+        return _undo_workout_action(get_db, session_id, "post")
+
+    @router.get("/workout/config", response_model=WorkoutConfigResponse)
+    def get_workout_config():
+        """Get available workout actions."""
+        return WorkoutConfigResponse(
+            start=_is_hook_available("pre"),
+            end=_is_hook_available("post"),
+        )
+
+    @router.get("/workout/{session_id}/status", response_model=WorkoutStatusResponse)
+    def get_workout_status(session_id: int):
+        return _get_workout_status(get_db, session_id)
+
     return router

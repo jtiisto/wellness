@@ -1558,13 +1558,14 @@ class TestExerciseLogsSchema:
         # simply ignored (writer omits it, read path never selects it).
         import sqlite3
         import modules.coach as coach_mod
+        from modules.db import DbAccessor
         conn = sqlite3.connect(self.db_path)
         conn.execute("ALTER TABLE exercise_logs ADD COLUMN completed INTEGER DEFAULT 0")
         conn.commit()
         conn.close()
 
-        coach_mod._db_path = self.db_path
-        coach_mod.init_database()  # must not raise; no longer drops the column
+        # must not raise; no longer drops the column
+        coach_mod.init_database(DbAccessor(self.db_path, foreign_keys=True))
         assert "completed" in self._exercise_log_columns()  # left as-is, harmless
 
 
