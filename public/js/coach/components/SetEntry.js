@@ -11,6 +11,7 @@ import htm from 'htm';
 
 import { updateLog } from '../store.js';
 import { NumericInput } from '../../shared/numeric-input.js';
+import { formatShortDate } from '../last-performance.js';
 
 const html = htm.bind(h);
 
@@ -28,7 +29,7 @@ function buildColumns({ showWeight, showTime }) {
     return cols;
 }
 
-export function SetEntry({ date, exerciseId, targetSets, sets, showTime = false, showWeight = true, isEditable = true }) {
+export function SetEntry({ date, exerciseId, targetSets, sets, showTime = false, showWeight = true, lastPerformance = null, isEditable = true }) {
     const handleSetChange = (setIndex, field, value) => {
         if (!isEditable) return;
         const updatedSets = [...sets];
@@ -58,42 +59,53 @@ export function SetEntry({ date, exerciseId, targetSets, sets, showTime = false,
     }
 
     return html`
-        <div class="sets-grid" style=${`grid-template-columns: ${gridTemplate};`}>
-            <${Fragment}>
-                <span class="sets-grid-head">#</span>
-                ${columns.map(c => html`
-                    <span class="sets-grid-head" key=${'h-' + c.key}>
-                        ${c.label}${c.unit ? html` <span class="sets-grid-unit">(${c.unit})</span>` : null}
-                    </span>
-                `)}
-                <span class="sets-grid-head" aria-label="Done">\u2713</span>
-            </>
-            ${setRows.map(({ index, data }) => html`
-                <${Fragment} key=${index}>
-                    <span class="sets-grid-num">${index + 1}</span>
+        <${Fragment}>
+            <div class="sets-grid" style=${`grid-template-columns: ${gridTemplate};`}>
+                <${Fragment}>
+                    <span class="sets-grid-head">#</span>
                     ${columns.map(c => html`
-                        <${NumericInput}
-                            key=${'c-' + index + '-' + c.key}
-                            class="sets-grid-input"
-                            data-col=${c.key}
-                            value=${data[c.key]}
-                            onValueChange=${(v) => handleSetChange(index, c.key, v)}
-                            disabled=${!isEditable}
-                            step=${c.step}
-                            min=${c.min}
-                            max=${c.max}
-                        />
+                        <span class="sets-grid-head" key=${'h-' + c.key}>
+                            ${c.label}${c.unit ? html` <span class="sets-grid-unit">(${c.unit})</span>` : null}
+                        </span>
                     `)}
-                    <div class="sets-grid-check">
-                        <input
-                            type="checkbox"
-                            checked=${!!data.completed}
-                            onChange=${(e) => handleSetChange(index, 'completed', e.target.checked)}
-                            disabled=${!isEditable}
-                        />
-                    </div>
+                    <span class="sets-grid-head" aria-label="Done">\u2713</span>
                 </>
-            `)}
-        </div>
+                ${setRows.map(({ index, data }) => {
+                    // Faint "last time" placeholders for this set number (display
+                    // only \u2014 never the value, so an untouched set logs nothing).
+                    const lastSet = lastPerformance?.sets?.find(s => s.set_num === index + 1);
+                    return html`
+                        <${Fragment} key=${index}>
+                            <span class="sets-grid-num">${index + 1}</span>
+                            ${columns.map(c => html`
+                                <${NumericInput}
+                                    key=${'c-' + index + '-' + c.key}
+                                    class="sets-grid-input"
+                                    data-col=${c.key}
+                                    value=${data[c.key]}
+                                    placeholder=${lastSet && lastSet[c.key] != null ? String(lastSet[c.key]) : undefined}
+                                    onValueChange=${(v) => handleSetChange(index, c.key, v)}
+                                    disabled=${!isEditable}
+                                    step=${c.step}
+                                    min=${c.min}
+                                    max=${c.max}
+                                />
+                            `)}
+                            <div class="sets-grid-check">
+                                <input
+                                    type="checkbox"
+                                    checked=${!!data.completed}
+                                    onChange=${(e) => handleSetChange(index, 'completed', e.target.checked)}
+                                    disabled=${!isEditable}
+                                />
+                            </div>
+                        </>
+                    `;
+                })}
+            </div>
+            ${lastPerformance && html`
+                <div class="last-performance-hint">Last \u00b7 ${formatShortDate(lastPerformance.date)}</div>
+            `}
+        </>
     `;
 }

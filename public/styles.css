@@ -1807,6 +1807,22 @@ textarea:focus-visible,
     outline: none;
 }
 
+/* "Last time" hints: faint + italic so the ghost values read as history, not
+   entered data. Placeholders never become the input's value (display only). */
+.coach .sets-grid-input::placeholder {
+    color: var(--text-muted);
+    font-style: italic;
+    opacity: 0.7;
+}
+
+.coach .last-performance-hint {
+    margin-top: var(--spacing-xs);
+    font-size: var(--font-size-sm);
+    font-style: italic;
+    color: var(--text-muted);
+    text-align: right;
+}
+
 .coach .sets-grid-check {
     display: flex;
     justify-content: center;

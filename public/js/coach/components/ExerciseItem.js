@@ -5,8 +5,9 @@ import { h } from 'preact';
 import { useState } from 'preact/hooks';
 import htm from 'htm';
 
-import { updateLog } from '../store.js';
+import { updateLog, workoutPlans, workoutLogs } from '../store.js';
 import { formatTarget, getExerciseProgress, isExerciseCompleted } from '../utils.js';
+import { findLastPerformance } from '../last-performance.js';
 import { SetEntry } from './SetEntry.js';
 import { CardioEntry } from './CardioEntry.js';
 import { ChecklistEntry } from './ChecklistEntry.js';
@@ -36,6 +37,12 @@ export function ExerciseItem({ date, exercise, logData, block, isEditable = true
     };
 
     const renderInputs = () => {
+        // Previous time this exact exercise (by slug) was performed — surfaced as
+        // faint placeholders + a date hint in the set grid. Computed lazily (only
+        // when expanded, since renderInputs only runs then).
+        const lastPerformance = exercise.canonical_slug
+            ? findLastPerformance(exercise.canonical_slug, date, workoutPlans.value, workoutLogs.value)
+            : null;
         switch (exercise.type) {
             case 'checklist':
                 return html`
@@ -57,6 +64,7 @@ export function ExerciseItem({ date, exercise, logData, block, isEditable = true
                         sets=${logData?.sets || []}
                         showTime=${!!exercise.show_time}
                         showWeight=${!exercise.hide_weight}
+                        lastPerformance=${lastPerformance}
                         isEditable=${isEditable}
                     />
                 `;
@@ -79,6 +87,7 @@ export function ExerciseItem({ date, exercise, logData, block, isEditable = true
                         targetSets=${exercise.target_sets || 1}
                         sets=${logData?.sets || []}
                         showTime=${true}
+                        lastPerformance=${lastPerformance}
                         isEditable=${isEditable}
                     />
                 `;
