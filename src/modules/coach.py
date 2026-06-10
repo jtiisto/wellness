@@ -20,6 +20,7 @@ from modules.db import (
     DbAccessor,
     get_utc_now,
     utc_days_ago,
+    sync_watermark,
     register_client as _db_register_client,
     run_migrations,
     enable_wal,
@@ -648,6 +649,14 @@ def _workout_sync_get(get_db, response, client_id, last_sync_time=None):
         cursor = conn.cursor()
 
         now = get_utc_now()
+        # Watermark returned to the client as its next `since`. Like journal's
+        # delta, it is stamped before the reads and offset into the past by a
+        # small overlap, so a write that committed during this pull (timestamp
+        # just below `now`) is re-delivered on the next pull rather than skipped
+        # forever by `last_modified > since`. Re-delivery is safe: plans are
+        # server-managed (idempotent overwrite) and logs merge under the
+        # per-record dirty protection. `now` itself still stamps last_seen_at.
+        server_time = sync_watermark()
         cursor.execute("""
             UPDATE clients SET last_seen_at = ? WHERE id = ?
         """, (now, client_id))
@@ -719,7 +728,7 @@ def _workout_sync_get(get_db, response, client_id, last_sync_time=None):
 
         conn.commit()
         return WorkoutSyncResponse(
-            plans=plans, logs=logs, serverTime=now,
+            plans=plans, logs=logs, serverTime=server_time,
             earliestDate=cutoff, deletedPlanDates=deleted_plan_dates
         )
 

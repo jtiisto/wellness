@@ -15,15 +15,20 @@
     <link rel="preload" href="/wellness/fonts/Inter-Medium.woff2" as="font" type="font/woff2" crossorigin>
     <link rel="preload" href="/wellness/fonts/Inter-SemiBold.woff2" as="font" type="font/woff2" crossorigin>
     <link rel="stylesheet" href="/wellness/styles.css">
+    <!-- Runtime libraries are vendored same-origin under js/vendor/ (see
+         js/vendor/README.md) so the offline PWA has no hard dependency on a
+         third-party CDN. preact/hooks and @preact/signals import the bare
+         "preact" specifier, which this map resolves to the single vendored
+         preact.js — preserving the one-instance invariant they require. -->
     <script type="importmap">
     {
         "imports": {
-            "preact": "https://esm.sh/preact@10.19.3",
-            "preact/hooks": "https://esm.sh/preact@10.19.3/hooks",
-            "@preact/signals": "https://esm.sh/@preact/signals@1.2.1?deps=preact@10.19.3",
-            "htm": "https://esm.sh/htm@3.1.1",
-            "localforage": "https://esm.sh/localforage@1.10.0",
-            "marked": "https://esm.sh/marked@15.0.7"
+            "preact": "/wellness/js/vendor/preact.js",
+            "preact/hooks": "/wellness/js/vendor/preact-hooks.js",
+            "@preact/signals": "/wellness/js/vendor/preact-signals.js",
+            "htm": "/wellness/js/vendor/htm.js",
+            "localforage": "/wellness/js/vendor/localforage.js",
+            "marked": "/wellness/js/vendor/marked.js"
         }
     }
     </script>

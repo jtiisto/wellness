@@ -216,7 +216,21 @@ async function checkAndMigrateSchema() {
 }
 
 // Load all data from LocalForage on startup
-export async function initializeStore() {
+let _initPromise = null;
+
+/**
+ * Initialize the store once per session. Idempotent: repeated calls — a view
+ * remount on tab switch, or the app-shell boot-init — return the same
+ * in-flight/settled promise instead of re-reading storage and re-starting sync.
+ * The recovery path (discardLocalAndContinue) does a full page reload, which
+ * resets this module state, so a genuine re-init still happens when intended.
+ */
+export function initializeStore() {
+    if (!_initPromise) _initPromise = _initializeStore();
+    return _initPromise;
+}
+
+async function _initializeStore() {
     try {
         isLoading.value = true;
 

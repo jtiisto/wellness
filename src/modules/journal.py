@@ -14,6 +14,8 @@ from modules.db import (
     DbAccessor,
     get_utc_now,
     utc_days_ago,
+    sync_watermark,
+    read_transaction,
     register_client as _db_register_client,
     run_migrations,
     enable_wal,
@@ -359,55 +361,63 @@ def _sync_delta(get_db, since=None, client_id=None):
     only ever sees entries for trackers it can still display.
     """
     with get_db() as conn:
-        cursor = conn.cursor()
+        # Stamp the watermark BEFORE the reads (and read both tables in one
+        # consistent snapshot). Stamping it after the reads — as this once did —
+        # let a write that committed during a slow read carry a timestamp below
+        # serverTime yet be unseen by the snapshot, then be skipped forever by
+        # the next `> since` pull. sync_watermark() also subtracts a small
+        # overlap so a write that stamped just before this snapshot but committed
+        # just after is re-delivered next pull rather than lost; re-delivery is
+        # harmless (the client applies non-dirty rows idempotently, skips dirty).
+        server_time = sync_watermark()
+        with read_transaction(conn) as cursor:
+            if since:
+                cursor.execute(
+                    "SELECT * FROM trackers "
+                    "WHERE last_modified_at > ? OR last_modified_at IS NULL",
+                    (since,),
+                )
+            else:
+                cursor.execute("SELECT * FROM trackers")
+            tracker_rows = cursor.fetchall()
 
-        if since:
-            cursor.execute(
-                "SELECT * FROM trackers "
-                "WHERE last_modified_at > ? OR last_modified_at IS NULL",
-                (since,),
-            )
-        else:
-            cursor.execute("SELECT * FROM trackers")
-        tracker_rows = cursor.fetchall()
+            config = []
+            deleted_trackers = []
+            for row in tracker_rows:
+                if row["deleted"]:
+                    deleted_trackers.append(row["id"])
+                    continue
+                tracker = {}
+                if row["meta_json"]:
+                    tracker.update(json.loads(row["meta_json"]))
+                # Protocol-owned fields written LAST so they win over any stray
+                # field that might have slipped into meta_json.
+                tracker["id"] = row["id"]
+                tracker["name"] = row["name"]
+                tracker["category"] = row["category"]
+                tracker["type"] = row["type"]
+                tracker["lastModifiedAt"] = row["last_modified_at"]
+                config.append(tracker)
 
-        config = []
-        deleted_trackers = []
-        for row in tracker_rows:
-            if row["deleted"]:
-                deleted_trackers.append(row["id"])
-                continue
-            tracker = {}
-            if row["meta_json"]:
-                tracker.update(json.loads(row["meta_json"]))
-            # Protocol-owned fields written LAST so they win over any stray
-            # field that might have slipped into meta_json.
-            tracker["id"] = row["id"]
-            tracker["name"] = row["name"]
-            tracker["category"] = row["category"]
-            tracker["type"] = row["type"]
-            tracker["lastModifiedAt"] = row["last_modified_at"]
-            config.append(tracker)
-
-        seven_days_ago = (
-            datetime.now(timezone.utc) - timedelta(days=7)
-        ).strftime("%Y-%m-%d")
-        if since:
-            cursor.execute(
-                "SELECT e.* FROM entries e "
-                "JOIN trackers t ON e.tracker_id = t.id "
-                "WHERE (e.last_modified_at > ? OR e.last_modified_at IS NULL) "
-                "AND e.date >= ? AND t.deleted = 0",
-                (since, seven_days_ago),
-            )
-        else:
-            cursor.execute(
-                "SELECT e.* FROM entries e "
-                "JOIN trackers t ON e.tracker_id = t.id "
-                "WHERE e.date >= ? AND t.deleted = 0",
-                (seven_days_ago,),
-            )
-        entry_rows = cursor.fetchall()
+            seven_days_ago = (
+                datetime.now(timezone.utc) - timedelta(days=7)
+            ).strftime("%Y-%m-%d")
+            if since:
+                cursor.execute(
+                    "SELECT e.* FROM entries e "
+                    "JOIN trackers t ON e.tracker_id = t.id "
+                    "WHERE (e.last_modified_at > ? OR e.last_modified_at IS NULL) "
+                    "AND e.date >= ? AND t.deleted = 0",
+                    (since, seven_days_ago),
+                )
+            else:
+                cursor.execute(
+                    "SELECT e.* FROM entries e "
+                    "JOIN trackers t ON e.tracker_id = t.id "
+                    "WHERE e.date >= ? AND t.deleted = 0",
+                    (seven_days_ago,),
+                )
+            entry_rows = cursor.fetchall()
 
         days: dict[str, dict[str, dict[str, Any]]] = {}
         for row in entry_rows:
@@ -425,7 +435,7 @@ def _sync_delta(get_db, since=None, client_id=None):
             config=config,
             days=days,
             deletedTrackers=deleted_trackers,
-            serverTime=get_utc_now(),
+            serverTime=server_time,
         )
 
 

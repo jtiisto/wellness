@@ -9,7 +9,7 @@ import pytest
 import time
 from datetime import datetime, timedelta, timezone
 
-from modules.db import get_db
+from modules.db import get_db, get_utc_now
 
 
 def _upload(client, client_id, *, config=None, days=None):
@@ -249,3 +249,49 @@ class TestSyncDeltaTrackerLifecycle:
         assert data["days"][today]["tracker-new-uuid"]["value"] == 2
         # Old tracker's entry is NOT in the delta (filtered by t.deleted=0)
         assert "tracker-old-uuid" not in data["days"][today]
+
+
+@pytest.mark.integration
+class TestDeltaWatermarkRace:
+    """The delta watermark (serverTime) must be a lower bound on what the
+    pull's snapshot reflects, so a write that races the pull is delivered on the
+    next pull instead of being skipped forever by the `> since` filter."""
+
+    @staticmethod
+    def _parse(ts):
+        return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+
+    def test_serverTime_is_a_past_watermark(self, client, journal_seeded_database):
+        """serverTime is stamped before the reads and offset into the past by
+        the overlap, so it is strictly before the moment the request was issued.
+        (The old code stamped it AFTER the reads, so serverTime was later than
+        `before` and this failed.)"""
+        before = datetime.now(timezone.utc)
+        data = client.get("/api/journal/sync/delta").json()
+        assert self._parse(data["serverTime"]) < before
+
+    def test_write_stamped_just_before_pull_is_not_skipped(
+        self, client, journal_seeded_database, tmp_journal_db
+    ):
+        """A write whose last_modified_at falls just before a pull's snapshot
+        (it committed during the pull, so the pull missed it) must be delivered
+        by the next pull. Models the delta-token boundary race directly."""
+        # t0: when an in-flight write stamps its last_modified_at, just before
+        # we issue the pull whose snapshot misses it.
+        t0 = get_utc_now()
+        server_time = client.get("/api/journal/sync/delta").json()["serverTime"]
+        # The watermark must land before t0, so `since=server_time` re-delivers
+        # the raced write. (Old after-the-reads stamp put server_time >= t0.)
+        assert server_time < t0
+
+        # Inject the raced tracker straight into the DB at last_modified_at=t0.
+        with get_db(tmp_journal_db) as conn:
+            conn.execute(
+                "INSERT INTO trackers (id, name, category, type, last_modified_at, deleted) "
+                "VALUES ('inflight-1', 'Inflight', 'health', 'simple', ?, 0)",
+                (t0,),
+            )
+            conn.commit()
+
+        data = client.get(f"/api/journal/sync/delta?since={server_time}").json()
+        assert "inflight-1" in [t["id"] for t in data["config"]]

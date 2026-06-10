@@ -197,7 +197,20 @@ export function cancelActiveReport() {
 }
 
 // Init: load queries, check for pending reports
-export async function initializeStore() {
+let _initPromise = null;
+
+/**
+ * Initialize the store once per session. Idempotent: repeated calls — a view
+ * remount on tab switch, or the app-shell boot-init — return the same
+ * in-flight/settled promise rather than re-loading queries and re-checking
+ * pending reports over the network.
+ */
+export function initializeStore() {
+    if (!_initPromise) _initPromise = _initializeStore();
+    return _initPromise;
+}
+
+async function _initializeStore() {
     isLoading.value = true;
     try {
         await loadQueries();

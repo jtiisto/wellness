@@ -102,6 +102,51 @@ def immediate_transaction(conn):
         conn.isolation_level = previous_isolation
 
 
+# Overlap (seconds) subtracted from a sync watermark. See sync_watermark().
+SYNC_WATERMARK_OVERLAP_SECONDS = 2
+
+
+def sync_watermark() -> str:
+    """Return a 'changes-since' watermark: now minus a small overlap.
+
+    Sync pull endpoints return this as ``serverTime``; the client stores it and
+    sends it back as ``since`` on the next pull. Subtracting a small overlap (and
+    stamping it BEFORE the reads) closes a delivery race: a write that stamped
+    its ``last_modified_at`` just before the pull's snapshot but committed just
+    after it would otherwise be unseen by this pull AND skipped forever by the
+    next ``> since`` pull. With the overlap, the next pull's window reaches back
+    far enough to re-deliver it. Re-delivery is safe — the client applies
+    non-dirty rows idempotently and skips rows it has dirty locally — so the only
+    cost is occasionally re-sending a row modified in the last couple of seconds.
+    """
+    return _iso_z(
+        datetime.now(timezone.utc) - timedelta(seconds=SYNC_WATERMARK_OVERLAP_SECONDS)
+    )
+
+
+@contextmanager
+def read_transaction(conn):
+    """Run a block inside a single deferred read transaction.
+
+    In WAL mode the read snapshot is fixed at the first SELECT, so multiple
+    SELECTs inside this block see one consistent point in time (e.g. a delta
+    pull's trackers and entries can't straddle a concurrent write). Read-only:
+    always rolls back to release the snapshot; the caller owns the connection.
+    """
+    previous_isolation = conn.isolation_level
+    conn.isolation_level = None  # we manage BEGIN/ROLLBACK explicitly
+    cursor = conn.cursor()
+    cursor.execute("BEGIN")  # DEFERRED — snapshot taken at the first read
+    try:
+        yield cursor
+    finally:
+        try:
+            cursor.execute("ROLLBACK")
+        except sqlite3.Error:
+            pass
+        conn.isolation_level = previous_isolation
+
+
 def enable_wal(conn):
     """Switch the database to WAL journal mode (readers concurrent with a single
     writer; fewer reader/writer stalls than the default rollback journal).

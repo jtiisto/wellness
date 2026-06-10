@@ -118,3 +118,19 @@ class TestDeltaSync:
 
         assert len(data["plans"]) >= 1
         assert len(data["logs"]) >= 1
+
+
+@pytest.mark.integration
+class TestSyncGetWatermark:
+    """The sync watermark (serverTime) is offset into the past by the
+    overlap, so a write that races the pull (timestamp just below the pull's
+    `now`, committed during it) is re-delivered on the next pull instead of being
+    skipped forever by `last_modified > since`."""
+
+    def test_serverTime_is_a_past_watermark(self, client, coach_registered_client):
+        before = datetime.now(timezone.utc)
+        data = client.get(f"/api/coach/sync?client_id={coach_registered_client}").json()
+        server_time = datetime.fromisoformat(data["serverTime"].replace("Z", "+00:00"))
+        # New: serverTime = now - overlap < before. (Old returned `now`, which is
+        # after `before`, so this failed.)
+        assert server_time < before

@@ -18,7 +18,7 @@ def coach_page(app_page, seeded_coach_db):
     shell.navigate_to("Coach")
     coach = CoachPage(app_page)
     coach.wait_for_loaded()
-    app_page.wait_for_timeout(2000)
+    coach.wait_for_plan()
     return coach
 
 

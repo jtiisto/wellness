@@ -73,7 +73,21 @@ async function getClientId() {
 
 // ==================== Initialization ====================
 
-export async function initializeStore() {
+let _initPromise = null;
+
+/**
+ * Initialize the store once per session. Idempotent: repeated calls — a view
+ * remount on tab switch, or the app-shell boot-init — return the same
+ * in-flight/settled promise instead of re-reading storage and re-requesting
+ * sync. SyncScheduler.start() is itself guarded, but this also avoids the
+ * redundant IndexedDB reads and signal churn on every tab switch.
+ */
+export function initializeStore() {
+    if (!_initPromise) _initPromise = _initializeStore();
+    return _initPromise;
+}
+
+async function _initializeStore() {
     isLoading.value = true;
 
     try {

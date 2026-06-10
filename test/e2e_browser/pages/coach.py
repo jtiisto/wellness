@@ -1,9 +1,26 @@
+from playwright.sync_api import expect
+
+
 class CoachPage:
     def __init__(self, page):
         self.page = page
 
     def wait_for_loaded(self):
         self.page.wait_for_selector(".coach", timeout=5000)
+
+    def wait_for_plan(self):
+        """Wait for the seeded plan to actually render — the deterministic signal
+        that sync + render finished. Replaces the fixed sleep that flaked when
+        sync ran long."""
+        self.page.wait_for_selector(".workout-day-name", timeout=10000)
+
+    def expect_start_gate_active(self):
+        """Auto-wait then assert the start gate is active (read-only workout)."""
+        expect(self.page.locator(".workout-view.read-only")).to_be_visible()
+
+    def expect_start_gate_inactive(self):
+        """Auto-wait then assert the start gate has cleared."""
+        expect(self.page.locator(".workout-view.read-only")).to_have_count(0)
 
     def get_sync_dot_class(self):
         dot = self.page.locator(".sync-dot")

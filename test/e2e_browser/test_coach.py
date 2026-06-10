@@ -2,6 +2,7 @@
 import re
 
 import pytest
+from playwright.sync_api import expect
 from pages.app_shell import AppShellPage
 from pages.coach import CoachPage
 
@@ -15,14 +16,13 @@ def coach_page(app_page, seeded_coach_db):
     shell.navigate_to("Coach")
     coach = CoachPage(app_page)
     coach.wait_for_loaded()
-    app_page.wait_for_timeout(2000)
+    coach.wait_for_plan()
     return coach
 
 
 def test_plan_displays(coach_page):
     """Seeded plan renders with correct title."""
-    title = coach_page.get_workout_title()
-    assert title == "Test Workout"
+    expect(coach_page.page.locator(".workout-day-name")).to_have_text("Test Workout")
 
 
 def test_blocks_display(coach_page):
@@ -66,14 +66,14 @@ def test_session_feedback(coach_page, app_page):
 
 def test_start_gate_blocks_input(coach_page, app_page):
     """Exercises are read-only before Start Workout is clicked."""
-    assert coach_page.is_start_gate_active()
+    coach_page.expect_start_gate_active()
 
 
 def test_start_gate_unlocks_on_click(coach_page, app_page):
     """Clicking Start Workout removes the gate and enables input."""
-    assert coach_page.is_start_gate_active()
+    coach_page.expect_start_gate_active()
     coach_page.start_workout()
-    assert not coach_page.is_start_gate_active()
+    coach_page.expect_start_gate_inactive()
 
 
 def test_start_gate_unlocks_on_failure(coach_page, app_page):
@@ -82,7 +82,7 @@ def test_start_gate_unlocks_on_failure(coach_page, app_page):
     Intercept the POST to force a failure; the gate should still open
     because any click (success or failure) satisfies the gate condition.
     """
-    assert coach_page.is_start_gate_active()
+    coach_page.expect_start_gate_active()
 
     # Block the start endpoint to force a failure
     app_page.route("**/api/coach/workout/*/start", lambda route: route.abort())
@@ -90,7 +90,7 @@ def test_start_gate_unlocks_on_failure(coach_page, app_page):
     app_page.unroute_all(behavior="ignoreErrors")
 
     # Gate should be unlocked despite failure
-    assert not coach_page.is_start_gate_active()
+    coach_page.expect_start_gate_inactive()
 
 
 def test_calendar_highlights_today_with_scheduled_status(coach_page, app_page):

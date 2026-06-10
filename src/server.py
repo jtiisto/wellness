@@ -96,6 +96,34 @@ def _safe_static_file(subdir: str, file_path: str) -> Path:
     return candidate
 
 
+def _app_shell_urls() -> list:
+    """Build the service worker's precache list by walking PUBLIC_DIR.
+
+    Generated at serve time so a newly added JS module/component or vendored
+    library under public/js/ is precached automatically — there is no
+    hand-maintained list in sw.js to drift out of sync. (Drift previously
+    dropped coach/last-performance.js from the precache, breaking Coach offline
+    after every deploy.) Returns BASE_PATH-prefixed URLs; injected into sw.js as
+    a JSON array literal in place of the $APP_SHELL_URLS$ placeholder.
+    """
+    urls = [
+        f"{BASE_PATH}/",
+        f"{BASE_PATH}/styles.css",
+        f"{BASE_PATH}/manifest.json",
+        f"{BASE_PATH}/version.json",
+    ]
+    fonts_dir = PUBLIC_DIR / "fonts"
+    if fonts_dir.is_dir():
+        for font in sorted(fonts_dir.glob("*.woff2")):
+            urls.append(f"{BASE_PATH}/fonts/{font.name}")
+    js_dir = PUBLIC_DIR / "js"
+    if js_dir.is_dir():
+        for js_file in sorted(js_dir.rglob("*.js")):
+            rel = js_file.relative_to(js_dir).as_posix()
+            urls.append(f"{BASE_PATH}/js/{rel}")
+    return urls
+
+
 static_router = APIRouter()
 
 
@@ -174,6 +202,7 @@ def serve_sw():
 
     content = sw_path.read_text()
     content = content.replace("$SERVER_VERSION$", SERVER_VERSION)
+    content = content.replace("$APP_SHELL_URLS$", json.dumps(_app_shell_urls()))
     content = content.replace("$BASE_PATH$", BASE_PATH)
 
     return Response(
@@ -258,9 +287,6 @@ def create_app(db_path_overrides=None):
     return StripPrefixMiddleware(inner_app, BASE_PATH)
 
 
-app = create_app()
-
-
 if __name__ == "__main__":
     import argparse
     import uvicorn
@@ -269,4 +295,10 @@ if __name__ == "__main__":
     parser.add_argument("--port", type=int, default=9000, help="Port number (default: 9000)")
     args = parser.parse_args()
 
-    uvicorn.run(app, host="0.0.0.0", port=args.port)
+    # Build the app inside the entrypoint, not at import time, so that importing
+    # `server` is side-effect-free. create_app() runs every module's migrations
+    # and the analysis stale-report recovery (which marks any in-flight report
+    # failed); those belong to an actual server start, not to a stray `import
+    # server` from a test or CLI tool. Prod (systemd unit + server.sh) and dev
+    # both launch through this path: `python src/server.py --port N`.
+    uvicorn.run(create_app(), host="0.0.0.0", port=args.port)

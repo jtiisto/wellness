@@ -45,7 +45,8 @@ wellness/
 │   └── modules/            # Journal, Coach, Analysis routers
 ├── public/                 # PWA frontend (no build step)
 │   ├── js/                 # Preact components per module
-│   │   └── shared/         # Sync scheduler, settings, debug log, data export
+│   │   ├── shared/         # Sync scheduler, settings, debug log, data export
+│   │   └── vendor/         # Vendored runtime libs (Preact, Signals, HTM, …) — no CDN
 │   ├── styles.css          # Dark theme, responsive layout
 │   ├── sw.js               # Service worker for offline
 │   └── manifest.json       # PWA manifest

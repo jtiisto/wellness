@@ -86,10 +86,12 @@ def test_app(tmp_path, tmp_journal_db, tmp_coach_db, tmp_analysis_db, monkeypatc
         return sig + ihdr + idat + iend
     (icons_dir / "icon-192.png").write_bytes(_make_png())
 
-    # Env vars guard the one-time module-level `app = create_app()` that runs on
-    # first `import server`: if this fixture is the first importer, they keep that
-    # production-app build off the real data/ DBs. The per-test app below is built
-    # explicitly with temp-path overrides, so it doesn't depend on these.
+    # Point the module DB-path env vars at this test's temp DBs as a safety net.
+    # The per-test app below is built explicitly with temp-path overrides (R2), so
+    # it doesn't depend on these; they only matter for any code that reads a DB
+    # path from the environment. Importing `server` no longer builds an app
+    # (create_app() runs only from the __main__ entrypoint), so there is no
+    # import-time production-app build to guard against.
     monkeypatch.setenv("JOURNAL_DB_PATH", str(tmp_journal_db))
     monkeypatch.setenv("COACH_DB_PATH", str(tmp_coach_db))
     monkeypatch.setenv("ANALYSIS_DB_PATH", str(tmp_analysis_db))
