@@ -9,11 +9,9 @@ import {
     logHasUploadableContent,
     nextDirtyAfterApply,
     selectLogsToUpload,
-    resolveForceSyncLogs,
     pruneOlderThan,
     maxPlanVersion,
     withBaseTokens,
-    withServerTokens,
     adoptUploadResults,
 } from '../../public/js/coach/sync-logic.js';
 
@@ -122,15 +120,6 @@ test('selectLogsToUpload: attaches per-record base tokens to sent logs', () => {
     assert.equal(logsToUpload.d1.ex_1._baseLastModifiedAt, 'ex1');
 });
 
-test('withServerTokens: stamps local records with the SERVER\'s tokens (force-sync)', () => {
-    const local = { ex_1: { sets: [{ reps: 9 }] }, ex_new: { sets: [{ reps: 1 }] } };
-    const server = { _lastModified: 'sDay', ex_1: { _lastModified: 'sEx1' } };
-    const out = withServerTokens(local, server);
-    assert.equal(out._baseLastModifiedAt, 'sDay');
-    assert.equal(out.ex_1._baseLastModifiedAt, 'sEx1');     // forces overwrite
-    assert.ok(!('_baseLastModifiedAt' in out.ex_new));      // server lacks it → insert
-});
-
 test('adoptUploadResults: adopts merged serverRow for non-re-modified dates', () => {
     const local = { d1: { ex_1: { local: true } } };
     const results = { d1: { ex_1: { server: true, _lastModified: 's1' } } };
@@ -154,91 +143,11 @@ test('adoptUploadResults: re-modified date keeps local content but advances toke
     assert.equal(next.d2._lastModified, 'srv-day');       // day token advanced
 });
 
-// ---- resolveForceSyncLogs (force-sync LWW merge) -------------------------
-
-test('resolveForceSyncLogs: local newer w/ content uploads; local newer but empty does not clobber', () => {
-    const local = {
-        d1: { _lastModifiedAt: '2026-05-02T00:00:00Z', ex_1: { sets: [{ reps: 5 }] } },
-        d2: { _lastModifiedAt: '2026-05-02T00:00:00Z', session_feedback: {} },
-    };
-    const server = {
-        d1: { _lastModified: '2026-05-01T00:00:00Z', ex_1: { sets: [{ reps: 3 }] } },
-        d2: { _lastModified: '2026-05-01T00:00:00Z', ex_2: { sets: [{ reps: 8 }] } },
-    };
-    const { uploadLogs, mergedLogs, counts } = resolveForceSyncLogs(local, server, null);
-    assert.deepEqual(Object.keys(uploadLogs), ['d1']);
-    assert.equal(mergedLogs.d1, local.d1);    // local wins
-    assert.equal(mergedLogs.d2, server.d2);   // empty local does not clobber server
-    assert.equal(counts.uploaded, 1);
-    assert.equal(counts.accepted, 1);
-});
-
-test('resolveForceSyncLogs: server newer accepted; equal timestamp keeps local', () => {
-    const local = {
-        d1: { _lastModifiedAt: '2026-05-01T00:00:00Z', ex_1: { sets: [{ reps: 5 }] } },
-        d2: { _lastModifiedAt: '2026-05-02T00:00:00Z', ex_1: { sets: [{ reps: 5 }] } },
-    };
-    const server = {
-        d1: { _lastModified: '2026-05-03T00:00:00Z', ex_1: { sets: [{ reps: 9 }] } },
-        d2: { _lastModified: '2026-05-02T00:00:00Z', ex_1: { sets: [{ reps: 1 }] } },
-    };
-    const { mergedLogs, counts } = resolveForceSyncLogs(local, server, null);
-    assert.equal(mergedLogs.d1, server.d1);  // server newer
-    assert.equal(mergedLogs.d2, local.d2);   // equal -> keep local
-    assert.equal(counts.accepted, 1);
-    assert.equal(counts.skipped, 1);
-});
-
-test('resolveForceSyncLogs: local-only out-of-window kept but not uploaded; server-only accepted', () => {
-    const local = {
-        '2026-01-01': { _lastModifiedAt: '2026-01-01T00:00:00Z', ex_1: { sets: [{ reps: 5 }] } },
-    };
-    const server = {
-        '2026-05-01': { _lastModified: '2026-05-01T00:00:00Z', ex_1: { sets: [{ reps: 5 }] } },
-    };
-    const { uploadLogs, mergedLogs, counts } = resolveForceSyncLogs(local, server, '2026-03-01');
-    assert.deepEqual(Object.keys(uploadLogs), []);
-    assert.ok(mergedLogs['2026-01-01']);
-    assert.equal(mergedLogs['2026-05-01'], server['2026-05-01']);
-    assert.equal(counts.skipped, 1);
-    assert.equal(counts.accepted, 1);
-});
-
-test('resolveForceSyncLogs: local-only with content uploads; empty local-only kept not uploaded', () => {
-    const local = {
-        d1: { _lastModifiedAt: '2026-05-02T00:00:00Z', ex_1: { sets: [{ reps: 5 }] } },
-        d2: { _lastModifiedAt: '2026-05-02T00:00:00Z', session_feedback: {} },
-    };
-    const { uploadLogs, counts } = resolveForceSyncLogs(local, {}, null);
-    assert.deepEqual(Object.keys(uploadLogs), ['d1']);
-    assert.equal(counts.uploaded, 1);
-    assert.equal(counts.skipped, 1);
-});
-
 // ---- pruneOlderThan / maxPlanVersion -------------------------------------
 
 test('pruneOlderThan: keeps dates >= cutoff', () => {
     const m = { '2026-04-30': 'a', '2026-05-01': 'b', '2026-05-02': 'c' };
     assert.deepEqual(pruneOlderThan(m, '2026-05-01'), { '2026-05-01': 'b', '2026-05-02': 'c' });
-});
-
-test('resolveForceSyncLogs: forced upload echoes the server day + per-exercise tokens (R3)', () => {
-    const local = { d1: { _lastModifiedAt: '2026-05-02T00:00:00Z', ex_1: { sets: [{ reps: 5 }] } } };
-    const server = {
-        d1: {
-            _lastModified: '2026-05-01T00:00:00Z',
-            ex_1: { _lastModified: '2026-05-01T00:00:00Z', sets: [{ reps: 3 }] },
-        },
-    };
-    const { uploadLogs } = resolveForceSyncLogs(local, server, null);
-    assert.equal(uploadLogs.d1._baseLastModifiedAt, '2026-05-01T00:00:00Z');
-    assert.equal(uploadLogs.d1.ex_1._baseLastModifiedAt, '2026-05-01T00:00:00Z');  // forces overwrite
-});
-
-test('resolveForceSyncLogs: local-only forced upload omits the base token (insert)', () => {
-    const local = { d1: { _lastModifiedAt: '2026-05-02T00:00:00Z', ex_1: { sets: [{ reps: 5 }] } } };
-    const { uploadLogs } = resolveForceSyncLogs(local, {}, null);
-    assert.ok(!('_baseLastModifiedAt' in uploadLogs.d1));
 });
 
 test('maxPlanVersion: latest _lastModified, never below currentMax', () => {

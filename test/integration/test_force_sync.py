@@ -71,13 +71,17 @@ class TestCoachForceSync:
         assert "client_id=${clientId}`)" in self.source or \
                "client_id=${clientId}" in self.source
 
-    def test_compares_timestamps(self):
-        """Should compare local _lastModifiedAt with server _lastModified."""
-        assert "_lastModifiedAt" in self.source
-        assert "_lastModified" in self.source
+    def test_no_client_clock_comparison(self):
+        """Force sync must NOT decide winners by comparing client/server
+        timestamps — the unsafe client-clock LWW path is removed; the server is
+        the only arbiter."""
+        assert "resolveForceSyncLogs" not in self.source
+        assert "withServerTokens" not in self.source
 
-    def test_uploads_client_winning_logs(self):
-        assert "uploadLogs" in self.source
+    def test_uploads_dirty_logs_via_base_tokens(self):
+        """Force sync uploads the dirty set through the normal per-record
+        base-token contract (selectLogsToUpload), not a force-overwrite."""
+        assert "selectLogsToUpload" in self.source
 
     def test_plans_server_authoritative(self):
         """Should overwrite local plans with server plans."""
@@ -94,10 +98,8 @@ class TestCoachForceSync:
         """Should use earliestDate from response, not hardcoded window."""
         assert "data.earliestDate" in self.source
 
-    def test_returns_stats(self):
-        assert "uploaded" in self.source
-        assert "accepted" in self.source
-        assert "skipped" in self.source
+    def test_returns_uploaded_count(self):
+        assert "uploaded: uploadedDates.length" in self.source
 
     def test_logs_force_sync_start(self):
         assert "debugLog('coach-sync', 'force sync start'" in self.source

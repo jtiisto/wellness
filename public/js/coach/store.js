@@ -1,6 +1,7 @@
 /**
  * Coach Store - Signals, LocalForage, and Sync Logic
- * Workout plans are server-authoritative, logs use last-write-wins
+ * Workout plans are server-authoritative; logs use per-record server-token
+ * arbitration (the server is the only arbiter — no client-clock comparison).
  */
 import { signal, batch } from '@preact/signals';
 import localforage from 'localforage';
@@ -11,7 +12,6 @@ import { SyncScheduler } from '../shared/sync-scheduler.js';
 import {
     nextDirtyAfterApply,
     selectLogsToUpload,
-    resolveForceSyncLogs,
     pruneOlderThan,
     maxPlanVersion,
     adoptUploadResults,
@@ -450,79 +450,87 @@ export async function forceSync() {
     isSyncing.value = true;
 
     try {
-        const clientId = syncMetadata.value.clientId;
-        debugLog('coach-sync', 'force sync start', { clientId });
+        const meta = syncMetadata.value;
+        const clientId = meta.clientId;
+        debugLog('coach-sync', 'force sync start', { clientId, dirtyDates: meta.dirtyDates.length });
 
-        // Snapshot generations to detect re-modifications during sync
-        const snapshotGens = { ...syncMetadata.value.dirtyDateGenerations };
+        // Snapshot generations to detect re-modifications mid-sync.
+        const snapshotGens = { ...meta.dirtyDateGenerations };
 
-        // Phase 1: Download full server state (no last_sync_time)
-        const response = await fetch(`${API_BASE}/sync?client_id=${clientId}`, { cache: 'no-store' });
-        if (!response.ok) throw new Error('Failed to download server data');
-        const data = await response.json();
+        // Force sync is the NORMAL sync with a full pull. The server is the only
+        // arbiter — there is no client-side timestamp comparison anywhere, so a
+        // dirty edit is never silently dropped: it is uploaded and arbitrated
+        // per-record (a losing edit is archived server-side), and the download
+        // never clobbers a dirty date.
 
-        // Phase 2: Resolve local-vs-server per date (client-side reconcile).
-        const resolved = resolveForceSyncLogs(
-            workoutLogs.value, data.logs, data.earliestDate,
-        );
-        const { uploadLogs, counts } = resolved;
-        let mergedLogs = resolved.mergedLogs;  // reassigned by the R1 token handling below
-        const { uploaded, accepted, skipped } = counts;
-
-        // Phase 3: Upload client-winning logs
-        const uploadedDates = Object.keys(uploadLogs);
-        if (uploadedDates.length > 0) {
-            const uploadResponse = await fetch(`${API_BASE}/sync`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ clientId, logs: uploadLogs })
-            });
-            if (!uploadResponse.ok) throw new Error('Failed to upload logs');
-
-            const uploadResult = await uploadResponse.json();
-            // R3: the server returns the reconciled day per uploaded date in
-            // `results` (merged per-record — forced overwrites applied, any
-            // server-only records preserved, conflicts server-won). Adopt it over
-            // the optimistic local merge so mergedLogs reflects the real outcome.
-            mergedLogs = adoptUploadResults(
-                mergedLogs, uploadResult.results || {}, snapshotGens,
-                syncMetadata.value.dirtyDateGenerations,
-            );
+        // Phase 1: Upload the dirty set through the per-record base-token contract
+        // (withBaseTokens via selectLogsToUpload); adopt the reconciled `results`.
+        let uploadedDates = [];
+        if (meta.dirtyDates.length > 0) {
+            const { logsToUpload } = selectLogsToUpload(meta.dirtyDates, workoutLogs.value);
+            if (Object.keys(logsToUpload).length > 0) {
+                const uploadResponse = await fetch(`${API_BASE}/sync`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ clientId, logs: logsToUpload })
+                });
+                if (!uploadResponse.ok) throw new Error('Failed to upload logs');
+                const uploadResult = await uploadResponse.json();
+                workoutLogs.value = adoptUploadResults(
+                    workoutLogs.value, uploadResult.results || {}, snapshotGens,
+                    syncMetadata.value.dirtyDateGenerations,
+                );
+                uploadedDates = Object.keys(logsToUpload);
+            }
         }
 
-        // Apply merged state locally
-        batch(() => {
-            // Plans: server-authoritative
-            workoutPlans.value = { ...data.plans };
+        // Phase 2: Full download — no last_sync_time. (The only difference from
+        // the normal incremental sync.)
+        const downloadResponse = await fetch(`${API_BASE}/sync?client_id=${clientId}`, { cache: 'no-store' });
+        if (!downloadResponse.ok) throw new Error('Failed to download server data');
+        const data = await downloadResponse.json();
 
-            // Track latest plan version for polling
+        // Phase 3: Apply server data — plans server-authoritative; logs merged but
+        // SKIPPING dirty dates (those were uploaded above and arbitrated server-side;
+        // the download must never clobber a dirty local edit).
+        batch(() => {
+            workoutPlans.value = { ...data.plans };
             const maxVersion = maxPlanVersion(data.plans, lastKnownPlansVersion);
             if (maxVersion) lastKnownPlansVersion = maxVersion;
 
-            // Logs: merged result
-            workoutLogs.value = mergedLogs;
-
-            // Update earliest date from server
-            if (data.earliestDate) {
-                earliestDate.value = data.earliestDate;
+            const currentDirty = new Set(syncMetadata.value.dirtyDates);
+            const currentLogs = { ...workoutLogs.value };
+            for (const [date, serverLog] of Object.entries(data.logs)) {
+                if (!currentDirty.has(date)) currentLogs[date] = serverLog;
             }
+            workoutLogs.value = currentLogs;
 
+            if (data.earliestDate) earliestDate.value = data.earliestDate;
             syncMetadata.value = {
                 ...syncMetadata.value,
                 lastServerSyncTime: data.serverTime
             };
+
+            if (earliestDate.value) {
+                const cutoff = earliestDate.value;
+                workoutPlans.value = pruneOlderThan(workoutPlans.value, cutoff);
+                workoutLogs.value = pruneOlderThan(workoutLogs.value, cutoff);
+            }
         });
 
-        // Clear dirty state only for dates whose generation hasn't changed
-        const allApplied = [...new Set([...uploadedDates, ...Object.keys(data.logs)])];
-        clearAppliedDirtyDates(allApplied, snapshotGens);
+        // Phase 4: Clear dirty ONLY for dates actually sent whose generation is
+        // unchanged — never the union with all server dates (which previously
+        // cleared dirty for a date whose local edit had been silently discarded).
+        if (uploadedDates.length > 0) {
+            clearAppliedDirtyDates(uploadedDates, snapshotGens);
+        }
 
         await Promise.all([savePlans(), saveLogs(), saveMetadata()]);
         syncStatus.value = 'green';
 
-        debugLog('coach-sync', 'force sync complete', { uploaded, accepted, skipped });
+        debugLog('coach-sync', 'force sync complete', { uploaded: uploadedDates.length });
         scheduler.resetRetry();
-        return { success: true, uploaded, accepted, skipped };
+        return { success: true, uploaded: uploadedDates.length };
 
     } catch (error) {
         console.error('Force sync failed:', error);

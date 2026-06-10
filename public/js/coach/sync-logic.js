@@ -28,9 +28,9 @@ export function hasFeedbackContent(log) {
 }
 
 // A log is worth uploading if it carries real exercise data OR non-empty session
-// feedback. Truly-empty logs are skipped. Feedback-only logs upload safely: the
-// server's content guard authoritatively rejects (via contentRejectedLogs) a
-// feedback-only payload that would overwrite an existing logged workout.
+// feedback. Truly-empty logs are skipped. Feedback-only logs upload safely
+// because the server arbitrates per record: a feedback-only payload updates only
+// the feedback record and never touches the day's already-logged exercises.
 export function logHasUploadableContent(log) {
     return logHasExerciseContent(log) || hasFeedbackContent(log);
 }
@@ -147,101 +147,7 @@ function advanceRecordTokens(localLog, serverRow) {
     return out;
 }
 
-/**
- * Force-sync upload payload: stamp the local log's records with the SERVER's
- * current tokens (`serverLog`'s day + per-exercise `_lastModified`) so each
- * forced overwrite passes per-record arbitration. A record the server lacks gets
- * no base (inserted). Distinct from `withBaseTokens` (which echoes the local
- * log's own last-seen tokens for the normal sync path). Pure shallow copy.
- */
-export function withServerTokens(localLog, serverLog) {
-    const srv = serverLog || {};
-    const out = {};
-    for (const [key, val] of Object.entries(localLog)) {
-        const srvRec = srv[key];
-        if (val && typeof val === 'object' && srvRec && srvRec._lastModified) {
-            out[key] = { ...val, _baseLastModifiedAt: srvRec._lastModified };
-        } else {
-            out[key] = val;
-        }
-    }
-    if (srv._lastModified) out._baseLastModifiedAt = srv._lastModified;
-    return out;
-}
-
-
-
-// ---- Force-sync merge + window pruning -----------------------------------
-
-/**
- * Force-sync per-date resolution (client-side last-write-wins).
- * For each date across local+server logs, decide upload / accept-server / skip:
- *   - local-only & older than the window  -> keep local, don't upload (skip)
- *   - both present, local newer & uploadable -> upload local
- *   - both present, local newer but empty   -> take server (clobber guard)
- *   - both present, server newer            -> take server
- *   - both present, equal timestamp         -> keep local
- *   - local-only & uploadable               -> upload local
- *   - local-only & empty                    -> keep local, don't upload
- *   - server-only                           -> take server
- *
- * @returns {{uploadLogs: Object, mergedLogs: Object, counts: {uploaded:number, accepted:number, skipped:number}}}
- */
-export function resolveForceSyncLogs(localLogs, serverLogs, earliestDate) {
-    const uploadLogs = {};
-    const mergedLogs = {};
-    let uploaded = 0, accepted = 0, skipped = 0;
-    const allDates = new Set([...Object.keys(localLogs), ...Object.keys(serverLogs)]);
-
-    for (const date of allDates) {
-        const localLog = localLogs[date];
-        const serverLog = serverLogs[date];
-
-        if (!serverLog && earliestDate && date < earliestDate) {
-            mergedLogs[date] = localLog;  // local-only outside window
-            skipped++;
-            continue;
-        }
-
-        if (localLog && serverLog) {
-            const localTs = localLog._lastModifiedAt || '';
-            const serverTs = serverLog._lastModified || '';
-            if (localTs > serverTs) {
-                if (logHasUploadableContent(localLog)) {
-                    // Echo the server's CURRENT per-record tokens so each forced
-                    // overwrite passes per-record arbitration (R3). The reconciled
-                    // day comes back in `results` and is adopted by the caller.
-                    uploadLogs[date] = withServerTokens(localLog, serverLog);
-                    mergedLogs[date] = localLog;
-                    uploaded++;
-                } else {
-                    mergedLogs[date] = serverLog;  // newer but empty: don't clobber
-                    accepted++;
-                }
-            } else if (serverTs > localTs) {
-                mergedLogs[date] = serverLog;
-                accepted++;
-            } else {
-                mergedLogs[date] = localLog;       // equal: keep local
-                skipped++;
-            }
-        } else if (localLog) {
-            if (logHasUploadableContent(localLog)) {
-                uploadLogs[date] = withServerTokens(localLog, undefined);  // local-only → insert
-                mergedLogs[date] = localLog;
-                uploaded++;
-            } else {
-                mergedLogs[date] = localLog;       // local-only empty: keep, no upload
-                skipped++;
-            }
-        } else {
-            mergedLogs[date] = serverLog;
-            accepted++;
-        }
-    }
-
-    return { uploadLogs, mergedLogs, counts: { uploaded, accepted, skipped } };
-}
+// ---- Window pruning + plan version --------------------------------------
 
 /** Keep only entries whose date key is >= cutoff (server sync-window boundary). */
 export function pruneOlderThan(dateKeyedMap, cutoff) {

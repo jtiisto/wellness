@@ -307,3 +307,62 @@ def test_forcesync_during_edit_preserves_latest(coach_sync_page, app_server):
     assert len(sets) >= 1
     assert sets[0]["weight"] == 42, (
         f"Edit during forceSync was lost; server has weight {sets[0].get('weight')}")
+
+
+def test_forcesync_preserves_dirty_edit_when_server_day_advanced(coach_sync_page, app_server):
+    """Force Sync preserves a dirty offline edit even when another device has
+    advanced that day's server stamp — the edit converges (the untouched
+    exercise the client edited wins) instead of vanishing.
+
+    Exercises the rebuilt force-sync, which uploads the dirty record through
+    per-record arbitration rather than discarding it client-side on a wall-clock
+    comparison. NOTE: this is an end-to-end *behavior* guard, not a strict
+    isolator of the old bug — the pre-fix client-clock discard is removed
+    structurally, and online the (also-safe) auto-sync masks it, so this asserts
+    the user-facing guarantee rather than failing on the old force-sync alone.
+    """
+    coach = coach_sync_page
+    page = coach.page
+    today = coach._seed_info["dates"][0]
+
+    # 1. Log a set and let it sync — establishes the client's base token for ex_1.
+    coach.start_workout()
+    coach.expand_exercise("KB Goblet Squat")
+    page.wait_for_timeout(300)
+    coach.fill_set_weight(0, 24)
+    coach.fill_set_reps(0, 10)
+    page.wait_for_timeout(3000)
+    page.wait_for_selector(".sync-dot.green", timeout=10000)
+
+    # 2. Go offline and make a dirty edit so it cannot auto-sync.
+    page.context.set_offline(True)
+    coach.fill_set_weight(0, 42)
+    page.wait_for_timeout(500)
+
+    # 3. Another device writes feedback on the SAME day, bumping the server's
+    #    day stamp above the offline edit's client stamp (the 'server newer'
+    #    trap) without touching ex_1.
+    time.sleep(1)
+    resp = http_requests.post(
+        f"{app_server['url']}/api/coach/sync",
+        json={"clientId": "other-device",
+              "logs": {today: {"session_feedback": {"general_notes": "from another device"}}}})
+    assert resp.ok, resp.text
+
+    # 4. Back online; Force Sync.
+    page.context.set_offline(False)
+    page.once("dialog", lambda d: d.accept())
+    shell = AppShellPage(page)
+    shell.open_tools()
+    page.locator(".tools-item").filter(has_text="Force Sync").click()
+    page.wait_for_timeout(SYNC_DELAY_MS + 6000)
+    page.wait_for_selector(".sync-dot.green", timeout=10000)
+
+    # 5. The offline edit must have reached the server (uploaded + accepted
+    #    per-record), not been silently dropped by a whole-day replace.
+    server_log = _get_server_log(app_server, today)
+    assert server_log is not None
+    sets = server_log.get("ex_1", {}).get("sets", [])
+    assert sets and sets[0]["weight"] == 42, (
+        f"force-sync dropped the dirty edit; server weight="
+        f"{sets[0].get('weight') if sets else None}")
