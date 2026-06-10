@@ -8,7 +8,7 @@ A personal health and fitness dashboard that unifies daily habit tracking, worko
 Daily habit and health tracking with multi-device sync. Track supplements, habits, metrics, and any custom data points. Features conflict-aware synchronization with per-record versioning so multiple devices stay in sync without data loss. Sync runs automatically via a shared scheduler that responds to edits, network changes, and page visibility.
 
 ### Coach
-Workout planning and logging. Supports structured workout plans with blocks (warmup, strength, cardio), set-level tracking (weight, reps, RPE), and multiple exercise types including strength, cardio, duration, and checklists. Plans are managed server-side; logs sync from clients using last-write-wins. Automatic sync with debounced uploads and periodic polling for plan changes. Configurable pre/post-workout hooks fire shell scripts to capture stats (e.g., Garmin training readiness) before exercise overwrites them.
+Workout planning and logging. Supports structured workout plans with blocks (warmup, strength, cardio), set-level tracking (weight, reps, RPE), and multiple exercise types including strength, cardio, duration, and checklists. Plans are managed server-side; logs sync from clients with per-record server-token arbitration (the server is the only arbiter — client clock skew can never reject or overwrite a legitimate edit). Automatic sync with debounced uploads and periodic polling for plan changes. Configurable pre/post-workout hooks fire shell scripts to capture stats (e.g., Garmin training readiness) before exercise overwrites them.
 
 ### Analysis
 LLM-powered health insights. Submits structured prompts to Claude Code CLI with access to all data via MCP servers. Includes pre-built queries for post-workout analysis, pre-workout readiness checks, and weekly performance reviews. Custom queries can be added in `src/modules/user_queries.py` (gitignored) for personal or sensitive analysis like migraine trigger assessments. Reports are generated asynchronously using stream-json output and rendered as markdown, with CLI execution metadata (cost, duration, turns) tracked per report.
@@ -50,13 +50,16 @@ wellness/
 │   ├── styles.css          # Dark theme, responsive layout
 │   ├── sw.js               # Service worker for offline
 │   └── manifest.json       # PWA manifest
-├── mcp/                    # MCP servers for AI data access
+├── mcp_servers/            # MCP servers for AI data access
 │   ├── journal_mcp/        # Read-only journal queries
 │   └── coach_mcp/          # Read/write workout data
-├── test/                   # Pytest suite
-│   ├── unit/               # Unit tests
-│   ├── integration/        # Integration tests
-│   └── e2e_browser/        # Playwright E2E browser tests
+├── test/                   # Test suites
+│   ├── test_*.py           # Top-level unit tests
+│   ├── journal/, coach/    # Per-module unit + integration tests
+│   ├── analysis/           # Analysis module tests
+│   ├── integration/        # Cross-module integration tests
+│   ├── e2e_browser/        # Playwright E2E browser tests (pages/ objects)
+│   └── js/                 # node:test suites for client sync logic
 ├── bin/                    # Server control, deployment, and hook scripts
 ├── githooks/               # Shared git hooks (enable: git config core.hooksPath githooks)
 ├── data/                   # SQLite databases (runtime)

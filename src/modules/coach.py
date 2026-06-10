@@ -1,6 +1,8 @@
 """
 Coach API Router - extracted from coach/src/server.py
-Workout plan management and log synchronization (last-write-wins).
+Workout plan management and log synchronization (per-record server-token
+arbitration — the server compares its stored stamp against the client's echoed
+base token, never the client clock).
 """
 import asyncio
 import json

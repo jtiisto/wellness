@@ -33,6 +33,7 @@ plans/
 
 # Claude Code
 CLAUDE.md
+.claude/
 
 # OS
 .DS_Store

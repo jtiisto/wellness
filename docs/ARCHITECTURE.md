@@ -58,7 +58,7 @@ Both Journal and Coach modules use a shared `SyncScheduler` class (`public/js/sh
 The scheduler triggers sync automatically based on:
 
 - **Edit debounce** — When local data changes, sync is scheduled after a 2.5s debounce window to batch rapid edits
-- **Periodic polling** — Every 30s, checks for server-side changes (Coach polls `/plans-version`; Journal syncs if dirty)
+- **Periodic polling** — Every 30s (Coach first polls the cheap `/plans-version` and full-syncs only on a version change or local dirty data; Journal has no pre-check and runs a full sync every tick)
 - **Network restore** — Syncs immediately when the browser comes back online
 - **Page visibility** — Re-syncs when the app regains focus after being backgrounded
 
@@ -311,9 +311,11 @@ This means the pre-workout hook won't fire when offline, which is intentional: t
 
 Both modules support force sync (accessible from the settings menu). Force sync reports per-module counts of uploaded and accepted records.
 
-Coach's force sync performs a full bidirectional reconciliation by timestamp comparison and skips logs without exercise content to avoid clobbering real data with empty payloads.
+Both modules' force sync is server-arbitrated — the normal sync flow with a full pull; the client never decides a winner by comparing client-generated timestamps.
 
-Journal's force sync is server-arbitrated: it does a full pull (delta with no `since`), then re-uploads all currently dirty records through the same `_baseLastModifiedAt` optimistic-concurrency contract used by normal sync. The client never decides a winner by comparing client-generated timestamps. Generation counters are snapshotted before the upload so concurrent edits during the force sync stay dirty and get picked up by the next cycle.
+Coach's force sync uploads the dirty set through the same per-record base-token contract as normal sync (`selectLogsToUpload`/`withBaseTokens`), adopts the server's reconciled `results`, then downloads the full window (no `last_sync_time`) and applies it to non-dirty dates only. Dirty flags clear only for dates actually sent whose generation counter is unchanged, so an edit made mid-force-sync stays dirty for the next cycle.
+
+Journal's force sync does a full pull (delta with no `since`), then re-uploads all currently dirty records through the same `_baseLastModifiedAt` optimistic-concurrency contract used by normal sync. Generation counters are snapshotted before the upload so concurrent edits during the force sync stay dirty and get picked up by the next cycle.
 
 ### Analysis: Offline Cache (No Sync)
 
@@ -456,9 +458,10 @@ Custom queries appear in the Analysis UI alongside built-in queries. The server 
 
 **Pytest** with `pytest-asyncio` for async test support. Tests are organized by module:
 
-- **Unit tests** (`test/unit/`, `test/*/unit/`) — Isolated function and class tests
+- **Unit tests** (`test/test_*.py`, `test/*/unit/`) — Isolated function and class tests (top-level files plus per-module `unit/` dirs)
 - **Integration tests** (`test/integration/`, `test/*/integration/`) — API and cross-component tests with temp databases
 - **E2E browser tests** (`test/e2e_browser/`) — Playwright tests that run against a real server with seeded databases, covering navigation, sync, offline behavior, and responsive layout
+- **JS unit tests** (`test/js/`) — `node:test` suites for the pure client sync-logic modules; run with `node --test test/js/*.test.js`
 
 Key testing patterns:
 - Each test gets isolated temporary databases via fixtures

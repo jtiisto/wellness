@@ -178,10 +178,8 @@ ARCHIVE_RETENTION_DAYS = 14
 def _purge_old_archives(conn):
     """Delete archive rows older than ARCHIVE_RETENTION_DAYS.
 
-    Intended to be called opportunistically during sync. Cheap (indexed on
-    superseded_at) and idempotent — safe to invoke on every sync request.
-    Not yet wired in; the call site is added when sync endpoints start writing
-    archive rows.
+    Called opportunistically on every sync upload (see _sync_update). Cheap
+    (indexed on superseded_at) and idempotent.
     """
     cutoff = utc_days_ago(ARCHIVE_RETENTION_DAYS)
     cursor = conn.cursor()

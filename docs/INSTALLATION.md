@@ -176,7 +176,7 @@ Add the MCP servers to your Claude Code settings file at `.claude/settings.local
     "journal-localdb": {
       "command": "python3",
       "args": ["-m", "journal_mcp"],
-      "cwd": "/absolute/path/to/wellness/mcp",
+      "cwd": "/absolute/path/to/wellness/mcp_servers",
       "env": {
         "JOURNAL_DB_PATH": "/absolute/path/to/wellness/data/journal.db"
       }
@@ -184,7 +184,7 @@ Add the MCP servers to your Claude Code settings file at `.claude/settings.local
     "coach-localdb": {
       "command": "python3",
       "args": ["-m", "coach_mcp"],
-      "cwd": "/absolute/path/to/wellness/mcp",
+      "cwd": "/absolute/path/to/wellness/mcp_servers",
       "env": {
         "COACH_DB_PATH": "/absolute/path/to/wellness/data/coach.db"
       }
@@ -193,7 +193,7 @@ Add the MCP servers to your Claude Code settings file at `.claude/settings.local
 }
 ```
 
-The `cwd` must point to the `mcp/` directory so Python can resolve the module packages. The `env` overrides are optional - both servers default to `../../data/<module>.db` relative to their own location.
+The `cwd` must point to the `mcp_servers/` directory so Python can resolve the module packages. The `env` overrides are optional - both servers default to `../../data/<module>.db` relative to their own location.
 
 #### Verifying MCP tools
 
@@ -216,7 +216,7 @@ Add MCP servers to your Gemini CLI settings file at `~/.gemini/settings.json`:
     "journal-localdb": {
       "command": "python3",
       "args": ["-m", "journal_mcp"],
-      "cwd": "/absolute/path/to/wellness/mcp",
+      "cwd": "/absolute/path/to/wellness/mcp_servers",
       "env": {
         "JOURNAL_DB_PATH": "/absolute/path/to/wellness/data/journal.db"
       }
@@ -224,7 +224,7 @@ Add MCP servers to your Gemini CLI settings file at `~/.gemini/settings.json`:
     "coach-localdb": {
       "command": "python3",
       "args": ["-m", "coach_mcp"],
-      "cwd": "/absolute/path/to/wellness/mcp",
+      "cwd": "/absolute/path/to/wellness/mcp_servers",
       "env": {
         "COACH_DB_PATH": "/absolute/path/to/wellness/data/coach.db"
       }
@@ -273,8 +273,8 @@ Both MCP servers accept environment variables to override database paths:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `JOURNAL_DB_PATH` | `mcp/../data/journal.db` | Path to journal SQLite database |
-| `COACH_DB_PATH` | `mcp/../data/coach.db` | Path to coach SQLite database |
+| `JOURNAL_DB_PATH` | `mcp_servers/../data/journal.db` | Path to journal SQLite database |
+| `COACH_DB_PATH` | `mcp_servers/../data/coach.db` | Path to coach SQLite database |
 
 ---
 
@@ -300,8 +300,8 @@ Chrome on Android identifies PWAs by scope on the same origin. If Wellness and S
 
 - Ensure `fastmcp` is installed: `pip install fastmcp`
 - Verify the database files exist in `data/` (they are created on first server start)
-- Check that `cwd` in MCP config points to the `mcp/` directory, not the individual server directory
-- Test a server directly: `cd mcp && python3 -m journal_mcp`
+- Check that `cwd` in MCP config points to the `mcp_servers/` directory, not the individual server directory
+- Test a server directly: `cd mcp_servers && python3 -m journal_mcp`
 
 ### Analysis module not working
 
