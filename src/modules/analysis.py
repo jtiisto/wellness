@@ -16,6 +16,7 @@ from .analysis_db import (init_database, create_report, update_report_running,
     update_report_completed, update_report_failed, get_report, list_reports,
     get_pending_reports, delete_report, has_active_report, recover_stale_reports)
 from .analysis_queries import get_query, list_queries, build_prompt
+from .background import spawn
 
 
 # ==================== Claude CLI Execution ====================
@@ -106,9 +107,12 @@ async def run_report(report_id: int, prompt: str, extra_tools, timeout, db_path:
     """Background task: execute Claude query and update report status.
 
     ``db_path`` (a string) and ``llm_dir`` are injected by create_router rather
-    than read from a module global (R2)."""
-    update_report_running(db_path, report_id)
+    than read from a module global (R2). The 'running' mark sits INSIDE the try:
+    any failure — including the mark itself — lands the report in 'failed'
+    rather than leaving it wedged in 'pending'/'running', which would block the
+    single-active-report 409 guard until a server restart."""
     try:
+        update_report_running(db_path, report_id)
         response_text, cli_meta = await execute_claude_query(prompt, extra_tools, timeout, llm_dir=llm_dir)
         meta_json = None
         if cli_meta:
@@ -121,7 +125,11 @@ async def run_report(report_id: int, prompt: str, extra_tools, timeout, db_path:
             })
         update_report_completed(db_path, report_id, response_text, meta_json)
     except Exception as e:
-        update_report_failed(db_path, report_id, str(e))
+        try:
+            update_report_failed(db_path, report_id, str(e))
+        except Exception:
+            # Best effort — recover_stale_reports cleans up on next start.
+            pass
 
 
 # ==================== Request Models ====================
@@ -169,7 +177,7 @@ def create_router(db_path: Path) -> APIRouter:
         extra_tools = query.get("extra_allowed_tools")
         timeout = query.get("timeout")
         report_id = create_report(db_path_str, query["id"], query["label"], prompt)
-        asyncio.create_task(run_report(report_id, prompt, extra_tools, timeout, db_path_str, llm_dir))
+        spawn(run_report(report_id, prompt, extra_tools, timeout, db_path_str, llm_dir))
         return JSONResponse(content={"id": report_id, "status": "pending"}, status_code=201)
 
     @router.get("/reports/pending")

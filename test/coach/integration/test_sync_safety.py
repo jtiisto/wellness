@@ -560,3 +560,101 @@ def test_client_behind_clock_still_wins_with_token(client, coach_registered_clie
 
     result = _upload(client, coach_registered_client, today, edit)
     assert _results(result)[today]["ex_1"]["user_note"] == "behind-clock edit"
+
+
+# ===========================================================================
+# Exercise-only accepted writes must reach other devices' incremental pulls
+# ===========================================================================
+
+@pytest.mark.integration
+class TestExerciseOnlyWritePropagation:
+    """The day-level stamp bumps only when the FEEDBACK record is accepted (it
+    is that record's concurrency token), so a day where only exercise records
+    were accepted kept its old stamp — and the incremental GET, filtering
+    solely on workout_session_logs.last_modified, never delivered it to the
+    other device. The EXISTS arm on exercise_logs.last_modified fixes
+    propagation without touching arbitration."""
+
+    def test_exercise_only_insert_reaches_other_device(self, client, coach_registered_client):
+        import time as _time
+        date = datetime.now().strftime("%Y-%m-%d")
+
+        # Device A creates the day (feedback + ex_1) and is fully synced:
+        # its last_sync_time equals the day's stamp.
+        _upload(client, coach_registered_client, date, {
+            "session_feedback": {"general_notes": "from device A"},
+            "ex_1": {"sets": [{"set_num": 1, "weight": 100, "reps": 5}]},
+        })
+        day_token = _server_token(client, coach_registered_client, date)
+        assert day_token
+
+        # Device B inserts a NEW exercise only — no feedback record in the
+        # payload, so the day-level stamp must NOT move (feedback gate).
+        _time.sleep(0.005)
+        _upload(client, "device-b", date, {
+            "ex_2": {"sets": [{"set_num": 1, "weight": 50, "reps": 10}]},
+        })
+        assert _server_token(client, coach_registered_client, date) == day_token
+
+        # Device A's incremental pull (since its own day stamp) must now
+        # deliver the day carrying B's exercise. Pre-fix: the day was filtered
+        # out (stamp unchanged) and A stayed divergent until a re-edit or
+        # force sync.
+        resp = client.get(
+            f"/api/coach/sync?client_id={coach_registered_client}"
+            f"&last_sync_time={day_token}")
+        assert resp.status_code == 200
+        logs = resp.json()["logs"]
+        assert date in logs, "exercise-only accepted write was not propagated"
+        assert "ex_2" in logs[date]
+        # A's own ex_1 rides along in the merged day (assemble_log is whole-day)
+        assert "ex_1" in logs[date]
+
+
+# ===========================================================================
+# Deletion contract: an emptied record with a valid base token clears server data
+# ===========================================================================
+
+@pytest.mark.integration
+class TestEmptiedRecordClearsServerCopy:
+    """The client expresses 'this content was deleted' by uploading the emptied
+    record with its base token. The server's normal per-record arbitration
+    accepts it and replaces the record's sets wholesale — i.e. with none. A
+    stale token still keeps the server's copy (no clobbering newer data)."""
+
+    def test_empty_sets_with_valid_token_clear_the_servers_sets(self, client, coach_registered_client):
+        date = datetime.now().strftime("%Y-%m-%d")
+        _upload(client, coach_registered_client, date, {
+            "ex_1": {"sets": [{"set_num": 1, "weight": 100, "reps": 5}]},
+        })
+        assert _server_day(client, coach_registered_client, date)["ex_1"]["sets"]
+
+        # Delete the set: re-upload ex_1 with empty sets + its current token.
+        result = _upload_with_token(client, coach_registered_client, date, {
+            "ex_1": {"sets": []},
+        })
+        merged = _results(result)[date]
+        assert merged["ex_1"].get("sets", []) == []
+        assert _server_day(client, coach_registered_client, date)["ex_1"].get("sets", []) == []
+
+    def test_empty_sets_with_stale_token_keep_the_servers_sets(self, client, coach_registered_client):
+        date = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+        _upload(client, coach_registered_client, date, {
+            "ex_1": {"sets": [{"set_num": 1, "weight": 100, "reps": 5}]},
+        })
+        stale_token = _server_day(client, coach_registered_client, date)["ex_1"]["_lastModified"]
+
+        # Another device updates ex_1 (advances the server stamp).
+        import time as _time
+        _time.sleep(0.005)
+        _upload_with_token(client, "device-b", date, {
+            "ex_1": {"sets": [{"set_num": 1, "weight": 105, "reps": 5}]},
+        })
+
+        # A deletion carrying the now-stale token must be rejected per-record.
+        result = _upload(client, coach_registered_client, date, {
+            "ex_1": {"sets": [], "_baseLastModifiedAt": stale_token},
+        })
+        merged = _results(result)[date]
+        assert merged["ex_1"]["sets"], "stale-token deletion clobbered newer server data"
+        assert merged["ex_1"]["sets"][0]["weight"] == 105

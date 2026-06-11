@@ -304,10 +304,16 @@ async function triggerSync() {
 
         // Step 1: Upload dirty logs first
         if (meta.dirtyDates.length > 0) {
-            // Pure: include each dirty date whose local log carries uploadable
-            // content (exercise data or feedback); truly-empty/missing logs are
-            // skipped and so stay dirty.
-            const { logsToUpload } = selectLogsToUpload(meta.dirtyDates, workoutLogs.value);
+            // Pure: include each dirty date whose log carries content or is a
+            // token-bearing emptied day (deletion update). Dates that can never
+            // upload — pruned-away or empty-and-never-synced logs — are dropped
+            // from the dirty set here, or they'd wedge the client red forever.
+            const { logsToUpload, unsatisfiableDates } =
+                selectLogsToUpload(meta.dirtyDates, workoutLogs.value);
+            if (unsatisfiableDates.length > 0) {
+                debugLog('coach-sync', 'dropping unsatisfiable dirty dates', { dates: unsatisfiableDates });
+                clearAppliedDirtyDates(unsatisfiableDates, snapshotGens);
+            }
 
             debugLog('coach-sync', 'upload attempt', { dates: meta.dirtyDates, logCount: Object.keys(logsToUpload).length });
 
@@ -416,8 +422,13 @@ async function triggerSync() {
             }
         });
 
-        // Clear dirty state only for uploaded dates whose generation hasn't changed
+        // Clear dirty state only for uploaded dates whose generation hasn't changed.
+        // Persist the token-bearing logs BEFORE clearAppliedDirtyDates's metadata
+        // write (it fires saveMetadata internally): IndexedDB writes land in issue
+        // order, so a crash between the two otherwise leaves dirty cleared with
+        // stale base tokens, and the next edit would be wrongly rejected/reverted.
         if (uploadedDates.length > 0) {
+            await saveLogs();
             clearAppliedDirtyDates(uploadedDates, snapshotGens);
         }
 
@@ -467,7 +478,12 @@ export async function forceSync() {
         // (withBaseTokens via selectLogsToUpload); adopt the reconciled `results`.
         let uploadedDates = [];
         if (meta.dirtyDates.length > 0) {
-            const { logsToUpload } = selectLogsToUpload(meta.dirtyDates, workoutLogs.value);
+            const { logsToUpload, unsatisfiableDates } =
+                selectLogsToUpload(meta.dirtyDates, workoutLogs.value);
+            if (unsatisfiableDates.length > 0) {
+                debugLog('coach-sync', 'dropping unsatisfiable dirty dates', { dates: unsatisfiableDates });
+                clearAppliedDirtyDates(unsatisfiableDates, snapshotGens);
+            }
             if (Object.keys(logsToUpload).length > 0) {
                 const uploadResponse = await fetch(`${API_BASE}/sync`, {
                     method: 'POST',
@@ -521,7 +537,10 @@ export async function forceSync() {
         // Phase 4: Clear dirty ONLY for dates actually sent whose generation is
         // unchanged — never the union with all server dates (which previously
         // cleared dirty for a date whose local edit had been silently discarded).
+        // Token-bearing logs persist first (same crash-window ordering as
+        // triggerSync — see there).
         if (uploadedDates.length > 0) {
+            await saveLogs();
             clearAppliedDirtyDates(uploadedDates, snapshotGens);
         }
 

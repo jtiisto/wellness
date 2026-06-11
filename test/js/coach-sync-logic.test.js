@@ -80,19 +80,38 @@ test('nextDirtyAfterApply: a not-applied dirty date is kept', () => {
 
 // ---- selectLogsToUpload (the "cleared == sent" invariant) ----------------
 
-test('selectLogsToUpload: sends content + feedback-only, skips empty/missing', () => {
+test('selectLogsToUpload: sends content + feedback-only; empty-never-synced and missing are unsatisfiable', () => {
     const logs = {
         d1: { ex_1: { sets: [{ reps: 5 }] } },         // exercise content → sent
-        d2: { session_feedback: {} },                   // truly empty → skip
+        d2: { session_feedback: {} },                   // empty, never synced → unsatisfiable
         d3: { session_feedback: { general_notes: 'n' } }, // feedback-only → sent
-        // d4 has no local log object at all
+        // d4 has no local log object at all (window-pruned) → unsatisfiable
     };
     const r = selectLogsToUpload(['d1', 'd2', 'd3', 'd4'], logs);
     assert.deepEqual(Object.keys(r.logsToUpload).sort(), ['d1', 'd3']);
     assert.deepEqual(r.uploadedDates.sort(), ['d1', 'd3']);
-    // The skipped/missing dates are NOT reported as uploaded → they stay dirty.
-    assert.ok(!r.uploadedDates.includes('d2'));
-    assert.ok(!r.uploadedDates.includes('d4'));
+    // Unsatisfiable dates are reported so the caller can drop them from the
+    // dirty set instead of leaving the client wedged red forever.
+    assert.deepEqual(r.unsatisfiableDates.sort(), ['d2', 'd4']);
+});
+
+test('selectLogsToUpload: a token-bearing EMPTY log uploads as a deletion update', () => {
+    // The user logged a set, synced (so the day carries server tokens), then
+    // deleted the set. The emptied log must still upload so the server clears
+    // its copy — per-record base tokens make the overwrite arbitration-safe.
+    const logs = {
+        d1: {
+            _lastModified: 'day-tok',
+            session_feedback: {},
+            ex_1: { _lastModified: 'ex-tok', sets: [] },
+        },
+    };
+    const r = selectLogsToUpload(['d1'], logs);
+    assert.deepEqual(r.uploadedDates, ['d1']);
+    assert.deepEqual(r.unsatisfiableDates, []);
+    assert.equal(r.logsToUpload.d1._baseLastModifiedAt, 'day-tok');
+    assert.equal(r.logsToUpload.d1.ex_1._baseLastModifiedAt, 'ex-tok');
+    assert.deepEqual(r.logsToUpload.d1.ex_1.sets, []);
 });
 
 // ---- R3 per-record token protocol ----------------------------------------

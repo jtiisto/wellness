@@ -28,11 +28,22 @@ export function hasFeedbackContent(log) {
 }
 
 // A log is worth uploading if it carries real exercise data OR non-empty session
-// feedback. Truly-empty logs are skipped. Feedback-only logs upload safely
-// because the server arbitrates per record: a feedback-only payload updates only
-// the feedback record and never touches the day's already-logged exercises.
+// feedback. Feedback-only logs upload safely because the server arbitrates per
+// record: a feedback-only payload updates only the feedback record and never
+// touches the day's already-logged exercises.
 export function logHasUploadableContent(log) {
     return logHasExerciseContent(log) || hasFeedbackContent(log);
+}
+
+// A log the server already knows: its day stamp (`_lastModified`) was adopted
+// from a previous sync. An EMPTY log in this state expresses deletion — the
+// user logged content, synced, then removed it — and must still be uploaded so
+// the server clears its copy (each emptied record carries its base token, so
+// per-record arbitration protects against clobbering newer remote data).
+// Without this, an emptied synced day was skipped forever: dirty flag stuck
+// red, the 30s poll re-syncing in a loop, and the server keeping deleted sets.
+export function logIsSyncedToServer(log) {
+    return !!log._lastModified;
 }
 
 // ---- Dirty-date state transitions ---------------------------------------
@@ -64,22 +75,39 @@ export function nextDirtyAfterApply(appliedDates, snapshotGens, dirtyDates, dirt
 }
 
 /**
- * Build the upload set from dirty dates + local logs. Includes a date's log iff
- * it exists AND carries uploadable content; truly-empty logs are skipped (and so
- * stay dirty). `uploadedDates` is exactly the set of dates actually sent — the
- * invariant that keeps "dirty cleared == sent".
+ * Build the upload set from dirty dates + local logs. A date's log is included
+ * when it carries uploadable content OR the server already knows the day
+ * (token-bearing empty log = deletion update). `uploadedDates` is exactly the
+ * set of dates actually sent — the invariant that keeps "dirty cleared == sent".
  *
- * @returns {{logsToUpload: Object, uploadedDates: string[]}}
+ * `unsatisfiableDates` are dirty dates that can NEVER become uploadable: the
+ * log is missing entirely (window-pruned), or empty and never synced (nothing
+ * to send and nothing server-side to delete). Leaving them dirty wedges the
+ * client — permanent red status and a full sync every 30s poll — so the caller
+ * drops them from the dirty set (with a debug breadcrumb).
+ *
+ * @returns {{logsToUpload: Object, uploadedDates: string[], unsatisfiableDates: string[]}}
  */
 export function selectLogsToUpload(dirtyDates, localLogs) {
     const logsToUpload = {};
+    const unsatisfiableDates = [];
     for (const date of dirtyDates) {
         const log = localLogs[date];
-        if (!log) continue;
-        if (!logHasUploadableContent(log)) continue;
-        logsToUpload[date] = withBaseTokens(log);
+        if (!log) {
+            unsatisfiableDates.push(date);  // pruned out of the window
+            continue;
+        }
+        if (logHasUploadableContent(log) || logIsSyncedToServer(log)) {
+            logsToUpload[date] = withBaseTokens(log);
+        } else {
+            unsatisfiableDates.push(date);  // empty + never synced
+        }
     }
-    return { logsToUpload, uploadedDates: Object.keys(logsToUpload) };
+    return {
+        logsToUpload,
+        uploadedDates: Object.keys(logsToUpload),
+        unsatisfiableDates,
+    };
 }
 
 /**

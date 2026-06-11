@@ -656,6 +656,15 @@ export async function triggerSync() {
             ...(result.rejectedEntries || []).map(r => `${r.date}|${r.trackerId}`),
         ];
 
+        // Persist the server-stamped tokens BEFORE the metadata write that
+        // clears dirty state (clearDirtyState fires saveMetadata internally).
+        // IndexedDB executes writes in issue order, so without this a crash
+        // between the two writes left dirty cleared with STALE base tokens —
+        // the next edit re-uploaded against an old base and was wrongly
+        // rejected/reverted. This order errs toward "still dirty with fresh
+        // tokens": a harmless re-upload the server accepts (equal-accepts).
+        await Promise.all([saveConfig(), saveLogs()]);
+
         clearDirtyState(resolvedTrackerIds, resolvedEntryKeys,
                         snapshotTrackerGens, snapshotEntryGens);
 
@@ -772,6 +781,9 @@ export async function forceSync() {
                 ...(result.acceptedEntries || []).map(a => `${a.date}|${a.trackerId}`),
                 ...(result.rejectedEntries || []).map(r => `${r.date}|${r.trackerId}`),
             ];
+            // Persist the stamped tokens before clearDirtyState's metadata
+            // write — same crash-window ordering as triggerSync (see there).
+            await Promise.all([saveConfig(), saveLogs()]);
             clearDirtyState(resolvedTrackerIds, resolvedEntryKeys,
                             snapshotTrackerGens, snapshotEntryGens);
 

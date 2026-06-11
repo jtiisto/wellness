@@ -384,3 +384,67 @@ class TestSyncUpdateMeta:
         data = _upload(client, journal_registered_client)
         assert data["serverTime"]
         assert data["serverTime"].endswith("Z")
+
+
+@pytest.mark.integration
+class TestSyncUpdateTransaction:
+    """The upload's check-then-write arbitration runs inside one BEGIN IMMEDIATE
+    transaction (matching coach), and internal errors are not converted into
+    detail-leaking HTTPExceptions."""
+
+    def test_uses_immediate_transaction(self):
+        """Source pin: the arbitration loop must run under immediate_transaction
+        so the SELECT-stamp -> compare -> archive+UPDATE sequence is atomic
+        against a concurrent uploader."""
+        import inspect
+        import modules.journal as journal
+        src = inspect.getsource(journal._sync_update)
+        assert "immediate_transaction" in src
+
+    def test_error_mid_batch_rolls_back_whole_upload(
+        self, client, journal_registered_client, sample_tracker, tmp_journal_db, monkeypatch
+    ):
+        """If the entry loop blows up after a tracker was already accepted, the
+        whole upload must roll back — no half-applied batch."""
+        import modules.journal as journal
+
+        def _boom(*args, **kwargs):
+            raise RuntimeError("synthetic mid-batch failure")
+
+        monkeypatch.setattr(journal, "_apply_entry_upload", _boom)
+        payload = {
+            "clientId": journal_registered_client,
+            "config": [sample_tracker],
+            "days": {"2026-06-10": {sample_tracker["id"]: {"value": 1}}},
+        }
+        with pytest.raises(RuntimeError):
+            client.post("/api/journal/sync/update", json=payload)
+
+        with get_db(tmp_journal_db) as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM trackers WHERE id = ?", (sample_tracker["id"],)
+            ).fetchone()
+            assert row[0] == 0, "accepted tracker survived a failed batch (no rollback)"
+
+    def test_internal_error_returns_500_without_leaking_detail(
+        self, test_app, journal_registered_client, sample_tracker, monkeypatch
+    ):
+        """Internal errors propagate to FastAPI's default handler (which logs the
+        traceback); the response body must not echo the exception text."""
+        from fastapi.testclient import TestClient
+        import modules.journal as journal
+
+        secret = "synthetic-internal-detail-XYZ"
+
+        def _boom(*args, **kwargs):
+            raise RuntimeError(secret)
+
+        monkeypatch.setattr(journal, "_apply_tracker_upload", _boom)
+        with TestClient(test_app, raise_server_exceptions=False) as c:
+            resp = c.post("/api/journal/sync/update", json={
+                "clientId": journal_registered_client,
+                "config": [sample_tracker],
+                "days": {},
+            })
+        assert resp.status_code == 500
+        assert secret not in resp.text

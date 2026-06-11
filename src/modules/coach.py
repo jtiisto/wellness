@@ -7,6 +7,8 @@ base token, never the client clock).
 import asyncio
 import json
 import logging
+import os
+import signal
 import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -29,6 +31,7 @@ from modules.db import (
     column_exists,
     immediate_transaction,
 )
+from modules.background import spawn
 
 logger = logging.getLogger(__name__)
 
@@ -626,10 +629,24 @@ def _workout_status(get_db):
 
 
 def _plans_version(get_db):
-    """Return the latest plan modification timestamp (cheap version check)."""
+    """Return the latest plan modification timestamp (cheap version check).
+
+    Folds deletion tombstones in: deleting a plan removes its workout_sessions
+    row and writes only a deleted_plans tombstone, so without the UNION,
+    deleting any plan other than the most-recently-modified one left
+    MAX(last_modified) unchanged — the 30s poll never fired and a
+    continuously-visible client kept showing the deleted plan until a
+    refocus/online event.
+    """
     with get_db() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT MAX(last_modified) as v FROM workout_sessions")
+        cursor.execute("""
+            SELECT MAX(v) as v FROM (
+                SELECT MAX(last_modified) as v FROM workout_sessions
+                UNION ALL
+                SELECT MAX(deleted_at) as v FROM deleted_plans
+            )
+        """)
         row = cursor.fetchone()
         return PlansVersionResponse(version=row["v"] if row else None)
 
@@ -692,10 +709,22 @@ def _workout_sync_get(get_db, response, client_id, last_sync_time=None):
 
         if last_sync_time:
             cursor.execute("""
-                SELECT * FROM workout_session_logs
-                WHERE last_modified > ?
-                ORDER BY date
-            """, (last_sync_time,))
+                SELECT * FROM workout_session_logs l
+                WHERE l.last_modified > ?
+                   OR EXISTS (
+                        SELECT 1 FROM exercise_logs e
+                        WHERE e.session_log_id = l.id
+                          AND e.last_modified > ?
+                   )
+                ORDER BY l.date
+            """, (last_sync_time, last_sync_time))
+            # The EXISTS arm: the day-level stamp bumps only when the FEEDBACK
+            # record is accepted (it is that record's concurrency token, so it
+            # must not move on exercise-only writes). Without it, a day where
+            # only exercise records were accepted — the R3 multi-device merge —
+            # kept its old stamp and was never delivered to the other device's
+            # incremental pull. Propagation reads child stamps; arbitration
+            # semantics are untouched.
         else:
             cursor.execute("""
                 SELECT * FROM workout_session_logs
@@ -768,16 +797,40 @@ def _workout_sync_post(get_db, payload):
         return {"success": True, "results": results, "serverTime": now}
 
 
+# Hook scripts shell out to external services (e.g. Garmin); a hung script must
+# not leave the hook row at exit_code NULL forever (the UI reads NULL as
+# still-running). Distinct exit codes: -1 = failed to run, -2 = timed out.
+HOOK_TIMEOUT_SECONDS = 120
+
+
 async def _run_hook(get_db, result_id: int, script_path: Path):
     """Run a hook script asynchronously and store results in the database."""
     try:
+        # start_new_session: the script runs in its own process group, so the
+        # timeout kill below takes out the whole tree (a bare proc.kill() would
+        # kill only the shell — a child like curl/sleep inherits the stdout
+        # pipe and communicate() would block until it exits anyway).
         proc = await asyncio.create_subprocess_exec(
             str(script_path),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            start_new_session=True,
         )
-        stdout, stderr = await proc.communicate()
-        exit_code = proc.returncode
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(), timeout=HOOK_TIMEOUT_SECONDS
+            )
+            exit_code = proc.returncode
+        except asyncio.TimeoutError:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+            await proc.wait()
+            logger.error("Hook %d timed out after %ds: %s",
+                         result_id, HOOK_TIMEOUT_SECONDS, script_path)
+            stdout = b""
+            exit_code = -2
 
         with get_db() as conn:
             cursor = conn.cursor()
@@ -859,7 +912,7 @@ async def _start_or_end_workout(get_db, session_id: int, hook_type: str, action_
 
         conn.commit()
 
-    asyncio.create_task(_run_hook(get_db, result_id, script_path))
+    spawn(_run_hook(get_db, result_id, script_path))
 
     return WorkoutActionResponse(status=action_label, result_id=result_id)
 

@@ -68,3 +68,41 @@ class TestPlansVersion:
 
         response = client.get("/api/coach/plans-version")
         assert response.json()["version"] == new_ts
+
+    def test_deleting_a_non_latest_plan_bumps_the_version(self, client, tmp_coach_db):
+        """Deleting a plan removes its session row and writes only a
+        deleted_plans tombstone. The version must fold tombstones in —
+        otherwise deleting any plan other than the most-recently-modified one
+        left MAX(last_modified) unchanged and the 30s poll never noticed, so a
+        continuously-visible client kept showing the deleted plan."""
+        conn = sqlite3.connect(tmp_coach_db)
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute(
+            "INSERT INTO workout_sessions (date, day_name, last_modified) VALUES (?, ?, ?)",
+            ("2025-01-01", "Old Day", "2025-01-01T00:00:00Z"),
+        )
+        conn.execute(
+            "INSERT INTO workout_sessions (date, day_name, last_modified) VALUES (?, ?, ?)",
+            ("2025-06-15", "Latest Day", "2025-06-15T12:00:00Z"),
+        )
+        conn.commit()
+
+        version_before = client.get("/api/coach/plans-version").json()["version"]
+        assert version_before == "2025-06-15T12:00:00Z"
+
+        # Delete the OLDER plan the way delete_workout_plan does: drop the
+        # session row, write a tombstone (stamped now, later than every
+        # session's last_modified).
+        deleted_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        conn.execute("DELETE FROM workout_sessions WHERE date = '2025-01-01'")
+        conn.execute(
+            "INSERT INTO deleted_plans (date, deleted_at) VALUES (?, ?)",
+            ("2025-01-01", deleted_at),
+        )
+        conn.commit()
+        conn.close()
+
+        version_after = client.get("/api/coach/plans-version").json()["version"]
+        assert version_after != version_before, (
+            "plans-version did not change on tombstone-only deletion")
+        assert version_after == deleted_at

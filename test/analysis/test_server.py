@@ -156,3 +156,44 @@ class TestApiPendingReports:
         resp = client.get("/api/analysis/reports/pending")
         assert resp.status_code == 200
         assert resp.json() == []
+
+
+@pytest.mark.integration
+class TestRunReportLifecycle:
+    """run_report must never leave a report wedged in pending/running — any
+    failure (including marking it running) lands it in 'failed', so the
+    single-active-report 409 guard cannot get stuck."""
+
+    async def test_failure_in_running_mark_lands_in_failed(
+        self, analysis_initialized_db, monkeypatch, tmp_path
+    ):
+        import modules.analysis as analysis
+        from modules.analysis_db import get_report
+
+        report_id = create_report(analysis_initialized_db, "t", "T", "prompt")
+
+        def _boom(*a, **k):
+            raise RuntimeError("db hiccup while marking running")
+
+        monkeypatch.setattr(analysis, "update_report_running", _boom)
+        await analysis.run_report(report_id, "prompt", None, None,
+                                  analysis_initialized_db, tmp_path)
+
+        report = get_report(analysis_initialized_db, report_id)
+        assert report["status"] == "failed"
+
+    async def test_spawn_holds_strong_reference_until_done(self):
+        import asyncio
+        from modules import background
+
+        release = asyncio.Event()
+
+        async def work():
+            await release.wait()
+
+        task = background.spawn(work())
+        assert task in background._tasks  # strong ref held while running
+        release.set()
+        await task
+        await asyncio.sleep(0)  # let the done-callback run
+        assert task not in background._tasks  # discarded on completion

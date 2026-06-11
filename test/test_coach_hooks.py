@@ -558,3 +558,26 @@ class TestMCPWorkoutStats:
         conn.close()
 
         assert "workout_stats" not in log_data
+
+
+@pytest.mark.integration
+class TestHookTimeout:
+    """A hung hook script must not leave the result row at exit_code NULL
+    forever — it is killed after HOOK_TIMEOUT_SECONDS and stored as -2."""
+
+    def test_hung_hook_times_out_with_distinct_exit_code(
+        self, client, coach_seeded_database, tmp_path, tmp_coach_db, monkeypatch
+    ):
+        script = tmp_path / "hung-hook.sh"
+        script.write_text("#!/bin/bash\nsleep 60\n")
+        script.chmod(script.stat().st_mode | stat.S_IEXEC)
+        monkeypatch.setattr("modules.coach.get_hook_path", lambda t: script if t == "pre" else None)
+        monkeypatch.setattr("modules.coach.HOOK_TIMEOUT_SECONDS", 1)
+
+        session_id = _get_session_id(tmp_coach_db)
+        resp = client.post(f"/api/coach/workout/{session_id}/start")
+        assert resp.status_code == 200
+        result_id = resp.json()["result_id"]
+
+        exit_code = _poll_exit_code(tmp_coach_db, result_id, timeout=10.0)
+        assert exit_code == -2, f"expected timeout exit code -2, got {exit_code}"

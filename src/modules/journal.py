@@ -1,13 +1,15 @@
 """
 Journal API Router - extracted from journal/src/server.py
-Conflict-aware versioning sync engine for personal journal trackers.
+Per-record optimistic-concurrency sync for personal journal trackers: the
+server compares its stored stamp against the client's echoed base token
+(_baseLastModifiedAt) — never the client clock.
 """
 import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter
 from pydantic import BaseModel, ConfigDict
 
 from modules.db import (
@@ -16,6 +18,7 @@ from modules.db import (
     utc_days_ago,
     sync_watermark,
     read_transaction,
+    immediate_transaction,
     register_client as _db_register_client,
     run_migrations,
     enable_wal,
@@ -611,10 +614,18 @@ def _sync_update(get_db, payload):
     had_accept = False
 
     with get_db() as conn:
-        cursor = conn.cursor()
-        _db_register_client(conn, client_id, now=now)
+        # BEGIN IMMEDIATE: the per-record arbitration below is check-then-write
+        # (SELECT the stored stamp → compare against the base token → archive +
+        # UPDATE), which must be atomic against a concurrent uploader. Without
+        # the up-front write lock, two devices syncing the same record could
+        # both read the same stored stamp, both pass the staleness check, and
+        # both write — the loser's accepted edit silently overwritten with no
+        # `stale` rejection. Matches coach's upload path (coach.py).
+        # Errors propagate to FastAPI's default handler (500 + logged
+        # traceback); immediate_transaction rolls back on the way out.
+        with immediate_transaction(conn) as cursor:
+            _db_register_client(conn, client_id, now=now)
 
-        try:
             for item in payload.config:
                 accepted, rejected = _apply_tracker_upload(cursor, item, now)
                 if accepted is not None:
@@ -642,19 +653,14 @@ def _sync_update(get_db, payload):
                 )
 
             _purge_old_archives(conn)
-            conn.commit()
 
-            return SyncResponse(
-                serverTime=now,
-                acceptedTrackers=accepted_trackers,
-                acceptedEntries=accepted_entries,
-                rejectedTrackers=rejected_trackers,
-                rejectedEntries=rejected_entries,
-            )
-
-        except Exception as e:
-            conn.rollback()
-            raise HTTPException(status_code=500, detail=str(e))
+        return SyncResponse(
+            serverTime=now,
+            acceptedTrackers=accepted_trackers,
+            acceptedEntries=accepted_entries,
+            rejectedTrackers=rejected_trackers,
+            rejectedEntries=rejected_entries,
+        )
 
 
 def create_router(db_path: Path) -> APIRouter:
