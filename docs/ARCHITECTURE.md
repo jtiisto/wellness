@@ -340,6 +340,7 @@ The Analysis module has no bidirectional sync protocol — all authoritative sta
 The `public/js/shared/` directory contains cross-module utilities:
 
 - **`sync-scheduler.js`** — `SyncScheduler` class used by both Journal and Coach stores (see above)
+- **`dirty-set.js`** — The one implementation of the dirty-tracking generation machinery (mark → snapshot → clear-if-generation-unchanged) used by journal trackers, journal entries, and coach dates
 - **`settings.js`** — Settings modal with debug log download, data export, and force sync
 - **`debug-log.js`** — Fire-and-forget logging to IndexedDB (max 500 entries, 1-hour TTL) for sync troubleshooting
 - **`data-export.js`** — Exports all LocalForage data (journal, coach, app state) as a timestamped JSON file

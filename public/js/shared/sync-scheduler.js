@@ -6,6 +6,7 @@
  */
 import { log as debugLog } from './debug-log.js';
 import { showNotification } from './notifications.js';
+import { isNetworkError } from './utils.js';
 
 export class SyncScheduler {
     /**
@@ -148,11 +149,7 @@ export class SyncScheduler {
     }
 
     _classifyError(error) {
-        // TypeError = network-level failure (DNS, offline, CORS)
-        if (error instanceof TypeError) return 'network';
-        if (error.name === 'AbortError') return 'network';
-        if (!navigator.onLine) return 'network';
-        return 'server';
+        return isNetworkError(error) ? 'network' : 'server';
     }
 
     _scheduleRetry() {

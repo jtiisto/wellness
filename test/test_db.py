@@ -280,3 +280,26 @@ class TestImmediateTransaction:
         # lock released after commit → writes succeed again
         with get_db(db_path) as conn:
             assert conn.execute("SELECT COUNT(*) FROM t").fetchone()[0] == 1
+
+
+class TestSharedArbitrationPredicate:
+    """should_accept_log_write has exactly one implementation, shared by both
+    modules. It is the most safety-critical predicate in the system — journal
+    used to inline it twice, and copies of arbitration logic have a record of
+    drifting (the force-sync divergence)."""
+
+    def test_both_modules_share_the_canonical_function(self):
+        from modules.sync_arbitration import should_accept_log_write as canonical
+        from modules.coach_logs import should_accept_log_write as coach_alias
+        import modules.journal as journal
+        assert coach_alias is canonical
+        assert journal.should_accept_log_write is canonical
+
+    def test_predicate_semantics(self):
+        from modules.sync_arbitration import should_accept_log_write as accept
+        assert accept(None, None) is True            # no row → insert
+        assert accept(None, "t1") is True            # no row, token sent → insert
+        assert accept("t1", "t1") is True            # equal → idempotent retry
+        assert accept("t1", "t2") is True            # stored older → accept
+        assert accept("t2", "t1") is False           # stored newer → stale
+        assert accept("t1", None) is False           # existing row, no token → hard cutover

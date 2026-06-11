@@ -15,44 +15,41 @@ const coachStore = localforage.createInstance({
 });
 
 /**
+ * Dump every key/value pair in a LocalForage instance.
+ *
+ * Generic by construction: a key added to a store later is exported
+ * automatically. The previous hand-maintained key list had already drifted —
+ * it silently omitted `tracker_value_updated_times` and `app_schema_version`,
+ * so a "full" export wasn't.
+ */
+async function dumpInstance(store) {
+    const out = {};
+    await store.iterate((value, key) => {
+        out[key] = value;
+    });
+    return out;
+}
+
+/**
  * Export all PWA data as a JSON file download.
  */
 export async function exportAllData() {
     try {
-        const [
-            trackerConfig, dailyLogs, journalMeta, journalClientId, expandedCategories,
-            workoutPlans, workoutLogs, coachMeta, coachClientId
-        ] = await Promise.all([
-            journalStore.getItem('tracker_config'),
-            journalStore.getItem('daily_logs'),
-            journalStore.getItem('app_metadata'),
-            journalStore.getItem('client_id'),
-            journalStore.getItem('expanded_categories'),
-            coachStore.getItem('workout_plans'),
-            coachStore.getItem('workout_logs'),
-            coachStore.getItem('coach_metadata'),
-            coachStore.getItem('coach_client_id'),
+        const [journal, coach] = await Promise.all([
+            dumpInstance(journalStore),
+            dumpInstance(coachStore),
         ]);
 
         const data = {
             _export: {
-                version: 1,
+                // version 2: modules are raw key->value dumps of their
+                // LocalForage instances (keys as stored), not a curated shape.
+                version: 2,
                 exportedAt: new Date().toISOString(),
                 userAgent: navigator.userAgent
             },
-            journal: {
-                clientId: journalClientId,
-                trackerConfig: trackerConfig,
-                dailyLogs: dailyLogs,
-                syncMetadata: journalMeta,
-                expandedCategories: expandedCategories
-            },
-            coach: {
-                clientId: coachClientId,
-                workoutPlans: workoutPlans,
-                workoutLogs: workoutLogs,
-                syncMetadata: coachMeta
-            },
+            journal,
+            coach,
             app: {
                 activeModule: localStorage.getItem('wellness_active_module')
             }

@@ -6,6 +6,7 @@
  * store keeps the thin read-signal -> call -> assign -> persist wrappers; this
  * module is unit-tested in isolation (test/js/coach-sync-logic.test.js).
  */
+import { clearApplied } from '../shared/dirty-set.js';
 
 // ---- Content predicates --------------------------------------------------
 
@@ -50,28 +51,14 @@ export function logIsSyncedToServer(log) {
 
 /**
  * Decide which dirty dates to clear after an upload.
- * A date clears only if it was applied AND its generation counter still matches
- * the pre-sync snapshot (i.e. it was not re-modified mid-sync). Generation
- * counters for cleared dates are dropped.
+ * Delegates to the shared DirtySet algorithm (shared/dirty-set.js) — one
+ * implementation for journal trackers, journal entries, and coach dates.
  *
  * @returns {{dirtyDates: string[], dirtyDateGenerations: Object}}
  */
 export function nextDirtyAfterApply(appliedDates, snapshotGens, dirtyDates, dirtyDateGenerations) {
-    const appliedSet = new Set(appliedDates);
-    const nextDirty = dirtyDates.filter(date => {
-        if (!appliedSet.has(date)) return true;  // not applied, keep dirty
-        if (snapshotGens && dirtyDateGenerations[date] !== snapshotGens[date]) {
-            return true;  // re-modified during sync, keep dirty
-        }
-        return false;  // applied and not re-modified, clear
-    });
-
-    const nextGens = { ...dirtyDateGenerations };
-    const remaining = new Set(nextDirty);
-    for (const date of appliedDates) {
-        if (!remaining.has(date)) delete nextGens[date];
-    }
-    return { dirtyDates: nextDirty, dirtyDateGenerations: nextGens };
+    const next = clearApplied(dirtyDates, dirtyDateGenerations, appliedDates, snapshotGens);
+    return { dirtyDates: next.keys, dirtyDateGenerations: next.generations };
 }
 
 /**

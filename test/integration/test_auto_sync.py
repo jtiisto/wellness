@@ -88,12 +88,15 @@ class TestSyncSchedulerModule:
     def test_listens_for_visibility_change(self):
         assert "visibilitychange" in self.source
 
-    def test_classifies_type_error_as_network(self):
-        """TypeError from fetch should be classified as network error."""
-        assert "TypeError" in self.source
-
-    def test_classifies_abort_error_as_network(self):
-        assert "AbortError" in self.source
+    def test_classifies_via_shared_helper(self):
+        """Network-vs-server classification delegates to the shared
+        isNetworkError (shared/utils.js) — one classifier for the scheduler and
+        the analysis store (whose own inline copy broke on WebKit's
+        'Load failed' message)."""
+        assert "isNetworkError" in self.source
+        utils_source = (SHARED_DIR / "utils.js").read_text()
+        assert "TypeError" in utils_source
+        assert "AbortError" in utils_source
 
     def test_shows_notification_for_server_errors(self):
         """Server errors should trigger a toast notification."""

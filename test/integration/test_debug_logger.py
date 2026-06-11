@@ -223,15 +223,14 @@ class TestDataExportModule:
     def test_exports_export_all_data(self):
         assert "export async function exportAllData(" in self.source
 
-    def test_reads_journal_keys(self):
-        """Should read all 5 journal store keys."""
-        for key in ['tracker_config', 'daily_logs', 'app_metadata', 'client_id', 'expanded_categories']:
-            assert key in self.source, f"Missing journal key: {key}"
-
-    def test_reads_coach_keys(self):
-        """Should read all 4 coach store keys."""
-        for key in ['workout_plans', 'workout_logs', 'coach_metadata', 'coach_client_id']:
-            assert key in self.source, f"Missing coach key: {key}"
+    def test_dumps_stores_generically(self):
+        """The export iterates each LocalForage instance rather than reading a
+        hand-maintained key list (which had drifted: tracker_value_updated_times
+        and app_schema_version were silently missing from exports)."""
+        assert ".iterate(" in self.source
+        # No hardcoded per-key reads left — generic by construction.
+        assert "getItem('tracker_config')" not in self.source
+        assert "getItem('workout_plans')" not in self.source
 
     def test_reads_app_state(self):
         """Should read the active module from localStorage."""

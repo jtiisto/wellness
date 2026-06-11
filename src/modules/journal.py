@@ -23,6 +23,7 @@ from modules.db import (
     run_migrations,
     enable_wal,
 )
+from modules.sync_arbitration import should_accept_log_write
 
 
 def _column_exists(cursor, table: str, column: str) -> bool:
@@ -483,10 +484,10 @@ def _apply_tracker_upload(
         return {"id": tracker_id, "lastModifiedAt": now}, None
 
     stored_ts = row["last_modified_at"]
-    # Compare opaque timestamp tokens. Equal accepts (covers idempotent retry
-    # after a lost response). Strictly-greater rejects. NULL stored_ts means a
-    # pre-LWW row that has no timestamp yet — accept and stamp.
-    if stored_ts is not None and (base_ts is None or stored_ts > base_ts):
+    # The shared arbitration predicate (one implementation for both modules):
+    # equal accepts (idempotent retry after a lost response), strictly-greater
+    # rejects, NULL stored_ts (a pre-protocol row with no stamp) accepts.
+    if not should_accept_log_write(stored_ts, base_ts):
         return None, {
             "id": tracker_id,
             "errorKind": "stale",
@@ -561,7 +562,7 @@ def _apply_entry_upload(
         }, None
 
     stored_ts = row["last_modified_at"]
-    if stored_ts is not None and (base_ts is None or stored_ts > base_ts):
+    if not should_accept_log_write(stored_ts, base_ts):
         return None, {
             "date": date_str,
             "trackerId": tracker_id,

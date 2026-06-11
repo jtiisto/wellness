@@ -22,6 +22,10 @@ _MCP_DIR = Path(__file__).parent.parent / "mcp_servers"
 sys.path.insert(0, str(_SRC_DIR))
 sys.path.insert(0, str(_MCP_DIR))
 
+# Shared test-data seeds (one implementation for this conftest + e2e's)
+sys.path.insert(0, str(Path(__file__).parent))
+from seeds import seed_coach_plan  # noqa: E402
+
 
 @pytest.fixture(scope="function")
 def tmp_journal_db(tmp_path):
@@ -319,83 +323,10 @@ def coach_seeded_database(client, coach_registered_client, sample_plan, sample_l
     conn = sqlite3.connect(tmp_coach_db)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
-    cursor = conn.cursor()
 
-    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-
-    # Insert today's plan
-    cursor.execute("""
-        INSERT INTO workout_sessions
-        (date, day_name, location, phase, last_modified, modified_by)
-        VALUES (?, ?, ?, ?, ?, ?)
-    """, (today, "Test Workout", "Home", "Foundation", now, "test"))
-    s1 = cursor.lastrowid
-
-    cursor.execute("""
-        INSERT INTO session_blocks (session_id, position, block_type, title)
-        VALUES (?, ?, ?, ?)
-    """, (s1, 0, "warmup", "Warmup"))
-    b1 = cursor.lastrowid
-
-    cursor.execute("""
-        INSERT INTO planned_exercises
-        (session_id, block_id, exercise_key, position, name, exercise_type)
-        VALUES (?, ?, ?, ?, ?, ?)
-    """, (s1, b1, "warmup_0", 0, "Stability Start", "checklist"))
-    e_warmup = cursor.lastrowid
-
-    for i, item in enumerate(["Cat-Cow x10", "Bird-Dog x5/side"]):
-        cursor.execute(
-            "INSERT INTO checklist_items (exercise_id, position, item_text) VALUES (?, ?, ?)",
-            (e_warmup, i, item)
-        )
-
-    cursor.execute("""
-        INSERT INTO session_blocks (session_id, position, block_type, title, rest_guidance)
-        VALUES (?, ?, ?, ?, ?)
-    """, (s1, 1, "strength", "Strength", "Rest 2 min"))
-    b2 = cursor.lastrowid
-
-    cursor.execute("""
-        INSERT INTO planned_exercises
-        (session_id, block_id, exercise_key, position, name, exercise_type,
-         target_sets, target_reps, guidance_note)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (s1, b2, "ex_1", 0, "KB Goblet Squat", "strength", 3, "10", "Tempo 3-1-1"))
-
-    cursor.execute("""
-        INSERT INTO session_blocks (session_id, position, block_type, title)
-        VALUES (?, ?, ?, ?)
-    """, (s1, 2, "cardio", "Conditioning"))
-    b3 = cursor.lastrowid
-
-    cursor.execute("""
-        INSERT INTO planned_exercises
-        (session_id, block_id, exercise_key, position, name, exercise_type,
-         target_duration_min, guidance_note)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    """, (s1, b3, "cardio_1", 0, "Zone 2 Bike", "duration", 15, "HR 135-148"))
-
-    # Yesterday's plan
-    cursor.execute("""
-        INSERT INTO workout_sessions
-        (date, day_name, location, phase, last_modified, modified_by)
-        VALUES (?, ?, ?, ?, ?, ?)
-    """, (yesterday, "Yesterday's Workout", "Home", "Foundation", now, "test"))
-    s2 = cursor.lastrowid
-
-    cursor.execute("""
-        INSERT INTO session_blocks (session_id, position, block_type, title)
-        VALUES (?, ?, ?, ?)
-    """, (s2, 0, "strength", "Strength"))
-    b_y = cursor.lastrowid
-
-    cursor.execute("""
-        INSERT INTO planned_exercises
-        (session_id, block_id, exercise_key, position, name, exercise_type,
-         target_sets, target_reps)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    """, (s2, b_y, "ex_1", 0, "Squat", "strength", 3, "10"))
+    # One shared seed implementation for this conftest AND the e2e conftest
+    # (test/seeds.py) — the two used to carry drifting near-duplicate SQL.
+    seed_coach_plan(conn, today=today, yesterday=yesterday)
 
     conn.commit()
     conn.close()

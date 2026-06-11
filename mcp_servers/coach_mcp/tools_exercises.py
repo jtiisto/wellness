@@ -13,7 +13,7 @@ from modules import coach_queries
 
 from ._helpers import _assemble_plan_from_db, _reject_legacy_pair_suffix
 from .database import get_utc_now
-from .exercise_registry import resolve_plan_exercises
+from .exercise_registry import resolve_or_create_exercise, resolve_plan_exercises
 
 
 class ExerciseTools:
@@ -91,19 +91,14 @@ class ExerciseTools:
                         set_clauses.append(f"{col} = ?")
                         params.append(value)
 
-                # If name is changing, resolve new canonical slug
+                # If name is changing, resolve new canonical slug via the one
+                # shared resolve-or-create (collision suffixing + inference +
+                # registry self-heal included — the old inline copy had none).
                 if "name" in updates:
-                    from .exercise_registry import generate_slug, _infer_equipment, _get_utc_now as _reg_utc_now
-                    new_name = updates["name"]
-                    slug, match_type = self.registry.resolve(new_name)
-                    if match_type == "new":
-                        slug = generate_slug(new_name)
-                        now_reg = _reg_utc_now()
-                        cursor.execute("""
-                            INSERT OR IGNORE INTO exercises (slug, name, equipment, category, created_at, source)
-                            VALUES (?, ?, ?, ?, ?, ?)
-                        """, [slug, new_name, None, None, now_reg, "auto"])
-                        self.registry.add(slug, new_name, None, None)
+                    slug, _ = resolve_or_create_exercise(
+                        self.registry, cursor, updates["name"],
+                        exercise={**updates, "name": updates["name"]},
+                    )
                     set_clauses.append("canonical_slug = ?")
                     params.append(slug)
 
@@ -224,18 +219,11 @@ class ExerciseTools:
                         WHERE block_id = ? AND position >= ?
                     """, [block_id, position])
 
-                # Resolve canonical slug for the new exercise
-                from .exercise_registry import generate_slug, _infer_equipment, _get_utc_now as _reg_utc_now
-                slug, match_type = self.registry.resolve(exercise["name"])
-                if match_type == "new":
-                    slug = generate_slug(exercise["name"])
-                    equip = _infer_equipment(exercise)
-                    now_reg = _reg_utc_now()
-                    cursor.execute("""
-                        INSERT OR IGNORE INTO exercises (slug, name, equipment, category, created_at, source)
-                        VALUES (?, ?, ?, ?, ?, ?)
-                    """, [slug, exercise["name"], equip, None, now_reg, "auto"])
-                    self.registry.add(slug, exercise["name"], equip, None)
+                # Resolve canonical slug via the one shared resolve-or-create
+                # (collision suffixing + inference + registry self-heal).
+                slug, _ = resolve_or_create_exercise(
+                    self.registry, cursor, exercise["name"], exercise=exercise,
+                )
 
                 # Insert exercise
                 cursor.execute("""

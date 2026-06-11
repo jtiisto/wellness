@@ -7,6 +7,7 @@ database seeding helpers, and browser page fixtures.
 import os
 import socket
 import sqlite3
+import sys
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -19,6 +20,10 @@ import uvicorn
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 SRC_DIR = PROJECT_ROOT / "src"
 PUBLIC_DIR = PROJECT_ROOT / "public"
+
+# Shared test-data seeds (one implementation with test/conftest.py)
+sys.path.insert(0, str(PROJECT_ROOT / "test"))
+from seeds import seed_coach_plan  # noqa: E402
 
 pytestmark = pytest.mark.e2e
 
@@ -139,66 +144,11 @@ def seeded_coach_db(app_server):
     conn.execute("DELETE FROM session_blocks")
     conn.execute("DELETE FROM workout_sessions")
 
-    conn.execute("""
-        INSERT INTO workout_sessions (date, day_name, location, phase, last_modified, modified_by)
-        VALUES (?, 'Test Workout', 'Home', 'Foundation', ?, 'test')
-    """, (today, now))
-    s1 = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-
-    conn.execute(
-        "INSERT INTO session_blocks (session_id, position, block_type, title) VALUES (?, 0, 'warmup', 'Warmup')",
-        (s1,))
-    b1 = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-    conn.execute("""
-        INSERT INTO planned_exercises (session_id, block_id, exercise_key, position, name, exercise_type)
-        VALUES (?, ?, 'warmup_0', 0, 'Stability Start', 'checklist')
-    """, (s1, b1))
-    e1 = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-    for i, item in enumerate(["Cat-Cow x10", "Bird-Dog x5/side"]):
-        conn.execute(
-            "INSERT INTO checklist_items (exercise_id, position, item_text) VALUES (?, ?, ?)",
-            (e1, i, item))
-
-    conn.execute(
-        "INSERT INTO session_blocks (session_id, position, block_type, title, rest_guidance) VALUES (?, 1, 'strength', 'Strength', 'Rest 2 min')",
-        (s1,))
-    b2 = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-    conn.execute("""
-        INSERT INTO planned_exercises
-        (session_id, block_id, exercise_key, position, name, exercise_type, target_sets, target_reps, guidance_note)
-        VALUES (?, ?, 'ex_1', 0, 'KB Goblet Squat', 'strength', 3, '10', 'Tempo 3-1-1')
-    """, (s1, b2))
-
-    # Superset pair: two exercises sharing superset_group='A'
-    conn.execute("""
-        INSERT INTO planned_exercises
-        (session_id, block_id, exercise_key, position, name, exercise_type,
-         target_sets, target_reps, superset_group)
-        VALUES (?, ?, 'ex_pair_a1', 1, 'DB Bench Press', 'strength', 3, '8', 'A')
-    """, (s1, b2))
-    conn.execute("""
-        INSERT INTO planned_exercises
-        (session_id, block_id, exercise_key, position, name, exercise_type,
-         target_sets, target_reps, superset_group)
-        VALUES (?, ?, 'ex_pair_a2', 2, 'Bent Row', 'strength', 3, '8', 'A')
-    """, (s1, b2))
-
-    conn.execute(
-        "INSERT INTO session_blocks (session_id, position, block_type, title) VALUES (?, 2, 'cardio', 'Conditioning')",
-        (s1,))
-    b3 = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-    conn.execute("""
-        INSERT INTO planned_exercises
-        (session_id, block_id, exercise_key, position, name, exercise_type, target_duration_min, guidance_note)
-        VALUES (?, ?, 'cardio_1', 0, 'Zone 2 Bike', 'duration', 15, 'HR 135-148')
-    """, (s1, b3))
-
-    conn.execute("""
-        INSERT INTO planned_exercises
-        (session_id, block_id, exercise_key, position, name, exercise_type,
-         rounds, work_duration_sec, rest_duration_sec, guidance_note)
-        VALUES (?, ?, 'cardio_2', 1, 'Bike Intervals', 'interval', 4, 30, 90, 'VO2 max effort')
-    """, (s1, b3))
+    # One shared seed implementation with the unit/integration conftest
+    # (test/seeds.py) — the two used to carry drifting near-duplicate SQL.
+    seeded = seed_coach_plan(conn, today=today, now=now,
+                             supersets=True, intervals=True)
+    s1 = seeded["session_id"]
 
     conn.commit()
     conn.close()

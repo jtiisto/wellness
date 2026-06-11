@@ -193,6 +193,57 @@ def _get_utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def resolve_or_create_exercise(
+    registry: ExerciseRegistry,
+    cursor,
+    name: str,
+    *,
+    exercise: Optional[Dict[str, Any]] = None,
+    block: Optional[Dict[str, Any]] = None,
+) -> Tuple[str, str]:
+    """Resolve `name` to a canonical slug, creating a registry entry if unknown.
+
+    THE one resolve-or-create implementation. It used to be re-implemented
+    inline by the granular editors (update_exercise / add_exercise), and both
+    copies had drifted: they omitted the slug-collision suffixing, and their
+    equipment/category inference differed from the plan-ingest path.
+
+    Also self-heals registry/DB divergence: the exercises row is INSERT OR
+    IGNOREd even on an exact/fuzzy match. A failed plan write rolls back its
+    exercises rows but not the in-memory registry, so a later resolve of the
+    same name would otherwise hand out a slug with no backing row — and the
+    planned_exercises.canonical_slug FK would fail.
+
+    Returns (slug, match_type) — match_type as in ExerciseRegistry.resolve.
+    """
+    slug, match_type = registry.resolve(name)
+
+    if match_type == "new":
+        slug = generate_slug(name)
+        # Handle slug collision (different name, same slug)
+        if registry.get(slug) is not None:
+            suffix = 2
+            while registry.get(f"{slug}_{suffix}") is not None:
+                suffix += 1
+            slug = f"{slug}_{suffix}"
+
+    entry = registry.get(slug)
+    if entry is not None:
+        row_name, equipment, category = entry["name"], entry["equipment"], entry["category"]
+    else:
+        row_name = name
+        equipment = _infer_equipment(exercise or {"name": name})
+        category = _infer_category(exercise or {"name": name}, block or {})
+
+    cursor.execute("""
+        INSERT OR IGNORE INTO exercises (slug, name, equipment, category, created_at, source)
+        VALUES (?, ?, ?, ?, ?, ?)
+    """, [slug, row_name, equipment, category, _get_utc_now(), "auto"])
+    registry.add(slug, row_name, equipment, category)
+
+    return slug, match_type
+
+
 def resolve_plan_exercises(
     registry: ExerciseRegistry,
     plan: Dict[str, Any],
@@ -211,46 +262,20 @@ def resolve_plan_exercises(
     for block in plan.get("blocks", []):
         for ex in block.get("exercises", []):
             name = ex.get("name", "")
-            ex_type = ex.get("type", "")
 
-            # Skip checklist items — the parent checklist exercise
-            # gets a slug, but we still resolve it
-            slug, match_type = registry.resolve(name)
+            slug, match_type = resolve_or_create_exercise(
+                registry, cursor, name, exercise=ex, block=block,
+            )
+            ex["canonical_slug"] = slug
 
             if match_type == "exact":
-                ex["canonical_slug"] = slug
                 report["resolved"] += 1
-
             elif match_type == "fuzzy":
-                ex["canonical_slug"] = slug
                 report["fuzzy"] += 1
                 report["details"].append(
                     f"fuzzy: '{name}' -> '{registry.get(slug)['name']}'"
                 )
-
             else:
-                # Create new registry entry
-                slug = generate_slug(name)
-
-                # Handle slug collision (different name, same slug)
-                if registry.get(slug) is not None:
-                    # Append a suffix
-                    suffix = 2
-                    while registry.get(f"{slug}_{suffix}") is not None:
-                        suffix += 1
-                    slug = f"{slug}_{suffix}"
-
-                equipment = _infer_equipment(ex)
-                category = _infer_category(ex, block)
-                now = _get_utc_now()
-
-                cursor.execute("""
-                    INSERT OR IGNORE INTO exercises (slug, name, equipment, category, created_at, source)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                """, [slug, name, equipment, category, now, "auto"])
-
-                registry.add(slug, name, equipment, category)
-                ex["canonical_slug"] = slug
                 report["created"] += 1
                 report["details"].append(f"new: '{name}' -> '{slug}'")
 

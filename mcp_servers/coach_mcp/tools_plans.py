@@ -15,9 +15,11 @@ from modules.coach_plans import (
     ensure_exercise_ids as _ensure_exercise_ids,
     transform_block_plan as _transform_block_plan,
     store_plan as _store_plan_to_db,
+    validate_plan,
+    validate_plan_structure,
 )
 
-from ._helpers import _assemble_plan_from_db, _assemble_log_from_db, _reject_legacy_pair_suffix
+from ._helpers import _assemble_plan_from_db, _assemble_log_from_db
 from .database import get_utc_now
 from .exercise_registry import resolve_plan_exercises
 
@@ -115,30 +117,11 @@ class PlanTools:
         except ValueError:
             raise ValueError(f"Invalid date format: {date}. Use YYYY-MM-DD")
 
-        # Validate plan structure
-        if not isinstance(plan, dict):
-            raise ValueError("Plan must be a dictionary")
-
-        if "blocks" not in plan:
-            raise ValueError("Plan must have 'blocks'")
-
-        if not isinstance(plan["blocks"], list):
-            raise ValueError("Plan blocks must be a list")
-
-        # Validate blocks
-        valid_block_types = ["warmup", "strength", "cardio", "circuit", "accessory", "power"]
-        for i, block in enumerate(plan["blocks"]):
-            if "block_type" not in block:
-                raise ValueError(f"Block {i} missing 'block_type' field")
-            if not isinstance(block["block_type"], str):
-                raise ValueError(f"Block {i} 'block_type' must be a string")
-            if block["block_type"] not in valid_block_types:
-                raise ValueError(
-                    f"Block {i} has invalid block_type: {block['block_type']}. "
-                    f"Must be one of: {valid_block_types}"
-                )
-            if "exercises" not in block and "instructions" not in block:
-                raise ValueError(f"Block {i} must have either 'exercises' or 'instructions'")
+        # Block-level shape must hold before the transform can run; the full
+        # validation (exercise fields, types, legacy suffixes) happens inside
+        # store_plan so every write path — this tool, the bulk ingest, any
+        # future caller — inherits it from one place.
+        validate_plan_structure(plan)
 
         # Transform raw LLM format if needed, then backfill any missing ids.
         if _needs_transform(plan):
@@ -149,22 +132,11 @@ class PlanTools:
         if "day_name" not in plan:
             plan["day_name"] = plan.get("theme", "Workout")
 
-        # Validate exercises in blocks
-        valid_types = ["strength", "duration", "checklist", "weighted_time", "interval", "circuit"]
-        for block in plan.get("blocks", []):
-            for i, exercise in enumerate(block.get("exercises", [])):
-                if "id" not in exercise:
-                    raise ValueError(f"Exercise {i} missing 'id' field")
-                if "name" not in exercise:
-                    raise ValueError(f"Exercise {i} missing 'name' field")
-                if "type" not in exercise:
-                    raise ValueError(f"Exercise {i} missing 'type' field")
-                if exercise["type"] not in valid_types:
-                    raise ValueError(
-                        f"Exercise {i} has invalid type: {exercise['type']}. "
-                        f"Must be one of: {valid_types}"
-                    )
-                _reject_legacy_pair_suffix(exercise["name"], f"Exercise {i}")
+        # Validate BEFORE resolve_plan_exercises touches the registry: an
+        # invalid plan must fail with no side effects (a failed transaction
+        # rolls back the exercises rows but not the in-memory registry).
+        # store_plan re-validates as the enforcement backstop.
+        validate_plan(plan)
 
         try:
             with self.db_manager.transaction() as cursor:
@@ -235,6 +207,11 @@ class PlanTools:
                         break
                 if not has_exercises:
                     raise ValueError("Plan must have exercises")
+
+                # Validate BEFORE resolve_plan_exercises touches the registry:
+                # an invalid plan must fail with no side effects. (store_plan
+                # re-validates as the enforcement backstop for any caller.)
+                validate_plan(plan)
 
                 with self.db_manager.transaction() as cursor:
                     resolve_plan_exercises(self.registry, plan, cursor)

@@ -17,6 +17,7 @@ import { isWithinLastNDays } from './utils.js';
 import { showNotification } from '../shared/notifications.js';
 import { log as debugLog } from '../shared/debug-log.js';
 import { SyncScheduler } from '../shared/sync-scheduler.js';
+import { markDirty } from '../shared/dirty-set.js';
 import {
     computeUploadPayload,
     computeClearedDirtyState,
@@ -413,13 +414,9 @@ export function markValueUpdated(date, trackerId) {
 
 function markTrackerDirty(trackerId) {
     const meta = { ...syncMetadata.value };
-    if (!meta.dirtyTrackers.includes(trackerId)) {
-        meta.dirtyTrackers = [...meta.dirtyTrackers, trackerId];
-    }
-    // Always increment generation (detects re-modifications during sync)
-    const gens = { ...meta.dirtyTrackerGenerations };
-    gens[trackerId] = (gens[trackerId] || 0) + 1;
-    meta.dirtyTrackerGenerations = gens;
+    const next = markDirty(meta.dirtyTrackers, meta.dirtyTrackerGenerations, trackerId);
+    meta.dirtyTrackers = next.keys;
+    meta.dirtyTrackerGenerations = next.generations;
     syncMetadata.value = meta;
     saveMetadata();
     updateSyncStatus();
@@ -427,13 +424,9 @@ function markTrackerDirty(trackerId) {
 
 function markEntryDirty(entryKey) {
     const meta = { ...syncMetadata.value };
-    if (!meta.dirtyEntries.includes(entryKey)) {
-        meta.dirtyEntries = [...meta.dirtyEntries, entryKey];
-    }
-    // Always increment generation (detects re-modifications during sync)
-    const gens = { ...meta.dirtyEntryGenerations };
-    gens[entryKey] = (gens[entryKey] || 0) + 1;
-    meta.dirtyEntryGenerations = gens;
+    const next = markDirty(meta.dirtyEntries, meta.dirtyEntryGenerations, entryKey);
+    meta.dirtyEntries = next.keys;
+    meta.dirtyEntryGenerations = next.generations;
     syncMetadata.value = meta;
     saveMetadata();
     updateSyncStatus();

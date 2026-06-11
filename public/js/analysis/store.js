@@ -1,6 +1,7 @@
 import { signal } from '@preact/signals';
 import localforage from 'localforage';
 import { showNotification } from '../shared/notifications.js';
+import { isNetworkError } from '../shared/utils.js';
 
 // Re-export for components that import from store
 export { showNotification };
@@ -76,7 +77,7 @@ export async function submitQuery(queryId, location = null) {
         currentView.value = 'loading';
         startPolling(result.id);
     } catch (err) {
-        if (err instanceof TypeError && err.message.includes('fetch')) {
+        if (isNetworkError(err)) {
             showNotification({ type: 'error', title: 'Offline', message: 'Server unreachable — new queries unavailable offline.' });
         } else {
             showNotification({ type: 'error', title: 'Error', message: err.message });
@@ -128,7 +129,7 @@ export async function deleteReport(reportId) {
         await cache.removeItem(CACHE_REPORT_PREFIX + reportId).catch(() => {});
         showNotification({ type: 'success', title: 'Deleted', message: 'Report deleted.' });
     } catch (err) {
-        if (err instanceof TypeError && err.message.includes('fetch')) {
+        if (isNetworkError(err)) {
             showNotification({ type: 'error', title: 'Offline', message: 'Cannot delete reports while offline.' });
         } else {
             showNotification({ type: 'error', title: 'Error', message: err.message });
@@ -218,7 +219,7 @@ async function _initializeStore() {
         if (!hasPending) currentView.value = 'queries';
     } catch (err) {
         // Server unreachable — degrade gracefully
-        if (err instanceof TypeError && err.message.includes('fetch')) {
+        if (isNetworkError(err)) {
             // Load cached history for offline viewing
             const cached = await cache.getItem(CACHE_HISTORY).catch(() => null);
             if (cached) {

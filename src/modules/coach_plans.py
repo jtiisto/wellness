@@ -6,8 +6,77 @@ later). The FastAPI router (`modules.coach`) and the MCP server
 each plan operation (see plans/ phase 3). Do NOT import fastapi or fastmcp here.
 """
 import json
+import re
 
 from modules.db import get_utc_now
+
+VALID_BLOCK_TYPES = ["warmup", "strength", "cardio", "circuit", "accessory", "power"]
+VALID_EXERCISE_TYPES = ["strength", "duration", "checklist", "weighted_time", "interval", "circuit"]
+
+# Legacy pair-suffix pattern: rejects names like "Bench Press (Pair A)" so that
+# pair info is forced through the structured `superset_group` field instead of
+# leaking into canonical_slug.
+LEGACY_PAIR_SUFFIX_RE = re.compile(r"\((?:Pair|Superset|Triplet)\b[^)]*\)", re.IGNORECASE)
+
+
+def reject_legacy_pair_suffix(name, context=""):
+    """Raise ValueError if name still uses the deprecated `(Pair X)` suffix."""
+    if name and LEGACY_PAIR_SUFFIX_RE.search(name):
+        prefix = f"{context}: " if context else ""
+        raise ValueError(
+            f"{prefix}Exercise name '{name}' uses the legacy pair suffix "
+            f"convention. Put pair info in the structured `superset_group` "
+            f"field instead (e.g. \"superset_group\": \"A\")."
+        )
+
+
+def validate_plan_structure(plan):
+    """Validate the plan's block-level shape (safe on a raw, pre-transform plan).
+
+    Raises ValueError on the first problem.
+    """
+    if not isinstance(plan, dict):
+        raise ValueError("Plan must be a dictionary")
+    if "blocks" not in plan:
+        raise ValueError("Plan must have 'blocks'")
+    if not isinstance(plan["blocks"], list):
+        raise ValueError("Plan blocks must be a list")
+    for i, block in enumerate(plan["blocks"]):
+        if "block_type" not in block:
+            raise ValueError(f"Block {i} missing 'block_type' field")
+        if not isinstance(block["block_type"], str):
+            raise ValueError(f"Block {i} 'block_type' must be a string")
+        if block["block_type"] not in VALID_BLOCK_TYPES:
+            raise ValueError(
+                f"Block {i} has invalid block_type: {block['block_type']}. "
+                f"Must be one of: {VALID_BLOCK_TYPES}"
+            )
+        if "exercises" not in block and "instructions" not in block:
+            raise ValueError(f"Block {i} must have either 'exercises' or 'instructions'")
+
+
+def validate_plan(plan):
+    """Full plan validation (expects the post-transform shape with exercise ids).
+
+    Called from store_plan itself so EVERY write path inherits it — the bulk
+    ingest path used to skip the per-exercise checks entirely, making the
+    least-supervised writer the least-validated one. Raises ValueError.
+    """
+    validate_plan_structure(plan)
+    for block in plan.get("blocks", []):
+        for i, exercise in enumerate(block.get("exercises", [])):
+            if "id" not in exercise:
+                raise ValueError(f"Exercise {i} missing 'id' field")
+            if "name" not in exercise:
+                raise ValueError(f"Exercise {i} missing 'name' field")
+            if "type" not in exercise:
+                raise ValueError(f"Exercise {i} missing 'type' field")
+            if exercise["type"] not in VALID_EXERCISE_TYPES:
+                raise ValueError(
+                    f"Exercise {i} has invalid type: {exercise['type']}. "
+                    f"Must be one of: {VALID_EXERCISE_TYPES}"
+                )
+            reject_legacy_pair_suffix(exercise["name"], f"Exercise {i}")
 
 
 def assemble_plan(cursor, session_row):
@@ -384,7 +453,11 @@ def insert_block(cursor, session_id, position, block):
 
 
 def store_plan(cursor, date_str, plan, modified_by="mcp"):
-    """Store a plan dict into normalized tables. Returns session_id."""
+    """Store a plan dict into normalized tables. Returns session_id.
+
+    Validates first (validate_plan) — the single enforcement point every
+    transport and tool inherits."""
+    validate_plan(plan)
     now = get_utc_now()
 
     # Guard: refuse to replace plans that have workout logs attached.

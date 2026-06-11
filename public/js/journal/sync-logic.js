@@ -9,6 +9,7 @@
  * Journal sync is optimistic concurrency on an opaque server-issued
  * `lastModifiedAt` token, echoed on upload as `_baseLastModifiedAt`.
  */
+import { clearApplied } from '../shared/dirty-set.js';
 
 /**
  * Build the upload payload for the current dirty set. Each record carries its
@@ -80,41 +81,18 @@ export function computeClearedDirtyState({
     dirtyTrackerGenerations,
     dirtyEntryGenerations,
 }) {
-    const uploadedTrackerSet = new Set(uploadedTrackerIds);
-    const nextDirtyTrackers = dirtyTrackers.filter(id => {
-        if (!uploadedTrackerSet.has(id)) return true;
-        if (snapshotTrackerGens && dirtyTrackerGenerations[id] !== snapshotTrackerGens[id]) {
-            return true; // re-modified during sync, keep dirty
-        }
-        return false;
-    });
-
-    const uploadedEntrySet = new Set(uploadedEntryKeys);
-    const nextDirtyEntries = dirtyEntries.filter(key => {
-        if (!uploadedEntrySet.has(key)) return true;
-        if (snapshotEntryGens && dirtyEntryGenerations[key] !== snapshotEntryGens[key]) {
-            return true; // re-modified during sync, keep dirty
-        }
-        return false;
-    });
-
-    const trackerGens = { ...dirtyTrackerGenerations };
-    const remainingTrackers = new Set(nextDirtyTrackers);
-    for (const id of uploadedTrackerIds) {
-        if (!remainingTrackers.has(id)) delete trackerGens[id];
-    }
-
-    const entryGens = { ...dirtyEntryGenerations };
-    const remainingEntries = new Set(nextDirtyEntries);
-    for (const key of uploadedEntryKeys) {
-        if (!remainingEntries.has(key)) delete entryGens[key];
-    }
+    // Two applications of the shared DirtySet algorithm (shared/dirty-set.js)
+    // — one implementation for journal trackers, journal entries, coach dates.
+    const trackers = clearApplied(
+        dirtyTrackers, dirtyTrackerGenerations, uploadedTrackerIds, snapshotTrackerGens);
+    const entries = clearApplied(
+        dirtyEntries, dirtyEntryGenerations, uploadedEntryKeys, snapshotEntryGens);
 
     return {
-        dirtyTrackers: nextDirtyTrackers,
-        dirtyEntries: nextDirtyEntries,
-        dirtyTrackerGenerations: trackerGens,
-        dirtyEntryGenerations: entryGens,
+        dirtyTrackers: trackers.keys,
+        dirtyEntries: entries.keys,
+        dirtyTrackerGenerations: trackers.generations,
+        dirtyEntryGenerations: entries.generations,
     };
 }
 

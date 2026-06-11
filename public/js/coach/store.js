@@ -9,6 +9,7 @@ import { getToday, getUtcNow, generateId, deepClone } from '../shared/utils.js';
 import { showNotification } from '../shared/notifications.js';
 import { log as debugLog } from '../shared/debug-log.js';
 import { SyncScheduler } from '../shared/sync-scheduler.js';
+import { markDirty } from '../shared/dirty-set.js';
 import {
     nextDirtyAfterApply,
     selectLogsToUpload,
@@ -190,13 +191,9 @@ export function updateSessionFeedback(date, feedback) {
 
 function markDateDirty(date) {
     const meta = { ...syncMetadata.value };
-    if (!meta.dirtyDates.includes(date)) {
-        meta.dirtyDates = [...meta.dirtyDates, date];
-    }
-    // Always increment generation (detects re-modifications during sync)
-    const gens = { ...meta.dirtyDateGenerations };
-    gens[date] = (gens[date] || 0) + 1;
-    meta.dirtyDateGenerations = gens;
+    const next = markDirty(meta.dirtyDates, meta.dirtyDateGenerations, date);
+    meta.dirtyDates = next.keys;
+    meta.dirtyDateGenerations = next.generations;
     syncMetadata.value = meta;
     saveMetadata();
     updateSyncStatus();

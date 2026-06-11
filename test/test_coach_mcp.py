@@ -1282,6 +1282,63 @@ class TestWriteTools:
         assert result["success_count"] == 1
         assert result["failed_count"] == 1
 
+    def test_ingest_validates_like_set_workout_plan(self):
+        """The bulk path inherits store_plan's validation — it used to skip the
+        block/exercise checks entirely, so the least-supervised writer was the
+        least-validated one. An invalid block_type, a bad exercise type, and a
+        legacy pair suffix must all be rejected (not silently stored)."""
+        bad_block = self._make_plan(day_name="Bad Block")
+        bad_block["blocks"][0]["block_type"] = "mobility"  # not in whitelist
+
+        bad_type = self._make_plan(day_name="Bad Type")
+        bad_type["blocks"][0]["exercises"][0]["type"] = "yoga"
+
+        legacy = self._make_plan(day_name="Legacy Pair")
+        legacy["blocks"][0]["exercises"][0]["name"] = "Bench Press (Pair A)"
+
+        result = self.tools["ingest_training_program"](plans={
+            "2099-08-01": bad_block,
+            "2099-08-02": bad_type,
+            "2099-08-03": legacy,
+            "2099-08-04": self._make_plan(day_name="Fine"),
+        })
+        assert result["success_count"] == 1
+        assert result["failed_count"] == 3
+
+    def test_registry_self_heals_after_rolled_back_plan(self, tmp_coach_db):
+        """A failed plan write rolls back its exercises rows but not the
+        in-memory registry. Re-using the same exercise name afterwards must not
+        produce a dangling canonical_slug (FK failure) — resolve_or_create
+        re-INSERTs the row on every resolve."""
+        # Force a mid-transaction failure AFTER resolve created the registry
+        # entry: a plan that passes validation but trips store_plan's
+        # log-exists guard.
+        good = self._make_plan(day_name="First")
+        good["blocks"][0]["exercises"][0]["name"] = "Phoenix Press"
+        self.tools["set_workout_plan"](date=self.FUTURE, plan=good)
+        # Log a workout on that date so a re-store fails inside the transaction.
+        import sqlite3
+        conn = sqlite3.connect(tmp_coach_db)
+        conn.execute(
+            "INSERT INTO workout_session_logs (date, last_modified) VALUES (?, ?)",
+            (self.FUTURE, "2026-01-01T00:00:00Z"),
+        )
+        conn.commit()
+        conn.close()
+        retry = self._make_plan(day_name="Retry")
+        retry["blocks"][0]["exercises"][0]["name"] = "Phoenix Riser"
+        result = self.tools["ingest_training_program"](plans={self.FUTURE: retry})
+        assert result["failed_count"] == 1  # rolled back (log exists)
+
+        # Same NEW name on a fresh date must succeed — pre-fix this hit
+        # 'FOREIGN KEY constraint failed' because the registry still held the
+        # rolled-back slug and skipped the exercises INSERT.
+        again = self._make_plan(day_name="Again")
+        again["blocks"][0]["exercises"][0]["name"] = "Phoenix Riser"
+        result2 = self.tools["ingest_training_program"](plans={"2099-09-09": again})
+        assert result2["failed_count"] == 0, result2["failed"]
+        assert result2["success_count"] == 1
+
     # --- superset_group support ---
 
     def _superset_plan(self, group_a="A", group_b="A"):

@@ -59,3 +59,18 @@ export function getUtcNow() {
 export function deepClone(obj) {
     return JSON.parse(JSON.stringify(obj));
 }
+
+/**
+ * True when a fetch() failure is a network-level error (offline, DNS, CORS,
+ * abort) rather than a server response. Browsers throw TypeError with
+ * BROWSER-SPECIFIC messages — Chrome's contains 'fetch', WebKit/Safari throws
+ * 'Load failed' — so never match on the message text; the error TYPE plus
+ * navigator.onLine is the reliable signal. (Same classification SyncScheduler
+ * uses for its silent-retry-vs-toast decision.)
+ */
+export function isNetworkError(error) {
+    if (error instanceof TypeError) return true;
+    if (error && error.name === 'AbortError') return true;
+    if (!navigator.onLine) return true;
+    return false;
+}

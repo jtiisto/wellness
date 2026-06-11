@@ -1,33 +1,21 @@
 """Shared helpers for the Coach MCP server.
 
-Moved verbatim from `server.py` (behavior-preserving split):
-- `LEGACY_PAIR_SUFFIX_RE` / `_reject_legacy_pair_suffix`
+- `LEGACY_PAIR_SUFFIX_RE` / `_reject_legacy_pair_suffix` (re-exported — the
+  canonical implementation moved to `modules.coach_plans` so plan validation is
+  a domain rule every transport inherits)
 - `_assemble_plan_from_db` / `_assemble_log_from_db` (shared canonical readers)
-- `_get_coach_plan_guide` (now reads the markdown from `coach_plan_guide.md`)
+- `_get_coach_plan_guide` (reads the markdown from `coach_plan_guide.md`)
 """
 
-import re
 from pathlib import Path
 
 # Shared coach domain logic (src/ is placed on the path by coach_mcp/__init__).
-from modules.coach_plans import assemble_plan
+from modules.coach_plans import (
+    assemble_plan,
+    LEGACY_PAIR_SUFFIX_RE,  # noqa: F401 — historical import surface
+    reject_legacy_pair_suffix as _reject_legacy_pair_suffix,  # noqa: F401
+)
 from modules.coach_logs import assemble_log
-
-# Legacy pair-suffix pattern: rejects names like "Bench Press (Pair A)" so that
-# pair info is forced through the structured `superset_group` field instead of
-# leaking into canonical_slug.
-LEGACY_PAIR_SUFFIX_RE = re.compile(r"\((?:Pair|Superset|Triplet)\b[^)]*\)", re.IGNORECASE)
-
-
-def _reject_legacy_pair_suffix(name: str, context: str = "") -> None:
-    """Raise ValueError if name still uses the deprecated `(Pair X)` suffix."""
-    if name and LEGACY_PAIR_SUFFIX_RE.search(name):
-        prefix = f"{context}: " if context else ""
-        raise ValueError(
-            f"{prefix}Exercise name '{name}' uses the legacy pair suffix "
-            f"convention. Put pair info in the structured `superset_group` "
-            f"field instead (e.g. \"superset_group\": \"A\")."
-        )
 
 
 # ==================== Plan Storage Helpers ====================
