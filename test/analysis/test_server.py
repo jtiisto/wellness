@@ -197,3 +197,89 @@ class TestRunReportLifecycle:
         await task
         await asyncio.sleep(0)  # let the done-callback run
         assert task not in background._tasks  # discarded on completion
+
+
+@pytest.mark.integration
+class TestRunReportSuccessPath:
+    """The full pipeline through the (text, meta) CLI contract: submit ->
+    background task -> completed with markdown + metadata persisted."""
+
+    def _poll_completed(self, client, report_id, attempts=50):
+        import time
+        for _ in range(attempts):
+            report = client.get(f"/api/analysis/reports/{report_id}").json()
+            if report["status"] in ("completed", "failed"):
+                return report
+            time.sleep(0.05)
+        return report
+
+    def test_submit_runs_to_completed_with_meta(self, client, analysis_initialized_db, mock_claude_cli):
+        resp = client.post("/api/analysis/reports", json={"query_id": "post_workout"})
+        assert resp.status_code == 201, resp.text
+        report_id = resp.json()["id"]
+
+        report = self._poll_completed(client, report_id)
+        assert report["status"] == "completed", report.get("error_message")
+        assert "Workout Summary" in report["response_markdown"]
+        import json as _json
+        meta = _json.loads(report["cli_metadata"])
+        assert meta["duration_ms"] == 1234
+        assert meta["total_cost_usd"] == 0.01
+
+    def test_cli_failure_lands_in_failed_with_message(self, client, analysis_initialized_db, monkeypatch):
+        import modules.analysis as analysis
+
+        async def boom(prompt, extra_tools=None, timeout=None, llm_dir=None):
+            raise RuntimeError("CLI exploded")
+
+        monkeypatch.setattr(analysis, "execute_claude_query", boom)
+        resp = client.post("/api/analysis/reports", json={"query_id": "post_workout"})
+        assert resp.status_code == 201
+        report = self._poll_completed(client, resp.json()["id"])
+        assert report["status"] == "failed"
+        assert "CLI exploded" in report["error_message"]
+
+
+@pytest.mark.integration
+class TestAtomicSingleActiveGuard:
+    """create_report_if_idle: one atomic reap+check+insert (no two-step race),
+    with the age-gated runtime reaper for wedged non-terminal reports."""
+
+    def test_second_create_returns_none_while_first_active(self, analysis_initialized_db):
+        from modules.analysis_db import create_report_if_idle
+        first = create_report_if_idle(analysis_initialized_db, "a", "A", "p", 300)
+        assert first is not None
+        second = create_report_if_idle(analysis_initialized_db, "b", "B", "p", 300)
+        assert second is None  # 409 path — first is still pending
+
+    def test_wedged_old_report_is_reaped_and_new_one_allowed(self, analysis_initialized_db):
+        """A running report whose terminal write was lost must not block new
+        queries forever — past the age gate it is failed and replaced."""
+        import sqlite3
+        from modules.analysis_db import create_report_if_idle, get_report
+        wedged = create_report_if_idle(analysis_initialized_db, "a", "A", "p", 300)
+        conn = sqlite3.connect(analysis_initialized_db)
+        conn.execute(
+            "UPDATE reports SET status='running', created_at='2020-01-01T00:00:00Z' WHERE id=?",
+            (wedged,))
+        conn.commit(); conn.close()
+
+        new_id = create_report_if_idle(analysis_initialized_db, "b", "B", "p", 300)
+        assert new_id is not None
+        reaped = get_report(analysis_initialized_db, wedged)
+        assert reaped["status"] == "failed"
+        assert "Reaped" in reaped["error_message"]
+
+    def test_recent_running_report_is_NOT_reaped(self, analysis_initialized_db):
+        """The age gate is the safety property: a legitimately live report
+        (younger than max-timeout+grace) is never killed."""
+        import sqlite3
+        from modules.analysis_db import create_report_if_idle, get_report
+        live = create_report_if_idle(analysis_initialized_db, "a", "A", "p", 300)
+        conn = sqlite3.connect(analysis_initialized_db)
+        conn.execute("UPDATE reports SET status='running' WHERE id=?", (live,))
+        conn.commit(); conn.close()
+
+        blocked = create_report_if_idle(analysis_initialized_db, "b", "B", "p", 300)
+        assert blocked is None
+        assert get_report(analysis_initialized_db, live)["status"] == "running"

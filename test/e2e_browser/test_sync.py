@@ -4,7 +4,6 @@ import requests as http_requests
 from pages.app_shell import AppShellPage
 from pages.journal import JournalPage
 
-pytestmark = pytest.mark.e2e
 
 
 @pytest.fixture

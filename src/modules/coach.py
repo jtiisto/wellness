@@ -803,6 +803,41 @@ def _workout_sync_post(get_db, payload):
 HOOK_TIMEOUT_SECONDS = 120
 
 
+def _store_hook_result(get_db, result_id: int, exit_code, stdout: bytes):
+    """Persist a hook's exit code (+ parsed JSON key/values on success).
+
+    Blocking sqlite3 work — callers on the event loop go through
+    asyncio.to_thread."""
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE workout_hook_results SET exit_code = ? WHERE id = ?",
+            (exit_code, result_id),
+        )
+
+        # Parse stdout as JSON and store key/value pairs
+        if exit_code == 0 and stdout:
+            try:
+                data = json.loads(stdout.decode())
+                if isinstance(data, dict):
+                    # Clear old data for retry/upsert
+                    cursor.execute(
+                        "DELETE FROM workout_hook_data WHERE result_id = ?",
+                        (result_id,),
+                    )
+                    for key, value in data.items():
+                        cursor.execute(
+                            "INSERT INTO workout_hook_data (result_id, key, value) VALUES (?, ?, ?)",
+                            (result_id, key, json.dumps(value) if not isinstance(value, str) else value),
+                        )
+                else:
+                    logger.warning("Hook %d output is not a JSON object", result_id)
+            except (json.JSONDecodeError, UnicodeDecodeError) as e:
+                logger.warning("Hook %d produced invalid JSON: %s", result_id, e)
+
+        conn.commit()
+
+
 async def _run_hook(get_db, result_id: int, script_path: Path):
     """Run a hook script asynchronously and store results in the database."""
     try:
@@ -832,51 +867,14 @@ async def _run_hook(get_db, result_id: int, script_path: Path):
             stdout = b""
             exit_code = -2
 
-        with get_db() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "UPDATE workout_hook_results SET exit_code = ? WHERE id = ?",
-                (exit_code, result_id),
-            )
-
-            # Parse stdout as JSON and store key/value pairs
-            if exit_code == 0 and stdout:
-                try:
-                    data = json.loads(stdout.decode())
-                    if isinstance(data, dict):
-                        # Clear old data for retry/upsert
-                        cursor.execute(
-                            "DELETE FROM workout_hook_data WHERE result_id = ?",
-                            (result_id,),
-                        )
-                        for key, value in data.items():
-                            cursor.execute(
-                                "INSERT INTO workout_hook_data (result_id, key, value) VALUES (?, ?, ?)",
-                                (result_id, key, json.dumps(value) if not isinstance(value, str) else value),
-                            )
-                    else:
-                        logger.warning("Hook %d output is not a JSON object", result_id)
-                except (json.JSONDecodeError, UnicodeDecodeError) as e:
-                    logger.warning("Hook %d produced invalid JSON: %s", result_id, e)
-
-            conn.commit()
+        await asyncio.to_thread(_store_hook_result, get_db, result_id, exit_code, stdout)
 
     except FileNotFoundError:
         logger.error("Hook script not found: %s", script_path)
-        with get_db() as conn:
-            conn.execute(
-                "UPDATE workout_hook_results SET exit_code = ? WHERE id = ?",
-                (-1, result_id),
-            )
-            conn.commit()
+        await asyncio.to_thread(_store_hook_result, get_db, result_id, -1, b"")
     except Exception:
         logger.exception("Hook %d failed unexpectedly", result_id)
-        with get_db() as conn:
-            conn.execute(
-                "UPDATE workout_hook_results SET exit_code = ? WHERE id = ?",
-                (-1, result_id),
-            )
-            conn.commit()
+        await asyncio.to_thread(_store_hook_result, get_db, result_id, -1, b"")
 
 
 async def _start_or_end_workout(get_db, session_id: int, hook_type: str, action_label: str):
@@ -885,32 +883,37 @@ async def _start_or_end_workout(get_db, session_id: int, hook_type: str, action_
     if not script_path or not script_path.exists():
         raise HTTPException(status_code=400, detail=f"No {action_label} action configured")
 
-    with get_db() as conn:
-        cursor = conn.cursor()
+    def _record_hook_fired():
+        """Blocking sqlite3 work — run via to_thread (this endpoint is async)."""
+        with get_db() as conn:
+            cursor = conn.cursor()
 
-        cursor.execute("SELECT id FROM workout_sessions WHERE id = ?", (session_id,))
-        if not cursor.fetchone():
-            raise HTTPException(status_code=404, detail="Session not found")
+            cursor.execute("SELECT id FROM workout_sessions WHERE id = ?", (session_id,))
+            if not cursor.fetchone():
+                raise HTTPException(status_code=404, detail="Session not found")
 
-        now = get_utc_now()
+            now = get_utc_now()
 
-        cursor.execute(
-            """INSERT INTO workout_hook_results (session_id, hook_type, fired_at, exit_code)
-               VALUES (?, ?, ?, NULL)
-               ON CONFLICT(session_id, hook_type) DO UPDATE
-               SET fired_at = excluded.fired_at, exit_code = NULL""",
-            (session_id, hook_type, now),
-        )
-        result_id = cursor.lastrowid
-        if result_id == 0:
             cursor.execute(
-                "SELECT id FROM workout_hook_results WHERE session_id = ? AND hook_type = ?",
-                (session_id, hook_type),
+                """INSERT INTO workout_hook_results (session_id, hook_type, fired_at, exit_code)
+                   VALUES (?, ?, ?, NULL)
+                   ON CONFLICT(session_id, hook_type) DO UPDATE
+                   SET fired_at = excluded.fired_at, exit_code = NULL""",
+                (session_id, hook_type, now),
             )
-            result_id = cursor.fetchone()["id"]
-            cursor.execute("DELETE FROM workout_hook_data WHERE result_id = ?", (result_id,))
+            result_id = cursor.lastrowid
+            if result_id == 0:
+                cursor.execute(
+                    "SELECT id FROM workout_hook_results WHERE session_id = ? AND hook_type = ?",
+                    (session_id, hook_type),
+                )
+                result_id = cursor.fetchone()["id"]
+                cursor.execute("DELETE FROM workout_hook_data WHERE result_id = ?", (result_id,))
 
-        conn.commit()
+            conn.commit()
+            return result_id
+
+    result_id = await asyncio.to_thread(_record_hook_fired)
 
     spawn(_run_hook(get_db, result_id, script_path))
 

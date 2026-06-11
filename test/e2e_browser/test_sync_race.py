@@ -12,7 +12,6 @@ from datetime import datetime, timedelta, timezone
 from pages.app_shell import AppShellPage
 from pages.journal import JournalPage
 
-pytestmark = pytest.mark.e2e
 
 SYNC_DELAY_MS = 3000  # Artificial delay added to sync endpoints
 
@@ -136,8 +135,9 @@ def test_edit_different_tracker_during_sync_preserves_both(
     # Edit Meditation checkbox while sync is active.
     race_journal_page.set_tracker_checkbox("Meditation", checked=True)
 
-    # Wait for all syncs to complete (delayed sync + follow-up sync for second edit)
-    page.wait_for_timeout(SYNC_DELAY_MS + 6000)
+    # Deterministic completion signal: the dot stays red from the mid-flight
+    # edit until the follow-up upload lands (journal status is dirty-aware).
+    page.wait_for_selector(".sync-dot.green", timeout=SYNC_DELAY_MS + 12000)
 
     # Verify both values persisted on the server
     steps_entry = _get_server_entry(app_server, seed["trackers"][0]["id"], seed["today"])
@@ -178,8 +178,9 @@ def test_re_edit_same_entry_during_sync_keeps_latest(
     # Re-edit the same entry while sync is in flight
     race_journal_page.set_tracker_value("Steps", 9999)
 
-    # Wait for all syncs to complete
-    page.wait_for_timeout(SYNC_DELAY_MS + 6000)
+    # Deterministic completion signal: the dot stays red from the mid-flight
+    # edit until the follow-up upload lands (journal status is dirty-aware).
+    page.wait_for_selector(".sync-dot.green", timeout=SYNC_DELAY_MS + 12000)
 
     # Server must have the LATEST value (9999), not the first (2000)
     entry = _get_server_entry(app_server, seed["trackers"][0]["id"], seed["today"])
@@ -212,8 +213,9 @@ def test_checkbox_edit_during_sync_not_reverted(
     # Uncheck while sync is in flight
     race_journal_page.set_tracker_checkbox("Meditation", checked=False)
 
-    # Wait for all syncs to complete
-    page.wait_for_timeout(SYNC_DELAY_MS + 6000)
+    # Deterministic completion signal: the dot stays red from the mid-flight
+    # edit until the follow-up upload lands (journal status is dirty-aware).
+    page.wait_for_selector(".sync-dot.green", timeout=SYNC_DELAY_MS + 12000)
 
     # Server should have the FINAL state (unchecked)
     entry = _get_server_entry(app_server, seed["trackers"][1]["id"], seed["today"])
@@ -338,9 +340,8 @@ def test_rapid_keystrokes_during_sync_preserves_final_value(
     steps_input.press_sequentially("54321", delay=40)
     steps_input.blur()
 
-    # Wait for in-flight sync + follow-up sync for the rapid edits
-    page.wait_for_timeout(SYNC_DELAY_MS + 8000)
-    page.wait_for_selector(".sync-dot.green", timeout=10000)
+    # Deterministic completion signal (dot is red until the rapid edits land).
+    page.wait_for_selector(".sync-dot.green", timeout=SYNC_DELAY_MS + 12000)
 
     entry = _get_server_entry(app_server, seed["trackers"][0]["id"], seed["today"])
     assert entry is not None
@@ -371,9 +372,9 @@ def test_dirty_data_during_sync_triggers_followup(
     # Edit Meditation while sync is in flight
     race_journal_page.set_tracker_checkbox("Meditation", checked=True)
 
-    # Wait for: delayed sync to complete + follow-up debounce (2.5s) + follow-up sync
-    # Should NOT need to wait 30s for the poll — the follow-up should fire promptly
-    page.wait_for_timeout(SYNC_DELAY_MS + 8000)
+    # Deterministic completion: the follow-up must fire promptly (NOT the 30s
+    # poll) — the green dot within the delayed-sync window proves it.
+    page.wait_for_selector(".sync-dot.green", timeout=SYNC_DELAY_MS + 12000)
 
     # Both values should be on the server
     steps = _get_server_entry(app_server, seed["trackers"][0]["id"], seed["today"])

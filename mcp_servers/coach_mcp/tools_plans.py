@@ -248,34 +248,39 @@ class PlanTools:
             # Validate date format
             datetime.strptime(date, "%Y-%m-%d")
 
-            # Check if plan exists
-            results = self.db_manager.execute_query(
-                "SELECT id FROM workout_sessions WHERE date = ?", [date]
-            )
-            if not results:
-                raise ValueError(f"No plan found for date: {date}")
-
-            # Guard: refuse to delete plans that have workout logs attached.
-            # Logs represent completed training data recorded by the user and
-            # must never be orphaned. If the user wants to change a past
-            # workout, edit the plan instead of deleting it. Do NOT attempt
-            # to work around this by deleting the log first — the log is the
-            # user's training record and is immutable.
-            log_results = self.db_manager.execute_query(
-                "SELECT id FROM workout_session_logs WHERE date = ?", [date]
-            )
-            if log_results:
-                raise ValueError(
-                    f"Cannot delete workout plan for {date}: a workout log "
-                    f"exists for this date. Logs represent the user's completed "
-                    f"training data and must be preserved. If the plan needs "
-                    f"changes, use update_exercise, add_exercise, remove_exercise, "
-                    f"or update_plan_metadata to edit it in place. Do NOT delete "
-                    f"the log to work around this restriction."
-                )
-
-            # Delete plan and insert tombstone for incremental sync
+            # Both guards run INSIDE the BEGIN IMMEDIATE transaction so the
+            # check-then-delete is atomic against the FastAPI sync writer in
+            # the other process (a log uploaded between an outside-check and
+            # the DELETE would otherwise be orphaned) — same discipline as
+            # store_plan.
             with self.db_manager.transaction() as cursor:
+                # Check if plan exists
+                row = cursor.execute(
+                    "SELECT id FROM workout_sessions WHERE date = ?", [date]
+                ).fetchone()
+                if not row:
+                    raise ValueError(f"No plan found for date: {date}")
+
+                # Guard: refuse to delete plans that have workout logs attached.
+                # Logs represent completed training data recorded by the user and
+                # must never be orphaned. If the user wants to change a past
+                # workout, edit the plan instead of deleting it. Do NOT attempt
+                # to work around this by deleting the log first — the log is the
+                # user's training record and is immutable.
+                log_row = cursor.execute(
+                    "SELECT id FROM workout_session_logs WHERE date = ?", [date]
+                ).fetchone()
+                if log_row:
+                    raise ValueError(
+                        f"Cannot delete workout plan for {date}: a workout log "
+                        f"exists for this date. Logs represent the user's completed "
+                        f"training data and must be preserved. If the plan needs "
+                        f"changes, use update_exercise, add_exercise, remove_exercise, "
+                        f"or update_plan_metadata to edit it in place. Do NOT delete "
+                        f"the log to work around this restriction."
+                    )
+
+                # Delete plan and insert tombstone for incremental sync
                 cursor.execute(
                     "DELETE FROM workout_sessions WHERE date = ?", [date]
                 )

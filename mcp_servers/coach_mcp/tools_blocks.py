@@ -320,6 +320,15 @@ class BlockTools:
                         f"and its exercises together."
                     )
 
+                # Orphan any log rows referencing this block's exercises first
+                # (exercise_logs.exercise_id is a NO ACTION FK — see
+                # remove_exercise); log identity survives via exercise_key.
+                cursor.execute(
+                    "UPDATE exercise_logs SET exercise_id = NULL WHERE exercise_id IN "
+                    "(SELECT id FROM planned_exercises WHERE block_id = ?)",
+                    [block_id],
+                )
+
                 # Delete the block (CASCADE drops its exercises + checklist items).
                 cursor.execute("DELETE FROM session_blocks WHERE id = ?", [block_id])
 

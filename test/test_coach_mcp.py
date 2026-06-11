@@ -1709,3 +1709,78 @@ class TestSQLiteConnection:
         with SQLiteConnection(self.db_path, read_only=True) as conn:
             result = conn.execute("PRAGMA busy_timeout").fetchone()
             assert result[0] == 5000
+
+
+@pytest.mark.integration
+class TestRemoveLoggedExercise:
+    """Removing a logged exercise orphans its log row (exercise_id -> NULL)
+    instead of dying with a raw 'FOREIGN KEY constraint failed' — the log keeps
+    its identity via exercise_key/canonical_slug."""
+
+    FUTURE = "2099-03-01"
+
+    @pytest.fixture(autouse=True)
+    def setup_mcp(self, test_app, tmp_coach_db):
+        self.db_path = tmp_coach_db
+        config = MCPConfig(db_path=tmp_coach_db)
+        mcp = create_mcp_server(config)
+        self.tools = _extract_tools(mcp)
+
+    def _plan_with_logged_exercise(self):
+        """Create a plan and log a workout against its exercise; return the
+        planned exercise's row id."""
+        import sqlite3
+        plan = {
+            "day_name": "Logged Day",
+            "blocks": [{"block_type": "strength", "title": "Main", "exercises": [
+                {"id": "ex_logged", "name": "Logged Press", "type": "strength",
+                 "target_sets": 3, "target_reps": "8"},
+            ]}],
+        }
+        self.tools["set_workout_plan"](date=self.FUTURE, plan=plan)
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        pe = conn.execute(
+            "SELECT pe.id, pe.session_id FROM planned_exercises pe "
+            "JOIN workout_sessions ws ON pe.session_id = ws.id WHERE ws.date = ?",
+            (self.FUTURE,)).fetchone()
+        conn.execute(
+            "INSERT INTO workout_session_logs (session_id, date, last_modified) VALUES (?, ?, ?)",
+            (pe["session_id"], self.FUTURE, "2026-01-01T00:00:00Z"))
+        log_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        conn.execute(
+            "INSERT INTO exercise_logs (session_log_id, exercise_id, exercise_key, last_modified) "
+            "VALUES (?, ?, 'ex_logged', '2026-01-01T00:00:00Z')",
+            (log_id, pe["id"]))
+        conn.commit()
+        conn.close()
+        return pe["id"]
+
+    def _log_row(self):
+        import sqlite3
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT exercise_id, exercise_key FROM exercise_logs WHERE exercise_key = 'ex_logged'"
+        ).fetchone()
+        conn.close()
+        return row
+
+    def test_remove_exercise_orphans_the_log(self):
+        self._plan_with_logged_exercise()
+        result = self.tools["remove_exercise"](date=self.FUTURE, exercise_id="ex_logged")
+        assert result["success"] is True
+        row = self._log_row()
+        assert row is not None, "log row vanished"
+        assert row["exercise_id"] is None       # orphaned, not deleted
+        assert row["exercise_key"] == "ex_logged"  # identity survives
+
+    def test_remove_block_force_orphans_the_log(self):
+        self._plan_with_logged_exercise()
+        result = self.tools["remove_block"](date=self.FUTURE, block_position=0, force=True)
+        assert result["success"] is True
+        row = self._log_row()
+        assert row is not None
+        assert row["exercise_id"] is None
+        assert row["exercise_key"] == "ex_logged"

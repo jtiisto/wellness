@@ -103,14 +103,14 @@ class TestSyncSchedulerModule:
         assert "showNotification" in self.source
         assert "'server'" in self.source
 
-    def test_exponential_backoff(self):
-        """Retry delay should use exponential backoff."""
-        assert "Math.pow(2" in self.source or "2 **" in self.source
-
-    def test_max_retry_cap(self):
-        """Retry delay should be capped at maxRetryMs."""
-        assert "Math.min" in self.source
-        assert "_maxRetryMs" in self.source
+    def test_backoff_delegates_to_pure_logic(self):
+        """Retry backoff math lives in shared/sync-scheduler-logic.js (unit
+        tested in test/js/sync-scheduler-logic.test.js with real semantics —
+        doubling + cap); the scheduler delegates."""
+        assert "computeRetryDelay" in self.source
+        logic = (SHARED_DIR / "sync-scheduler-logic.js").read_text()
+        assert "Math.pow(2" in logic
+        assert "Math.min" in logic
 
     def test_default_debounce_ms(self):
         assert "2500" in self.source
@@ -137,8 +137,11 @@ class TestSyncSchedulerModule:
         assert "_getIsSyncing()" in self.source
 
     def test_handles_conflicts_reason(self):
-        """Conflicts should be treated as handled (no retry)."""
-        assert "'conflicts'" in self.source
+        """Conflicts are treated as handled (no retry) — the outcome routing
+        lives in shared/sync-scheduler-logic.js (unit tested in node)."""
+        assert "classifySyncOutcome" in self.source
+        logic = (SHARED_DIR / "sync-scheduler-logic.js").read_text()
+        assert "'conflicts'" in logic
 
 
 # ==================== Coach store scheduler integration ====================

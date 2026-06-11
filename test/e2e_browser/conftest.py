@@ -25,7 +25,17 @@ PUBLIC_DIR = PROJECT_ROOT / "public"
 sys.path.insert(0, str(PROJECT_ROOT / "test"))
 from seeds import seed_coach_plan  # noqa: E402
 
-pytestmark = pytest.mark.e2e
+def pytest_collection_modifyitems(items):
+    """Apply the e2e marker to every test in this directory.
+
+    A `pytestmark` module variable in a conftest has NO effect (it only works
+    inside test modules) — each e2e module used to repeat it manually, and the
+    first new module to forget would silently run in the wrong selection
+    (e.g. inside the fast pre-commit slice). This hook makes the directory
+    itself the marker boundary.
+    """
+    for item in items:
+        item.add_marker(pytest.mark.e2e)
 
 
 def _find_free_port():
@@ -158,7 +168,23 @@ def seeded_coach_db(app_server):
 
 @pytest.fixture
 def seeded_journal(app_server):
-    """Seed journal data via API calls (respects version tracking)."""
+    """Seed journal data via API calls (respects version tracking).
+
+    Resets the journal DATA tables first — in one transaction, scoped to data
+    only (clients/meta_sync sync plumbing untouched) — so each test starts from
+    a clean DB instead of accumulating trackers/entries across the session.
+    A previous blanket-wipe attempt destabilized the suite by clearing sync
+    infrastructure non-atomically; this mirrors coach's reset-before-seed.
+    """
+    conn = sqlite3.connect(app_server["db_dir"] / "journal.db", timeout=10)
+    try:
+        with conn:  # one transaction: no empty-DB window visible to the server
+            for table in ("entries", "entries_archive", "trackers_archive",
+                          "sync_conflicts", "trackers"):
+                conn.execute(f"DELETE FROM {table}")
+    finally:
+        conn.close()
+
     base = app_server["url"]
 
     client_id = "e2e-test-client"

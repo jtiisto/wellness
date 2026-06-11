@@ -315,6 +315,16 @@ class ExerciseTools:
 
                 session_id = row["session_id"]
 
+                # Orphan any log rows first: exercise_logs.exercise_id has a
+                # plain (NO ACTION) FK, so deleting a logged exercise would
+                # otherwise die with a raw 'FOREIGN KEY constraint failed'.
+                # The log keeps its identity via exercise_key/canonical_slug —
+                # the documented orphaned-log semantics.
+                cursor.execute(
+                    "UPDATE exercise_logs SET exercise_id = NULL WHERE exercise_id = ?",
+                    [row["id"]],
+                )
+
                 # Delete exercise (CASCADE handles checklist_items)
                 cursor.execute("DELETE FROM planned_exercises WHERE id = ?", [row["id"]])
 

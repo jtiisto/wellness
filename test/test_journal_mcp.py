@@ -251,3 +251,32 @@ class TestJournalMCPTools:
     def test_list_trackers_empty_category(self):
         result = self.tools["list_trackers"](category="nonexistent_category_xyz")
         assert result == []
+
+
+@pytest.mark.unit
+class TestValidatorIgnoresStringLiterals:
+    """Forbidden-keyword scan must not fire on words inside quoted data — the
+    ?mode=ro connection is the enforcement boundary; the validator is
+    defense-in-depth and false positives only cost usability."""
+
+    def test_keyword_inside_single_quotes_is_allowed(self):
+        QueryValidator.validate_query(
+            "SELECT * FROM trackers WHERE name = 'Update meds'")
+
+    def test_keyword_inside_double_quotes_is_allowed(self):
+        QueryValidator.validate_query(
+            'SELECT * FROM entries WHERE tracker_id = "delete-me-tracker"')
+
+    def test_keyword_outside_literals_still_rejected(self):
+        with pytest.raises(ValueError, match="Forbidden"):
+            QueryValidator.validate_query(
+                "SELECT * FROM trackers WHERE name = 'x'; UPDATE trackers SET name='y'"
+                .replace(";", " "))  # single statement, raw UPDATE keyword
+
+    def test_busy_timeout_is_set(self, tmp_path):
+        import sqlite3 as _sq
+        from journal_mcp.server import SQLiteConnection
+        db = tmp_path / "j.db"
+        _sq.connect(db).close()
+        with SQLiteConnection(db) as conn:
+            assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == 5000

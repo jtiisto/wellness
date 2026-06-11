@@ -5,6 +5,14 @@ set -e
 echo "Running unit tests..."
 python3 -m pytest test/ -m "unit or not (integration or e2e)" --ignore=test/integration --cov=src --cov=mcp_servers --cov-report=term-missing 2>&1
 
+echo "Running JS unit tests (node:test)..."
+node --test test/js/*.test.js
+
+echo "Running doc-lint..."
+# Pure file-greps (~0.1s): catches doc drift (dead paths, stale protocol
+# claims) at commit time instead of a 10-minute pre-push round trip.
+python3 -m pytest test/integration/test_doc_lint.py -q 2>&1
+
 # Stamp version.json with build date.
 BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 VERSION_FILE="public/version.json"

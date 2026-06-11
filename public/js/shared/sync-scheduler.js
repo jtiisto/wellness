@@ -7,6 +7,7 @@
 import { log as debugLog } from './debug-log.js';
 import { showNotification } from './notifications.js';
 import { isNetworkError } from './utils.js';
+import { computeRetryDelay, classifySyncOutcome } from './sync-scheduler-logic.js';
 
 export class SyncScheduler {
     /**
@@ -107,14 +108,15 @@ export class SyncScheduler {
         try {
             const result = await this._syncFn();
 
-            if (result.success || result.reason === 'conflicts') {
+            const outcome = classifySyncOutcome(result);
+            if (outcome === 'reset') {
                 // Success or conflicts (handled by journal UI) — reset retry
                 this._retryAttempt = 0;
                 this._clearRetry();
-            } else if (result.reason === 'offline' || result.reason === 'already syncing') {
-                // Not an error, just skip
+            } else if (outcome === 'skip') {
+                // Not an error (offline / already syncing), just skip
                 return;
-            } else if (result.error) {
+            } else if (outcome === 'error') {
                 // syncFn returned a failure with an error object
                 this._handleError(result.error);
             } else {
@@ -154,9 +156,8 @@ export class SyncScheduler {
 
     _scheduleRetry() {
         this._clearRetry();
-        const delay = Math.min(
-            this._baseRetryMs * Math.pow(2, this._retryAttempt),
-            this._maxRetryMs
+        const delay = computeRetryDelay(
+            this._retryAttempt, this._baseRetryMs, this._maxRetryMs
         );
         this._retryAttempt++;
         debugLog(`${this._name}-scheduler`, 'retry scheduled', { delay, attempt: this._retryAttempt });

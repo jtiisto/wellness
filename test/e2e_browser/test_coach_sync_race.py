@@ -11,7 +11,6 @@ import requests as http_requests
 from pages.app_shell import AppShellPage
 from pages.coach import CoachPage
 
-pytestmark = pytest.mark.e2e
 
 SYNC_DELAY_MS = 3000  # Artificial delay added to sync endpoints
 

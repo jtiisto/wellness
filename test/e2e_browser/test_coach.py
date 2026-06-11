@@ -6,7 +6,6 @@ from playwright.sync_api import expect
 from pages.app_shell import AppShellPage
 from pages.coach import CoachPage
 
-pytestmark = pytest.mark.e2e
 
 
 @pytest.fixture

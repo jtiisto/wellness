@@ -36,7 +36,14 @@ def utc_days_ago(n: int) -> str:
 
 @contextmanager
 def get_db(db_path, foreign_keys=False):
-    """Context manager for database connections."""
+    """Context manager for database connections.
+
+    CONVENTION: never call this on the asyncio event loop. Handlers are sync
+    `def`s (FastAPI runs them in its threadpool); the few `async def` paths
+    (analysis submit/run_report, coach workout hooks) route their DB work
+    through `asyncio.to_thread`. A blocking sqlite3 call here can hold the loop
+    for up to busy_timeout (5s) under contention.
+    """
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA busy_timeout = 5000")

@@ -360,8 +360,17 @@ def analysis_initialized_db(tmp_analysis_db):
 
 @pytest.fixture
 def mock_claude_cli():
-    """Mock the Claude CLI execution for analysis tests."""
-    async def fake_execute(prompt, extra_tools=None):
-        return "## Workout Summary\nTest response.\n\n## Performance Analysis\nAll good."
+    """Mock the Claude CLI execution for analysis tests.
+
+    Mirrors execute_claude_query's REAL contract — a (response_text, cli_meta)
+    tuple and the real keyword signature. The old fake returned a bare string,
+    so the seam could never catch a signature/shape regression."""
+    async def fake_execute(prompt, extra_tools=None, timeout=None, llm_dir=None):
+        text = "## Workout Summary\nTest response.\n\n## Performance Analysis\nAll good."
+        meta = {
+            "duration_ms": 1234, "duration_api_ms": 1000, "num_turns": 2,
+            "total_cost_usd": 0.01, "mcp_servers": ["journal-localdb"],
+        }
+        return text, meta
     with patch("modules.analysis.execute_claude_query", side_effect=fake_execute) as mock:
         yield mock

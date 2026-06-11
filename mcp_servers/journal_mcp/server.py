@@ -37,6 +37,10 @@ class SQLiteConnection:
         """Open read-only SQLite connection."""
         self.conn = sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True)
         self.conn.row_factory = sqlite3.Row
+        # Under WAL even a reader can hit a transient SQLITE_BUSY (e.g. during
+        # a checkpoint by the live server); wait instead of failing — same
+        # setting as db.get_db and the coach MCP.
+        self.conn.execute("PRAGMA busy_timeout = 5000")
         return self.conn
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -75,13 +79,39 @@ class QueryValidator:
             allowed = ", ".join(cls.ALLOWED_STATEMENTS).upper()
             raise ValueError(f"Only {allowed} queries are allowed for security")
 
-        query_words = set(re.findall(r"\b\w+\b", query_lower))
+        # Scan keywords OUTSIDE string literals only: a legitimate SELECT can
+        # mention 'update' or 'delete' inside quoted data (e.g. a tracker named
+        # 'Update meds'). The connection is opened ?mode=ro, so this validator
+        # is defense-in-depth, not the enforcement boundary — false positives
+        # cost usability without adding safety.
+        stripped = cls._strip_string_literals(query_lower)
+        query_words = set(re.findall(r"\b\w+\b", stripped))
         forbidden_found = query_words.intersection(cls.FORBIDDEN_KEYWORDS)
         if forbidden_found:
             raise ValueError(f"Forbidden keywords found: {', '.join(forbidden_found)}")
 
         if cls._contains_multiple_statements(query):
             raise ValueError("Multiple statements not allowed")
+
+    @staticmethod
+    def _strip_string_literals(sql: str) -> str:
+        """Replace the contents of '...'/"..." literals with spaces, honoring
+        SQL's doubled-quote escaping, so the keyword scan only sees real SQL."""
+        out = []
+        quote = None
+        for char in sql:
+            if quote:
+                if char == quote:
+                    quote = None
+                    out.append(char)
+                else:
+                    out.append(" ")
+            elif char in ("'", '"'):
+                quote = char
+                out.append(char)
+            else:
+                out.append(char)
+        return "".join(out)
 
     @staticmethod
     def _contains_multiple_statements(sql: str) -> bool:

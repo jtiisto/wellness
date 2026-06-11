@@ -12,11 +12,16 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from .analysis_db import (init_database, create_report, update_report_running,
-    update_report_completed, update_report_failed, get_report, list_reports,
-    get_pending_reports, delete_report, has_active_report, recover_stale_reports)
+from .analysis_db import (init_database, create_report, create_report_if_idle,
+    update_report_running, update_report_completed, update_report_failed,
+    get_report, list_reports, get_pending_reports, delete_report,
+    has_active_report, recover_stale_reports)
 from .analysis_queries import get_query, list_queries, build_prompt
 from .background import spawn
+
+# Grace added to the largest registered query timeout before a non-terminal
+# report can be reaped as stale at runtime (see create_report_if_idle).
+STALE_REPORT_GRACE_SECONDS = 120
 
 
 # ==================== Claude CLI Execution ====================
@@ -112,7 +117,9 @@ async def run_report(report_id: int, prompt: str, extra_tools, timeout, db_path:
     rather than leaving it wedged in 'pending'/'running', which would block the
     single-active-report 409 guard until a server restart."""
     try:
-        update_report_running(db_path, report_id)
+        # Status writes go through to_thread: they are blocking sqlite3 calls
+        # (5s busy_timeout) and this coroutine runs ON the event loop.
+        await asyncio.to_thread(update_report_running, db_path, report_id)
         response_text, cli_meta = await execute_claude_query(prompt, extra_tools, timeout, llm_dir=llm_dir)
         meta_json = None
         if cli_meta:
@@ -123,10 +130,11 @@ async def run_report(report_id: int, prompt: str, extra_tools, timeout, db_path:
                 "total_cost_usd": cli_meta.get("total_cost_usd"),
                 "mcp_servers": cli_meta.get("mcp_servers"),
             })
-        update_report_completed(db_path, report_id, response_text, meta_json)
+        await asyncio.to_thread(
+            update_report_completed, db_path, report_id, response_text, meta_json)
     except Exception as e:
         try:
-            update_report_failed(db_path, report_id, str(e))
+            await asyncio.to_thread(update_report_failed, db_path, report_id, str(e))
         except Exception:
             # Best effort — recover_stale_reports cleans up on next start.
             pass
@@ -171,12 +179,25 @@ def create_router(db_path: Path) -> APIRouter:
         query = get_query(req.query_id)
         if not query:
             raise HTTPException(status_code=404, detail=f"Unknown query_id: {req.query_id}")
-        if has_active_report(db_path_str):
-            raise HTTPException(status_code=409, detail="A query is already in progress.")
         prompt = build_prompt(query, req.location)
         extra_tools = query.get("extra_allowed_tools")
         timeout = query.get("timeout")
-        report_id = create_report(db_path_str, query["id"], query["label"], prompt)
+        # Age gate for the runtime stale-report reaper: longer than ANY
+        # registered query could legitimately run, so a live report is never
+        # reaped (the old startup-only recovery left a wedged report blocking
+        # the 409 guard until restart). Computed per-request because
+        # user_queries can register custom timeouts.
+        stale_after = max(
+            [q.get("timeout") or QUERY_TIMEOUT for q in list_queries()] + [QUERY_TIMEOUT]
+        ) + STALE_REPORT_GRACE_SECONDS
+        # Atomic reap+check+insert (in a thread — blocking sqlite3 call);
+        # replaces the racy has_active_report()+create_report() two-step.
+        report_id = await asyncio.to_thread(
+            create_report_if_idle, db_path_str,
+            query["id"], query["label"], prompt, stale_after,
+        )
+        if report_id is None:
+            raise HTTPException(status_code=409, detail="A query is already in progress.")
         spawn(run_report(report_id, prompt, extra_tools, timeout, db_path_str, llm_dir))
         return JSONResponse(content={"id": report_id, "status": "pending"}, status_code=201)
 

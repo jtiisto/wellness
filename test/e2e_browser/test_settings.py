@@ -2,7 +2,6 @@
 import pytest
 from pages.app_shell import AppShellPage
 
-pytestmark = pytest.mark.e2e
 
 
 def test_force_sync_button(app_page):
