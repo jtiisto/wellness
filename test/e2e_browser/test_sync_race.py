@@ -301,12 +301,11 @@ def test_forcesync_during_edit_preserves_latest(
     # Edit mid-forceSync — after the generation snapshot is taken
     race_journal_page.set_tracker_value("Steps", 8888)
 
-    # Deterministic: green when forceSync + the follow-up for the still-dirty
-    # entry (generation snapshot caught the mid-sync edit) have landed. The
-    # follow-up rides the NEXT 30s POLL TICK — a debounce that fires while the
-    # force sync is in flight parks as _pendingSync, and only a scheduler-run
-    # sync consumes it — so the budget must cover a full poll interval.
-    page.wait_for_selector(".sync-dot.green", timeout=45000)
+    # Deterministic AND prompt: forceSync now kicks scheduler.requestSync()
+    # for anything still dirty as it finishes, so the follow-up for the
+    # mid-sync edit no longer waits for the 30s poll tick. The tight budget is
+    # the regression guard — riding the poll again would blow it.
+    page.wait_for_selector(".sync-dot.green", timeout=SYNC_DELAY_MS * 4 + 8000)
 
     entry = _get_server_entry(app_server, seed["trackers"][0]["id"], seed["today"])
     assert entry is not None

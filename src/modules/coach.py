@@ -629,14 +629,17 @@ def _workout_status(get_db):
 
 
 def _plans_version(get_db):
-    """Return the latest plan modification timestamp (cheap version check).
+    """Return the latest coach change timestamp (cheap poll version check).
 
-    Folds deletion tombstones in: deleting a plan removes its workout_sessions
-    row and writes only a deleted_plans tombstone, so without the UNION,
-    deleting any plan other than the most-recently-modified one left
-    MAX(last_modified) unchanged — the 30s poll never fired and a
-    continuously-visible client kept showing the deleted plan until a
-    refocus/online event.
+    Folds in everything the 30s poll should notice:
+    - plan edits (workout_sessions.last_modified),
+    - plan deletions (deleted_plans.deleted_at — the delete removes the session
+      row, so without this arm deleting a non-latest plan never moved MAX),
+    - LOG writes (workout_session_logs.last_modified — without this arm another
+      device's logged sets reached a continuously-visible client only on a
+      refocus/online event; mid-workout phone+tablet is exactly that case).
+    Accepted cost: any device logging a set triggers the other devices' next
+    poll to run a full sync.
     """
     with get_db() as conn:
         cursor = conn.cursor()
@@ -645,6 +648,8 @@ def _plans_version(get_db):
                 SELECT MAX(last_modified) as v FROM workout_sessions
                 UNION ALL
                 SELECT MAX(deleted_at) as v FROM deleted_plans
+                UNION ALL
+                SELECT MAX(last_modified) as v FROM workout_session_logs
             )
         """)
         row = cursor.fetchone()

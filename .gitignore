@@ -17,6 +17,7 @@ data/*.db
 server.log
 .server.pid
 *.log
+*.log.1
 
 # User-specific queries (contains personal medical data)
 src/modules/user_queries.py

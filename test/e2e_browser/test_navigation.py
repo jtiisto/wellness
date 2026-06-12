@@ -54,3 +54,16 @@ def test_tools_opens_and_closes(app_page):
     assert app_page.locator(".tools-menu").is_visible()
     shell.close_tools()
     assert not app_page.locator(".tools-menu").is_visible()
+
+
+def test_unvisited_module_syncs_in_background(app_page):
+    """Background store init: the coach module syncs without its tab ever
+    being visited (journal is the default active module in a fresh context).
+    Init is delayed ~8s past boot and runs sequentially, so it cannot regress
+    the active module's first render — the failure that reverted the original
+    boot-init-everything approach."""
+    with app_page.expect_request(
+        lambda r: "/api/coach/sync" in r.url, timeout=20000
+    ) as req_info:
+        pass  # request fires from the delayed background init
+    assert "/api/coach/sync" in req_info.value.url

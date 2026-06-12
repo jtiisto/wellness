@@ -95,11 +95,18 @@ sync_dir() {
     if [ -d "$src" ]; then
         echo "  Syncing $name..."
         mkdir -p "$dest"
-        rsync -a --delete --filter='protect */' \
+        # No blanket 'protect */' filter: it shielded every receiver-only
+        # directory AND its contents from --delete, so removed/renamed code
+        # packages stayed importable in prod forever. The shipped code dirs
+        # (src/public/mcp_servers) have no prod-local content to protect; the
+        # db excludes are belt-and-suspenders should a data dir ever ship.
+        rsync -a --delete \
             --exclude='__pycache__' \
             --exclude='*.pyc' \
             --exclude='*.pyo' \
             --exclude='*.db' \
+            --exclude='*.db-wal' \
+            --exclude='*.db-shm' \
             "$src/" "$dest/"
     fi
 }
@@ -129,6 +136,8 @@ fi
 echo -e "${GREEN}Copying production files (per bin/deploy.manifest)...${NC}"
 echo ""
 
+SHIPPED_BIN=""
+
 while read -r action target _rest; do
     # Skip blanks and comments
     [[ -z "$action" || "$action" == \#* ]] && continue
@@ -140,6 +149,7 @@ while read -r action target _rest; do
             copy_file "$PROJECT_ROOT/$target" "$PROD_DIR/$target" "$target"
             ;;
         ship-bin)
+            SHIPPED_BIN="$SHIPPED_BIN $target"
             mkdir -p "$PROD_DIR/bin"
             src="$PROJECT_ROOT/bin/$target"
             if [ ! -f "$src" ]; then
@@ -163,6 +173,26 @@ while read -r action target _rest; do
             ;;
     esac
 done < "$MANIFEST"
+
+# The server expects data/ to exist (it creates the DB files itself; the dir
+# is no longer a ship-dir so rsync --delete can never touch live databases).
+mkdir -p "$PROD_DIR/data"
+
+# Deploys never delete from prod bin/ (hooks may carry prod-local versions),
+# so dead scripts used to accumulate silently. Warn about strays — anything
+# that is neither a ship-bin target nor a known prod-local file — instead of
+# deleting them.
+KNOWN_LOCAL_BIN="quick-deploy.sh backup-gitignored.sh"
+if [ -d "$PROD_DIR/bin" ]; then
+    for f in "$PROD_DIR/bin"/*; do
+        [ -f "$f" ] || continue
+        name="$(basename "$f")"
+        case " $SHIPPED_BIN $KNOWN_LOCAL_BIN " in
+            *" $name "*) ;;
+            *) echo -e "  ${YELLOW}Stray prod bin/$name — not in the manifest; remove it manually if dead${NC}" ;;
+        esac
+    done
+fi
 
 echo ""
 

@@ -21,8 +21,11 @@
 ship-dir   src
 ship-dir   public
 ship-dir   mcp_servers
-ship-dir   data
 ship-file  requirements.txt
+# data/ deliberately does NOT ship: nothing tracked lives there, the server
+# creates its databases on first start (deploy-prod.sh mkdir -p's the dir),
+# and rsync --delete near live prod databases/WAL sidecars is exactly the
+# hazard we refuse to re-create.
 
 ship-bin   server.sh
 ship-bin   pre-workout-hook.sh

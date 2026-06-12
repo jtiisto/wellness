@@ -801,5 +801,12 @@ export async function forceSync() {
         return { success: false, error: error.message };
     } finally {
         isSyncing.value = false;
+        // Kick the follow-up for anything still dirty (e.g. an edit made while
+        // the force sync was in flight) — see coach forceSync; without this it
+        // waits for the next 30s poll tick. Must run AFTER isSyncing flips.
+        const meta = syncMetadata.value;
+        if (navigator.onLine && (meta.dirtyTrackers.length > 0 || meta.dirtyEntries.length > 0)) {
+            scheduler.requestSync();
+        }
     }
 }

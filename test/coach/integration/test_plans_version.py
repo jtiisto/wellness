@@ -106,3 +106,28 @@ class TestPlansVersion:
         assert version_after != version_before, (
             "plans-version did not change on tombstone-only deletion")
         assert version_after == deleted_at
+
+    def test_log_write_bumps_the_version(self, client, tmp_coach_db):
+        """Another device's LOG write must move the poll version — without the
+        logs arm, a continuously-visible client saw new sets only on a
+        refocus/online event (mid-workout phone+tablet staleness)."""
+        conn = sqlite3.connect(tmp_coach_db)
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute(
+            "INSERT INTO workout_sessions (date, day_name, last_modified) VALUES (?, ?, ?)",
+            ("2025-06-15", "Day", "2025-06-15T12:00:00Z"),
+        )
+        conn.commit()
+        version_before = client.get("/api/coach/plans-version").json()["version"]
+
+        log_ts = "2025-06-16T09:00:00Z"  # later than every plan stamp
+        conn.execute(
+            "INSERT INTO workout_session_logs (date, last_modified) VALUES (?, ?)",
+            ("2025-06-15", log_ts),
+        )
+        conn.commit()
+        conn.close()
+
+        version_after = client.get("/api/coach/plans-version").json()["version"]
+        assert version_after != version_before
+        assert version_after == log_ts

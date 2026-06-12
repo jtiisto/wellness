@@ -560,5 +560,13 @@ export async function forceSync() {
         return { success: false, error: error.message };
     } finally {
         isSyncing.value = false;
+        // Kick the follow-up for anything still dirty (e.g. an edit made while
+        // the force sync was in flight). Its debounce parked as the scheduler's
+        // pending flag — which only a scheduler-run sync consumes — so without
+        // this the edit would wait for the next 30s poll tick. Must run AFTER
+        // isSyncing flips false, or the scheduler just re-parks it.
+        if (navigator.onLine && syncMetadata.value.dirtyDates.length > 0) {
+            scheduler.requestSync();
+        }
     }
 }

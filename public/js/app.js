@@ -109,6 +109,44 @@ function selectModule(id) {
     localStorage.setItem('wellness_active_module', id);
 }
 
+// ==================== Background store init ====================
+
+const STORE_INITIALIZERS = {
+    journal:  () => import('./journal/store.js'),
+    coach:    () => import('./coach/store.js'),
+    analysis: () => import('./analysis/store.js'),
+};
+
+// Long enough that the active module is fully rendered and its own sync has
+// settled before any background work starts. An earlier version initialized
+// all stores CONCURRENTLY at boot and intermittently delayed the active
+// module's first render — hence both the delay and the strictly sequential
+// loop below.
+const BACKGROUND_INIT_DELAY_MS = 8000;
+
+/**
+ * Start the non-active modules' stores (and so their SyncSchedulers) in the
+ * background, so journal/coach data syncs regardless of which tab the user
+ * opens this session — not only after a tab is first visited.
+ * initializeStore() is idempotent: a view visited before (or after) this runs
+ * shares the same one-shot init.
+ */
+function scheduleBackgroundStoreInit() {
+    setTimeout(async () => {
+        for (const m of modules.value) {
+            if (m.id === activeModuleId.value) continue;  // its view owns init
+            const load = STORE_INITIALIZERS[m.id];
+            if (!load) continue;
+            try {
+                const store = await load();
+                await store.initializeStore();  // sequential — never concurrent
+            } catch (err) {
+                console.error(`Background init of ${m.id} store failed:`, err);
+            }
+        }
+    }, BACKGROUND_INIT_DELAY_MS);
+}
+
 // ==================== Components ====================
 
 function NavBar() {
@@ -178,5 +216,5 @@ function App() {
 
 // ==================== Mount ====================
 
-loadModules();
+loadModules().then(scheduleBackgroundStoreInit);
 render(html`<${App}/>`, document.getElementById('app'));

@@ -58,7 +58,7 @@ pytest test/e2e_browser/    # Playwright E2E browser tests
 ./bin/deploy-prod.sh /path/to/production [/path/to/llm-directory]
 ```
 
-What gets deployed is driven entirely by **`bin/deploy.manifest`** (the single source of truth): `src/`, `public/`, `mcp_servers/`, `data/`, `requirements.txt`, and a curated allowlist of `bin/` scripts (`server.sh`, the workout hooks, `backup-databases.sh`). Dev tooling, `docs/`, `plans/`, `test/`, and `githooks/` are intentionally excluded. To add or remove a deployed file, edit the manifest — the guard test `test/test_deploy_manifest.py` fails until every tracked top-level entry and `bin/` script is classified there, so nothing ships (or fails to ship) by accident. The optional LLM directory argument specifies where Claude Code CLI runs analysis queries (it must contain `CLAUDE.md` and `.claude/` with MCP configs).
+What gets deployed is driven entirely by **`bin/deploy.manifest`** (the single source of truth): `src/`, `public/`, `mcp_servers/`, `requirements.txt`, and a curated allowlist of `bin/` scripts (`server.sh`, the workout hooks, `backup-databases.sh`). Dev tooling, `docs/`, `plans/`, `test/`, and `githooks/` are intentionally excluded. To add or remove a deployed file, edit the manifest — the guard test `test/test_deploy_manifest.py` fails until every tracked top-level entry and `bin/` script is classified there, so nothing ships (or fails to ship) by accident. `data/` deliberately never ships — the server creates its databases on first start, keeping rsync away from live production data. The optional LLM directory argument specifies where Claude Code CLI runs analysis queries (it must contain `CLAUDE.md` and `.claude/` with MCP configs).
 
 ### Manual production setup
 
@@ -69,6 +69,13 @@ source venv/bin/activate
 pip install -r requirements.txt
 ./bin/server.sh start
 ```
+
+> **Note:** `server.sh` is the dev/manual control script. A long-running
+> production install is better managed as a systemd service whose `ExecStart`
+> runs `python src/server.py --port 9000` directly — stop the service before
+> deploying and start it after. `server.sh start` rotates the previous run's
+> log to `server.log.1` (crash forensics) and `stop` only kills the port's
+> owner if it is actually this server.
 
 ### Tailscale Setup (with Share)
 

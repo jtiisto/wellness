@@ -52,7 +52,15 @@ start_server() {
         source "$VENV_DIR/bin/activate"
     fi
 
-    nohup python3 "$SRC_DIR/server.py" --port "$PORT" $TEST_MODE > "$LOG_FILE" 2>&1 &
+    # Rotate the previous run's log instead of truncating it — after a crash,
+    # server.log.1 is the forensic trail `start` used to destroy.
+    if [ -s "$LOG_FILE" ]; then
+        mv "$LOG_FILE" "$LOG_FILE.1"
+    fi
+
+    # --test affects only the port; server.py takes no --test flag (passing it
+    # through used to make `server.sh --test start` fail at argparse).
+    nohup python3 "$SRC_DIR/server.py" --port "$PORT" > "$LOG_FILE" 2>&1 &
     local pid=$!
     echo $pid > "$PID_FILE"
 
@@ -87,7 +95,17 @@ stop_server() {
         fi
     fi
 
-    fuser -k "$PORT/tcp" 2>/dev/null
+    # Fallback for a stale/missing PID file: kill the port's owner ONLY if it
+    # is actually our server (cmdline matches src/server.py). An unrelated
+    # process squatting on the port gets reported, not killed.
+    local port_pid=$(fuser "$PORT/tcp" 2>/dev/null | tr -d '[:space:]')
+    if [ -n "$port_pid" ]; then
+        if grep -qa "server\.py" "/proc/$port_pid/cmdline" 2>/dev/null; then
+            kill "$port_pid" 2>/dev/null
+        else
+            echo -e "${YELLOW}Port $PORT is held by unrelated PID $port_pid — not killing it${NC}"
+        fi
+    fi
     rm -f "$PID_FILE"
     echo -e "${GREEN}Wellness app stopped${NC}"
 }
