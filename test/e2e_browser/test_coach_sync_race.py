@@ -87,8 +87,9 @@ def test_edit_during_sync_preserves_data(coach_sync_page, app_server):
     coach.fill_set_weight(2, 28)
     coach.fill_set_reps(2, 6)
 
-    # Wait for all syncs to complete
-    page.wait_for_timeout(SYNC_DELAY_MS + 8000)
+    # Deterministic completion: the dot is dirty-aware (red from the
+    # mid-flight edit until the follow-up upload lands), so green == all synced.
+    page.wait_for_selector(".sync-dot.green", timeout=SYNC_DELAY_MS + 12000)
 
     # Verify UI still shows all three sets
     weights = page.locator(".sets-grid-input[data-col='weight']")
@@ -139,8 +140,9 @@ def test_re_edit_same_set_during_sync_keeps_latest(coach_sync_page, app_server):
     # Re-edit the same set while sync is in flight
     coach.fill_set_weight(0, 32)
 
-    # Wait for all syncs to complete
-    page.wait_for_timeout(SYNC_DELAY_MS + 8000)
+    # Deterministic completion: the dot is dirty-aware (red from the
+    # mid-flight edit until the follow-up upload lands), so green == all synced.
+    page.wait_for_selector(".sync-dot.green", timeout=SYNC_DELAY_MS + 12000)
 
     # Server must have the LATEST value (32), not the first (20)
     server_log = _get_server_log(app_server, today)
@@ -173,7 +175,7 @@ def test_feedback_edit_during_sync_keeps_latest(coach_sync_page, app_server):
     # Fill a set so this case exercises the exercise+feedback path specifically.
     # (Feedback-only uploads are covered by test_feedback_only_log_reaches_server.)
     coach.fill_set_weight(0, 20)
-    page.wait_for_timeout(4000)  # let this sync complete before delaying
+    page.wait_for_selector(".sync-dot.green", timeout=10000)  # this sync done
 
     _delay_coach_sync_endpoints(page)
 
@@ -186,8 +188,9 @@ def test_feedback_edit_during_sync_keeps_latest(coach_sync_page, app_server):
     # Re-edit the same feedback while sync is in flight
     coach.fill_feedback("General Notes", "final version")
 
-    # Wait for all syncs to complete
-    page.wait_for_timeout(SYNC_DELAY_MS + 8000)
+    # Deterministic completion: the dot is dirty-aware (red from the
+    # mid-flight edit until the follow-up upload lands), so green == all synced.
+    page.wait_for_selector(".sync-dot.green", timeout=SYNC_DELAY_MS + 12000)
 
     server_log = _get_server_log(app_server, today)
     assert server_log is not None, "Log missing from server"
@@ -215,8 +218,7 @@ def test_feedback_only_log_reaches_server(coach_sync_page, app_server):
 
     coach.start_workout()                       # unlock; adds no log content
     coach.fill_feedback("General Notes", "solo feedback note")
-    page.wait_for_timeout(5000)                 # debounce (2.5s) + upload
-    page.wait_for_selector(".sync-dot.green", timeout=10000)
+    page.wait_for_selector(".sync-dot.green", timeout=15000)  # debounce + upload
 
     server_log = _get_server_log(app_server, today)
     assert server_log is not None, "Feedback-only log never reached the server"
@@ -253,7 +255,9 @@ def test_checklist_edit_during_sync_preserves_both(coach_sync_page, app_server):
     second_item = page.locator(".checklist-item").filter(has_text="Bird-Dog x5/side")
     second_item.locator("input[type='checkbox']").check()
 
-    page.wait_for_timeout(SYNC_DELAY_MS + 8000)
+    # Deterministic completion: the dot is dirty-aware (red from the
+    # mid-flight edit until the follow-up upload lands), so green == all synced.
+    page.wait_for_selector(".sync-dot.green", timeout=SYNC_DELAY_MS + 12000)
 
     server_log = _get_server_log(app_server, today)
     assert server_log is not None, "Log missing from server"
@@ -294,9 +298,9 @@ def test_forcesync_during_edit_preserves_latest(coach_sync_page, app_server):
     # Edit mid-forceSync — the generation counter must keep this change dirty
     coach.fill_set_weight(0, 42)
 
-    # Wait for forceSync + follow-up sync from the new dirty state
-    page.wait_for_timeout(SYNC_DELAY_MS * 2 + 8000)
-    page.wait_for_selector(".sync-dot.green", timeout=10000)
+    # Deterministic: dirty-aware dot stays red until the follow-up sync for the
+    # mid-forceSync edit lands.
+    page.wait_for_selector(".sync-dot.green", timeout=20000)
 
     server_log = _get_server_log(app_server, today)
     assert server_log is not None
@@ -354,8 +358,7 @@ def test_forcesync_preserves_dirty_edit_when_server_day_advanced(coach_sync_page
     shell = AppShellPage(page)
     shell.open_tools()
     page.locator(".tools-item").filter(has_text="Force Sync").click()
-    page.wait_for_timeout(SYNC_DELAY_MS + 6000)
-    page.wait_for_selector(".sync-dot.green", timeout=10000)
+    page.wait_for_selector(".sync-dot.green", timeout=20000)
 
     # 5. The offline edit must have reached the server (uploaded + accepted
     #    per-record), not been silently dropped by a whole-day replace.

@@ -432,7 +432,10 @@ async function triggerSync() {
         await Promise.all([savePlans(), saveLogs(), saveMetadata()]);
         debugLog('coach-sync', 'server data applied', { plansUpdated: Object.keys(data.plans).length, logsMerged: Object.keys(data.logs).length });
 
-        syncStatus.value = 'green';
+        // Dirty-aware, not unconditional green: a date re-modified mid-sync is
+        // still dirty (its follow-up upload hasn't run), and the dot must say
+        // so — both for the user and as the e2e tests' completion signal.
+        updateSyncStatus();
         return { success: true };
 
     } catch (error) {
@@ -542,7 +545,9 @@ export async function forceSync() {
         }
 
         await Promise.all([savePlans(), saveLogs(), saveMetadata()]);
-        syncStatus.value = 'green';
+        // Dirty-aware (see triggerSync): an edit made mid-force-sync stays red
+        // until its follow-up upload lands.
+        updateSyncStatus();
 
         debugLog('coach-sync', 'force sync complete', { uploaded: uploadedDates.length });
         scheduler.resetRetry();

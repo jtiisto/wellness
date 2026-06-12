@@ -263,9 +263,9 @@ def test_edit_before_initial_sync_completes(
     # Edit immediately — the initial sync + any follow-up is still delayed.
     journal.set_tracker_value("Steps", 7777)
 
-    # Wait for all sync activity to settle
-    page.wait_for_timeout(SYNC_DELAY_MS * 2 + 6000)
-    page.wait_for_selector(".sync-dot.green", timeout=10000)
+    # Deterministic settle signal: the dot is dirty-aware, so green means the
+    # delayed sync AND the follow-up for the immediate edit both landed.
+    page.wait_for_selector(".sync-dot.green", timeout=SYNC_DELAY_MS * 2 + 14000)
 
     entry = _get_server_entry(app_server, seed["trackers"][0]["id"], seed["today"])
     assert entry is not None
@@ -301,12 +301,12 @@ def test_forcesync_during_edit_preserves_latest(
     # Edit mid-forceSync — after the generation snapshot is taken
     race_journal_page.set_tracker_value("Steps", 8888)
 
-    # Wait for forceSync to complete + the follow-up scheduler sync that picks
-    # up the still-dirty entry (because the generation snapshot caught the
-    # mid-sync edit). Under coverage instrumentation the timings drift, so we
-    # give a generous wait plus a poll on the sync indicator going green.
-    page.wait_for_timeout(SYNC_DELAY_MS * 3 + 4000)
-    page.wait_for_selector(".sync-dot.green", timeout=20000)
+    # Deterministic: green when forceSync + the follow-up for the still-dirty
+    # entry (generation snapshot caught the mid-sync edit) have landed. The
+    # follow-up rides the NEXT 30s POLL TICK — a debounce that fires while the
+    # force sync is in flight parks as _pendingSync, and only a scheduler-run
+    # sync consumes it — so the budget must cover a full poll interval.
+    page.wait_for_selector(".sync-dot.green", timeout=45000)
 
     entry = _get_server_entry(app_server, seed["trackers"][0]["id"], seed["today"])
     assert entry is not None
