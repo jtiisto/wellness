@@ -142,6 +142,22 @@ export function formatTarget(exercise, block) {
 }
 
 /**
+ * Build the compact prescription tokens shown in the expanded exercise body —
+ * the OPTIONAL modifiers only. The mandatory sets×reps stay in the header
+ * (formatTarget); these are the elaboration. Returns an ordered array of the
+ * present tokens (RPE, then load, then tempo); [] when none are set:
+ *   [{ kind: 'rpe', value }, { kind: 'load', value }, { kind: 'tempo', value }]
+ * Structured (not a joined string) so `load` can render an icon, not a label.
+ */
+export function buildPrescription(exercise) {
+    const tokens = [];
+    if (exercise.target_rpe) tokens.push({ kind: 'rpe', value: String(exercise.target_rpe) });
+    if (exercise.target_load) tokens.push({ kind: 'load', value: String(exercise.target_load) });
+    if (exercise.tempo) tokens.push({ kind: 'tempo', value: String(exercise.tempo) });
+    return tokens;
+}
+
+/**
  * Progress indicator for an exercise row header. Returns { display, complete }
  * or null when the exercise type has no meaningful "N of M" reading.
  *  - strength / circuit / weighted_time: completed sets / target sets

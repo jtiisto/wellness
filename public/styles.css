@@ -1755,28 +1755,42 @@ textarea:focus-visible,
     border-left: 3px solid var(--accent-warning);
 }
 
-/* Tempo — a coach prescription (e.g. "3-1-2-0"), display-only. Distinct from
-   the italic guidance note: a small upright caption with an accent label chip. */
-.coach .exercise-tempo {
+/* Prescription line — the OPTIONAL strength modifiers (RPE · load · tempo),
+   display-only, in the expanded body. The mandatory sets×reps stay in the header
+   (formatTarget). Distinct from the italic guidance note: an upright line with
+   small teal labels for RPE/Tempo and a dumbbell icon for the (label-less) load
+   token. */
+.coach .exercise-prescription {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
-    gap: var(--spacing-sm);
+    gap: 6px;
     margin-bottom: var(--spacing-md);
     font-size: var(--font-size-sm);
     color: var(--text-secondary);
     font-variant-numeric: tabular-nums;
 }
 
-.coach .exercise-tempo .tempo-label {
+.coach .exercise-prescription .rx-token { white-space: nowrap; }
+
+.coach .exercise-prescription .rx-label {
     font-size: 0.7rem;
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.04em;
-    color: var(--accent-primary);
-    background-color: var(--bg-tertiary);
-    border-radius: var(--radius-full);
-    padding: 1px 8px;
+    color: var(--app-accent);
 }
+
+.coach .exercise-prescription .rx-sep { color: var(--text-muted); opacity: 0.55; }
+
+.coach .exercise-prescription .rx-load {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--text-primary);
+}
+
+.coach .exercise-prescription .rx-load svg { flex: none; color: var(--app-accent); }
 
 /* Set Entry — grid layout: one header row, then one row per set.
    Columns are set dynamically by SetEntry.js via an inline style

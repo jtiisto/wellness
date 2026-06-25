@@ -6,13 +6,37 @@ import { useState } from 'preact/hooks';
 import htm from 'htm';
 
 import { updateLog, workoutPlans, workoutLogs } from '../store.js';
-import { formatTarget, getExerciseProgress, isExerciseCompleted } from '../utils.js';
+import { formatTarget, getExerciseProgress, isExerciseCompleted, buildPrescription } from '../utils.js';
 import { findLastPerformance } from '../last-performance.js';
 import { SetEntry } from './SetEntry.js';
 import { CardioEntry } from './CardioEntry.js';
 import { ChecklistEntry } from './ChecklistEntry.js';
 
 const html = htm.bind(h);
+
+// Small dumbbell glyph for the load token — load carries no text label (it's
+// self-describing: "70%", "24kg"), so the icon is its visual cue. currentColor
+// + the module accent; no external asset.
+const DUMBBELL = html`
+    <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor"
+         stroke-width="2" stroke-linecap="round" aria-hidden="true">
+        <line x1="3.5" y1="8.5" x2="3.5" y2="15.5" />
+        <line x1="6.5" y1="6" x2="6.5" y2="18" />
+        <line x1="17.5" y1="6" x2="17.5" y2="18" />
+        <line x1="20.5" y1="8.5" x2="20.5" y2="15.5" />
+        <line x1="6.5" y1="12" x2="17.5" y2="12" />
+    </svg>
+`;
+
+// Render one prescription token. `load` gets the dumbbell icon; `rpe`/`tempo`
+// get a small teal label + value.
+function renderRxToken(token) {
+    if (token.kind === 'load') {
+        return html`<span class="rx-token rx-load">${DUMBBELL}${token.value}</span>`;
+    }
+    const label = token.kind === 'rpe' ? 'RPE' : 'Tempo';
+    return html`<span class="rx-token"><span class="rx-label">${label}</span> ${token.value}</span>`;
+}
 
 function parseName(name) {
     const pills = [];
@@ -30,6 +54,7 @@ export function ExerciseItem({ date, exercise, logData, block, isEditable = true
     const target = formatTarget(exercise, block);
     const progress = getExerciseProgress(exercise, logData);
     const parsed = parseName(exercise.name);
+    const prescription = buildPrescription(exercise);
 
     const handleNoteChange = (e) => {
         if (!isEditable) return;
@@ -135,9 +160,12 @@ export function ExerciseItem({ date, exercise, logData, block, isEditable = true
                         <div class="guidance-note">${exercise.guidance_note}</div>
                     `}
 
-                    ${exercise.tempo && html`
-                        <div class="exercise-tempo">
-                            <span class="tempo-label">Tempo</span>${exercise.tempo}
+                    ${prescription.length > 0 && html`
+                        <div class="exercise-prescription">
+                            ${prescription.map((token, i) => html`
+                                ${i > 0 && html`<span class="rx-sep">·</span>`}
+                                ${renderRxToken(token)}
+                            `)}
                         </div>
                     `}
 
