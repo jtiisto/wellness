@@ -40,21 +40,23 @@ def test_exercise_expand(coach_page, app_page):
     assert exercise.locator(".exercise-body").is_visible()
 
 
-def test_tempo_prescription_displays(coach_page, app_page):
-    """A planned strength tempo renders as a display-only caption in the body."""
+def test_prescription_line_displays(coach_page, app_page):
+    """The optional modifiers (RPE · load · tempo) render as one consolidated
+    prescription line in the expanded body."""
     coach_page.expand_exercise("Front Squat")
     app_page.wait_for_timeout(300)
-    tempo = coach_page.get_exercise_tempo("Front Squat")
-    assert tempo is not None
-    assert "3-1-2-0" in tempo
+    rx = coach_page.get_exercise_prescription("Front Squat")
+    assert rx is not None
+    for fragment in ("RPE", "6-7", "70%", "Tempo", "3-1-2-0"):
+        assert fragment in rx, f"expected {fragment!r} in prescription line {rx!r}"
 
 
-def test_tempo_absent_and_legacy_note_still_shows(coach_page, app_page):
-    """An exercise without a structured tempo shows no tempo caption, while its
-    legacy inline 'Tempo' guidance note still renders (no backfill)."""
+def test_prescription_absent_and_legacy_note_still_shows(coach_page, app_page):
+    """An exercise with no structured modifiers shows no prescription line, while
+    its legacy inline 'Tempo' guidance note still renders (no backfill)."""
     coach_page.expand_exercise("KB Goblet Squat")
     app_page.wait_for_timeout(300)
-    assert coach_page.get_exercise_tempo("KB Goblet Squat") is None
+    assert coach_page.get_exercise_prescription("KB Goblet Squat") is None
     note = app_page.locator(".exercise-item").filter(
         has_text="KB Goblet Squat").locator(".guidance-note")
     expect(note).to_have_text("Tempo 3-1-1")

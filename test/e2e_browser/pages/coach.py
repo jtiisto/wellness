@@ -56,12 +56,13 @@ class CoachPage:
         """Read the prescription text shown in the exercise header."""
         return self.page.locator(".exercise-item").filter(has_text=name).locator(".exercise-target").text_content()
 
-    def get_exercise_tempo(self, name):
-        """Return the .exercise-tempo caption text in the named exercise's
-        expanded body, or None when the exercise has no tempo. Expand first."""
+    def get_exercise_prescription(self, name):
+        """Return the .exercise-prescription line text (optional RPE/load/tempo
+        modifiers) in the named exercise's expanded body, or None when there are
+        none. Expand the exercise first."""
         item = self.page.locator(".exercise-item").filter(has_text=name)
-        tempo = item.locator(".exercise-tempo")
-        return tempo.text_content() if tempo.count() else None
+        rx = item.locator(".exercise-prescription")
+        return rx.text_content() if rx.count() else None
 
     def is_exercise_marked_complete(self, name):
         """True when the exercise-item has the .completed class."""

@@ -157,7 +157,7 @@ def seeded_coach_db(app_server):
     # One shared seed implementation with the unit/integration conftest
     # (test/seeds.py) — the two used to carry drifting near-duplicate SQL.
     seeded = seed_coach_plan(conn, today=today, now=now,
-                             supersets=True, intervals=True, tempo=True)
+                             supersets=True, intervals=True, prescription=True)
     s1 = seeded["session_id"]
 
     conn.commit()
