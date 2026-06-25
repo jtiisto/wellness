@@ -1443,6 +1443,63 @@ class TestWriteTools:
                 updates={"name": "Renamed (Pair A)"},
             )
 
+    # --- tempo support ---
+
+    def _tempo_plan(self, tempo="3-1-2-0"):
+        return {
+            "day_name": "Tempo Day",
+            "location": "Gym",
+            "phase": "Foundation",
+            "blocks": [
+                {
+                    "block_type": "strength",
+                    "title": "Main",
+                    "exercises": [
+                        {"id": "squat", "name": "Back Squat", "type": "strength",
+                         "target_sets": 3, "target_reps": "5", "tempo": tempo},
+                        {"id": "dl", "name": "Deadlift", "type": "strength",
+                         "target_sets": 1, "target_reps": "5"},
+                    ],
+                }
+            ],
+        }
+
+    def test_set_workout_plan_persists_tempo(self):
+        result = self.tools["set_workout_plan"](
+            date="2099-09-01", plan=self._tempo_plan()
+        )
+        by_id = {ex["id"]: ex for ex in result["plan"]["blocks"][0]["exercises"]}
+        assert by_id["squat"]["tempo"] == "3-1-2-0"
+        assert "tempo" not in by_id["dl"]
+
+    def test_set_workout_plan_freeform_tempo(self):
+        result = self.tools["set_workout_plan"](
+            date="2099-09-02", plan=self._tempo_plan(tempo="30X1")
+        )
+        assert result["plan"]["blocks"][0]["exercises"][0]["tempo"] == "30X1"
+
+    def test_add_exercise_persists_tempo(self):
+        self.tools["set_workout_plan"](date="2099-09-03", plan=self._make_plan())
+        new_ex = {
+            "id": "added", "name": "Front Squat", "type": "strength",
+            "target_sets": 3, "target_reps": "6", "tempo": "4-0-1-0",
+        }
+        self.tools["add_exercise"](date="2099-09-03", exercise=new_ex, block_position=0)
+        plan = self.tools["get_workout_plan"](
+            start_date="2099-09-03", end_date="2099-09-03"
+        )[0]["plan"]
+        added = next(ex for ex in plan["blocks"][0]["exercises"] if ex["id"] == "added")
+        assert added["tempo"] == "4-0-1-0"
+
+    def test_update_exercise_can_set_tempo(self):
+        self.tools["set_workout_plan"](date="2099-09-04", plan=self._make_plan())
+        result = self.tools["update_exercise"](
+            date="2099-09-04",
+            exercise_id="test_ex_1",
+            updates={"tempo": "2-1-2-0"},
+        )
+        assert result["updated_exercise"]["tempo"] == "2-1-2-0"
+
 
 # ==================== Unit 4: Exercise Registry + DB Classes ====================
 

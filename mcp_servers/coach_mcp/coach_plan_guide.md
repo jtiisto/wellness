@@ -54,8 +54,10 @@ is preferred: explicit type and name, no keyword-guessing.
 ### strength
 ```json
 {"id": "ex_1", "name": "KB Goblet Squat", "type": "strength",
- "target_sets": 3, "target_reps": "10", "guidance_note": "Tempo 3-1-1"}
+ "target_sets": 3, "target_reps": "10", "tempo": "3-1-1"}
 ```
+Optional `tempo` is a free-form prescription string (e.g. `"3-1-1"`, `"3-1-2-0"`,
+`"30X1"`). Put tempo in the dedicated `tempo` field — **not** in `guidance_note`.
 
 ### duration
 ```json
@@ -123,7 +125,7 @@ the canonical slug and break cross-session comparison.
             "rest_guidance": "Rest until HR <= 130",
             "exercises": [
                 {"id": "ex_1", "name": "KB Goblet Squat", "type": "strength",
-                 "target_sets": 3, "target_reps": "10", "guidance_note": "Tempo 3-1-1"},
+                 "target_sets": 3, "target_reps": "10", "tempo": "3-1-1"},
                 {"id": "ex_2", "name": "DB Romanian Deadlift", "type": "strength",
                  "target_sets": 3, "target_reps": "10"}
             ]
@@ -174,6 +176,8 @@ when plans are created. This enables cross-session queries.
 
 1. **Block grouping**: Group exercises by type (warmup, strength, cardio)
 2. **Unique IDs**: Each exercise needs a unique `id` within the plan
-3. **Guidance Notes**: Include tempo, rest periods, HR targets
-4. **Progressive Overload**: Increase volume/intensity across phases
-5. **Consistent Names**: Use `search_exercises` to find existing exercise names
+3. **Tempo**: For strength lifts, put tempo in the dedicated `tempo` field
+   (free-form, e.g. `"3-1-1"`) — not in `guidance_note`
+4. **Guidance Notes**: Include rest periods, HR targets, and form cues
+5. **Progressive Overload**: Increase volume/intensity across phases
+6. **Consistent Names**: Use `search_exercises` to find existing exercise names

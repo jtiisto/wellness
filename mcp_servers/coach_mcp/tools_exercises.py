@@ -37,7 +37,7 @@ class ExerciseTools:
             exercise_id: Exercise key (e.g., "ex_1", "warmup_0")
             updates: Dictionary of fields to update. Can include:
                      name, type, target_sets, target_reps, target_duration_min,
-                     guidance_note, items, hide_weight, show_time
+                     guidance_note, items, hide_weight, show_time, tempo
 
         Returns:
             Updated exercise and confirmation
@@ -57,6 +57,7 @@ class ExerciseTools:
             "hide_weight": "hide_weight",
             "show_time": "show_time",
             "superset_group": "superset_group",
+            "tempo": "tempo",
         }
 
         if "name" in updates:
@@ -231,8 +232,8 @@ class ExerciseTools:
                     (session_id, block_id, exercise_key, position, name, exercise_type,
                      target_sets, target_reps, target_duration_min, target_duration_sec,
                      rounds, work_duration_sec, rest_duration_sec,
-                     guidance_note, hide_weight, show_time, superset_group, canonical_slug)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     guidance_note, hide_weight, show_time, superset_group, tempo, canonical_slug)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, [
                     session_id, block_id, exercise["id"], position,
                     exercise["name"], exercise["type"],
@@ -247,6 +248,7 @@ class ExerciseTools:
                     1 if exercise.get("hide_weight") else 0,
                     1 if exercise.get("show_time") else 0,
                     exercise.get("superset_group"),
+                    str(exercise["tempo"]).strip() if exercise.get("tempo") else None,
                     slug,
                 ])
                 exercise_id = cursor.lastrowid
