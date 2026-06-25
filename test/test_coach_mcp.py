@@ -1500,6 +1500,57 @@ class TestWriteTools:
         )
         assert result["updated_exercise"]["tempo"] == "2-1-2-0"
 
+    # --- target_rpe / target_load support ---
+
+    def _rx_plan(self, rpe="6-7", load="70%"):
+        return {
+            "day_name": "RX Day", "location": "Gym", "phase": "Foundation",
+            "blocks": [{
+                "block_type": "strength", "title": "Main",
+                "exercises": [
+                    {"id": "squat", "name": "Back Squat", "type": "strength",
+                     "target_sets": 3, "target_reps": "5",
+                     "target_rpe": rpe, "target_load": load},
+                    {"id": "dl", "name": "Deadlift", "type": "strength",
+                     "target_sets": 1, "target_reps": "5"},
+                ],
+            }],
+        }
+
+    def test_set_workout_plan_persists_intensity(self):
+        result = self.tools["set_workout_plan"](
+            date="2099-09-05", plan=self._rx_plan()
+        )
+        by_id = {ex["id"]: ex for ex in result["plan"]["blocks"][0]["exercises"]}
+        assert by_id["squat"]["target_rpe"] == "6-7"
+        assert by_id["squat"]["target_load"] == "70%"
+        assert "target_rpe" not in by_id["dl"]
+        assert "target_load" not in by_id["dl"]
+
+    def test_add_exercise_persists_intensity(self):
+        self.tools["set_workout_plan"](date="2099-09-06", plan=self._make_plan())
+        new_ex = {
+            "id": "added", "name": "Front Squat", "type": "strength",
+            "target_sets": 3, "target_reps": "6", "target_rpe": "8", "target_load": "60kg",
+        }
+        self.tools["add_exercise"](date="2099-09-06", exercise=new_ex, block_position=0)
+        plan = self.tools["get_workout_plan"](
+            start_date="2099-09-06", end_date="2099-09-06"
+        )[0]["plan"]
+        added = next(ex for ex in plan["blocks"][0]["exercises"] if ex["id"] == "added")
+        assert added["target_rpe"] == "8"
+        assert added["target_load"] == "60kg"
+
+    def test_update_exercise_can_set_intensity(self):
+        self.tools["set_workout_plan"](date="2099-09-07", plan=self._make_plan())
+        result = self.tools["update_exercise"](
+            date="2099-09-07",
+            exercise_id="test_ex_1",
+            updates={"target_rpe": "8-9", "target_load": "RPE-based"},
+        )
+        assert result["updated_exercise"]["target_rpe"] == "8-9"
+        assert result["updated_exercise"]["target_load"] == "RPE-based"
+
 
 # ==================== Unit 4: Exercise Registry + DB Classes ====================
 

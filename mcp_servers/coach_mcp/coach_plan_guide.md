@@ -54,10 +54,17 @@ is preferred: explicit type and name, no keyword-guessing.
 ### strength
 ```json
 {"id": "ex_1", "name": "KB Goblet Squat", "type": "strength",
- "target_sets": 3, "target_reps": "10", "tempo": "3-1-1"}
+ "target_sets": 3, "target_reps": "10",
+ "tempo": "3-1-1", "target_rpe": "7", "target_load": "24kg"}
 ```
-Optional `tempo` is a free-form prescription string (e.g. `"3-1-1"`, `"3-1-2-0"`,
-`"30X1"`). Put tempo in the dedicated `tempo` field — **not** in `guidance_note`.
+Optional structured prescription fields (all free-form text, all displayed in a
+compact line in the UI — put them in their own field, **not** `guidance_note`):
+- `tempo` — e.g. `"3-1-1"`, `"3-1-2-0"`, `"30X1"`.
+- `target_rpe` — target RPE/RIR; may be a range, e.g. `"7"`, `"6-7"`, `"8-9"`.
+- `target_load` — free-form load cue, e.g. `"70%"`, `"24kg"`, `"BW"`, `"level 5"`.
+
+Per-set nuance (e.g. "last set RPE 9", drop sets, AMRAP) still goes in
+`guidance_note`.
 
 ### duration
 ```json
@@ -176,8 +183,10 @@ when plans are created. This enables cross-session queries.
 
 1. **Block grouping**: Group exercises by type (warmup, strength, cardio)
 2. **Unique IDs**: Each exercise needs a unique `id` within the plan
-3. **Tempo**: For strength lifts, put tempo in the dedicated `tempo` field
-   (free-form, e.g. `"3-1-1"`) — not in `guidance_note`
-4. **Guidance Notes**: Include rest periods, HR targets, and form cues
+3. **Prescription fields**: For strength lifts, put tempo, target RPE, and load
+   in their dedicated fields (`tempo`, `target_rpe`, `target_load`; all free-form,
+   e.g. `"3-1-1"` / `"6-7"` / `"70%"`) — not in `guidance_note`
+4. **Guidance Notes**: Include rest periods, HR targets, form cues, and per-set
+   nuance (e.g. "last set RPE 9")
 5. **Progressive Overload**: Increase volume/intensity across phases
 6. **Consistent Names**: Use `search_exercises` to find existing exercise names
