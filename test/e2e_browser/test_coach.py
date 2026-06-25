@@ -40,6 +40,26 @@ def test_exercise_expand(coach_page, app_page):
     assert exercise.locator(".exercise-body").is_visible()
 
 
+def test_tempo_prescription_displays(coach_page, app_page):
+    """A planned strength tempo renders as a display-only caption in the body."""
+    coach_page.expand_exercise("Front Squat")
+    app_page.wait_for_timeout(300)
+    tempo = coach_page.get_exercise_tempo("Front Squat")
+    assert tempo is not None
+    assert "3-1-2-0" in tempo
+
+
+def test_tempo_absent_and_legacy_note_still_shows(coach_page, app_page):
+    """An exercise without a structured tempo shows no tempo caption, while its
+    legacy inline 'Tempo' guidance note still renders (no backfill)."""
+    coach_page.expand_exercise("KB Goblet Squat")
+    app_page.wait_for_timeout(300)
+    assert coach_page.get_exercise_tempo("KB Goblet Squat") is None
+    note = app_page.locator(".exercise-item").filter(
+        has_text="KB Goblet Squat").locator(".guidance-note")
+    expect(note).to_have_text("Tempo 3-1-1")
+
+
 def test_log_workout_set(coach_page, app_page):
     """Filling weight and reps in a set row saves the values."""
     coach_page.start_workout()

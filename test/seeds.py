@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 
 
 def seed_coach_plan(conn, *, today, yesterday=None, supersets=False,
-                    intervals=False, now=None):
+                    intervals=False, tempo=False, now=None):
     """Insert the canonical test plan(s) into an open coach DB connection.
 
     today/yesterday are local-calendar YYYY-MM-DD strings (the browser and the
@@ -73,6 +73,17 @@ def seed_coach_plan(conn, *, today, yesterday=None, supersets=False,
             (session_id, block_id, exercise_key, position, name, exercise_type,
              target_sets, target_reps, superset_group)
             VALUES (?, ?, 'ex_pair_a2', 2, 'Bent Row', 'strength', 3, '8', 'A')
+        """, (s1, b2))
+    if tempo:
+        # A strength exercise carrying a structured `tempo` and NO guidance_note,
+        # so the UI shows the tempo caption distinctly. KB Goblet Squat above
+        # keeps its legacy inline "Tempo 3-1-1" guidance_note (no structured
+        # tempo) so both the new field and the historical note are exercised.
+        cursor.execute("""
+            INSERT INTO planned_exercises
+            (session_id, block_id, exercise_key, position, name, exercise_type,
+             target_sets, target_reps, tempo)
+            VALUES (?, ?, 'ex_tempo', 3, 'Front Squat', 'strength', 4, '6', '3-1-2-0')
         """, (s1, b2))
 
     # Cardio block
