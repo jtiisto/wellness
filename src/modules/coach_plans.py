@@ -136,6 +136,8 @@ def assemble_plan(cursor, session_row):
                 exercise["show_time"] = True
             if er["superset_group"]:
                 exercise["superset_group"] = er["superset_group"]
+            if er["tempo"]:
+                exercise["tempo"] = er["tempo"]
             if er["canonical_slug"]:
                 exercise["canonical_slug"] = er["canonical_slug"]
 
@@ -301,13 +303,15 @@ def transform_block_to_exercises(block: dict, block_index: int) -> list:
                 elif not equipment and is_bodyweight_or_band(exercise["name"]):
                     exercise["hide_weight"] = True
 
+            # Tempo is a first-class field now (free-form, e.g. "3-1-2-0"); it is
+            # no longer folded into guidance_note. `exercise = dict(ex)` already
+            # copied it through, and insert_block normalizes it to trimmed text.
+
             # Build a guidance note from exercise-specific cues, unless the
             # exercise already carries one. Block-level rest_guidance is never
             # folded in here — it stays on the block.
             if not exercise.get("guidance_note"):
                 notes = []
-                if ex.get("tempo"):
-                    notes.append(f"Tempo {ex['tempo']}")
                 if ex.get("load_guide"):
                     notes.append(ex["load_guide"])
                 if ex.get("notes"):
@@ -315,8 +319,9 @@ def transform_block_to_exercises(block: dict, block_index: int) -> list:
                 if notes:
                     exercise["guidance_note"] = ". ".join(notes)
 
-            # Drop raw input hints now folded into the canonical fields.
-            for raw_key in ("sets", "reps", "tempo", "load_guide", "notes", "equipment"):
+            # Drop raw input hints now folded into the canonical fields. `tempo`
+            # is intentionally NOT dropped — it is a structured field.
+            for raw_key in ("sets", "reps", "load_guide", "notes", "equipment"):
                 exercise.pop(raw_key, None)
 
             exercise.setdefault("id", f"{block_type}_{block_index}_{idx + 1}")
@@ -419,8 +424,8 @@ def insert_block(cursor, session_id, position, block):
             (session_id, block_id, exercise_key, position, name, exercise_type,
              target_sets, target_reps, target_duration_min, target_duration_sec,
              rounds, work_duration_sec, rest_duration_sec,
-             guidance_note, hide_weight, show_time, superset_group, extra, canonical_slug)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             guidance_note, hide_weight, show_time, superset_group, tempo, extra, canonical_slug)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, [
             session_id, block_id, exercise_key, j,
             ex.get("name", "Unknown"),
@@ -436,6 +441,7 @@ def insert_block(cursor, session_id, position, block):
             1 if ex.get("hide_weight") else 0,
             1 if ex.get("show_time") else 0,
             ex.get("superset_group"),
+            str(ex["tempo"]).strip() if ex.get("tempo") else None,
             json.dumps(ex["extra"]) if ex.get("extra") else None,
             ex.get("canonical_slug"),
         ])

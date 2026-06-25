@@ -65,6 +65,21 @@ def test_planned_exercises_has_superset_group(test_app, tmp_coach_db):
 
 
 @pytest.mark.unit
+def test_planned_exercises_has_tempo(test_app, tmp_coach_db):
+    """planned_exercises.tempo column is created on init (migration 4)."""
+    conn = sqlite3.connect(tmp_coach_db)
+    cursor = conn.cursor()
+
+    cursor.execute("PRAGMA table_info(planned_exercises)")
+    columns = {row[1]: row[2] for row in cursor.fetchall()}
+
+    conn.close()
+
+    assert "tempo" in columns
+    assert columns["tempo"] == "TEXT"
+
+
+@pytest.mark.unit
 def test_canonical_slug_columns_in_create_table(test_app, tmp_coach_db):
     """canonical_slug exists on both tables from CREATE TABLE (no ALTER needed)."""
     conn = sqlite3.connect(tmp_coach_db)
@@ -116,6 +131,36 @@ def test_fresh_db_stamped_at_latest_version(tmp_path):
     block_cols = {row[1] for row in conn.execute("PRAGMA table_info(session_blocks)")}
     assert {"work_duration_sec", "rest_duration_sec"} <= block_cols
     conn.close()
+
+
+@pytest.mark.unit
+def test_migration_4_adds_tempo_on_upgrade(tmp_path):
+    """A DB stamped at v3 (pre-tempo) gains planned_exercises.tempo on the next
+    init — the guarded migration 4 is the only place the column is added (the
+    baseline CREATE TABLE is intentionally left untouched, mirroring 2 & 3)."""
+    import modules.coach as coach_mod
+    from modules.db import enable_wal, run_migrations
+
+    db_path = tmp_path / "coach.db"
+
+    # Build the schema only through migration 3 — tempo must be absent.
+    conn = sqlite3.connect(db_path)
+    enable_wal(conn)
+    run_migrations(conn, coach_mod.MIGRATIONS[:3], label="coach test")
+    cols_before = {r[1] for r in conn.execute("PRAGMA table_info(planned_exercises)")}
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
+    conn.close()
+    assert "tempo" not in cols_before
+
+    # Re-init runs the full registry → migration 4 adds the column.
+    coach_mod.init_database(DbAccessor(db_path, foreign_keys=True))
+
+    conn = sqlite3.connect(db_path)
+    cols_after = {r[1] for r in conn.execute("PRAGMA table_info(planned_exercises)")}
+    ver = conn.execute("PRAGMA user_version").fetchone()[0]
+    conn.close()
+    assert "tempo" in cols_after
+    assert ver == len(coach_mod.MIGRATIONS)
 
 
 @pytest.mark.unit

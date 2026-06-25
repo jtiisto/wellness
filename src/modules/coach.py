@@ -307,6 +307,17 @@ def _migration_3_exercise_log_token(cursor):
         cursor.execute("ALTER TABLE exercise_logs ADD COLUMN last_modified TEXT")
 
 
+def _migration_4_planned_exercise_tempo(cursor):
+    """Add the optional strength `tempo` prescription column (free-form text,
+    e.g. "3-1-2-0" or "30X1"). Guarded; existing rows backfill to NULL (no
+    tempo). Tempo used to live inline in guidance_note as "Tempo X" — those
+    historical notes are left as-is (no backfill), so old plans keep showing
+    tempo in the note while new plans use this structured field.
+    """
+    if not column_exists(cursor, "planned_exercises", "tempo"):
+        cursor.execute("ALTER TABLE planned_exercises ADD COLUMN tempo TEXT")
+
+
 # Ordered (target_version, migration_fn) pairs — see db.run_migrations for the
 # transactional contract. Migration fns are DDL-only and must not manage their
 # own transactions.
@@ -314,6 +325,7 @@ MIGRATIONS = [
     (1, _migration_1_baseline),
     (2, _migration_2_block_interval_cols),
     (3, _migration_3_exercise_log_token),
+    (4, _migration_4_planned_exercise_tempo),
 ]
 
 

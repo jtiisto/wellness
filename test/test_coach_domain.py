@@ -124,6 +124,57 @@ def test_store_plan_round_trips_via_assemble(test_app, tmp_coach_db):
 
 
 @pytest.mark.unit
+def test_tempo_promoted_to_field_not_folded_into_guidance_note():
+    """Tempo is a structured field now: the raw->formed transform surfaces it as
+    `tempo` and no longer appends "Tempo X" to guidance_note. Other cues
+    (load_guide/notes) still fold into the note."""
+    from modules.coach_plans import transform_block_to_exercises
+
+    block = {
+        "block_type": "strength",
+        "title": "Main",
+        "exercises": [
+            {"name": "Goblet Squat", "sets": 3, "reps": "10",
+             "tempo": "3-1-2-0", "load_guide": "RPE 8"},
+        ],
+    }
+    [ex] = transform_block_to_exercises(block, 0)
+
+    assert ex["tempo"] == "3-1-2-0"
+    assert ex.get("guidance_note") == "RPE 8"
+    assert "Tempo" not in (ex.get("guidance_note") or "")
+
+
+@pytest.mark.unit
+def test_store_plan_round_trips_tempo(test_app, tmp_coach_db):
+    """tempo on a planned strength exercise persists and reads back via the
+    canonical assembler — trimmed to text, and omitted entirely when absent."""
+    plan = {
+        "day_name": "Legs", "total_duration_min": 40,
+        "blocks": [{
+            "block_type": "strength", "title": "Main",
+            "exercises": [
+                {"id": "sq", "name": "Squat", "type": "strength",
+                 "target_sets": 3, "target_reps": "5", "tempo": " 30X1 "},
+                {"id": "dl", "name": "Deadlift", "type": "strength",
+                 "target_sets": 1, "target_reps": "5"},
+            ],
+        }],
+    }
+    conn = sqlite3.connect(tmp_coach_db)
+    conn.row_factory = sqlite3.Row
+    sid = store_plan(conn.cursor(), "2026-06-02", plan, modified_by="test")
+    conn.commit()
+    row = conn.execute("SELECT * FROM workout_sessions WHERE id=?", (sid,)).fetchone()
+    got = assemble_plan(conn.cursor(), row)
+    conn.close()
+
+    exs = {e["id"]: e for e in got["blocks"][0]["exercises"]}
+    assert exs["sq"]["tempo"] == "30X1"      # normalized (trimmed) text
+    assert "tempo" not in exs["dl"]          # omitted when absent
+
+
+@pytest.mark.unit
 def test_log_lean_vs_rich_shapes(coach_seeded_database, tmp_coach_db):
     """§3.15 for logs: both transports share the raw per-exercise core, but the
     sync path stays LEAN (no derived completion/stats — the PWA derives it) while
