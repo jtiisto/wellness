@@ -135,6 +135,12 @@ export function ExerciseItem({ date, exercise, logData, block, isEditable = true
                         <div class="guidance-note">${exercise.guidance_note}</div>
                     `}
 
+                    ${exercise.tempo && html`
+                        <div class="exercise-tempo">
+                            <span class="tempo-label">Tempo</span>${exercise.tempo}
+                        </div>
+                    `}
+
                     ${renderInputs()}
 
                     <div class="user-note">

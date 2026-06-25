@@ -1755,6 +1755,29 @@ textarea:focus-visible,
     border-left: 3px solid var(--accent-warning);
 }
 
+/* Tempo — a coach prescription (e.g. "3-1-2-0"), display-only. Distinct from
+   the italic guidance note: a small upright caption with an accent label chip. */
+.coach .exercise-tempo {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    margin-bottom: var(--spacing-md);
+    font-size: var(--font-size-sm);
+    color: var(--text-secondary);
+    font-variant-numeric: tabular-nums;
+}
+
+.coach .exercise-tempo .tempo-label {
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--accent-primary);
+    background-color: var(--bg-tertiary);
+    border-radius: var(--radius-full);
+    padding: 1px 8px;
+}
+
 /* Set Entry — grid layout: one header row, then one row per set.
    Columns are set dynamically by SetEntry.js via an inline style
    (grid-template-columns), adapting to weight/reps/RPE vs. time-only. */
