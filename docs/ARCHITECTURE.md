@@ -135,7 +135,8 @@ workout_sessions   (id, date, day_name, location, phase, duration_min)
 session_blocks     (id, session_id, position, block_type, title, duration_min,
                     rest_guidance, rounds, work_duration_sec, rest_duration_sec)
 planned_exercises  (id, session_id, block_id, exercise_key, name, exercise_type,
-                    targets..., superset_group, tempo, canonical_slug)
+                    targets..., superset_group, tempo, target_rpe, target_load,
+                    canonical_slug)
 checklist_items    (id, exercise_id, position, item_text)
 deleted_plans      (date, deleted_at)  -- tombstones for incremental sync
 ```
@@ -152,15 +153,24 @@ encoding pair info in the exercise `name` (e.g. `"Bench Press (Pair A)"`) is
 rejected by the server because the suffix would leak into `canonical_slug`
 and break cross-session comparison.
 
-`tempo` is an optional free-form strength prescription (e.g. `"3-1-2-0"`,
-`"30X1"`), display-only in the expanded exercise body. It is server-authoritative
-and rides the existing plan-sync payload — `assemble_plan` (the one reader for
-both the sync GET and the MCP read tools) emits it, so no extra endpoint or
-client-store change is needed. The column is added by migration 4
-(`ALTER TABLE planned_exercises`). It superseded the old practice of folding
-tempo into `guidance_note` as a `"Tempo X"` substring; historical notes are left
-as-is (no backfill), so old plans keep their inline note while new plans use the
-field.
+`tempo`, `target_rpe`, and `target_load` are the optional strength-prescription
+*modifiers*: all free-form TEXT (`target_rpe` may be a range like `"6-7"`;
+`target_load` is free-form, e.g. `"70%"` / `"24kg"` / `"level 5"`), display-only,
+and server-authoritative. They ride the existing plan-sync payload —
+`assemble_plan` (the one reader for both the sync GET and the MCP read tools)
+emits them, so no extra endpoint or client-store change is needed. `tempo` was
+added by migration 4; `target_rpe` / `target_load` by migration 5 (guarded
+`ALTER TABLE planned_exercises`). They superseded folding cues into
+`guidance_note` (tempo's `"Tempo X"` substring; the `load_guide` cue → now
+`target_load`); historical notes are left as-is (no backfill).
+
+Progression is tracked through *logs*, not plans, so these prescription fields
+are intentionally free-form (not numerically modelled). The mandatory targets
+(sets × reps, or duration) render in the always-visible exercise header
+(`formatTarget`); these optional modifiers render together in one compact
+"prescription line" in the expanded body (`buildPrescription` → RPE · load ·
+tempo, omitting absent tokens). Per-set nuance ("last set RPE 9", drop sets)
+stays in `guidance_note`.
 
 **Ingest & transform pipeline:**
 
