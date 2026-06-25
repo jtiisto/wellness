@@ -135,7 +135,7 @@ workout_sessions   (id, date, day_name, location, phase, duration_min)
 session_blocks     (id, session_id, position, block_type, title, duration_min,
                     rest_guidance, rounds, work_duration_sec, rest_duration_sec)
 planned_exercises  (id, session_id, block_id, exercise_key, name, exercise_type,
-                    targets..., superset_group, canonical_slug)
+                    targets..., superset_group, tempo, canonical_slug)
 checklist_items    (id, exercise_id, position, item_text)
 deleted_plans      (date, deleted_at)  -- tombstones for incremental sync
 ```
@@ -151,6 +151,16 @@ exercises sharing the same label render as a single visual group in the UI
 encoding pair info in the exercise `name` (e.g. `"Bench Press (Pair A)"`) is
 rejected by the server because the suffix would leak into `canonical_slug`
 and break cross-session comparison.
+
+`tempo` is an optional free-form strength prescription (e.g. `"3-1-2-0"`,
+`"30X1"`), display-only in the expanded exercise body. It is server-authoritative
+and rides the existing plan-sync payload — `assemble_plan` (the one reader for
+both the sync GET and the MCP read tools) emits it, so no extra endpoint or
+client-store change is needed. The column is added by migration 4
+(`ALTER TABLE planned_exercises`). It superseded the old practice of folding
+tempo into `guidance_note` as a `"Tempo X"` substring; historical notes are left
+as-is (no backfill), so old plans keep their inline note while new plans use the
+field.
 
 **Ingest & transform pipeline:**
 
@@ -202,7 +212,8 @@ exercise still render, because `formatTarget` checks the exercise first.)
 
 Likewise, a block's `rest_guidance` text stays on the block — it is **not**
 folded into exercise `guidance_note` fields. An exercise's `guidance_note`
-carries only exercise-specific cues (`tempo`, `load_guide`, `notes`).
+carries only exercise-specific cues (`load_guide`, `notes`); `tempo` is a
+structured field of its own and is no longer folded into the note.
 
 **Editing plans in place:**
 
