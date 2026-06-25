@@ -125,9 +125,9 @@ def test_store_plan_round_trips_via_assemble(test_app, tmp_coach_db):
 
 @pytest.mark.unit
 def test_tempo_promoted_to_field_not_folded_into_guidance_note():
-    """Tempo is a structured field now: the raw->formed transform surfaces it as
-    `tempo` and no longer appends "Tempo X" to guidance_note. Other cues
-    (load_guide/notes) still fold into the note."""
+    """Tempo is a structured field: the raw->formed transform surfaces it as
+    `tempo` and never appends "Tempo X" to guidance_note. Free-form `notes`
+    still folds into the note."""
     from modules.coach_plans import transform_block_to_exercises
 
     block = {
@@ -135,14 +135,39 @@ def test_tempo_promoted_to_field_not_folded_into_guidance_note():
         "title": "Main",
         "exercises": [
             {"name": "Goblet Squat", "sets": 3, "reps": "10",
-             "tempo": "3-1-2-0", "load_guide": "RPE 8"},
+             "tempo": "3-1-2-0", "notes": "Brace hard"},
         ],
     }
     [ex] = transform_block_to_exercises(block, 0)
 
     assert ex["tempo"] == "3-1-2-0"
-    assert ex.get("guidance_note") == "RPE 8"
+    assert ex.get("guidance_note") == "Brace hard"
     assert "Tempo" not in (ex.get("guidance_note") or "")
+
+
+@pytest.mark.unit
+def test_intensity_promoted_to_fields_not_folded_into_guidance_note():
+    """RPE and load are structured fields now: raw `rpe`/`load_guide` cues map to
+    `target_rpe` / `target_load` and are NOT folded into guidance_note. Only the
+    free-form `notes` cue still folds."""
+    from modules.coach_plans import transform_block_to_exercises
+
+    block = {
+        "block_type": "strength",
+        "title": "Main",
+        "exercises": [
+            {"name": "Back Squat", "sets": 3, "reps": "5",
+             "rpe": "6-7", "load_guide": "70%", "notes": "Belt on top sets"},
+        ],
+    }
+    [ex] = transform_block_to_exercises(block, 0)
+
+    assert ex["target_rpe"] == "6-7"
+    assert ex["target_load"] == "70%"
+    assert ex.get("guidance_note") == "Belt on top sets"
+    assert "70%" not in (ex.get("guidance_note") or "")
+    # raw aliases are consumed
+    assert "rpe" not in ex and "load_guide" not in ex
 
 
 @pytest.mark.unit
@@ -172,6 +197,38 @@ def test_store_plan_round_trips_tempo(test_app, tmp_coach_db):
     exs = {e["id"]: e for e in got["blocks"][0]["exercises"]}
     assert exs["sq"]["tempo"] == "30X1"      # normalized (trimmed) text
     assert "tempo" not in exs["dl"]          # omitted when absent
+
+
+@pytest.mark.unit
+def test_store_plan_round_trips_intensity_fields(test_app, tmp_coach_db):
+    """target_rpe (range) and target_load on a planned strength exercise persist
+    and read back via the canonical assembler — trimmed, and omitted when absent."""
+    plan = {
+        "day_name": "Legs", "total_duration_min": 40,
+        "blocks": [{
+            "block_type": "strength", "title": "Main",
+            "exercises": [
+                {"id": "sq", "name": "Squat", "type": "strength",
+                 "target_sets": 3, "target_reps": "5",
+                 "target_rpe": "6-7", "target_load": " 70% "},
+                {"id": "dl", "name": "Deadlift", "type": "strength",
+                 "target_sets": 1, "target_reps": "5"},
+            ],
+        }],
+    }
+    conn = sqlite3.connect(tmp_coach_db)
+    conn.row_factory = sqlite3.Row
+    sid = store_plan(conn.cursor(), "2026-06-03", plan, modified_by="test")
+    conn.commit()
+    row = conn.execute("SELECT * FROM workout_sessions WHERE id=?", (sid,)).fetchone()
+    got = assemble_plan(conn.cursor(), row)
+    conn.close()
+
+    exs = {e["id"]: e for e in got["blocks"][0]["exercises"]}
+    assert exs["sq"]["target_rpe"] == "6-7"
+    assert exs["sq"]["target_load"] == "70%"        # trimmed
+    assert "target_rpe" not in exs["dl"]            # omitted when absent
+    assert "target_load" not in exs["dl"]
 
 
 @pytest.mark.unit

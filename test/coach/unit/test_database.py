@@ -80,6 +80,21 @@ def test_planned_exercises_has_tempo(test_app, tmp_coach_db):
 
 
 @pytest.mark.unit
+def test_planned_exercises_has_prescription_fields(test_app, tmp_coach_db):
+    """planned_exercises.target_rpe / target_load columns exist (migration 5)."""
+    conn = sqlite3.connect(tmp_coach_db)
+    cursor = conn.cursor()
+
+    cursor.execute("PRAGMA table_info(planned_exercises)")
+    columns = {row[1]: row[2] for row in cursor.fetchall()}
+
+    conn.close()
+
+    assert columns.get("target_rpe") == "TEXT"
+    assert columns.get("target_load") == "TEXT"
+
+
+@pytest.mark.unit
 def test_canonical_slug_columns_in_create_table(test_app, tmp_coach_db):
     """canonical_slug exists on both tables from CREATE TABLE (no ALTER needed)."""
     conn = sqlite3.connect(tmp_coach_db)
@@ -160,6 +175,36 @@ def test_migration_4_adds_tempo_on_upgrade(tmp_path):
     ver = conn.execute("PRAGMA user_version").fetchone()[0]
     conn.close()
     assert "tempo" in cols_after
+    assert ver == len(coach_mod.MIGRATIONS)
+
+
+@pytest.mark.unit
+def test_migration_5_adds_prescription_fields_on_upgrade(tmp_path):
+    """A DB stamped at v4 (pre-intensity) gains planned_exercises.target_rpe /
+    target_load on the next init — guarded migration 5 is the only place they're
+    added (baseline CREATE untouched, mirroring migrations 2-4)."""
+    import modules.coach as coach_mod
+    from modules.db import enable_wal, run_migrations
+
+    db_path = tmp_path / "coach.db"
+
+    # Build the schema only through migration 4 — the new columns must be absent.
+    conn = sqlite3.connect(db_path)
+    enable_wal(conn)
+    run_migrations(conn, coach_mod.MIGRATIONS[:4], label="coach test")
+    cols_before = {r[1] for r in conn.execute("PRAGMA table_info(planned_exercises)")}
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 4
+    conn.close()
+    assert "target_rpe" not in cols_before and "target_load" not in cols_before
+
+    # Re-init runs the full registry → migration 5 adds both columns.
+    coach_mod.init_database(DbAccessor(db_path, foreign_keys=True))
+
+    conn = sqlite3.connect(db_path)
+    cols_after = {r[1] for r in conn.execute("PRAGMA table_info(planned_exercises)")}
+    ver = conn.execute("PRAGMA user_version").fetchone()[0]
+    conn.close()
+    assert {"target_rpe", "target_load"} <= cols_after
     assert ver == len(coach_mod.MIGRATIONS)
 
 

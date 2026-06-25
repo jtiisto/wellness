@@ -318,6 +318,20 @@ def _migration_4_planned_exercise_tempo(cursor):
         cursor.execute("ALTER TABLE planned_exercises ADD COLUMN tempo TEXT")
 
 
+def _migration_5_prescription_fields(cursor):
+    """Add the optional strength intensity prescriptions: `target_rpe` (free-form,
+    e.g. "6-7" or "8" — TEXT so it can hold a range like target_reps) and
+    `target_load` (free-form, e.g. "70%", "24kg", "level 5"). Both guarded;
+    existing rows backfill to NULL. `target_load` supersedes the old practice of
+    folding a `load_guide` cue into guidance_note — historical notes are left
+    as-is (no backfill).
+    """
+    if not column_exists(cursor, "planned_exercises", "target_rpe"):
+        cursor.execute("ALTER TABLE planned_exercises ADD COLUMN target_rpe TEXT")
+    if not column_exists(cursor, "planned_exercises", "target_load"):
+        cursor.execute("ALTER TABLE planned_exercises ADD COLUMN target_load TEXT")
+
+
 # Ordered (target_version, migration_fn) pairs — see db.run_migrations for the
 # transactional contract. Migration fns are DDL-only and must not manage their
 # own transactions.
@@ -326,6 +340,7 @@ MIGRATIONS = [
     (2, _migration_2_block_interval_cols),
     (3, _migration_3_exercise_log_token),
     (4, _migration_4_planned_exercise_tempo),
+    (5, _migration_5_prescription_fields),
 ]
 
 

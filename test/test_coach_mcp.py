@@ -233,7 +233,7 @@ class TestTransformBlockToExercises:
 
     def test_block_rest_guidance_not_copied_to_exercise_note(self):
         """Block-level rest_guidance stays on the block — exercise notes carry
-        only exercise-specific cues (load_guide/notes; tempo is its own field)."""
+        only the free-form `notes` cue (tempo / RPE / load are structured fields)."""
         block = {
             "block_type": "strength",
             "title": "Main Lifts",
