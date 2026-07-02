@@ -347,7 +347,10 @@ The Analysis module has no bidirectional sync protocol — all authoritative sta
 - **Submitting new queries** requires server connectivity. If the server is unreachable, a toast notifies the user.
 - **Initialization** — if `loadQueries()`/`checkPending()` fail on init (server unreachable), the module opens to History view with cached data rather than showing an error.
 
-**Stale report recovery:** On startup, any reports left in `status='running'` or `status='pending'` from a previous server crash are marked as `status='failed'`. Recovery runs once at startup, before the server accepts requests, so a non-terminal row is necessarily orphaned (no async task survives a restart). This prevents `has_active_report` from permanently blocking new queries with a 409 — including the case where the crash landed in the brief `create_report`→`update_report_running` window, leaving a stuck `pending` row.
+**Stale report recovery** has two layers:
+
+- **Startup recovery** — any reports left in `status='running'` or `status='pending'` from a previous server crash are marked `status='failed'`. This runs once at startup, before the server accepts requests, so a non-terminal row is necessarily orphaned (no async task survives a restart) — including the case where the crash landed in the brief `create_report`→`update_report_running` window, leaving a stuck `pending` row.
+- **Runtime reaper** — new reports are created via `create_report_if_idle` (`analysis_db.py`), a single `BEGIN IMMEDIATE` transaction that first fails any pending/running report older than the largest registered query timeout plus a grace period, then inserts the new report only if no live one remains (returning `None` → the caller answers 409). The atomicity replaced the racy `has_active_report` + `create_report` two-step (a double-tap could launch two CLI subprocesses); the age-gated reap covers the residual case where a report's terminal write itself failed, which under startup-only recovery wedged the 409 guard until the next restart. The age gate is what makes the sweep safe — a legitimately long-running report is never reaped.
 
 **Flow:**
 1. User selects a pre-built query from the UI
@@ -417,7 +420,7 @@ The Analysis module bridges the web app with Claude Code CLI:
 4. Output is parsed from the stream-json format; the final result object contains both the response text and execution metadata
 5. CLI metadata (`duration_ms`, `duration_api_ms`, `num_turns`, `total_cost_usd`, `mcp_servers`) is stored alongside the report in `analysis.db`
 6. The full stream is saved to `.wellness/data/last_stream.jsonl` for debugging
-7. Queries time out after 180 seconds
+7. Queries time out after 180 seconds by default; a query can register its own `timeout` (the built-in weekly review uses 400s)
 
 Default allowed tools for analysis queries: `mcp__journal-localdb__*`, `mcp__coach-localdb__*`, `mcp__garmy-localdb__*`, `Read`, `Glob`, `Grep`. Individual queries can grant additional tools via `extra_allowed_tools`.
 
@@ -445,6 +448,7 @@ Each query is a dict with these fields:
 | `icon` | no | Icon name rendered on the query card. Known names: `dumbbell`, `zap`, `calendar`, `heart-pulse`, `trending-up`. Unknown or omitted values fall back to a neutral document glyph. |
 | `accepts_location` | no | If `true`, the UI shows a location input field |
 | `extra_allowed_tools` | no | Additional tools beyond the defaults (e.g., `["WebSearch", "WebFetch"]`) |
+| `timeout` | no | Per-query timeout in seconds (default 180) |
 
 Two template variables are available in `prompt_template`:
 

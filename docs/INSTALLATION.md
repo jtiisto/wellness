@@ -211,7 +211,7 @@ claude
 > /mcp
 ```
 
-You should see `journal-localdb` and `coach-localdb` listed with their tools (e.g., `execute_sql_query`, `list_trackers`, `get_entries`).
+You should see `journal-localdb` and `coach-localdb` listed with their tools (e.g., `execute_sql_query`, `list_trackers` for journal; `get_workout_plan`, `set_workout_plan` for coach).
 
 ### Gemini CLI
 
@@ -259,20 +259,29 @@ All queries are validated to be read-only (SELECT/WITH only). A row limit is aut
 
 #### Coach MCP tools
 
+Read tools:
+
 | Tool | Description |
 |------|-------------|
-| `explore_database_structure` | List tables with row counts |
-| `get_table_details` | Column schema and sample data |
-| `execute_sql_query` | Run SELECT/WITH queries (read-only) |
-| `get_workout_plan` | Get a specific day's plan with exercises |
-| `get_workout_plans_range` | Plans for a date range |
-| `get_workout_log` | Get a specific day's log with sets |
-| `get_workout_logs_range` | Logs for a date range (includes pre/post workout stats) |
-| `get_exercise_history` | Historical logs for a specific exercise |
-| `save_workout_plan` | Create or update a workout plan (write) |
-| `lookup_exercise` | Search the exercise registry |
+| `get_workout_plan` | Get plans (blocks, exercises) for a date or date range |
+| `list_scheduled_dates` | List dates that have plans scheduled |
+| `get_workout_logs` | Logs for a date range, with sets and pre/post workout stats |
+| `get_workout_summary` | Overview of workout activity for the last N days |
+| `get_exercise_history` | All logged sessions for a specific exercise |
+| `search_exercises` | Search the exercise registry by name, equipment, or category |
 
-The Coach MCP opens the database in read-only mode for queries and read-write mode only for plan modifications.
+Write tools (plans only — logs are never writable via MCP):
+
+| Tool | Description |
+|------|-------------|
+| `set_workout_plan` | Create or replace a single day's plan |
+| `ingest_training_program` | Load a multi-date training program (raw LLM or transformed format) |
+| `delete_workout_plan` | Delete a day's plan — refused if the day has workout logs |
+| `update_plan_metadata` | Update day name, location, phase, or duration without touching exercises |
+| `update_exercise`, `add_exercise`, `remove_exercise` | Granular exercise editors |
+| `update_block`, `add_block`, `remove_block`, `reorder_blocks` | Granular block editors |
+
+Unlike the Journal MCP, the Coach MCP exposes no raw SQL tools — all access goes through the structured tools above. It opens the database in read-only mode for queries and read-write mode only for plan modifications.
 
 ### Environment Variables
 
@@ -315,4 +324,4 @@ Chrome on Android identifies PWAs by scope on the same origin. If Wellness and S
 - Ensure Claude Code CLI is installed and accessible as `claude` in PATH
 - Verify the LLM directory has `.claude/settings.local.json` with MCP server configs
 - Check that the LLM directory is correctly configured (env var, `.llm-dir` file, or default)
-- Analysis queries have a 180-second timeout
+- Analysis queries time out after 180 seconds by default; individual queries can register a longer `timeout` (the built-in weekly review uses 400s)
