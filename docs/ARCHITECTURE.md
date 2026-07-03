@@ -421,7 +421,7 @@ Each module follows a consistent pattern:
 
 Two **FastMCP** servers expose wellness data to LLMs:
 
-- **Journal MCP** - Strictly read-only. Opens SQLite in read-only mode (`?mode=ro`). Validates all queries to ensure only SELECT/WITH statements run. Auto-applies row limits.
+- **Journal MCP** - Strictly read-only. Opens SQLite in read-only mode (`?mode=ro`). Validates all queries to ensure only SELECT/WITH statements run. Auto-applies row limits. Exposes `get_schedule_adherence`, which computes schedule adherence server-side (in Python, over the canonical `schedule_json` / `polarity` columns): per tracker over a window it counts scheduled vs. logged/done days and reports a per-polarity metric (`adherence` / `avoidance` / `coverage`). `get_journal_summary` is unchanged and stays entries-based — completion and adherence are deliberately separate.
 - **Coach MCP** - Read-only for queries and logs. Write access for workout plan management (creating/updating/deleting plans). Deleting a plan is guarded: plans with workout logs attached cannot be deleted, preserving training history integrity. Uses a mode-switching connection manager. Workout logs include pre/post workout stats (readiness metrics, recovery data) when available.
 
 Both servers run over stdio transport when invoked by Claude Code CLI. They can also be configured for HTTP/SSE transport.

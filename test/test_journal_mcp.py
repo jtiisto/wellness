@@ -156,6 +156,62 @@ class TestJournalMCPTools:
         # `deleted` is surfaced as a proper bool for the analysis prompt
         assert tracker["deleted"] is False
 
+    def test_get_schedule_adherence(self, client, journal_registered_client):
+        """get_schedule_adherence rolls up scheduled vs logged/done per tracker,
+        reading the canonical schedule_json / polarity columns populated by the
+        sync path, and clamps the window to the tracker's first entry."""
+        tracker = {
+            "id": "tracker-adh",
+            "name": "Adherence Vitamin",
+            "category": "adh",
+            "type": "simple",
+            "scheduleHistory": [{"effectiveFrom": "0000-01-01", "days": [1, 2, 3, 4, 5]}],
+            "polarity": "positive",
+        }
+        # Mon done, Tue done, Wed logged-not-done, Sat off-schedule.
+        days = {
+            "2026-07-06": {"tracker-adh": {"completed": True}},
+            "2026-07-07": {"tracker-adh": {"completed": True}},
+            "2026-07-08": {"tracker-adh": {"completed": False}},
+            "2026-07-11": {"tracker-adh": {"completed": True}},
+        }
+        resp = client.post("/api/journal/sync/update", json={
+            "clientId": journal_registered_client, "config": [tracker], "days": days,
+        })
+        assert resp.status_code == 200, resp.text
+
+        result = self.tools["get_schedule_adherence"](
+            start_date="2026-07-06", end_date="2026-07-12",
+            tracker_name="Adherence Vitamin",
+        )
+        assert len(result) == 1
+        r = result[0]
+        assert r["tracker"] == "Adherence Vitamin"
+        assert r["polarity"] == "positive"
+        assert r["metric_kind"] == "adherence"
+        assert r["window"] == {"start": "2026-07-06", "end": "2026-07-12"}
+        assert r["scheduled_days"] == 5
+        assert r["logged_days"] == 3
+        assert r["done_days"] == 2
+        assert r["missed_days"] == 2
+        assert r["off_schedule_entries"] == 1
+        assert r["adherence_rate"] == 0.4
+        assert r["coverage_rate"] == 0.6
+
+    def test_get_schedule_adherence_omits_trackers_without_entries(self, client, journal_registered_client):
+        """A scheduled tracker with no entries is omitted (nothing to measure)."""
+        client.post("/api/journal/sync/update", json={
+            "clientId": journal_registered_client,
+            "config": [{
+                "id": "tracker-noentry", "name": "No Entry Sched",
+                "category": "adh", "type": "simple",
+                "scheduleHistory": [{"effectiveFrom": "0000-01-01", "days": [1, 2, 3, 4, 5]}],
+            }],
+            "days": {},
+        })
+        result = self.tools["get_schedule_adherence"](tracker_name="No Entry Sched")
+        assert result == []
+
     def test_list_trackers_surfaces_schedule_and_polarity(self, client, journal_registered_client):
         """scheduleHistory + polarity ride meta_json and surface under `metadata`.
 

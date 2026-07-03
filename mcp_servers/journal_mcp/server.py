@@ -20,6 +20,7 @@ except ImportError:
         "Install with: pip install fastmcp"
     )
 
+from .adherence import compute_adherence
 from .config import MCPConfig
 
 # Default DB path: ../../data/journal.db relative to this file's directory
@@ -517,6 +518,101 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
         except Exception as e:
             raise ValueError(f"Failed to generate summary: {str(e)}")
 
+    @mcp.tool()
+    def get_schedule_adherence(
+        days: int = 30,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        tracker_name: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """WHEN TO USE: to measure how well *scheduled* trackers were actually
+        followed over a period — the schedule-aware counterpart to
+        `get_journal_summary`'s entries-based completion rate.
+
+        For each day in the window this interprets the tracker's effective-dated
+        weekday schedule (`scheduleHistory`, stored in the canonical
+        `schedule_json` column) to decide whether the tracker was scheduled, and
+        whether it was logged/done, then rolls that up per tracker.
+        `get_journal_summary` is unchanged and stays entries-based — completion
+        and adherence are separate axes.
+
+        Window: defaults to the last `days` days ending today; override with
+        `start_date` / `end_date` (YYYY-MM-DD). Per tracker the start is clamped
+        to its first-ever entry date, so a tracker never accrues misses for days
+        before it was first used; a tracker with no entries (or none in the
+        window) is omitted (nothing to measure). Deleted trackers are excluded.
+
+        Polarity picks the headline metric (`metric_kind`): `positive` →
+        `adherence_rate` (done/scheduled); `negative` → `avoidance_rate`
+        ((scheduled−logged)/scheduled); `neutral`/unspecified → `coverage_rate`
+        only. `coverage_rate` (logged/scheduled) is always included. `done` is
+        `completed == 1`; `logged` (any entry) is reported separately.
+        Off-schedule entries are excluded from the denominator and surfaced as
+        `off_schedule_entries`. Every rate is null when `scheduled_days` is 0.
+
+        Args:
+            days: Window length in days when start_date is omitted (max 366, default 30)
+            start_date: Window start (YYYY-MM-DD); defaults to `days` before end_date
+            end_date: Window end (YYYY-MM-DD); defaults to today
+            tracker_name: Optional partial-match filter on tracker name
+
+        Returns:
+            One dict per tracker with scheduled/logged/done/missed day counts,
+            `off_schedule_entries`, `metric_kind`, and the applicable rate(s).
+        """
+        if days > 366:
+            raise ValueError("Days cannot exceed 366")
+        try:
+            end = end_date or date.today().isoformat()
+            start = start_date or (
+                date.fromisoformat(end) - timedelta(days=days)
+            ).isoformat()
+
+            tracker_query = (
+                "SELECT id, name, schedule_json, polarity, type "
+                "FROM trackers WHERE deleted = 0"
+            )
+            params: List[Any] = []
+            if tracker_name:
+                tracker_query += " AND name LIKE ?"
+                params.append(f"%{tracker_name}%")
+            trackers = db_manager.execute_safe_query(tracker_query, params)
+
+            results: List[Dict[str, Any]] = []
+            for tracker in trackers:
+                first = db_manager.execute_safe_query(
+                    "SELECT MIN(date) AS first_date FROM entries WHERE tracker_id = ?",
+                    [tracker["id"]],
+                )
+                first_date = first[0]["first_date"] if first else None
+                if not first_date:
+                    continue  # no entries → nothing to measure
+                eff_start = max(start, first_date)
+                if eff_start > end:
+                    continue  # first activity is after the window → nothing to measure
+
+                rows = db_manager.execute_safe_query(
+                    "SELECT date, completed FROM entries "
+                    "WHERE tracker_id = ? AND date >= ? AND date <= ?",
+                    [tracker["id"], eff_start, end],
+                )
+                entries = {row["date"]: row["completed"] for row in rows}
+
+                metrics = compute_adherence(
+                    tracker["schedule_json"], tracker["polarity"],
+                    tracker["type"], entries, eff_start, end,
+                )
+                results.append({
+                    "tracker": tracker["name"],
+                    "tracker_id": tracker["id"],
+                    **metrics,
+                })
+            return results
+        except ValueError:
+            raise
+        except Exception as e:
+            raise ValueError(f"Failed to compute schedule adherence: {str(e)}")
+
     @mcp.resource("file://journal_data_guide")
     def journal_data_guide() -> str:
         """Complete guide to understanding and querying journal data."""
@@ -547,8 +643,10 @@ def _get_journal_data_guide() -> str:
 ## Quick Start
 1. Use `list_trackers` to see what habits/metrics are being tracked
 2. Use `get_entries` to see recent journal entries
-3. Use `get_journal_summary` for a quick overview
-4. Use `execute_sql_query` for custom analysis
+3. Use `get_journal_summary` for a quick overview (entries-based)
+4. Use `get_schedule_adherence` for schedule-aware adherence (scheduled vs.
+   logged/done per tracker, respecting each tracker's weekday schedule)
+5. Use `execute_sql_query` for custom analysis
 
 ## Tracker Lifecycle and Historical Data
 
@@ -613,7 +711,11 @@ Two optional per-tracker fields live inside `meta_json` (parsed into the
 **entries-based** — the fraction of *logged entries* marked completed. It is
 **not** schedule adherence: it does not know which weekdays a tracker was
 scheduled on (`scheduleHistory`), and does not count unlogged scheduled days as
-misses. Keep "scheduled days" and "completion" as separate axes.
+misses. For schedule adherence, use the **`get_schedule_adherence`** tool — it
+interprets each tracker's effective-dated weekday schedule per date and reports
+scheduled vs. logged/done days, per-polarity (`adherence` / `avoidance` /
+`coverage`). `get_journal_summary` stays entries-based; keep "scheduled days" and
+"completion" as separate axes.
 
 ## Tracker Types
 - **simple**: Binary yes/no tracking (e.g., "Did I take my vitamins?")
