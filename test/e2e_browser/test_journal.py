@@ -731,6 +731,42 @@ def test_data_export_includes_schedule_and_polarity(journal_page, app_server, se
     assert tracker["scheduleHistory"][-1]["days"] == [1, 2, 3, 4, 5]
 
 
+def test_legacy_weekly_tracker_normalizes_and_converges(journal_page, app_server, seeded_journal):
+    """A legacy frequency:'weekly'+weeklyDay tracker delivered by the server is
+    normalized on the client to a canonical scheduleHistory genesis segment and
+    uploaded, so the server converges (frequency/weeklyDay stripped).
+    """
+    page = journal_page.page
+    base = app_server["url"]
+    client_id = seeded_journal["client_id"]
+
+    # Seed a legacy weekly tracker (frequency/weeklyDay, no scheduleHistory).
+    http_requests.post(f"{base}/api/journal/sync/update", json={
+        "clientId": client_id,
+        "config": [{
+            "id": "tracker-legacy", "name": "Legacy Weekly", "category": "health",
+            "type": "simple", "frequency": "weekly", "weeklyDay": 1,
+        }],
+        "days": {},
+    })
+
+    # Reload so the client pulls the legacy tracker, normalizes it on delta
+    # apply, and uploads the cleaned shape.
+    page.reload()
+    page.wait_for_selector(".shell", timeout=10000)
+    AppShellPage(page).navigate_to("Journal")
+    journal_page.wait_for_loaded()
+    journal_page.wait_for_trackers()
+    page.wait_for_timeout(4000)  # normalize + debounced upload
+    page.wait_for_selector(".sync-dot.green", timeout=10000)
+
+    resp = http_requests.get(f"{base}/api/journal/sync/delta")
+    tracker = next(t for t in resp.json()["config"] if t["id"] == "tracker-legacy")
+    assert "frequency" not in tracker
+    assert "weeklyDay" not in tracker
+    assert tracker["scheduleHistory"] == [{"effectiveFrom": "0000-01-01", "days": [1]}]
+
+
 def test_add_tracker_from_config(journal_page):
     """Creating a new tracker via the form adds it to the list."""
     page = journal_page.page

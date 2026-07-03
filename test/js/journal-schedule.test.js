@@ -22,6 +22,7 @@ import {
     isExpectedOn,
     shouldShowTracker,
     computeScheduleHistoryUpdate,
+    normalizeTrackerSchedule,
 } from '../../public/js/journal/utils.js';
 
 // Reference dates (verified against local-component Date under any TZ):
@@ -276,4 +277,52 @@ test('shouldShowTracker: omitted dayLog reduces to pure expectation', () => {
     const t = { id: 'x', scheduleHistory: [{ effectiveFrom: SCHEDULE_GENESIS_DATE, days: [1, 2, 3, 4, 5] }] };
     assert.equal(shouldShowTracker(t, FRI), true);
     assert.equal(shouldShowTracker(t, SAT), false);
+});
+
+// ---- normalizeTrackerSchedule (legacy → canonical) -----------------------
+
+test('normalizeTrackerSchedule: legacy weekly → single genesis segment; strips legacy', () => {
+    const t = { id: 't', name: 'X', frequency: 'weekly', weeklyDay: 1 };
+    const n = normalizeTrackerSchedule(t);
+    assert.notEqual(n, t);
+    assert.deepEqual(n.scheduleHistory, [{ effectiveFrom: SCHEDULE_GENESIS_DATE, days: [1] }]);
+    assert.ok(!('frequency' in n));
+    assert.ok(!('weeklyDay' in n));
+    assert.equal(n.name, 'X');
+});
+
+test('normalizeTrackerSchedule: legacy daily → strips frequency, no scheduleHistory', () => {
+    const t = { id: 't', frequency: 'daily' };
+    const n = normalizeTrackerSchedule(t);
+    assert.notEqual(n, t);
+    assert.ok(!('frequency' in n));
+    assert.ok(!('scheduleHistory' in n));
+});
+
+test('normalizeTrackerSchedule: no legacy fields → same reference (unchanged)', () => {
+    const t = { id: 't', scheduleHistory: [{ effectiveFrom: SCHEDULE_GENESIS_DATE, days: [1] }] };
+    assert.equal(normalizeTrackerSchedule(t), t);
+});
+
+test('normalizeTrackerSchedule: existing scheduleHistory preserved, legacy stripped', () => {
+    const hist = [{ effectiveFrom: SCHEDULE_GENESIS_DATE, days: [2, 4] }];
+    const t = { id: 't', frequency: 'weekly', weeklyDay: 1, scheduleHistory: hist };
+    const n = normalizeTrackerSchedule(t);
+    assert.deepEqual(n.scheduleHistory, hist);   // canonical wins, weeklyDay ignored
+    assert.ok(!('frequency' in n));
+    assert.ok(!('weeklyDay' in n));
+});
+
+test('normalizeTrackerSchedule: is idempotent', () => {
+    const t = { id: 't', frequency: 'weekly', weeklyDay: 3 };
+    const once = normalizeTrackerSchedule(t);
+    const twice = normalizeTrackerSchedule(once);
+    assert.equal(twice, once);                    // second pass is a no-op (same ref)
+});
+
+test('normalizeTrackerSchedule: invalid weeklyDay → daily (no scheduleHistory)', () => {
+    const t = { id: 't', frequency: 'weekly', weeklyDay: 9 };
+    const n = normalizeTrackerSchedule(t);
+    assert.ok(!('scheduleHistory' in n));
+    assert.ok(!('frequency' in n));
 });

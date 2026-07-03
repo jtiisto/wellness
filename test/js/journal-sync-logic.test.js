@@ -10,6 +10,7 @@ import {
     computeRejectedApply,
     computeDropDeletedTrackers,
     computePruneDeletedTrackers,
+    computeNormalizedConfig,
 } from '../../public/js/journal/sync-logic.js';
 
 // ---- computeUploadPayload (the _baseLastModifiedAt contract) -------------
@@ -256,4 +257,34 @@ test('computePruneDeletedTrackers: logsChanged false when deleted tracker has no
     const next = computePruneDeletedTrackers(config, logs);
     assert.deepEqual(next.trackerConfig, [{ id: 't2' }]);
     assert.equal(next.logsChanged, false);
+});
+
+// ---- computeNormalizedConfig (legacy frequency/weeklyDay migration) -------
+
+test('computeNormalizedConfig: null when nothing to normalize (steady state)', () => {
+    const config = [
+        { id: 't1', scheduleHistory: [{ effectiveFrom: '0000-01-01', days: [1] }] },
+        { id: 't2' },
+    ];
+    assert.equal(computeNormalizedConfig(config), null);
+});
+
+test('computeNormalizedConfig: converts legacy trackers and reports changedIds', () => {
+    const config = [
+        { id: 't1', frequency: 'weekly', weeklyDay: 2 },
+        { id: 't2', scheduleHistory: [{ effectiveFrom: '0000-01-01', days: [1] }] },
+        { id: 't3', frequency: 'daily' },
+    ];
+    const result = computeNormalizedConfig(config);
+    assert.deepEqual(result.changedIds, ['t1', 't3']);
+    const t1 = result.config.find(t => t.id === 't1');
+    assert.deepEqual(t1.scheduleHistory, [{ effectiveFrom: '0000-01-01', days: [2] }]);
+    assert.ok(!('frequency' in t1));
+    // Untouched tracker keeps its identity.
+    assert.equal(result.config[1], config[1]);
+});
+
+test('computeNormalizedConfig: leaves soft-deleted trackers untouched', () => {
+    const config = [{ id: 't1', _deleted: true, frequency: 'weekly', weeklyDay: 1 }];
+    assert.equal(computeNormalizedConfig(config), null);
 });

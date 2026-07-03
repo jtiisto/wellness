@@ -25,6 +25,7 @@ import {
     computeRejectedApply,
     computeDropDeletedTrackers,
     computePruneDeletedTrackers,
+    computeNormalizedConfig,
 } from './sync-logic.js';
 
 // Dedicated LocalForage instance — avoids collisions with other modules
@@ -265,6 +266,10 @@ async function _initializeStore() {
             trackerValueUpdatedTimes.value = valueUpdated || {};
         });
 
+        // Migrate any legacy frequency/weeklyDay trackers to scheduleHistory
+        // before the first sync, so the cleaned shape uploads this cycle.
+        normalizeLegacyTrackers();
+
         updateSyncStatus();
 
         if (navigator.onLine) {
@@ -331,6 +336,23 @@ export function deleteTracker(trackerId) {
     markTrackerDirty(trackerId);
     saveConfig();
     scheduler.scheduleUpload();
+}
+
+// One-time migration: convert any legacy frequency/weeklyDay trackers to the
+// canonical scheduleHistory form (pure normalize in sync-logic.js), marking
+// changed trackers dirty so the cleaned shape uploads and the data converges.
+// Idempotent — a no-op once converged. Applied on load and after each delta
+// apply. Derivation still honors legacy fields, so it stays correct in between.
+function normalizeLegacyTrackers() {
+    const result = computeNormalizedConfig(trackerConfig.value);
+    if (!result) {
+        return;
+    }
+    trackerConfig.value = result.config;
+    for (const id of result.changedIds) {
+        markTrackerDirty(id);
+    }
+    saveConfig();
 }
 
 // Drop deleted trackers locally — and any entries belonging to them — after a
@@ -537,6 +559,11 @@ async function pullServerChanges(clientId, since) {
     });
 
     await Promise.all([saveConfig(), saveLogs(), saveMetadata()]);
+
+    // Normalize any legacy frequency/weeklyDay trackers the server just
+    // delivered; changed ones are marked dirty and upload in this sync cycle.
+    normalizeLegacyTrackers();
+
     return serverData;
 }
 

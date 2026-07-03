@@ -10,6 +10,35 @@
  * `lastModifiedAt` token, echoed on upload as `_baseLastModifiedAt`.
  */
 import { clearApplied } from '../shared/dirty-set.js';
+import { normalizeTrackerSchedule } from './utils.js';
+
+/**
+ * Normalize legacy `frequency` / `weeklyDay` across a tracker config array (see
+ * `normalizeTrackerSchedule`). Returns `{ config, changedIds }` when at least
+ * one tracker changed, or `null` when nothing changed — so the store can skip
+ * all signal writes / dirtying at steady state (the converged, idempotent
+ * case). Soft-deleted (`_deleted`) trackers are left untouched; they are on
+ * their way out.
+ *
+ * @param {Array} config
+ * @returns {{config: Array, changedIds: string[]} | null}
+ */
+export function computeNormalizedConfig(config) {
+    let changed = false;
+    const changedIds = [];
+    const next = config.map(tracker => {
+        if (tracker && tracker._deleted) {
+            return tracker;
+        }
+        const normalized = normalizeTrackerSchedule(tracker);
+        if (normalized !== tracker) {
+            changed = true;
+            changedIds.push(tracker.id);
+        }
+        return normalized;
+    });
+    return changed ? { config: next, changedIds } : null;
+}
 
 /**
  * Build the upload payload for the current dirty set. Each record carries its

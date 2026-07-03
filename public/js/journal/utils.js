@@ -220,6 +220,41 @@ export function computeScheduleHistoryUpdate(tracker, newDays, today) {
 }
 
 /**
+ * Normalize a tracker's legacy `frequency` / `weeklyDay` into the canonical
+ * `scheduleHistory` form, idempotently. Returns the SAME reference when there is
+ * nothing to change, so callers can mark a tracker dirty only on a real change
+ * (and converge after one upload).
+ *
+ *   - legacy `frequency: 'weekly'` (with no existing scheduleHistory) → a single
+ *     genesis segment carrying `[weeklyDay]`
+ *   - `frequency: 'daily'` / absent → no scheduleHistory (absence == daily)
+ *   - an existing `scheduleHistory` is preserved (already canonical)
+ *   - `frequency` / `weeklyDay` are always stripped
+ *
+ * The derivation (getScheduleDaysForDate / shouldShowTracker) still honors the
+ * legacy fields, so an un-normalized tracker keeps working until it converges.
+ *
+ * @param {Object} tracker
+ * @returns {Object} the normalized tracker, or `tracker` unchanged
+ */
+export function normalizeTrackerSchedule(tracker) {
+    if (!tracker || !('frequency' in tracker || 'weeklyDay' in tracker)) {
+        return tracker;
+    }
+    const next = { ...tracker };
+    const hasSchedule = Array.isArray(next.scheduleHistory) && next.scheduleHistory.length > 0;
+    const wasWeekly = next.frequency === 'weekly';
+    const weeklyDay = Number(next.weeklyDay);
+    delete next.frequency;
+    delete next.weeklyDay;
+    if (!hasSchedule && wasWeekly &&
+        Number.isInteger(weeklyDay) && weeklyDay >= 0 && weeklyDay <= 6) {
+        next.scheduleHistory = [{ effectiveFrom: SCHEDULE_GENESIS_DATE, days: [weeklyDay] }];
+    }
+    return next;
+}
+
+/**
  * Map the config form's chosen weekdays + polarity to the tracker fields to
  * persist. Thin wrapper over the write helper:
  *
