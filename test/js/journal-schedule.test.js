@@ -326,3 +326,28 @@ test('normalizeTrackerSchedule: invalid weeklyDay → daily (no scheduleHistory)
     assert.ok(!('scheduleHistory' in n));
     assert.ok(!('frequency' in n));
 });
+
+// Representation change, NOT a schedule change: derived visibility must be
+// provably identical before and after normalization for every date.
+const FULL_WEEK = [
+    '2026-07-03', '2026-07-04', '2026-07-05', '2026-07-06',
+    '2026-07-07', '2026-07-08', '2026-07-09',
+];
+
+test('normalizeTrackerSchedule: visibility identical pre/post for legacy weekly', () => {
+    const legacy = { id: 't', frequency: 'weekly', weeklyDay: 1 };
+    const normalized = normalizeTrackerSchedule(legacy);
+    for (const d of FULL_WEEK) {
+        assert.equal(shouldShowTracker(normalized, d), shouldShowTracker(legacy, d),
+            `visibility diverged on ${d}`);
+    }
+});
+
+test('normalizeTrackerSchedule: visibility identical pre/post for legacy daily', () => {
+    const legacy = { id: 't', frequency: 'daily' };
+    const normalized = normalizeTrackerSchedule(legacy);
+    for (const d of FULL_WEEK) {
+        assert.equal(shouldShowTracker(normalized, d), shouldShowTracker(legacy, d),
+            `visibility diverged on ${d}`);
+    }
+});
