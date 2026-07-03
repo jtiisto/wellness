@@ -56,13 +56,28 @@ class JournalPage:
         self.page.locator(".header-actions button.icon-btn").click()
         self.page.wait_for_selector(".config-screen", timeout=3000)
 
-    def add_tracker(self, name, category, tracker_type="simple"):
+    def add_tracker(self, name, category, tracker_type="simple", days=None, polarity=None):
+        """Create a tracker via the config form.
+
+        `days` (optional): iterable of weekday ints (0=Sun..6=Sat) to schedule
+        on — the picker starts at Daily (all on), so this toggles to match.
+        `polarity` (optional): 'positive' | 'negative' | 'neutral'.
+        """
         self.page.locator("button.btn-primary").filter(has_text="Add").click()
         self.page.wait_for_selector(".modal-content", timeout=3000)
         self.page.locator(".form-input").first.fill(name)
         selects = self.page.locator(".form-select")
         selects.first.select_option(label=category)
         selects.nth(1).select_option(value=tracker_type)
+        if days is not None:
+            desired = set(days)
+            for d in range(7):
+                btn = self.page.locator(f".day-toggle[data-day='{d}']")
+                pressed = btn.get_attribute("aria-pressed") == "true"
+                if pressed != (d in desired):
+                    btn.click()
+        if polarity is not None:
+            self.page.locator("select[aria-label='Polarity']").select_option(value=polarity)
         self.page.locator("button[type='submit']").click()
         self.page.wait_for_selector(".modal-content", state="hidden", timeout=3000)
 

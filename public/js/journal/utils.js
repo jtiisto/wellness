@@ -209,6 +209,74 @@ export function computeScheduleHistoryUpdate(tracker, newDays, today) {
 }
 
 /**
+ * Map the config form's chosen weekdays + polarity to the tracker fields to
+ * persist. Thin wrapper over the write helper:
+ *
+ *   - Schedule. A new tracker left at Daily writes no `scheduleHistory` (keeps
+ *     the common case clean); a narrower new tracker gets a single genesis
+ *     segment (a tracker created today has no prior history). Editing an
+ *     existing tracker delegates to `computeScheduleHistoryUpdate`, so an
+ *     unchanged day-set writes nothing.
+ *   - Empty selection coerces to Daily.
+ *   - Polarity. A valid value is written; selecting "unspecified" on a tracker
+ *     that had one clears it (`undefined`, dropped from meta_json on upload).
+ *
+ * Returns a partial patch to merge into the tracker; keys are present only when
+ * they should be written.
+ *
+ * @param {Object|null} existingTracker - The tracker being edited, or null for a new one
+ * @param {{days: number[], polarity: string}} form - Chosen weekdays (0..6) and polarity
+ * @param {string} today - Local YYYY-MM-DD (caller passes getToday())
+ * @returns {{scheduleHistory?: Array, polarity?: string|undefined}}
+ */
+export function buildTrackerSaveFields(existingTracker, { days, polarity }, today) {
+    const fields = {};
+
+    const chosen = normalizeDays(
+        (Array.isArray(days) && days.length > 0) ? days : ALL_DAYS);
+    if (!existingTracker) {
+        if (!daysEqual(chosen, ALL_DAYS)) {
+            fields.scheduleHistory = [{ effectiveFrom: SCHEDULE_GENESIS_DATE, days: chosen }];
+        }
+    } else {
+        const res = computeScheduleHistoryUpdate(existingTracker, chosen, today);
+        if (res.changed) {
+            fields.scheduleHistory = res.scheduleHistory;
+        }
+    }
+
+    if (POLARITY_VALUES.includes(polarity)) {
+        fields.polarity = polarity;
+    } else if (existingTracker && existingTracker.polarity !== undefined) {
+        fields.polarity = undefined; // explicit clear back to unspecified
+    }
+
+    return fields;
+}
+
+/**
+ * Human-readable summary of a weekday set for the config list: "Daily",
+ * "Weekdays", "Weekend", or a comma-joined short-name list ("Mon, Wed, Fri").
+ * @param {Set<number>|number[]} daysInput
+ * @returns {string}
+ */
+export function formatScheduleSummary(daysInput) {
+    const days = normalizeDays(
+        Array.isArray(daysInput) ? daysInput : Array.from(daysInput || []));
+    if (days.length === 0 || daysEqual(days, ALL_DAYS)) {
+        return 'Daily';
+    }
+    if (daysEqual(days, [1, 2, 3, 4, 5])) {
+        return 'Weekdays';
+    }
+    if (daysEqual(days, [0, 6])) {
+        return 'Weekend';
+    }
+    const names = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    return days.map(d => names[d]).join(', ');
+}
+
+/**
  * Check if date is within the last N days
  * @param {string} dateStr - ISO date string
  * @param {number} days - Number of days

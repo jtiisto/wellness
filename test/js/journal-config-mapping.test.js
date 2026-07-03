@@ -1,0 +1,91 @@
+// Unit tests for the config form→trackerData mapping helpers (see
+// docs/ARCHITECTURE.md "Tracker scheduling"). Keeps the
+// no-op/genesis/append/replace logic and the empty→Daily coercion covered
+// without rendering the Preact form.
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {
+    ALL_DAYS,
+    SCHEDULE_GENESIS_DATE,
+    buildTrackerSaveFields,
+    formatScheduleSummary,
+} from '../../public/js/journal/utils.js';
+
+const TODAY = '2026-07-03';
+
+// ---- buildTrackerSaveFields: schedule (new tracker) ----------------------
+
+test('new tracker at Daily writes no scheduleHistory', () => {
+    const fields = buildTrackerSaveFields(null, { days: [...ALL_DAYS], polarity: '' }, TODAY);
+    assert.equal('scheduleHistory' in fields, false);
+});
+
+test('new tracker with empty selection coerces to Daily (no scheduleHistory)', () => {
+    const fields = buildTrackerSaveFields(null, { days: [], polarity: '' }, TODAY);
+    assert.equal('scheduleHistory' in fields, false);
+});
+
+test('new narrower tracker gets a single genesis segment (no phantom past split)', () => {
+    const fields = buildTrackerSaveFields(null, { days: [1, 2, 3, 4, 5], polarity: '' }, TODAY);
+    assert.deepEqual(fields.scheduleHistory, [
+        { effectiveFrom: SCHEDULE_GENESIS_DATE, days: [1, 2, 3, 4, 5] },
+    ]);
+});
+
+test('new tracker normalizes chosen days (sort/dedupe/range)', () => {
+    const fields = buildTrackerSaveFields(null, { days: [5, 1, 1, 9, 3], polarity: '' }, TODAY);
+    assert.deepEqual(fields.scheduleHistory[0].days, [1, 3, 5]);
+});
+
+// ---- buildTrackerSaveFields: schedule (editing) --------------------------
+
+test('editing to the same day-set writes no scheduleHistory (no-op)', () => {
+    const t = { scheduleHistory: [{ effectiveFrom: SCHEDULE_GENESIS_DATE, days: [1, 2, 3, 4, 5] }] };
+    const fields = buildTrackerSaveFields(t, { days: [1, 2, 3, 4, 5], polarity: '' }, TODAY);
+    assert.equal('scheduleHistory' in fields, false);
+});
+
+test('editing a legacy daily tracker splits genesis + today', () => {
+    const t = { frequency: 'daily' };
+    const fields = buildTrackerSaveFields(t, { days: [1, 2, 3, 4, 5], polarity: '' }, TODAY);
+    assert.deepEqual(fields.scheduleHistory, [
+        { effectiveFrom: SCHEDULE_GENESIS_DATE, days: ALL_DAYS },
+        { effectiveFrom: TODAY, days: [1, 2, 3, 4, 5] },
+    ]);
+});
+
+// ---- buildTrackerSaveFields: polarity ------------------------------------
+
+test('new tracker with a valid polarity writes it', () => {
+    const fields = buildTrackerSaveFields(null, { days: [...ALL_DAYS], polarity: 'negative' }, TODAY);
+    assert.equal(fields.polarity, 'negative');
+});
+
+test('new tracker with unspecified polarity omits the key', () => {
+    const fields = buildTrackerSaveFields(null, { days: [...ALL_DAYS], polarity: '' }, TODAY);
+    assert.equal('polarity' in fields, false);
+});
+
+test('editing to unspecified clears an existing polarity', () => {
+    const t = { polarity: 'positive' };
+    const fields = buildTrackerSaveFields(t, { days: [...ALL_DAYS], polarity: '' }, TODAY);
+    assert.equal('polarity' in fields, true);
+    assert.equal(fields.polarity, undefined);
+});
+
+test('editing an unspecified tracker to a value writes it', () => {
+    const t = {};
+    const fields = buildTrackerSaveFields(t, { days: [...ALL_DAYS], polarity: 'neutral' }, TODAY);
+    assert.equal(fields.polarity, 'neutral');
+});
+
+// ---- formatScheduleSummary -----------------------------------------------
+
+test('formatScheduleSummary: Daily / Weekdays / Weekend / list', () => {
+    assert.equal(formatScheduleSummary(ALL_DAYS), 'Daily');
+    assert.equal(formatScheduleSummary([]), 'Daily');
+    assert.equal(formatScheduleSummary([1, 2, 3, 4, 5]), 'Weekdays');
+    assert.equal(formatScheduleSummary([0, 6]), 'Weekend');
+    assert.equal(formatScheduleSummary([1, 3, 5]), 'Mon, Wed, Fri');
+    assert.equal(formatScheduleSummary(new Set([6, 1])), 'Mon, Sat');
+});

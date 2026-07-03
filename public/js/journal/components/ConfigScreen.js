@@ -11,23 +11,42 @@ import {
     updateTracker,
     deleteTracker
 } from '../store.js';
-import { getCategories, groupByCategory } from '../utils.js';
-import { generateId } from '../../shared/utils.js';
+import {
+    getCategories,
+    groupByCategory,
+    getScheduleDaysForDate,
+    buildTrackerSaveFields,
+    formatScheduleSummary,
+    ALL_DAYS,
+    POLARITY_VALUES,
+} from '../utils.js';
+import { generateId, getToday } from '../../shared/utils.js';
 
 const html = htm.bind(h);
 
-const DAYS_OF_WEEK = [
-    { value: 0, label: 'Sunday' },
-    { value: 1, label: 'Monday' },
-    { value: 2, label: 'Tuesday' },
-    { value: 3, label: 'Wednesday' },
-    { value: 4, label: 'Thursday' },
-    { value: 5, label: 'Friday' },
-    { value: 6, label: 'Saturday' }
+// Weekday toggles, Monday-first for display (values stay 0=Sun..6=Sat).
+const WEEKDAY_PICKER = [
+    { value: 1, label: 'M' },
+    { value: 2, label: 'T' },
+    { value: 3, label: 'W' },
+    { value: 4, label: 'T' },
+    { value: 5, label: 'F' },
+    { value: 6, label: 'S' },
+    { value: 0, label: 'S' },
+];
+const DAY_FULL_NAMES = [
+    'Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday',
+];
+const POLARITY_OPTIONS = [
+    { value: '', label: 'Unspecified' },
+    { value: 'positive', label: 'Positive (build)' },
+    { value: 'negative', label: 'Negative (avoid)' },
+    { value: 'neutral', label: 'Neutral (measure)' },
 ];
 
 function TrackerForm({ tracker, onSave, onCancel }) {
     const existingCategories = getCategories(trackerConfig.value);
+    const today = getToday();
 
     const [formData, setFormData] = useState({
         name: tracker?.name || '',
@@ -36,12 +55,28 @@ function TrackerForm({ tracker, onSave, onCancel }) {
         unit: tracker?.unit || '',
         defaultValue: tracker?.defaultValue ?? '',
         accumulator: tracker?.accumulator === true,
-        frequency: tracker?.frequency || 'daily',
-        weeklyDay: tracker?.weeklyDay ?? 1
     });
+
+    // Weekday schedule (0=Sun..6=Sat). Seed from the tracker's current schedule
+    // as of today (handles scheduleHistory + legacy frequency/weeklyDay); a new
+    // tracker defaults to Daily.
+    const [days, setDays] = useState(
+        tracker
+            ? Array.from(getScheduleDaysForDate(tracker, today)).sort((a, b) => a - b)
+            : [...ALL_DAYS]
+    );
+    const [polarity, setPolarity] = useState(
+        (tracker && POLARITY_VALUES.includes(tracker.polarity)) ? tracker.polarity : ''
+    );
 
     const [newCategory, setNewCategory] = useState('');
     const [useNewCategory, setUseNewCategory] = useState(existingCategories.length === 0);
+
+    const toggleDay = (value) => {
+        setDays(prev => prev.includes(value)
+            ? prev.filter(d => d !== value)
+            : [...prev, value].sort((a, b) => a - b));
+    };
 
     const handleChange = (field) => (e) => {
         const value = e.target.type === 'number'
@@ -69,7 +104,6 @@ function TrackerForm({ tracker, onSave, onCancel }) {
             name: formData.name.trim(),
             category: category,
             type: formData.type,
-            frequency: formData.frequency
         };
 
         if (formData.type === 'quantifiable') {
@@ -78,9 +112,8 @@ function TrackerForm({ tracker, onSave, onCancel }) {
             trackerData.accumulator = formData.accumulator === true;
         }
 
-        if (formData.frequency === 'weekly') {
-            trackerData.weeklyDay = Number(formData.weeklyDay);
-        }
+        // Schedule (scheduleHistory) + polarity — see buildTrackerSaveFields.
+        Object.assign(trackerData, buildTrackerSaveFields(tracker, { days, polarity }, today));
 
         onSave(trackerData);
     };
@@ -197,31 +230,40 @@ function TrackerForm({ tracker, onSave, onCancel }) {
                     `}
 
                     <div class="form-group">
-                        <label class="form-label">Frequency</label>
-                        <select
-                            class="form-select"
-                            value=${formData.frequency}
-                            onChange=${handleChange('frequency')}
-                        >
-                            <option value="daily">Daily</option>
-                            <option value="weekly">Weekly</option>
-                        </select>
+                        <label class="form-label">Scheduled days</label>
+                        <div class="day-toggle-group" role="group" aria-label="Scheduled days">
+                            ${WEEKDAY_PICKER.map(day => html`
+                                <button
+                                    type="button"
+                                    class="day-toggle ${days.includes(day.value) ? 'active' : ''}"
+                                    data-day=${day.value}
+                                    aria-pressed=${days.includes(day.value)}
+                                    aria-label=${DAY_FULL_NAMES[day.value]}
+                                    onClick=${() => toggleDay(day.value)}
+                                    key=${day.value}
+                                >${day.label}</button>
+                            `)}
+                        </div>
+                        <div class="day-toggle-presets">
+                            <button type="button" class="btn btn-secondary" onClick=${() => setDays([...ALL_DAYS])}>Daily</button>
+                            <button type="button" class="btn btn-secondary" onClick=${() => setDays([1, 2, 3, 4, 5])}>Weekdays</button>
+                        </div>
+                        <div class="schedule-summary">${formatScheduleSummary(days)}</div>
                     </div>
 
-                    ${formData.frequency === 'weekly' && html`
-                        <div class="form-group">
-                            <label class="form-label">Day of Week</label>
-                            <select
-                                class="form-select"
-                                value=${formData.weeklyDay}
-                                onChange=${handleChange('weeklyDay')}
-                            >
-                                ${DAYS_OF_WEEK.map(day => html`
-                                    <option value=${day.value} key=${day.value}>${day.label}</option>
-                                `)}
-                            </select>
-                        </div>
-                    `}
+                    <div class="form-group">
+                        <label class="form-label">Polarity</label>
+                        <select
+                            class="form-select"
+                            aria-label="Polarity"
+                            value=${polarity}
+                            onChange=${(e) => setPolarity(e.target.value)}
+                        >
+                            ${POLARITY_OPTIONS.map(opt => html`
+                                <option value=${opt.value} key=${opt.value}>${opt.label}</option>
+                            `)}
+                        </select>
+                    </div>
 
                     <div class="form-group mt-md">
                         <button type="submit" class="btn btn-primary btn-block">
@@ -244,20 +286,17 @@ function TrackerConfigItem({ tracker, onEdit, onDelete }) {
         }
     };
 
-    const getFrequencyLabel = () => {
-        if (tracker.frequency === 'weekly') {
-            const day = DAYS_OF_WEEK.find(d => d.value === tracker.weeklyDay);
-            return `Weekly (${day?.label || 'Unknown'})`;
-        }
-        return 'Daily';
-    };
+    const scheduleLabel = formatScheduleSummary(getScheduleDaysForDate(tracker, getToday()));
+    const polarityLabel = POLARITY_VALUES.includes(tracker.polarity)
+        ? tracker.polarity.charAt(0).toUpperCase() + tracker.polarity.slice(1)
+        : null;
 
     return html`
         <div class="tracker-config-item">
             <div class="tracker-config-info">
                 <div class="tracker-config-name">${tracker.name}</div>
                 <div class="tracker-config-meta">
-                    ${getTypeLabel(tracker.type)} \u2022 ${getFrequencyLabel()}
+                    ${getTypeLabel(tracker.type)} \u2022 ${scheduleLabel}${polarityLabel ? ` \u2022 ${polarityLabel}` : ''}
                 </div>
             </div>
             <div class="tracker-config-actions">

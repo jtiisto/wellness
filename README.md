@@ -5,7 +5,7 @@ A personal health and fitness dashboard that unifies daily habit tracking, worko
 ## Modules
 
 ### Journal
-Daily habit and health tracking with multi-device sync. Track supplements, habits, metrics, and any custom data points. Features conflict-aware synchronization with per-record versioning so multiple devices stay in sync without data loss. Sync runs automatically via a shared scheduler that responds to edits, network changes, and page visibility.
+Daily habit and health tracking with multi-device sync. Track supplements, habits, metrics, and any custom data points. Each tracker can be scheduled on specific weekdays (e.g. Mon–Fri instead of every day); schedule changes are effective-dated, so past days are always interpreted against the schedule that was in effect at the time. Trackers can also carry a polarity (positive/negative/neutral). Features conflict-aware synchronization with per-record versioning so multiple devices stay in sync without data loss. Sync runs automatically via a shared scheduler that responds to edits, network changes, and page visibility.
 
 ### Coach
 Workout planning and logging. Supports structured workout plans with blocks (warmup, strength, cardio), set-level tracking (weight, reps, RPE), and multiple exercise types including strength, cardio, duration, and checklists. Plans are managed server-side; logs sync from clients with per-record server-token arbitration (the server is the only arbiter — client clock skew can never reject or overwrite a legitimate edit). Automatic sync with debounced uploads and periodic polling for plan changes. Configurable pre/post-workout hooks fire shell scripts to capture stats (e.g., Garmin training readiness) before exercise overwrites them.

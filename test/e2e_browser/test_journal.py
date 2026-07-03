@@ -1,5 +1,5 @@
 """E2E tests for the journal module."""
-from datetime import datetime
+from datetime import date, datetime, timedelta
 
 import pytest
 import requests as http_requests
@@ -574,6 +574,60 @@ def test_delete_tracker_via_config(journal_app_page, app_server, seeded_journal)
     resp = http_requests.get(f"{app_server['url']}/api/journal/sync/delta")
     tracker_ids = [t["id"] for t in resp.json().get("config", [])]
     assert "tracker-to-delete" not in tracker_ids
+
+
+def test_schedule_days_and_polarity_via_config(journal_page, app_server):
+    """A Mon–Fri tracker created via config round-trips scheduleHistory +
+    polarity to the server, shows a schedule/polarity summary in the config
+    list, and is hidden on weekend dates in the grid (shown on weekdays).
+    """
+    page = journal_page.page
+    journal_page.open_config()
+    journal_page.add_tracker(
+        "Meds", "health", tracker_type="simple",
+        days=[1, 2, 3, 4, 5], polarity="positive")
+
+    # Sync so the tracker reaches the server and dirty state clears (which
+    # unlocks past dates in the grid).
+    page.wait_for_timeout(3500)
+    page.wait_for_selector(".sync-dot.green", timeout=10000)
+
+    # Config list summarizes the schedule + polarity.
+    meta = page.locator(".tracker-config-item").filter(
+        has_text="Meds").locator(".tracker-config-meta").inner_text()
+    assert "Weekdays" in meta
+    assert "Positive" in meta
+
+    # Server round-trip: scheduleHistory (Mon–Fri) + polarity survive sync.
+    resp = http_requests.get(f"{app_server['url']}/api/journal/sync/delta")
+    tracker = next(t for t in resp.json().get("config", []) if t["name"] == "Meds")
+    assert tracker.get("polarity") == "positive"
+    hist = tracker.get("scheduleHistory")
+    assert hist and hist[-1]["days"] == [1, 2, 3, 4, 5]
+
+    # Grid visibility: pick a weekend and a weekday date from the last-7-days
+    # selector (index 0 = 6 days ago .. index 6 = today). Python weekday():
+    # Mon=0..Sun=6, so >=5 is Sat/Sun.
+    dates = [date.today() - timedelta(days=(6 - i)) for i in range(7)]
+    weekend_idx = next(i for i, d in enumerate(dates) if d.weekday() >= 5)
+    weekday_idx = next(i for i, d in enumerate(dates) if d.weekday() < 5)
+
+    page.reload()
+    page.wait_for_selector(".shell", timeout=10000)
+    AppShellPage(page).navigate_to("Journal")
+    journal_page.wait_for_loaded()
+    journal_page.wait_for_trackers()
+    page.wait_for_selector(".sync-dot.green", timeout=10000)
+
+    journal_page.select_date(weekend_idx)
+    page.wait_for_timeout(400)
+    weekend_names = journal_page.get_tracker_names()
+    assert "Water Intake" in weekend_names  # grid rendered
+    assert "Meds" not in weekend_names
+
+    journal_page.select_date(weekday_idx)
+    page.wait_for_timeout(400)
+    assert "Meds" in journal_page.get_tracker_names()
 
 
 def test_add_tracker_from_config(journal_page):
