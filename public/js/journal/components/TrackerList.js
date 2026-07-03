@@ -5,7 +5,7 @@ import { h } from 'preact';
 import { useState, useEffect } from 'preact/hooks';
 import { effect } from '@preact/signals';
 import htm from 'htm';
-import { trackerConfig, selectedDate, syncMetadata, expandedCategories, toggleCategoryExpanded } from '../store.js';
+import { trackerConfig, selectedDate, dailyLogs, syncMetadata, expandedCategories, toggleCategoryExpanded } from '../store.js';
 import { getLastNDays, shouldShowTracker, groupByCategory } from '../utils.js';
 import { getToday } from '../../shared/utils.js';
 import { TrackerItem } from './TrackerItem.js';
@@ -67,6 +67,7 @@ function DateSelector({ selected, hasDirtyTrackers, onDateSelect }) {
 export function TrackerList() {
     const [config, setConfig] = useState(trackerConfig.value);
     const [date, setDate] = useState(selectedDate.value);
+    const [logs, setLogs] = useState(dailyLogs.value);
     const [hasDirtyTrackers, setHasDirtyTrackers] = useState(syncMetadata.value.dirtyTrackers.length > 0);
     const [expanded, setExpanded] = useState(new Set(expandedCategories.value));
 
@@ -74,6 +75,7 @@ export function TrackerList() {
         const dispose = effect(() => {
             setConfig([...trackerConfig.value]);
             setDate(selectedDate.value);
+            setLogs(dailyLogs.value);
             setHasDirtyTrackers(syncMetadata.value.dirtyTrackers.length > 0);
             setExpanded(new Set(expandedCategories.value));
         });
@@ -84,8 +86,11 @@ export function TrackerList() {
         selectedDate.value = newDate;
     };
 
-    // Filter trackers that should appear on this date (exclude deleted ones)
-    const visibleTrackers = config.filter(t => !t._deleted && shouldShowTracker(t, date));
+    // Filter trackers that should appear on this date (exclude deleted ones).
+    // Pass the day's log so an off-schedule tracker with an existing entry
+    // stays visible (see shouldShowTracker).
+    const dayLog = logs[date];
+    const visibleTrackers = config.filter(t => !t._deleted && shouldShowTracker(t, date, dayLog));
 
     // Group by category
     const grouped = groupByCategory(visibleTrackers);

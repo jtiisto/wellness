@@ -630,6 +630,63 @@ def test_schedule_days_and_polarity_via_config(journal_page, app_server):
     assert "Meds" in journal_page.get_tracker_names()
 
 
+def test_off_schedule_entry_keeps_tracker_visible(journal_page, app_server, seeded_journal):
+    """Entry-exists visibility override: a weekday-only tracker with a logged
+    entry on a weekend date stays visible on that date (and after reload), while
+    a weekend date with no entry keeps it hidden. On-schedule weekdays show it
+    normally.
+    """
+    page = journal_page.page
+    base = app_server["url"]
+    client_id = seeded_journal["client_id"]
+
+    # Last-7-days indices (0 = 6 days ago .. 6 = today). Python weekday():
+    # Mon=0..Sun=6, so Sat=5, Sun=6.
+    dates = [date.today() - timedelta(days=(6 - i)) for i in range(7)]
+    sat_idx = next(i for i, d in enumerate(dates) if d.weekday() == 5)
+    sun_idx = next(i for i, d in enumerate(dates) if d.weekday() == 6)
+    weekday_idx = next(i for i, d in enumerate(dates) if d.weekday() < 5)
+    sat_str = dates[sat_idx].strftime("%Y-%m-%d")
+
+    # Seed a Mon–Fri tracker plus an entry on the Saturday (off-schedule).
+    http_requests.post(f"{base}/api/journal/sync/update", json={
+        "clientId": client_id,
+        "config": [{
+            "id": "tracker-weekday",
+            "name": "Weekday Only",
+            "category": "health",
+            "type": "simple",
+            "scheduleHistory": [{"effectiveFrom": "0000-01-01", "days": [1, 2, 3, 4, 5]}],
+        }],
+        "days": {sat_str: {"tracker-weekday": {"completed": True}}},
+    })
+
+    # Reload so the browser pulls the new tracker + off-schedule entry.
+    page.reload()
+    page.wait_for_selector(".shell", timeout=10000)
+    AppShellPage(page).navigate_to("Journal")
+    journal_page.wait_for_loaded()
+    journal_page.wait_for_trackers()
+    page.wait_for_selector(".sync-dot.green", timeout=10000)
+
+    # On-schedule weekday → visible.
+    journal_page.select_date(weekday_idx)
+    page.wait_for_timeout(400)
+    assert "Weekday Only" in journal_page.get_tracker_names()
+
+    # Off-schedule Saturday but has an entry → visible (the override).
+    journal_page.select_date(sat_idx)
+    page.wait_for_timeout(400)
+    assert "Weekday Only" in journal_page.get_tracker_names()
+
+    # Off-schedule Sunday with no entry → hidden.
+    journal_page.select_date(sun_idx)
+    page.wait_for_timeout(400)
+    names = journal_page.get_tracker_names()
+    assert "Water Intake" in names  # grid rendered
+    assert "Weekday Only" not in names
+
+
 def test_add_tracker_from_config(journal_page):
     """Creating a new tracker via the form adds it to the list."""
     page = journal_page.page

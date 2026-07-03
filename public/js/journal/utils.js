@@ -131,16 +131,27 @@ export function isExpectedOn(tracker, dateStr) {
 /**
  * Check if a tracker should appear on a given date.
  *
- * Visibility == "expected on this date". The off-schedule "an entry already
- * exists → also show" rule ships with the visibility-integration work and is
- * intentionally NOT applied here yet.
+ * Visibility is "expected on this date" OR "already has a log entry that date":
+ * an off-schedule day still shows the tracker when a record for it exists in
+ * that day's log, so an exceptional entry (e.g. a weekday-only supplement taken
+ * on a weekend) stays visible and editable. The predicate is presence of a
+ * record for `tracker.id` — even `completed: false` — so unchecking an
+ * off-schedule entry doesn't make the row vanish mid-edit. This visibility rule
+ * is deliberately separate from any goal/completion semantics (see
+ * docs/ARCHITECTURE.md "Tracker scheduling"). With `dayLog` omitted this reduces
+ * to pure expectation.
  *
  * @param {Object} tracker - Tracker config object
  * @param {string} dateStr - Local YYYY-MM-DD date
+ * @param {Object} [dayLog] - The day's log map ({ trackerId: entry }), e.g. dailyLogs[dateStr]
  * @returns {boolean}
  */
-export function shouldShowTracker(tracker, dateStr) {
-    return isExpectedOn(tracker, dateStr);
+export function shouldShowTracker(tracker, dateStr, dayLog) {
+    if (isExpectedOn(tracker, dateStr)) {
+        return true;
+    }
+    return !!(dayLog && tracker &&
+        Object.prototype.hasOwnProperty.call(dayLog, tracker.id));
 }
 
 /**

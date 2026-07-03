@@ -77,7 +77,7 @@ test('empty scheduleHistory array → falls through to daily default', () => {
     assert.equal(isExpectedOn(t, SAT), true);
 });
 
-test('shouldShowTracker equals isExpectedOn (Phase 1: no entry-exists rule)', () => {
+test('shouldShowTracker with no dayLog equals isExpectedOn (pure expectation)', () => {
     const trackers = [
         { frequency: 'daily' },
         { frequency: 'weekly', weeklyDay: 1 },
@@ -241,4 +241,39 @@ test('local-date weekday under a negative-offset TZ: Mon–Fri hidden on Saturda
     const viaLegacy = { frequency: 'weekly', weeklyDay: 1 }; // Monday
     assert.equal(isExpectedOn(viaLegacy, MON), true);
     assert.equal(isExpectedOn(viaLegacy, SAT), false);
+});
+
+// ---- shouldShowTracker: entry-exists visibility override ------------------
+
+test('shouldShowTracker: on-schedule tracker is always visible', () => {
+    const t = { id: 'x', scheduleHistory: [{ effectiveFrom: SCHEDULE_GENESIS_DATE, days: [1, 2, 3, 4, 5] }] };
+    assert.equal(shouldShowTracker(t, FRI), true);
+    assert.equal(shouldShowTracker(t, FRI, {}), true);
+});
+
+test('shouldShowTracker: off-schedule tracker with an entry that day is visible', () => {
+    const t = { id: 'x', scheduleHistory: [{ effectiveFrom: SCHEDULE_GENESIS_DATE, days: [1, 2, 3, 4, 5] }] };
+    // Saturday is off-schedule, but a record exists in the day's log.
+    assert.equal(shouldShowTracker(t, SAT, { x: { completed: true } }), true);
+    // Even completed:false counts — unchecking must not hide the row mid-edit.
+    assert.equal(shouldShowTracker(t, SAT, { x: { completed: false } }), true);
+});
+
+test('shouldShowTracker: off-schedule tracker with no entry is hidden', () => {
+    const t = { id: 'x', scheduleHistory: [{ effectiveFrom: SCHEDULE_GENESIS_DATE, days: [1, 2, 3, 4, 5] }] };
+    assert.equal(shouldShowTracker(t, SAT, {}), false);
+    assert.equal(shouldShowTracker(t, SAT, { other: { completed: true } }), false);
+});
+
+test('shouldShowTracker: legacy weekly tracker with an off-day entry becomes visible', () => {
+    // The one intentional behavior change — previously always hidden off its day.
+    const t = { id: 'w', frequency: 'weekly', weeklyDay: 1 }; // Monday
+    assert.equal(shouldShowTracker(t, SAT), false);                    // no log → hidden
+    assert.equal(shouldShowTracker(t, SAT, { w: { value: 3 } }), true); // has entry → visible
+});
+
+test('shouldShowTracker: omitted dayLog reduces to pure expectation', () => {
+    const t = { id: 'x', scheduleHistory: [{ effectiveFrom: SCHEDULE_GENESIS_DATE, days: [1, 2, 3, 4, 5] }] };
+    assert.equal(shouldShowTracker(t, FRI), true);
+    assert.equal(shouldShowTracker(t, SAT), false);
 });
