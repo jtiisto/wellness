@@ -155,6 +155,90 @@ class TestInitDatabase:
         assert rows["t-bad"]["schedule_json"] is None
         assert rows["t-bad"]["polarity"] is None
 
+    def test_migration_4_strips_schedule_polarity_from_meta(self, test_app, tmp_journal_db):
+        """Migration 4 strips scheduleHistory/polarity from live + archive
+        meta_json (other keys preserved), lifts a live NULL-column value into the
+        column first, tolerates malformed meta, and is idempotent."""
+        import json
+        import modules.journal as journal
+
+        schedule = [{"effectiveFrom": "0000-01-01", "days": [1, 2, 3, 4, 5]}]
+        with get_db(tmp_journal_db) as conn:
+            cursor = conn.cursor()
+            # Live: column populated + meta still carries the fields (+ a real key).
+            cursor.execute(
+                "INSERT INTO trackers (id, name, category, type, meta_json, "
+                "schedule_json, polarity, last_modified_at, deleted) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)",
+                ("t-dual", "Dual", "c", "simple",
+                 json.dumps({"scheduleHistory": schedule, "polarity": "positive", "unit": "mg"}),
+                 json.dumps(schedule), "positive", "2026-01-01T00:00:00Z"),
+            )
+            # Live: NULL column but meta has the fields → lift, then strip.
+            cursor.execute(
+                "INSERT INTO trackers (id, name, category, type, meta_json, "
+                "schedule_json, polarity, last_modified_at, deleted) "
+                "VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, 0)",
+                ("t-missed", "Missed", "c", "simple",
+                 json.dumps({"scheduleHistory": schedule, "polarity": "negative"}),
+                 "2026-01-01T00:00:00Z"),
+            )
+            # Live: malformed meta → tolerated (left as-is).
+            cursor.execute(
+                "INSERT INTO trackers (id, name, category, type, meta_json, "
+                "schedule_json, polarity, last_modified_at, deleted) "
+                "VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, 0)",
+                ("t-bad", "Bad", "c", "simple", "{not json", "2026-01-01T00:00:00Z"),
+            )
+            # Archive row carrying the fields → stripped (no column lift).
+            cursor.execute(
+                "INSERT INTO trackers_archive (tracker_id, name, category, type, "
+                "meta_json, schedule_json, polarity, deleted, last_modified_at, superseded_at) "
+                "VALUES (?, ?, ?, ?, ?, NULL, NULL, 0, ?, ?)",
+                ("t-arch", "Arch", "c", "simple",
+                 json.dumps({"scheduleHistory": schedule, "polarity": "neutral", "unit": "x"}),
+                 "2026-01-01T00:00:00Z", "2026-01-02T00:00:00Z"),
+            )
+            conn.commit()
+
+            journal._migration_4_strip_schedule_polarity_from_meta(cursor)
+            conn.commit()
+
+            live = {r["id"]: r for r in cursor.execute(
+                "SELECT id, meta_json, schedule_json, polarity FROM trackers").fetchall()}
+            arch = cursor.execute(
+                "SELECT meta_json FROM trackers_archive WHERE tracker_id = ?",
+                ("t-arch",)).fetchone()
+
+        # Dual row: stripped from meta, columns intact, other key preserved.
+        dual_meta = json.loads(live["t-dual"]["meta_json"])
+        assert "scheduleHistory" not in dual_meta and "polarity" not in dual_meta
+        assert dual_meta["unit"] == "mg"
+        assert json.loads(live["t-dual"]["schedule_json"]) == schedule
+
+        # Missed row: value lifted into the columns, then stripped from meta.
+        missed_meta = json.loads(live["t-missed"]["meta_json"])
+        assert "scheduleHistory" not in missed_meta and "polarity" not in missed_meta
+        assert json.loads(live["t-missed"]["schedule_json"]) == schedule
+        assert live["t-missed"]["polarity"] == "negative"
+
+        # Malformed meta untouched.
+        assert live["t-bad"]["meta_json"] == "{not json"
+
+        # Archive stripped, other key preserved.
+        arch_meta = json.loads(arch["meta_json"])
+        assert "scheduleHistory" not in arch_meta and "polarity" not in arch_meta
+        assert arch_meta["unit"] == "x"
+
+        # Idempotent: a second pass changes nothing.
+        with get_db(tmp_journal_db) as conn:
+            cursor = conn.cursor()
+            journal._migration_4_strip_schedule_polarity_from_meta(cursor)
+            conn.commit()
+            again = json.loads(cursor.execute(
+                "SELECT meta_json FROM trackers WHERE id = 't-dual'").fetchone()["meta_json"])
+        assert "scheduleHistory" not in again and again["unit"] == "mg"
+
     def test_purge_old_archives_removes_aged_rows(self, test_app, tmp_journal_db):
         """_purge_old_archives should delete archive rows older than the retention window in both archive tables."""
         import modules.journal as journal

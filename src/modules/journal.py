@@ -202,6 +202,68 @@ def _migration_3_schedule_polarity_columns(cursor):
         )
 
 
+def _migration_4_strip_schedule_polarity_from_meta(cursor):
+    """Single-source cleanup: now that `scheduleHistory` / `polarity` are
+    protocol-owned columns (and reserved keys), strip them out of every
+    `meta_json` blob — live `trackers` and `trackers_archive` — so the columns
+    are the only copy.
+
+    Belt-and-suspenders for live rows: if a row's column is NULL but its
+    meta_json still carried a value (e.g. it somehow missed migration 3's
+    backfill), lift the value into the column BEFORE stripping, so no schedule /
+    polarity is lost. Archive rows are stripped only (historical snapshots).
+
+    Idempotent (a re-run finds no keys to strip), tolerant of absent/malformed
+    meta_json, and leaves all other meta keys untouched.
+    """
+    cursor.execute(
+        "SELECT id, meta_json, schedule_json, polarity FROM trackers"
+    )
+    for tracker_id, meta_json, schedule_json, polarity in cursor.fetchall():
+        meta = _loads_dict(meta_json)
+        if meta is None or (
+                "scheduleHistory" not in meta and "polarity" not in meta):
+            continue
+        new_schedule = schedule_json
+        if schedule_json is None and meta.get("scheduleHistory") is not None:
+            new_schedule = json.dumps(meta["scheduleHistory"])
+        new_polarity = polarity
+        if polarity is None and meta.get("polarity") is not None:
+            new_polarity = meta["polarity"]
+        meta.pop("scheduleHistory", None)
+        meta.pop("polarity", None)
+        cursor.execute(
+            "UPDATE trackers SET meta_json = ?, schedule_json = ?, polarity = ? "
+            "WHERE id = ?",
+            (json.dumps(meta), new_schedule, new_polarity, tracker_id),
+        )
+
+    cursor.execute("SELECT id, meta_json FROM trackers_archive")
+    for archive_id, meta_json in cursor.fetchall():
+        meta = _loads_dict(meta_json)
+        if meta is None or (
+                "scheduleHistory" not in meta and "polarity" not in meta):
+            continue
+        meta.pop("scheduleHistory", None)
+        meta.pop("polarity", None)
+        cursor.execute(
+            "UPDATE trackers_archive SET meta_json = ? WHERE id = ?",
+            (json.dumps(meta), archive_id),
+        )
+
+
+def _loads_dict(meta_json):
+    """Parse a meta_json string to a dict, or None when absent/malformed/not an
+    object. Used by migrations that rewrite meta_json in place."""
+    if not meta_json:
+        return None
+    try:
+        parsed = json.loads(meta_json)
+    except (ValueError, TypeError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
 # Ordered (target_version, migration_fn) pairs. Each migration is applied at
 # most once per DB, tracked via PRAGMA user_version. New schema changes are
 # added as a new entry with the next sequential version number.
@@ -213,6 +275,7 @@ MIGRATIONS = [
     (1, _migration_1_baseline),
     (2, _migration_2_archive_tables),
     (3, _migration_3_schedule_polarity_columns),
+    (4, _migration_4_strip_schedule_polarity_from_meta),
 ]
 
 
@@ -319,18 +382,23 @@ class DeltaSyncResponse(BaseModel):
 
 # Router with all sync endpoints
 # Tracker fields owned by the sync protocol — excluded when capturing
-# free-form meta_json fields from a tracker upload. Includes both the new
-# top-level response keys (`lastModifiedAt`, `deleted`) and the legacy
-# underscore-prefixed names a client might still echo back during migration.
+# free-form meta_json fields from a tracker upload. Includes the top-level
+# response keys (`lastModifiedAt`, `deleted`), the canonical-column fields
+# (`scheduleHistory`, `polarity` — stored in dedicated columns, never in
+# meta_json), and the legacy underscore-prefixed names a client might still
+# echo back during migration.
 _TRACKER_RESERVED_KEYS = frozenset({
     "id", "name", "category", "type", "lastModifiedAt", "deleted",
+    "scheduleHistory", "polarity",
     "_version", "_baseVersion", "_baseLastModifiedAt",
     "_lastModifiedBy", "_lastModifiedAt", "_deleted",
 })
 
 
 def _tracker_meta(item: dict) -> str:
-    """Serialize the non-reserved fields of a tracker upload to meta_json."""
+    """Serialize the non-reserved fields of a tracker upload to meta_json.
+    `scheduleHistory` / `polarity` are reserved (they live in dedicated
+    columns), so they are never written into meta_json."""
     return json.dumps({
         k: v for k, v in item.items() if k not in _TRACKER_RESERVED_KEYS
     })
@@ -338,17 +406,19 @@ def _tracker_meta(item: dict) -> str:
 
 def _schedule_json(item: dict) -> Optional[str]:
     """Serialize a tracker upload's `scheduleHistory` for its canonical column,
-    or None when absent. During the transition it is also dual-stored in
-    `meta_json` (scheduleHistory is not yet a reserved key)."""
+    or None when absent. This column is the single source of truth —
+    `scheduleHistory` is a reserved key and is not stored in `meta_json`."""
     schedule = item.get("scheduleHistory")
     return json.dumps(schedule) if schedule is not None else None
 
 
 def _apply_canonical_schedule_polarity(out: dict, row) -> None:
-    """Overlay the canonical `schedule_json` / `polarity` columns onto a
-    public-facing tracker dict, winning over the `meta_json` copy. Falls back to
-    whatever `meta_json` already merged in when a column is NULL (transition
-    safety before the meta copy is dropped)."""
+    """Emit the canonical `schedule_json` / `polarity` columns onto a
+    public-facing tracker dict. The columns are the single source of truth
+    (meta_json no longer carries these), so any stray copy that slipped in from
+    an old meta blob is dropped first and then set purely from the columns."""
+    out.pop("scheduleHistory", None)
+    out.pop("polarity", None)
     if row["schedule_json"] is not None:
         out["scheduleHistory"] = json.loads(row["schedule_json"])
     if row["polarity"] is not None:

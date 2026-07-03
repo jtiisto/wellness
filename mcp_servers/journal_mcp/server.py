@@ -341,7 +341,8 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
         """
         try:
             query = """
-                SELECT id, name, category, type, meta_json, deleted
+                SELECT id, name, category, type, meta_json, schedule_json,
+                       polarity, deleted
                 FROM trackers
                 WHERE 1=1
             """
@@ -360,14 +361,26 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
 
             for row in results:
                 row["deleted"] = bool(row.get("deleted"))
+                metadata = {}
                 if row.get("meta_json"):
                     try:
-                        row["metadata"] = json.loads(row["meta_json"])
+                        metadata = json.loads(row["meta_json"])
                     except json.JSONDecodeError:
-                        row["metadata"] = {}
-                    del row["meta_json"]
-                else:
-                    row["metadata"] = {}
+                        metadata = {}
+                # scheduleHistory / polarity are canonical columns (no longer in
+                # meta_json); merge them into `metadata` so the consumer-facing
+                # shape is unchanged (metadata.scheduleHistory / metadata.polarity).
+                if row.get("schedule_json"):
+                    try:
+                        metadata["scheduleHistory"] = json.loads(row["schedule_json"])
+                    except json.JSONDecodeError:
+                        pass
+                if row.get("polarity") is not None:
+                    metadata["polarity"] = row["polarity"]
+                row["metadata"] = metadata
+                row.pop("meta_json", None)
+                row.pop("schedule_json", None)
+                row.pop("polarity", None)
 
             return results
         except Exception as e:
@@ -675,8 +688,10 @@ means:
 - name: Display name (e.g., "Vitamin D3", "Exercise")
 - category: Grouping category (e.g., "Supplements", "Habits")
 - type: "simple" (checkbox) or "quantifiable" (has a value)
-- meta_json: Additional per-tracker settings as JSON — unit, defaultValue,
-  accumulator, scheduleHistory, polarity (see "Tracker Scheduling & Polarity")
+- meta_json: Additional free-form per-tracker settings as JSON — unit,
+  defaultValue, accumulator (schedule/polarity are NOT here — see below)
+- schedule_json: Canonical weekday schedule (`scheduleHistory` segments as JSON)
+- polarity: Canonical `'positive' | 'negative' | 'neutral'` (or NULL)
 - deleted: Soft delete flag — 1 means hidden from UI but retained for history
 - last_modified_at: Server-stamped timestamp (opaque sync token)
 
@@ -689,10 +704,14 @@ means:
 - completed: 1 if completed/checked, 0 otherwise
 - last_modified_at: Server-stamped timestamp (opaque sync token)
 
-## Tracker Scheduling & Polarity (in meta_json)
+## Tracker Scheduling & Polarity (canonical columns)
 
-Two optional per-tracker fields live inside `meta_json` (parsed into the
-`metadata` dict by `list_trackers`):
+Two optional per-tracker fields are stored in dedicated, protocol-owned columns
+(`trackers.schedule_json` and `trackers.polarity`) — **not** in `meta_json`.
+`list_trackers` still merges them into the returned `metadata` dict
+(`metadata.scheduleHistory` / `metadata.polarity`), so the consumer shape is
+unchanged; querying the raw table, read the `schedule_json` / `polarity`
+columns directly:
 
 - `scheduleHistory`: which weekdays a tracker is part of the routine on, as an
   effective-dated list of segments — `[{ "effectiveFrom": "YYYY-MM-DD",

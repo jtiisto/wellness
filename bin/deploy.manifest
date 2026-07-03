@@ -31,6 +31,7 @@ ship-bin   server.sh
 ship-bin   pre-workout-hook.sh
 ship-bin   post-workout-hook.sh
 ship-bin   backup-databases.sh
+ship-bin   reverse_backfill_schedule_polarity.py
 
 # ---- Intentionally NOT shipped (dev/test/docs/config) ----
 exclude    docs

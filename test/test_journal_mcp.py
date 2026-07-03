@@ -1,5 +1,6 @@
 """Tests for Journal MCP server tools and helpers."""
 
+import json
 import sqlite3
 
 import pytest
@@ -213,11 +214,11 @@ class TestJournalMCPTools:
         assert result == []
 
     def test_list_trackers_surfaces_schedule_and_polarity(self, client, journal_registered_client):
-        """scheduleHistory + polarity ride meta_json and surface under `metadata`.
+        """scheduleHistory + polarity are stored in canonical columns (NOT
+        meta_json) and still surface under `metadata` via list_trackers.
 
-        Uploads through the real sync API (which serializes non-reserved fields
-        into meta_json) and reads back via the MCP tool, so this covers the whole
-        passthrough, not just a hand-written meta_json blob.
+        Uploads through the real sync API and reads back via the MCP tool, then
+        checks the raw row to prove the fields are sourced from the columns.
         """
         tracker = {
             "id": "tracker-sched",
@@ -237,6 +238,19 @@ class TestJournalMCPTools:
         meta = result[0]["metadata"]
         assert meta["polarity"] == "positive"
         assert meta["scheduleHistory"][-1]["days"] == [1, 2, 3, 4, 5]
+
+        # Single source of truth: the raw row keeps these in the columns, not in
+        # meta_json — list_trackers merges them into `metadata`.
+        with get_db(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT meta_json, schedule_json, polarity FROM trackers WHERE id = ?",
+                ("tracker-sched",),
+            ).fetchone()
+        raw_meta = json.loads(row["meta_json"]) if row["meta_json"] else {}
+        assert "scheduleHistory" not in raw_meta
+        assert "polarity" not in raw_meta
+        assert row["polarity"] == "positive"
+        assert json.loads(row["schedule_json"])[-1]["days"] == [1, 2, 3, 4, 5]
 
     def test_list_trackers_include_deleted_surfaces_soft_deleted_rows(self):
         """When include_deleted=True, soft-deleted trackers appear with deleted=True.

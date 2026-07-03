@@ -40,7 +40,7 @@ def _upload(client, client_id, config):
 
 @pytest.mark.integration
 class TestSchedulePolarityColumns:
-    def test_upload_captures_columns_and_dual_stores_in_meta(
+    def test_upload_captures_columns_and_omits_them_from_meta(
             self, client, journal_registered_client, tmp_journal_db):
         _upload(client, journal_registered_client, [_tracker()])
         with get_db(tmp_journal_db) as conn:
@@ -50,10 +50,11 @@ class TestSchedulePolarityColumns:
             ).fetchone()
         assert json.loads(row["schedule_json"]) == SCHEDULE
         assert row["polarity"] == "positive"
-        # Dual-stored during the transition (not yet a reserved key).
+        # Single source of truth: the fields are reserved keys stored only in the
+        # canonical columns — NOT copied into meta_json.
         meta = json.loads(row["meta_json"])
-        assert meta["scheduleHistory"] == SCHEDULE
-        assert meta["polarity"] == "positive"
+        assert "scheduleHistory" not in meta
+        assert "polarity" not in meta
 
     def test_absent_schedule_and_polarity_store_null(
             self, client, journal_registered_client, tmp_journal_db):
