@@ -81,6 +81,7 @@ class TestInitDatabase:
             cols = {row[1] for row in cursor.fetchall()}
             assert cols == {
                 'id', 'tracker_id', 'name', 'category', 'type', 'meta_json',
+                'schedule_json', 'polarity',
                 'deleted', 'last_modified_at', 'superseded_at',
             }
 
@@ -92,6 +93,67 @@ class TestInitDatabase:
             current = cursor.execute("PRAGMA user_version").fetchone()[0]
             expected = max(v for v, _ in journal.MIGRATIONS)
             assert current == expected
+
+    def test_trackers_have_schedule_and_polarity_columns(self, test_app, tmp_journal_db):
+        """Migration 3 adds the canonical schedule_json + polarity columns."""
+        with get_db(tmp_journal_db) as conn:
+            cursor = conn.cursor()
+            cursor.execute("PRAGMA table_info(trackers)")
+            columns = {row[1] for row in cursor.fetchall()}
+        assert 'schedule_json' in columns
+        assert 'polarity' in columns
+
+    def test_migration_3_backfills_from_meta_json(self, test_app, tmp_journal_db):
+        """Migration 3's backfill lifts scheduleHistory/polarity out of an
+        existing row's meta_json into the columns, and tolerates absent or
+        malformed meta_json (leaving the columns NULL)."""
+        import json
+        import modules.journal as journal
+
+        schedule = [{"effectiveFrom": "0000-01-01", "days": [1, 2, 3, 4, 5]}]
+        with get_db(tmp_journal_db) as conn:
+            cursor = conn.cursor()
+            # Simulate legacy rows: columns NULL, fields still in meta_json.
+            cursor.execute(
+                "INSERT INTO trackers "
+                "(id, name, category, type, meta_json, last_modified_at, deleted, "
+                " schedule_json, polarity) "
+                "VALUES (?, ?, ?, ?, ?, ?, 0, NULL, NULL)",
+                ("t-legacy", "Legacy", "cat", "simple",
+                 json.dumps({"scheduleHistory": schedule, "polarity": "negative", "unit": "x"}),
+                 "2026-01-01T00:00:00Z"),
+            )
+            cursor.execute(
+                "INSERT INTO trackers "
+                "(id, name, category, type, meta_json, last_modified_at, deleted, "
+                " schedule_json, polarity) "
+                "VALUES (?, ?, ?, ?, ?, ?, 0, NULL, NULL)",
+                ("t-nometa", "NoMeta", "cat", "simple", "{}", "2026-01-01T00:00:00Z"),
+            )
+            cursor.execute(
+                "INSERT INTO trackers "
+                "(id, name, category, type, meta_json, last_modified_at, deleted, "
+                " schedule_json, polarity) "
+                "VALUES (?, ?, ?, ?, ?, ?, 0, NULL, NULL)",
+                ("t-bad", "BadMeta", "cat", "simple", "{not json", "2026-01-01T00:00:00Z"),
+            )
+            conn.commit()
+
+            # Re-running the migration is safe (guarded ALTER, NULL-only backfill).
+            journal._migration_3_schedule_polarity_columns(cursor)
+            conn.commit()
+
+            rows = {
+                r["id"]: r for r in cursor.execute(
+                    "SELECT id, schedule_json, polarity FROM trackers").fetchall()
+            }
+
+        assert json.loads(rows["t-legacy"]["schedule_json"]) == schedule
+        assert rows["t-legacy"]["polarity"] == "negative"
+        assert rows["t-nometa"]["schedule_json"] is None
+        assert rows["t-nometa"]["polarity"] is None
+        assert rows["t-bad"]["schedule_json"] is None
+        assert rows["t-bad"]["polarity"] is None
 
     def test_purge_old_archives_removes_aged_rows(self, test_app, tmp_journal_db):
         """_purge_old_archives should delete archive rows older than the retention window in both archive tables."""

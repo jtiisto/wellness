@@ -161,6 +161,47 @@ def _migration_2_archive_tables(cursor):
     )
 
 
+def _migration_3_schedule_polarity_columns(cursor):
+    """Promote `scheduleHistory` + `polarity` from `meta_json` into
+    protocol-owned columns on `trackers` (and `trackers_archive`), and backfill
+    existing rows from `meta_json`.
+
+    Transition phase (dual-stored): the fields are NOT yet in
+    `_TRACKER_RESERVED_KEYS`, so they still ride `meta_json` too — older code
+    keeps working and rollback needs no data step. See docs/ARCHITECTURE.md
+    "Tracker scheduling".
+
+    Idempotent: guarded `ADD COLUMN`, and the backfill only touches rows whose
+    columns are still NULL and tolerates absent/malformed `meta_json`.
+    """
+    for table in ("trackers", "trackers_archive"):
+        if not _column_exists(cursor, table, "schedule_json"):
+            cursor.execute(f"ALTER TABLE {table} ADD COLUMN schedule_json TEXT")
+        if not _column_exists(cursor, table, "polarity"):
+            cursor.execute(f"ALTER TABLE {table} ADD COLUMN polarity TEXT")
+
+    cursor.execute(
+        "SELECT id, meta_json FROM trackers "
+        "WHERE schedule_json IS NULL OR polarity IS NULL"
+    )
+    for tracker_id, meta_json in cursor.fetchall():
+        meta = {}
+        if meta_json:
+            try:
+                meta = json.loads(meta_json)
+            except (ValueError, TypeError):
+                meta = {}
+        schedule = meta.get("scheduleHistory")
+        cursor.execute(
+            "UPDATE trackers SET schedule_json = ?, polarity = ? WHERE id = ?",
+            (
+                json.dumps(schedule) if schedule is not None else None,
+                meta.get("polarity"),
+                tracker_id,
+            ),
+        )
+
+
 # Ordered (target_version, migration_fn) pairs. Each migration is applied at
 # most once per DB, tracked via PRAGMA user_version. New schema changes are
 # added as a new entry with the next sequential version number.
@@ -171,6 +212,7 @@ def _migration_2_archive_tables(cursor):
 MIGRATIONS = [
     (1, _migration_1_baseline),
     (2, _migration_2_archive_tables),
+    (3, _migration_3_schedule_polarity_columns),
 ]
 
 
@@ -294,12 +336,32 @@ def _tracker_meta(item: dict) -> str:
     })
 
 
+def _schedule_json(item: dict) -> Optional[str]:
+    """Serialize a tracker upload's `scheduleHistory` for its canonical column,
+    or None when absent. During the transition it is also dual-stored in
+    `meta_json` (scheduleHistory is not yet a reserved key)."""
+    schedule = item.get("scheduleHistory")
+    return json.dumps(schedule) if schedule is not None else None
+
+
+def _apply_canonical_schedule_polarity(out: dict, row) -> None:
+    """Overlay the canonical `schedule_json` / `polarity` columns onto a
+    public-facing tracker dict, winning over the `meta_json` copy. Falls back to
+    whatever `meta_json` already merged in when a column is NULL (transition
+    safety before the meta copy is dropped)."""
+    if row["schedule_json"] is not None:
+        out["scheduleHistory"] = json.loads(row["schedule_json"])
+    if row["polarity"] is not None:
+        out["polarity"] = row["polarity"]
+
+
 def _tracker_server_row(row, tracker_id: str) -> dict:
     """Build the public-facing shape of a stored tracker row.
 
-    Protocol-owned fields (id, name, category, type, deleted, lastModifiedAt)
-    are written LAST so they always win over any stray field that might have
-    slipped into `meta_json` from an old client echo.
+    Protocol-owned fields (id, name, category, type, deleted, lastModifiedAt,
+    and the canonical scheduleHistory/polarity) are written LAST so they always
+    win over any stray field that might have slipped into `meta_json` from an
+    old client echo.
     """
     out = {}
     if row["meta_json"]:
@@ -310,6 +372,7 @@ def _tracker_server_row(row, tracker_id: str) -> dict:
     out["type"] = row["type"]
     out["deleted"] = bool(row["deleted"])
     out["lastModifiedAt"] = row["last_modified_at"]
+    _apply_canonical_schedule_polarity(out, row)
     return out
 
 
@@ -399,6 +462,7 @@ def _sync_delta(get_db, since=None, client_id=None):
                 tracker["category"] = row["category"]
                 tracker["type"] = row["type"]
                 tracker["lastModifiedAt"] = row["last_modified_at"]
+                _apply_canonical_schedule_polarity(tracker, row)
                 config.append(tracker)
 
             seven_days_ago = (
@@ -454,8 +518,8 @@ def _apply_tracker_upload(
     is_deleted = bool(item.get("_deleted", False))
 
     cursor.execute(
-        "SELECT name, category, type, meta_json, deleted, last_modified_at "
-        "FROM trackers WHERE id = ?",
+        "SELECT name, category, type, meta_json, schedule_json, polarity, "
+        "deleted, last_modified_at FROM trackers WHERE id = ?",
         (tracker_id,),
     )
     row = cursor.fetchone()
@@ -469,14 +533,17 @@ def _apply_tracker_upload(
             }
         cursor.execute(
             "INSERT INTO trackers "
-            "(id, name, category, type, meta_json, last_modified_at, deleted) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "(id, name, category, type, meta_json, schedule_json, polarity, "
+            " last_modified_at, deleted) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 tracker_id,
                 item.get("name"),
                 item.get("category", ""),
                 item.get("type", "simple"),
                 _tracker_meta(item),
+                _schedule_json(item),
+                item.get("polarity"),
                 now,
                 1 if is_deleted else 0,
             ),
@@ -497,15 +564,17 @@ def _apply_tracker_upload(
     # Archive the prior row before overwriting.
     cursor.execute(
         "INSERT INTO trackers_archive "
-        "(tracker_id, name, category, type, meta_json, deleted, "
-        " last_modified_at, superseded_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "(tracker_id, name, category, type, meta_json, schedule_json, polarity, "
+        " deleted, last_modified_at, superseded_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             tracker_id,
             row["name"],
             row["category"],
             row["type"],
             row["meta_json"],
+            row["schedule_json"],
+            row["polarity"],
             row["deleted"] or 0,
             stored_ts or now,
             now,
@@ -513,12 +582,15 @@ def _apply_tracker_upload(
     )
     cursor.execute(
         "UPDATE trackers SET name = ?, category = ?, type = ?, meta_json = ?, "
-        "deleted = ?, last_modified_at = ? WHERE id = ?",
+        "schedule_json = ?, polarity = ?, deleted = ?, last_modified_at = ? "
+        "WHERE id = ?",
         (
             item.get("name"),
             item.get("category", ""),
             item.get("type", "simple"),
             _tracker_meta(item),
+            _schedule_json(item),
+            item.get("polarity"),
             1 if is_deleted else 0,
             now,
             tracker_id,
