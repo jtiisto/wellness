@@ -156,6 +156,32 @@ class TestJournalMCPTools:
         # `deleted` is surfaced as a proper bool for the analysis prompt
         assert tracker["deleted"] is False
 
+    def test_list_trackers_surfaces_schedule_and_polarity(self, client, journal_registered_client):
+        """scheduleHistory + polarity ride meta_json and surface under `metadata`.
+
+        Uploads through the real sync API (which serializes non-reserved fields
+        into meta_json) and reads back via the MCP tool, so this covers the whole
+        passthrough, not just a hand-written meta_json blob.
+        """
+        tracker = {
+            "id": "tracker-sched",
+            "name": "Weekday Vitamin",
+            "category": "schedule-mcp",
+            "type": "simple",
+            "scheduleHistory": [{"effectiveFrom": "0000-01-01", "days": [1, 2, 3, 4, 5]}],
+            "polarity": "positive",
+        }
+        resp = client.post("/api/journal/sync/update", json={
+            "clientId": journal_registered_client, "config": [tracker], "days": {},
+        })
+        assert resp.status_code == 200
+
+        result = self.tools["list_trackers"](category="schedule-mcp")
+        assert len(result) == 1
+        meta = result[0]["metadata"]
+        assert meta["polarity"] == "positive"
+        assert meta["scheduleHistory"][-1]["days"] == [1, 2, 3, 4, 5]
+
     def test_list_trackers_include_deleted_surfaces_soft_deleted_rows(self):
         """When include_deleted=True, soft-deleted trackers appear with deleted=True.
 

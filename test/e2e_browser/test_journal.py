@@ -1,4 +1,5 @@
 """E2E tests for the journal module."""
+import json
 from datetime import date, datetime, timedelta
 
 import pytest
@@ -685,6 +686,49 @@ def test_off_schedule_entry_keeps_tracker_visible(journal_page, app_server, seed
     names = journal_page.get_tracker_names()
     assert "Water Intake" in names  # grid rendered
     assert "Weekday Only" not in names
+
+
+def test_data_export_includes_schedule_and_polarity(journal_page, app_server, seeded_journal):
+    """The full-data export round-trips a tracker's scheduleHistory + polarity.
+    They ride tracker_config, which the export dumps verbatim.
+    """
+    page = journal_page.page
+    base = app_server["url"]
+    client_id = seeded_journal["client_id"]
+
+    http_requests.post(f"{base}/api/journal/sync/update", json={
+        "clientId": client_id,
+        "config": [{
+            "id": "tracker-export",
+            "name": "Export Me",
+            "category": "health",
+            "type": "simple",
+            "scheduleHistory": [{"effectiveFrom": "0000-01-01", "days": [1, 2, 3, 4, 5]}],
+            "polarity": "negative",
+        }],
+        "days": {},
+    })
+
+    # Reload so the browser pulls the tracker into its LocalForage config.
+    page.reload()
+    page.wait_for_selector(".shell", timeout=10000)
+    shell = AppShellPage(page)
+    shell.navigate_to("Journal")
+    journal_page.wait_for_loaded()
+    journal_page.wait_for_trackers()
+    page.wait_for_selector(".sync-dot.green", timeout=10000)
+
+    # Trigger the full-data export and capture the download.
+    shell.open_tools()
+    with page.expect_download() as download_info:
+        page.locator(".tools-item").filter(has_text="Export All Data").click()
+    with open(download_info.value.path()) as f:
+        data = json.load(f)
+
+    config = data["journal"]["tracker_config"]
+    tracker = next(t for t in config if t["id"] == "tracker-export")
+    assert tracker["polarity"] == "negative"
+    assert tracker["scheduleHistory"][-1]["days"] == [1, 2, 3, 4, 5]
 
 
 def test_add_tracker_from_config(journal_page):

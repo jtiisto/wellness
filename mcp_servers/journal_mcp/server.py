@@ -331,9 +331,12 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
                 attributed to the right (possibly retired) tracker.
 
         Returns:
-            List of trackers. Each item carries `deleted` as a bool. Entries
-            belonging to deleted trackers are still queryable via `get_entries`
-            or raw SQL — the deletion is purely a UI/sync-visibility flag.
+            List of trackers. Each item carries `deleted` as a bool and a
+            `metadata` dict parsed from `meta_json` — which may include
+            `scheduleHistory` (effective-dated weekday schedule) and `polarity`
+            (see the data guide). Entries belonging to deleted trackers are still
+            queryable via `get_entries` or raw SQL — the deletion is purely a
+            UI/sync-visibility flag.
         """
         try:
             query = """
@@ -441,6 +444,10 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
 
         Returns:
             Summary including total entries, completion rates, most used trackers, and active days
+
+        Note: `completion_rate_percent` is entries-based — completed vs. total
+        *logged* entries. It is NOT schedule adherence and does not consider a
+        tracker's `scheduleHistory` or count unlogged scheduled days as misses.
         """
         if days > 365:
             raise ValueError("Days cannot exceed 365")
@@ -570,7 +577,8 @@ means:
 - name: Display name (e.g., "Vitamin D3", "Exercise")
 - category: Grouping category (e.g., "Supplements", "Habits")
 - type: "simple" (checkbox) or "quantifiable" (has a value)
-- meta_json: Additional settings like frequency, unit, defaultValue
+- meta_json: Additional per-tracker settings as JSON — unit, defaultValue,
+  accumulator, scheduleHistory, polarity (see "Tracker Scheduling & Polarity")
 - deleted: Soft delete flag — 1 means hidden from UI but retained for history
 - last_modified_at: Server-stamped timestamp (opaque sync token)
 
@@ -582,6 +590,30 @@ means:
 - value: Numeric value for quantifiable trackers (NULL for simple)
 - completed: 1 if completed/checked, 0 otherwise
 - last_modified_at: Server-stamped timestamp (opaque sync token)
+
+## Tracker Scheduling & Polarity (in meta_json)
+
+Two optional per-tracker fields live inside `meta_json` (parsed into the
+`metadata` dict by `list_trackers`):
+
+- `scheduleHistory`: which weekdays a tracker is part of the routine on, as an
+  effective-dated list of segments — `[{ "effectiveFrom": "YYYY-MM-DD",
+  "days": [0..6] }]`, where 0=Sun..6=Sat. Absent means "daily" (every day). The
+  schedule in effect on date D is the segment with the greatest
+  `effectiveFrom <= D` (the earliest segment when D precedes all of them). It is
+  effective-dated so past days keep the schedule that was in effect then — a
+  later change never rewrites history. Interpreting it in SQL needs JSON1
+  (`json_extract` / `json_each`).
+- `polarity`: `"positive"` (a habit to build), `"negative"` (a behavior to
+  avoid), or `"neutral"` (a plain measurement). Absent = unspecified/neutral.
+  Advisory/display only.
+
+**IMPORTANT — completion vs. adherence:** `get_journal_summary`'s
+`completion_rate` (and any `SUM(completed)/COUNT(*)` you write) is
+**entries-based** — the fraction of *logged entries* marked completed. It is
+**not** schedule adherence: it does not know which weekdays a tracker was
+scheduled on (`scheduleHistory`), and does not count unlogged scheduled days as
+misses. Keep "scheduled days" and "completion" as separate axes.
 
 ## Tracker Types
 - **simple**: Binary yes/no tracking (e.g., "Did I take my vitamins?")
