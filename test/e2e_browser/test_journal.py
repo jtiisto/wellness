@@ -595,7 +595,7 @@ def test_schedule_days_and_polarity_via_config(journal_page, app_server):
     # Config list summarizes the schedule + polarity.
     meta = page.locator(".tracker-config-item").filter(
         has_text="Meds").locator(".tracker-config-meta").inner_text()
-    assert "Weekdays" in meta
+    assert "Mon–Fri" in meta
     assert "Positive" in meta
 
     # Server round-trip: scheduleHistory (Mon–Fri) + polarity survive sync.

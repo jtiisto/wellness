@@ -54,6 +54,18 @@ test('editing a legacy daily tracker splits genesis + today', () => {
     ]);
 });
 
+test('editing an existing scheduled tracker on a later day appends a segment', () => {
+    const t = {
+        scheduleHistory: [
+            { effectiveFrom: SCHEDULE_GENESIS_DATE, days: [1, 2, 3, 4, 5] },
+            { effectiveFrom: '2026-06-01', days: [1, 2, 3, 4, 5, 6] },
+        ],
+    };
+    const fields = buildTrackerSaveFields(t, { days: [1, 2, 3, 4, 5], polarity: '' }, TODAY);
+    assert.equal(fields.scheduleHistory.length, 3);
+    assert.deepEqual(fields.scheduleHistory[2], { effectiveFrom: TODAY, days: [1, 2, 3, 4, 5] });
+});
+
 // ---- buildTrackerSaveFields: polarity ------------------------------------
 
 test('new tracker with a valid polarity writes it', () => {
@@ -81,11 +93,11 @@ test('editing an unspecified tracker to a value writes it', () => {
 
 // ---- formatScheduleSummary -----------------------------------------------
 
-test('formatScheduleSummary: Daily / Weekdays / Weekend / list', () => {
+test('formatScheduleSummary: Daily / Mon–Fri / slash list', () => {
     assert.equal(formatScheduleSummary(ALL_DAYS), 'Daily');
     assert.equal(formatScheduleSummary([]), 'Daily');
-    assert.equal(formatScheduleSummary([1, 2, 3, 4, 5]), 'Weekdays');
-    assert.equal(formatScheduleSummary([0, 6]), 'Weekend');
-    assert.equal(formatScheduleSummary([1, 3, 5]), 'Mon, Wed, Fri');
-    assert.equal(formatScheduleSummary(new Set([6, 1])), 'Mon, Sat');
+    assert.equal(formatScheduleSummary([1, 2, 3, 4, 5]), 'Mon–Fri');
+    assert.equal(formatScheduleSummary([1, 3, 5]), 'Mon/Wed/Fri');
+    assert.equal(formatScheduleSummary([0, 6]), 'Sun/Sat');
+    assert.equal(formatScheduleSummary(new Set([6, 1])), 'Mon/Sat');
 });

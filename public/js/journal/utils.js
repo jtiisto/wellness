@@ -256,7 +256,7 @@ export function buildTrackerSaveFields(existingTracker, { days, polarity }, toda
 
 /**
  * Human-readable summary of a weekday set for the config list: "Daily",
- * "Weekdays", "Weekend", or a comma-joined short-name list ("Mon, Wed, Fri").
+ * "Mon–Fri", or a slash-joined short-name list ("Mon/Wed/Fri", "Sun/Sat").
  * @param {Set<number>|number[]} daysInput
  * @returns {string}
  */
@@ -267,13 +267,10 @@ export function formatScheduleSummary(daysInput) {
         return 'Daily';
     }
     if (daysEqual(days, [1, 2, 3, 4, 5])) {
-        return 'Weekdays';
-    }
-    if (daysEqual(days, [0, 6])) {
-        return 'Weekend';
+        return 'Mon–Fri';
     }
     const names = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-    return days.map(d => names[d]).join(', ');
+    return days.map(d => names[d]).join('/');
 }
 
 /**
