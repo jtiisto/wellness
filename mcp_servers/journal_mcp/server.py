@@ -342,7 +342,7 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
         try:
             query = """
                 SELECT id, name, category, type, meta_json, schedule_json,
-                       polarity, deleted
+                       polarity, target_json, deleted
                 FROM trackers
                 WHERE 1=1
             """
@@ -367,9 +367,10 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
                         metadata = json.loads(row["meta_json"])
                     except json.JSONDecodeError:
                         metadata = {}
-                # scheduleHistory / polarity are canonical columns (no longer in
-                # meta_json); merge them into `metadata` so the consumer-facing
-                # shape is unchanged (metadata.scheduleHistory / metadata.polarity).
+                # scheduleHistory / polarity / targetHistory are canonical columns
+                # (no longer in meta_json); merge them into `metadata` so the
+                # consumer-facing shape is unchanged (metadata.scheduleHistory /
+                # metadata.polarity / metadata.targetHistory).
                 if row.get("schedule_json"):
                     try:
                         metadata["scheduleHistory"] = json.loads(row["schedule_json"])
@@ -377,10 +378,16 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
                         pass
                 if row.get("polarity") is not None:
                     metadata["polarity"] = row["polarity"]
+                if row.get("target_json"):
+                    try:
+                        metadata["targetHistory"] = json.loads(row["target_json"])
+                    except json.JSONDecodeError:
+                        pass
                 row["metadata"] = metadata
                 row.pop("meta_json", None)
                 row.pop("schedule_json", None)
                 row.pop("polarity", None)
+                row.pop("target_json", None)
 
             return results
         except Exception as e:
@@ -582,7 +589,7 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
             ).isoformat()
 
             tracker_query = (
-                "SELECT id, name, schedule_json, polarity, type "
+                "SELECT id, name, schedule_json, polarity, type, target_json "
                 "FROM trackers WHERE deleted = 0"
             )
             params: List[Any] = []
@@ -605,15 +612,17 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
                     continue  # first activity is after the window → nothing to measure
 
                 rows = db_manager.execute_safe_query(
-                    "SELECT date, completed FROM entries "
+                    "SELECT date, completed, value FROM entries "
                     "WHERE tracker_id = ? AND date >= ? AND date <= ?",
                     [tracker["id"], eff_start, end],
                 )
                 entries = {row["date"]: row["completed"] for row in rows}
+                values = {row["date"]: row["value"] for row in rows}
 
                 metrics = compute_adherence(
                     tracker["schedule_json"], tracker["polarity"],
                     tracker["type"], entries, eff_start, end,
+                    target_json=tracker["target_json"], values=values,
                 )
                 results.append({
                     "tracker": tracker["name"],
@@ -706,14 +715,14 @@ means:
 - completed: 1 if completed/checked, 0 otherwise
 - last_modified_at: Server-stamped timestamp (opaque sync token)
 
-## Tracker Scheduling & Polarity (canonical columns)
+## Tracker Scheduling, Polarity & Targets (canonical columns)
 
-Two optional per-tracker fields are stored in dedicated, protocol-owned columns
-(`trackers.schedule_json` and `trackers.polarity`) — **not** in `meta_json`.
-`list_trackers` still merges them into the returned `metadata` dict
-(`metadata.scheduleHistory` / `metadata.polarity`), so the consumer shape is
-unchanged; querying the raw table, read the `schedule_json` / `polarity`
-columns directly:
+Three optional per-tracker fields are stored in dedicated, protocol-owned
+columns (`trackers.schedule_json`, `trackers.polarity`, `trackers.target_json`)
+— **not** in `meta_json`. `list_trackers` still merges them into the returned
+`metadata` dict (`metadata.scheduleHistory` / `metadata.polarity` /
+`metadata.targetHistory`), so the consumer shape is unchanged; querying the raw
+table, read the columns directly:
 
 - `scheduleHistory`: which weekdays a tracker is part of the routine on, as an
   effective-dated list of segments — `[{ "effectiveFrom": "YYYY-MM-DD",
@@ -725,18 +734,46 @@ columns directly:
   (`json_extract` / `json_each`).
 - `polarity`: `"positive"` (a habit to build), `"negative"` (a behavior to
   avoid), or `"neutral"` (a plain measurement). Absent = unspecified/neutral.
-  Advisory/display only.
+- `targetHistory` (quantifiable trackers): a typed value target, effective-dated
+  like the schedule — `[{ "effectiveFrom": "YYYY-MM-DD", "target": {min?, max?} }]`
+  (numbers; min-only = at-least, max-only = at-most, both = range, `min==max` =
+  exact). A `target: null` segment records a target removed from that date
+  forward; absent = no target.
 
 **IMPORTANT — completion vs. adherence:** `get_journal_summary`'s
 `completion_rate` (and any `SUM(completed)/COUNT(*)` you write) is
 **entries-based** — the fraction of *logged entries* marked completed. It is
-**not** schedule adherence: it does not know which weekdays a tracker was
-scheduled on (`scheduleHistory`), and does not count unlogged scheduled days as
-misses. For schedule adherence, use the **`get_schedule_adherence`** tool — it
+**not** schedule adherence, and for value trackers it systematically
+**undercounts** (value logging never sets the `completed` checkbox — see Data
+epochs). For schedule adherence, use the **`get_schedule_adherence`** tool — it
 interprets each tracker's effective-dated weekday schedule per date and reports
 scheduled vs. logged/done days, per-polarity (`adherence` / `avoidance` /
-`coverage`). `get_journal_summary` stays entries-based; keep "scheduled days" and
-"completion" as separate axes.
+`coverage`). When a tracker has a target in effect on a day, "done" for that day
+is whether the day's **value** meets the target (not the checkbox), and the
+result adds `target` (as of window end), `target_met_days`, and
+`target_partial_days`; the per-polarity rate then uses `target_met_days`
+(positive→`adherence_rate`, negative→`avoidance_rate`; neutral keeps
+`coverage_rate` = logged/scheduled). No-entry counts as MET for negative
+trackers (absence = avoided) and MISSED for positive/neutral. `get_journal_summary`
+stays entries-based; keep "scheduled days" and "completion" as separate axes.
+
+## Data epochs
+
+These signals became real on specific dates; do NOT trust comparisons that reach
+before them:
+- **Weekday schedules (`scheduleHistory`) + polarity:** data exists from
+  **2026-07-03**. Before that every tracker was implicitly daily and
+  unclassified.
+- **Typed targets + target-aware adherence:** from **2026-07-06**.
+- **Pre-epoch caveat:** before these dates "done" is only the manual checkbox, so
+  completed-based metrics (`completion_rate`, `SUM(completed)`) systematically
+  **undercount** accumulator/value trackers (value logging never set the
+  checkbox). Treat pre-epoch adherence/completion comparisons accordingly.
+- The data is also self-describing temporally: effective-dated genesis splits
+  mean a target (or schedule) added later carries a genesis segment for the past
+  (a `target: null` genesis → checkbox semantics before it), and adherence
+  windows clamp to a tracker's first entry — so a tracker never accrues misses
+  before it was in use.
 
 ## Tracker Types
 - **simple**: Binary yes/no tracking (e.g., "Did I take my vitamins?")

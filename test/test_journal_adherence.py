@@ -136,3 +136,148 @@ class TestComputeAdherence:
             else:
                 os.environ["TZ"] = orig
             time.tzset()
+
+
+# ---- target-aware adherence ----------------------------------------------
+
+def _target(min_v=None, max_v=None, effective=GENESIS):
+    t = {}
+    if min_v is not None:
+        t["min"] = min_v
+    if max_v is not None:
+        t["max"] = max_v
+    return json.dumps([{"effectiveFrom": effective, "target": t}])
+
+
+@pytest.mark.unit
+class TestTargetAdherence:
+    def test_at_least_met_partial_missed(self):
+        # min 150; Mon 160 met, Tue 100 partial, Wed no entry -> missed (positive).
+        r = compute_adherence(
+            None, "positive", "quantifiable", {MON: 1, TUE: 1}, MON, WED,
+            target_json=_target(min_v=150), values={MON: 160, TUE: 100})
+        assert r["scheduled_days"] == 3
+        assert r["logged_days"] == 2
+        assert r["done_days"] == 1
+        assert r["target_met_days"] == 1
+        assert r["target_partial_days"] == 1
+        assert r["target"] == {"min": 150}
+        assert r["adherence_rate"] == round(1 / 3, 3)   # target_met/scheduled
+
+    def test_at_most_met_over_and_negative_no_entry_met(self):
+        # max 2 (negative); Mon 1 met, Tue 3 over->missed, Wed no entry -> met.
+        r = compute_adherence(
+            None, "negative", "quantifiable", {MON: 1, TUE: 1}, MON, WED,
+            target_json=_target(max_v=2), values={MON: 1, TUE: 3})
+        assert r["scheduled_days"] == 3
+        assert r["logged_days"] == 2
+        assert r["target_met_days"] == 2          # Mon (<=2) + Wed (no entry, avoided)
+        assert r["target_partial_days"] == 0
+        assert r["metric_kind"] == "avoidance"
+        assert r["avoidance_rate"] == round(2 / 3, 3)
+        assert "adherence_rate" not in r
+
+    def test_range_and_neutral_coverage_not_redefined(self):
+        # range 150-170 (neutral); Mon 160 met, Tue 100 partial, Wed 200 over,
+        # Thu no entry -> missed. coverage stays logged/scheduled.
+        r = compute_adherence(
+            None, "neutral", "quantifiable", {MON: 1, TUE: 1, WED: 1}, MON, THU,
+            target_json=_target(min_v=150, max_v=170),
+            values={MON: 160, TUE: 100, WED: 200})
+        assert r["scheduled_days"] == 4
+        assert r["logged_days"] == 3
+        assert r["target_met_days"] == 1
+        assert r["target_partial_days"] == 1
+        assert r["metric_kind"] == "coverage"
+        assert r["coverage_rate"] == 0.75          # logged/scheduled (unchanged)
+        assert "adherence_rate" not in r and "avoidance_rate" not in r
+
+    def test_positive_no_entry_missed_vs_negative_no_entry_met(self):
+        pos = compute_adherence(
+            None, "positive", "quantifiable", {}, MON, MON,
+            target_json=_target(min_v=10), values={})
+        assert pos["target_met_days"] == 0 and pos["adherence_rate"] == 0.0
+        neg = compute_adherence(
+            None, "negative", "quantifiable", {}, MON, MON,
+            target_json=_target(max_v=2), values={})
+        assert neg["target_met_days"] == 1 and neg["avoidance_rate"] == 1.0
+
+    def test_target_change_mid_window_is_effective_dated(self):
+        # min 100 from genesis, min 200 from Tue; value 150 each day.
+        target_json = json.dumps([
+            {"effectiveFrom": GENESIS, "target": {"min": 100}},
+            {"effectiveFrom": TUE, "target": {"min": 200}},
+        ])
+        r = compute_adherence(
+            None, "positive", "quantifiable", {MON: 1, TUE: 1, WED: 1}, MON, WED,
+            target_json=target_json, values={MON: 150, TUE: 150, WED: 150})
+        assert r["target_met_days"] == 1          # Mon (>=100)
+        assert r["target_partial_days"] == 2      # Tue, Wed (<200)
+        assert r["target"] == {"min": 200}        # echoed as of window end
+
+    def test_null_target_segment_ends_targeting(self):
+        # min 150 from genesis, target removed from Tue; completed each day.
+        target_json = json.dumps([
+            {"effectiveFrom": GENESIS, "target": {"min": 150}},
+            {"effectiveFrom": TUE, "target": None},
+        ])
+        r = compute_adherence(
+            None, "positive", "quantifiable", {MON: 1, TUE: 1, WED: 1}, MON, WED,
+            target_json=target_json, values={MON: 100, TUE: 100, WED: 100})
+        assert r["target_met_days"] == 0          # Mon partial
+        assert r["target_partial_days"] == 1
+        assert r["done_days"] == 2                # Tue+Wed untargeted → completed==1
+        assert r["target"] is None                # removed as of window end
+
+    def test_untargeted_output_has_no_target_fields(self):
+        r = compute_adherence(None, "positive", "quantifiable", {MON: 1}, MON, MON)
+        assert "target" not in r
+        assert "target_met_days" not in r
+        assert "target_partial_days" not in r
+        assert r["adherence_rate"] == 1.0
+
+    def test_zero_scheduled_days_with_target_null_rates(self):
+        weekend = json.dumps([{"effectiveFrom": GENESIS, "days": [0, 6]}])
+        r = compute_adherence(
+            weekend, "positive", "quantifiable", {}, MON, FRI,
+            target_json=_target(min_v=10), values={})
+        assert r["scheduled_days"] == 0
+        assert r["adherence_rate"] is None
+        assert r["target_met_days"] == 0
+
+    def test_genesis_target_segment_no_year0_crash(self):
+        # date.fromisoformat('0000-01-01') would raise; the sentinel is only
+        # string-compared. A genesis-only target must flow through cleanly.
+        r = compute_adherence(
+            None, "positive", "quantifiable", {MON: 1}, MON, FRI,
+            target_json=_target(min_v=10), values={MON: 12})
+        assert r["target_met_days"] >= 1
+
+    def test_blended_rate_positive_pretarget_checkbox_counts(self):
+        # Target added Tue (genesis-null before). Mon has no target → the
+        # checkbox-completed day must count toward adherence_rate (blended).
+        target_json = json.dumps([
+            {"effectiveFrom": GENESIS, "target": None},
+            {"effectiveFrom": TUE, "target": {"min": 150}},
+        ])
+        r = compute_adherence(
+            None, "positive", "quantifiable", {MON: 1, TUE: 1, WED: 1}, MON, WED,
+            target_json=target_json, values={TUE: 160, WED: 100})
+        assert r["target_met_days"] == 1          # Tue met (targeted-only)
+        assert r["target_partial_days"] == 1      # Wed partial
+        # Blended numerator = Mon (checkbox) + Tue (met) = 2, NOT target_met_days.
+        assert r["adherence_rate"] == round(2 / 3, 3)
+
+    def test_blended_rate_negative_pretarget_no_entry_counts(self):
+        # Target added Tue. Mon has no target and no entry → avoided → counts
+        # toward avoidance_rate (blended).
+        target_json = json.dumps([
+            {"effectiveFrom": GENESIS, "target": None},
+            {"effectiveFrom": TUE, "target": {"max": 2}},
+        ])
+        r = compute_adherence(
+            None, "negative", "quantifiable", {TUE: 1, WED: 1}, MON, WED,
+            target_json=target_json, values={TUE: 1, WED: 3})
+        assert r["target_met_days"] == 1          # Tue met (<=2)
+        # Blended numerator = Mon (no entry, avoided) + Tue (met) = 2.
+        assert r["avoidance_rate"] == round(2 / 3, 3)

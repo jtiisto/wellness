@@ -213,6 +213,38 @@ class TestJournalMCPTools:
         result = self.tools["get_schedule_adherence"](tracker_name="No Entry Sched")
         assert result == []
 
+    def test_get_schedule_adherence_with_target(self, client, journal_registered_client):
+        """Target-aware adherence: 'done' is the day's value satisfying the
+        in-effect target (not the checkbox), with met/partial counts."""
+        tracker = {
+            "id": "tracker-tgt", "name": "Protein Target",
+            "category": "adh", "type": "quantifiable", "polarity": "positive",
+            "targetHistory": [{"effectiveFrom": "0000-01-01",
+                               "target": {"min": 150, "max": 170}}],
+        }
+        days = {
+            "2026-07-06": {"tracker-tgt": {"value": 160}},   # met
+            "2026-07-07": {"tracker-tgt": {"value": 100}},   # partial (< min)
+            "2026-07-08": {"tracker-tgt": {"value": 200}},   # over -> missed
+        }
+        resp = client.post("/api/journal/sync/update", json={
+            "clientId": journal_registered_client, "config": [tracker], "days": days,
+        })
+        assert resp.status_code == 200
+
+        result = self.tools["get_schedule_adherence"](
+            start_date="2026-07-06", end_date="2026-07-08",
+            tracker_name="Protein Target",
+        )
+        assert len(result) == 1
+        r = result[0]
+        assert r["scheduled_days"] == 3        # daily (no scheduleHistory)
+        assert r["logged_days"] == 3
+        assert r["target_met_days"] == 1
+        assert r["target_partial_days"] == 1
+        assert r["target"] == {"min": 150, "max": 170}
+        assert r["adherence_rate"] == round(1 / 3, 3)
+
     def test_list_trackers_surfaces_schedule_and_polarity(self, client, journal_registered_client):
         """scheduleHistory + polarity are stored in canonical columns (NOT
         meta_json) and still surface under `metadata` via list_trackers.
@@ -224,9 +256,10 @@ class TestJournalMCPTools:
             "id": "tracker-sched",
             "name": "Weekday Vitamin",
             "category": "schedule-mcp",
-            "type": "simple",
+            "type": "quantifiable",
             "scheduleHistory": [{"effectiveFrom": "0000-01-01", "days": [1, 2, 3, 4, 5]}],
             "polarity": "positive",
+            "targetHistory": [{"effectiveFrom": "0000-01-01", "target": {"min": 150, "max": 170}}],
         }
         resp = client.post("/api/journal/sync/update", json={
             "clientId": journal_registered_client, "config": [tracker], "days": {},
@@ -238,19 +271,23 @@ class TestJournalMCPTools:
         meta = result[0]["metadata"]
         assert meta["polarity"] == "positive"
         assert meta["scheduleHistory"][-1]["days"] == [1, 2, 3, 4, 5]
+        assert meta["targetHistory"][-1]["target"] == {"min": 150, "max": 170}
 
         # Single source of truth: the raw row keeps these in the columns, not in
         # meta_json — list_trackers merges them into `metadata`.
         with get_db(self.db_path) as conn:
             row = conn.execute(
-                "SELECT meta_json, schedule_json, polarity FROM trackers WHERE id = ?",
+                "SELECT meta_json, schedule_json, polarity, target_json "
+                "FROM trackers WHERE id = ?",
                 ("tracker-sched",),
             ).fetchone()
         raw_meta = json.loads(row["meta_json"]) if row["meta_json"] else {}
         assert "scheduleHistory" not in raw_meta
         assert "polarity" not in raw_meta
+        assert "targetHistory" not in raw_meta
         assert row["polarity"] == "positive"
         assert json.loads(row["schedule_json"])[-1]["days"] == [1, 2, 3, 4, 5]
+        assert json.loads(row["target_json"])[-1]["target"] == {"min": 150, "max": 170}
 
     def test_list_trackers_include_deleted_surfaces_soft_deleted_rows(self):
         """When include_deleted=True, soft-deleted trackers appear with deleted=True.
