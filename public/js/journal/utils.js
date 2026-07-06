@@ -656,9 +656,10 @@ export function isWithinLastNDays(dateStr, days = 7) {
  * single-day dayStatus (met → onTrack, partial, else notYet). `logged` counts
  * expected trackers with any entry — the basis of the pure-neutral "logged"
  * wording, where activity (not the checkbox) is what the label claims.
- * `allNeutral` is true when every counted tracker is neutral or unspecified
- * polarity (drives the "logged" vs "on track" wording). Pure — pass the day's
- * log map ({ id: entry }).
+ * `allNeutral` is true only when "on track" is meaningless for every counted
+ * tracker — each is neutral/unspecified polarity AND untargeted — which drives
+ * the "logged" wording; a target (value-vs-goal) or a non-neutral polarity flips
+ * the wording to "on track". Pure — pass the day's log map ({ id: entry }).
  *
  * @param {Array} trackers - the category's trackers (the visible list is fine;
  *   the isExpectedOn gate re-selects the expected subset)
@@ -678,10 +679,12 @@ export function categorySummary(trackers, dateStr, dayLog) {
             continue;
         }
         expected += 1;
-        if (t && t.polarity && t.polarity !== 'neutral') {
+        const ds = dayStatus(t, dateStr, dayLog ? dayLog[t.id] : undefined);
+        // "logged" wording only when "on track" is meaningless for every member:
+        // a non-neutral polarity OR a target in effect makes it meaningful.
+        if ((t && t.polarity && t.polarity !== 'neutral') || ds.hasTarget) {
             allNeutral = false;
         }
-        const ds = dayStatus(t, dateStr, dayLog ? dayLog[t.id] : undefined);
         if (ds.hasEntry) logged += 1;
         if (ds.state === 'met') onTrack += 1;
         else if (ds.state === 'partial') partial += 1;
@@ -714,6 +717,40 @@ export function formatCategorySummary(summary) {
         ? `All ${verb}`
         : `${count} of ${summary.expected} ${verb}`;
     return { text, tone: allMet ? 'met' : 'neutral' };
+}
+
+/**
+ * The last `n` local calendar days ending on `endDateStr` (oldest → newest), each
+ * with its single-day state for `tracker` — the "recent texture" dot row. Each
+ * day is either 'off' (the tracker is not expected that day — off-schedule ≠
+ * missed, so the dot can be muted) or the `dayStatus` state
+ * ('met' | 'partial' | 'missed') derived from that day's RAW log entry. Purely
+ * the single-day predicate repeated across the window: no streaks, no rates, no
+ * clamping — windowed adherence stays in the MCP.
+ *
+ * @param {Object} tracker
+ * @param {string} endDateStr - Local YYYY-MM-DD of the newest day (usually today)
+ * @param {Object} logs - dailyLogs map: { 'YYYY-MM-DD': { trackerId: entry } }
+ * @param {number} [n=7] - window length in days
+ * @returns {Array<{date: string, state: string}>} oldest → newest
+ */
+export function recentDayStates(tracker, endDateStr, logs, n = 7) {
+    const end = parseLocalDate(endDateStr);
+    const out = [];
+    for (let i = n - 1; i >= 0; i--) {
+        const d = new Date(end);
+        d.setDate(end.getDate() - i);
+        const dateStr = formatDateLocal(d);
+        let state;
+        if (!isExpectedOn(tracker, dateStr)) {
+            state = 'off';
+        } else {
+            const entry = (logs && logs[dateStr]) ? (logs[dateStr][tracker.id] ?? null) : null;
+            state = dayStatus(tracker, dateStr, entry).state;
+        }
+        out.push({ date: dateStr, state });
+    }
+    return out;
 }
 
 /**

@@ -81,6 +81,27 @@ test('categorySummary: logged counts entries, not checkboxes (neutral value-only
         { text: 'All logged', tone: 'met' });
 });
 
+test('categorySummary: a targeted neutral reads "on track", not "logged"', () => {
+    // Neutral polarity but a target in effect → value-vs-target is meaningful, so
+    // allNeutral flips false and the badge uses the on-track count, not logged.
+    const targeted = [
+        { id: 'a', polarity: 'neutral',
+          targetHistory: [{ effectiveFrom: SCHEDULE_GENESIS_DATE, target: { min: 150, max: 170 } }] },
+        { id: 'b', polarity: 'neutral',
+          targetHistory: [{ effectiveFrom: SCHEDULE_GENESIS_DATE, target: { min: 150, max: 170 } }] },
+    ];
+    const s = categorySummary(targeted, MON, { a: { value: 160 }, b: { value: 100 } });
+    assert.equal(s.allNeutral, false);   // a target makes on-track meaningful
+    assert.equal(s.onTrack, 1);          // a in range (met); b below (partial)
+    assert.deepEqual(formatCategorySummary(s), { text: '1 of 2 on track', tone: 'neutral' });
+
+    // Contrast: all-neutral AND untargeted still reads "logged" via the entry count.
+    const untargeted = [{ id: 'c', polarity: 'neutral' }, { id: 'd', polarity: 'neutral' }];
+    const s2 = categorySummary(untargeted, MON, { c: { value: 5 } });
+    assert.equal(s2.allNeutral, true);
+    assert.deepEqual(formatCategorySummary(s2), { text: '1 of 2 logged', tone: 'neutral' });
+});
+
 // ---- formatCategorySummary -----------------------------------------------
 
 test('formatCategorySummary: null when nothing is expected (badge suppressed)', () => {

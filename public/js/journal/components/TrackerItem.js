@@ -14,7 +14,7 @@ import {
     isDayEditable,
 } from '../store.js';
 import { NumericInput } from '../../shared/numeric-input.js';
-import { dayStatus, formatTargetProgress } from '../utils.js';
+import { dayStatus, formatTargetProgress, recentDayStates } from '../utils.js';
 
 const html = htm.bind(h);
 
@@ -81,6 +81,11 @@ export function TrackerItem({ tracker }) {
     const targetInfo = tracker.type === 'quantifiable'
         ? formatTargetProgress(dayStatus(tracker, date, rawEntry), tracker.unit)
         : null;
+
+    // 7-day "recent texture" dot row — the single-day dayStatus repeated over the
+    // last week ending on the selected date; off-schedule days are 'off' so the
+    // dots can mute them (off-schedule ≠ missed).
+    const recentStates = recentDayStates(tracker, date, logs, 7);
 
     const handleCompletedChange = (e) => {
         if (!editable) return;
@@ -231,6 +236,18 @@ export function TrackerItem({ tracker }) {
             ${lastUpdatedLabel && html`
                 <div class="tracker-last-updated">Last updated ${lastUpdatedLabel}</div>
             `}
+            <div
+                class="tracker-dots ${tracker.polarity === 'negative' ? 'tracker-dots--avoid' : ''}"
+                role="img"
+                aria-label="Last 7 days"
+            >
+                ${recentStates.map((d, i) => html`
+                    <span
+                        class="tracker-dot tracker-dot--${d.state}${i === recentStates.length - 1 ? ' tracker-dot--today' : ''}"
+                        key=${d.date}
+                    ></span>
+                `)}
+            </div>
             ${accumModal.open && html`
                 <div class="modal-overlay" onClick=${closeAccumModal}>
                     <div class="modal-content" onClick=${(e) => e.stopPropagation()}>

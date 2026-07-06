@@ -297,6 +297,59 @@ def test_collapsed_category_summary_badge(page, app_server, seeded_journal):
     assert "category-summary--met" in health_summary.get_attribute("class")
 
 
+def test_recent_dot_row_on_expanded_tracker(page, app_server, seeded_journal):
+    """The expanded row shows a 7-day dot row: weekdays with a completed entry
+    render 'met' dots, weekend days (off-schedule for a Mon–Fri tracker) render
+    'off' dots, and today is the last dot. Expected states are computed with the
+    same local-date discipline as the seed, so the test is day-of-week agnostic.
+    """
+    base = app_server["url"]
+    client_id = seeded_journal["client_id"]
+    today = datetime.now().date()
+    window = [today - timedelta(days=i) for i in range(6, -1, -1)]  # oldest→newest
+
+    days_payload = {}
+    expected_states = []
+    for d in window:
+        ds = d.strftime("%Y-%m-%d")
+        if d.weekday() < 5:  # Mon–Fri (scheduled) → completed → met
+            days_payload[ds] = {"tracker-weekday": {"completed": True}}
+            expected_states.append("met")
+        else:                # weekend → off-schedule → off (regardless of entry)
+            expected_states.append("off")
+    # Ensure today's row is visible even if today is a weekend (off-schedule entry).
+    today_str = today.strftime("%Y-%m-%d")
+    days_payload.setdefault(today_str, {"tracker-weekday": {"completed": True}})
+
+    http_requests.post(f"{base}/api/journal/sync/update", json={
+        "clientId": client_id,
+        "config": [{
+            "id": "tracker-weekday",
+            "name": "Weekday Vitamin",
+            "category": "supplements",
+            "type": "simple",
+            "polarity": "positive",
+            "scheduleHistory": [{"effectiveFrom": "0000-01-01", "days": [1, 2, 3, 4, 5]}],
+        }],
+        "days": days_payload,
+    })
+
+    page.goto(app_server["url"])
+    page.wait_for_selector(".shell", timeout=10000)
+    AppShellPage(page).navigate_to("Journal")
+    journal = JournalPage(page)
+    journal.wait_for_loaded()
+    journal.wait_for_trackers()  # expands categories → the row + dots are visible
+
+    row = page.locator(".tracker-item").filter(has_text="Weekday Vitamin")
+    dots = row.locator(".tracker-dots .tracker-dot")
+    assert dots.count() == 7
+    for i, expected in enumerate(expected_states):
+        cls = dots.nth(i).get_attribute("class")
+        assert f"tracker-dot--{expected}" in cls, f"dot {i} ({window[i]}): {cls}"
+    assert "tracker-dot--today" in dots.nth(6).get_attribute("class")
+
+
 def test_focus_blur_without_value_change_does_not_update_timestamp(journal_page):
     """Tabbing into and out of the field without editing must not bump the
     'Last updated' timestamp. Otherwise scrolling through trackers would

@@ -944,6 +944,13 @@ textarea:focus-visible,
     background: var(--text-muted);
 }
 
+/* The target progress line reflects today's (possibly uncommitted) value, so it
+   ghosts with the rest of the draft controls. The 7-day dot row is deliberately
+   NOT ghosted — it is mostly committed history, not the single draft value. */
+.journal .tracker-item--uncommitted .tracker-target {
+    opacity: 0.55;
+}
+
 /* Accumulator "+" button — adds to running total for cumulative trackers
    (protein, creatine). Inline next to the value + unit. */
 .journal .tracker-accum-btn {
@@ -1037,6 +1044,51 @@ textarea:focus-visible,
 
 .journal .tracker-target--met .tracker-target-fill {
     background-color: var(--accent-success);
+}
+
+/* 7-day "recent texture" dot row — one small dot per day (oldest → newest),
+   state from recentDayStates. Deliberately quiet: filled for met/partial, hollow
+   for missed, dimmed hollow for off-schedule; palette from existing tokens. */
+.journal .tracker-dots {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-xs);
+    margin-top: var(--spacing-xs);
+    padding-left: 40px; /* align with the tracker name, past the checkbox */
+}
+
+.journal .tracker-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: var(--radius-full);
+    box-sizing: border-box;
+    background-color: var(--accent-success); /* met */
+}
+
+.journal .tracker-dot--partial {
+    background-color: var(--app-accent);
+}
+
+.journal .tracker-dot--missed {
+    background-color: transparent;
+    border: 1px solid var(--border-color);
+}
+
+.journal .tracker-dot--off {
+    background-color: transparent;
+    border: 1px solid var(--border-color);
+    opacity: 0.4;
+}
+
+/* Avoidance trackers: an avoided (met) day is a good but calm outcome, not a
+   celebratory one — mute it to neutral rather than success green. */
+.journal .tracker-dots--avoid .tracker-dot--met {
+    background-color: var(--text-secondary);
+}
+
+/* Today is the last dot — a subtle ring so "where are we now" is locatable. */
+.journal .tracker-dot--today {
+    box-shadow: 0 0 0 1px var(--bg-card), 0 0 0 2px var(--text-muted);
 }
 
 /* Inline checkbox+label row used in config forms */
