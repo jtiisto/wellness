@@ -209,6 +209,49 @@ def test_migration_5_adds_prescription_fields_on_upgrade(tmp_path):
 
 
 @pytest.mark.unit
+def test_migration_6_adds_deleted_exercise_logs_on_upgrade(tmp_path):
+    """A DB stamped at v5 (pre-log-deletion) gains the deleted_exercise_logs
+    tombstone table on the next init. Unlike migrations 2-5 the DDL is shared
+    with the baseline (IF NOT EXISTS both ways), so a fresh DB also has it."""
+    import modules.coach as coach_mod
+    from modules.db import enable_wal, run_migrations
+
+    db_path = tmp_path / "coach.db"
+
+    # Build the schema only through migration 5 — the table must be absent.
+    # (The baseline creates it too, so build from a baseline snapshot without
+    # it: run migrations 1-5, then drop the table to simulate a pre-6 DB.)
+    conn = sqlite3.connect(db_path)
+    enable_wal(conn)
+    run_migrations(conn, coach_mod.MIGRATIONS[:5], label="coach test")
+    conn.execute("DROP TABLE IF EXISTS deleted_exercise_logs")
+    conn.commit()
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 5
+    conn.close()
+
+    # Re-init runs the full registry → migration 6 recreates the table.
+    coach_mod.init_database(DbAccessor(db_path, foreign_keys=True))
+
+    conn = sqlite3.connect(db_path)
+    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    ver = conn.execute("PRAGMA user_version").fetchone()[0]
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(deleted_exercise_logs)")}
+    conn.close()
+    assert "deleted_exercise_logs" in tables
+    assert {"date", "exercise_key", "deleted_at"} <= cols
+    assert ver == len(coach_mod.MIGRATIONS)
+
+
+@pytest.mark.unit
+def test_fresh_db_has_deleted_exercise_logs(test_app, tmp_coach_db):
+    """The baseline also creates the tombstone table on a fresh DB."""
+    conn = sqlite3.connect(tmp_coach_db)
+    tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    conn.close()
+    assert "deleted_exercise_logs" in tables
+
+
+@pytest.mark.unit
 def test_adopts_existing_unversioned_db(tmp_path):
     """An existing pre-registry DB (full schema, user_version=0) upgrades cleanly:
     guarded migrations are no-ops, the version is stamped forward, and data is

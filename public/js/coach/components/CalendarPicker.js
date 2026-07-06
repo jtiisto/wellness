@@ -20,11 +20,26 @@ const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June',
  * Get workout status for a date
  * Returns: 'completed' | 'missed' | 'scheduled' | null
  */
+function hasAnyProgress(log) {
+    return Object.keys(log).some(key => {
+        if (key === 'session_feedback' || key.startsWith('_')) return false;
+        const entry = log[key];
+        // Check for any logged data (completion is derived from this)
+        return entry.sets?.length > 0 ||
+               entry.completed_items?.length > 0 ||
+               entry.duration_min != null;
+    });
+}
+
 function getWorkoutStatus(dateStr, plans, logs) {
     const hasPlan = !!plans[dateStr];
     const hasLog = !!logs[dateStr];
 
-    if (!hasPlan) return null;
+    if (!hasPlan) {
+        // Rest day — an ad-hoc (off-plan) session with real content still
+        // earns the completed dot; a quiet rest day stays blank.
+        return hasLog && hasAnyProgress(logs[dateStr]) ? 'completed' : null;
+    }
 
     const today = getToday();
 
@@ -36,17 +51,7 @@ function getWorkoutStatus(dateStr, plans, logs) {
     if (dateStr <= today) {
         // Past or today - check if workout was done
         if (hasLog) {
-            // Check if any exercises were logged
-            const log = logs[dateStr];
-            const hasAnyProgress = Object.keys(log).some(key => {
-                if (key === 'session_feedback' || key.startsWith('_')) return false;
-                const entry = log[key];
-                // Check for any logged data (completion is derived from this)
-                return entry.sets?.length > 0 ||
-                       entry.completed_items?.length > 0 ||
-                       entry.duration_min != null;
-            });
-            return hasAnyProgress ? 'completed' : 'missed';
+            return hasAnyProgress(logs[dateStr]) ? 'completed' : 'missed';
         }
         // Has plan but no log
         return dateStr === today ? 'scheduled' : 'missed';

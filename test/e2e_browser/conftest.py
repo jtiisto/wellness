@@ -131,6 +131,22 @@ def journal_app_page(page, app_server, seeded_journal):
     return page
 
 
+def _reset_coach_data(conn):
+    """Clear coach data tables to avoid UNIQUE constraints / stale tombstones
+    on repeated runs against the session-scoped server. Order respects FK
+    constraints: children before parents."""
+    conn.execute("DELETE FROM checklist_log_items")
+    conn.execute("DELETE FROM set_logs")
+    conn.execute("DELETE FROM exercise_logs")
+    conn.execute("DELETE FROM workout_session_logs")
+    conn.execute("DELETE FROM deleted_exercise_logs")
+    conn.execute("DELETE FROM checklist_items")
+    conn.execute("DELETE FROM planned_exercises")
+    conn.execute("DELETE FROM session_blocks")
+    conn.execute("DELETE FROM workout_sessions")
+    conn.execute("DELETE FROM deleted_plans")
+
+
 @pytest.fixture
 def seeded_coach_db(app_server):
     """Seed coach database with a training plan via direct SQLite."""
@@ -143,16 +159,7 @@ def seeded_coach_db(app_server):
     today = datetime.now().strftime("%Y-%m-%d")
     yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
 
-    # Clear existing data to avoid UNIQUE constraint on repeated runs.
-    # Order respects FK constraints: children before parents.
-    conn.execute("DELETE FROM checklist_log_items")
-    conn.execute("DELETE FROM set_logs")
-    conn.execute("DELETE FROM exercise_logs")
-    conn.execute("DELETE FROM workout_session_logs")
-    conn.execute("DELETE FROM checklist_items")
-    conn.execute("DELETE FROM planned_exercises")
-    conn.execute("DELETE FROM session_blocks")
-    conn.execute("DELETE FROM workout_sessions")
+    _reset_coach_data(conn)
 
     # One shared seed implementation with the unit/integration conftest
     # (test/seeds.py) — the two used to carry drifting near-duplicate SQL.
@@ -164,6 +171,20 @@ def seeded_coach_db(app_server):
     conn.close()
 
     return {"dates": [today, yesterday], "session_id": s1}
+
+
+@pytest.fixture
+def coach_rest_day(app_server):
+    """Coach database with NO plan for any date — every day is a rest day.
+    The empty state + ad-hoc extra-session flow renders on today."""
+    db_path = app_server["db_dir"] / "coach.db"
+    conn = sqlite3.connect(db_path, timeout=10)
+    conn.execute("PRAGMA foreign_keys = ON")
+    _reset_coach_data(conn)
+    conn.commit()
+    conn.close()
+
+    return {"today": datetime.now().strftime("%Y-%m-%d")}
 
 
 @pytest.fixture

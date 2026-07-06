@@ -128,8 +128,9 @@ The Coach module handles workout plans (authored server-side, typically by AI) a
 1. **Client registers** (`POST /register`)
 2. **Sync pull** fetches plans (all or since last sync) and logs (30 days or since last sync) (`GET /sync?client_id=<id>&last_sync_time=<timestamp>`)
 3. **Log upload** sends workout logs (`POST /sync`); the day carries a `_baseLastModifiedAt` for its feedback record and each exercise carries its own. The server arbitrates each record independently (no existing row or NULL stamp → insert; `stored.last_modified <= base` → update, replacing that exercise's sets/items; stale base → keep the server's record; **hard cutover** — a token-absent write to an existing record is rejected). Un-mentioned exercises are never touched. There is **no whole-upload reject**: the server returns the reconciled day per uploaded date in `results[date]` (the merged `serverRow`, carrying each record's `_lastModified`), which the client adopts under its generation check. The existing day is archived to `*_archive` before mutation (14-day recovery). (`_lastModifiedAt` is retained as an advisory/display field only — never the arbiter.)
-4. **Change detection** via `GET /plans-version`, which returns the latest timestamp across plan edits (`workout_sessions.last_modified`), plan deletions (`deleted_plans.deleted_at`), and **log writes** (`workout_session_logs.last_modified`) — so another device's logged sets reach a continuously-visible client on the next 30s poll, not only on a refocus. The scheduler polls this endpoint every 30 seconds, triggering a full sync when the version changes (the poll records the version it saw, so a version moved by a log stamp doesn't re-trigger every tick).
+4. **Change detection** via `GET /plans-version`, which returns the latest timestamp across plan edits (`workout_sessions.last_modified`), plan deletions (`deleted_plans.deleted_at`), **log writes** (`workout_session_logs.last_modified`), and **log-entry deletions** (`deleted_exercise_logs.deleted_at`) — so another device's logged sets reach a continuously-visible client on the next 30s poll, not only on a refocus. The scheduler polls this endpoint every 30 seconds, triggering a full sync when the version changes (the poll records the version it saw, so a version moved by a log stamp doesn't re-trigger every tick).
 5. **Plan deletion propagation** — When a plan is deleted via MCP, a tombstone is written to `deleted_plans`. Incremental sync includes a `deletedPlanDates` array for tombstones newer than `last_sync_time`. The client removes those dates from local storage. Tombstones are pruned automatically when they age out of the sync window. Only future/unlogged plans can be deleted — plans with workout logs are immutable.
+6. **Log-entry deletion propagation** — The client deletes one exercise entry (today: the ad-hoc extra session's Delete button) by replacing it with a local tombstone `{"_deleted": true, "_lastModified": <last server stamp>}`; a never-synced entry is simply removed locally (nothing server-side to delete). The tombstone rides the normal upload (`withBaseTokens` echoes its stamp as `_baseLastModifiedAt`) and is arbitrated with the same `should_accept_log_write` predicate: accepted → the server hard-DELETEs the `exercise_logs` row (children removed explicitly; the day was already archived) and records `(date, exercise_key, deleted_at)` in `deleted_exercise_logs`; stale base (a remote edit won) → rejected, the surviving row returns in `results[date]` and the deleting client re-adopts it (server-wins); row already gone (retry) → idempotent tombstone refresh. The tombstone then guards against **resurrection**: a later edit that echoes a base token for the deleted record is rejected (delete wins — the token proves it edits the deleted row), while a token-less create is a deliberate re-add and clears the tombstone. Other clients converge because the incremental log query re-delivers a day whose tombstone is newer than `last_sync_time` (a hard DELETE leaves no child stamp to move the day) — the adopted server day simply lacks the key. Deleting the last entry keeps the (empty) `workout_session_logs` row, matching the existing emptied-synced-day behavior. Tombstones are pruned with `deleted_plans` when they age out of the sync window.
 
 **Sync safety layers:**
 - **HTTP cache prevention** — `GET /sync` returns `Cache-Control: no-cache, no-store, must-revalidate`; client fetch calls use `cache: 'no-store'`. Prevents stale sync responses from being served from browser HTTP cache (e.g., after Android storage clear).
@@ -279,6 +280,7 @@ workout_session_logs  (id, session_id, date, pain_discomfort, general_notes)
 exercise_logs         (id, session_log_id, exercise_id, exercise_key, user_note, duration_min, avg_hr, max_hr)
 set_logs              (id, exercise_log_id, set_num, weight, reps, rpe, unit, duration_sec, completed)
 checklist_log_items   (id, exercise_log_id, item_text)
+deleted_exercise_logs (date, exercise_key, deleted_at)  -- log-entry tombstones (migration 6)
 ```
 
 **Completion is derived, not stored.** There is no exercise- or session-level `completed`
@@ -291,6 +293,30 @@ checklist → logged items vs planned items; duration/interval → `duration_min
 completed. The legacy per-exercise `completed` flag was dropped (2026-05) because it was a manual
 PWA checkbox decoupled from data entry and read false on real, fully-logged work; only the
 per-set `set_logs.completed` "done" tick is retained, as an input to the derivation.
+
+**Off-plan (extra) sessions.** The PWA's rest-day empty state (today only —
+the standard `isEditable` rule) offers an **"Add Zone 2 session"** button:
+draft duration / avg HR / max HR fields held in component state until Save
+(Save requires a duration, since a duration-less cardio entry carries no
+uploadable content), which commits the entry to the log store under the
+well-known key `extra_zone2` (`EXTRA_SESSION_KEY` in `public/js/coach/utils.js`);
+from then on it edits/auto-saves like planned cardio, and Delete tombstones it
+(protocol point 6). There is **no explicit flag**: the off-plan signal is
+structural — the log's date has no plan, so `workout_session_logs.session_id`
+and `exercise_logs.exercise_id` persist as NULL. The server maps well-known
+ad-hoc keys to registry slugs (`AD_HOC_LOG_SLUGS` in `src/modules/coach.py`,
+`extra_zone2` → `zone_2`, self-healing the registry row) so extras appear in
+`get_exercise_history` alongside planned Zone 2 work. Read surfaces mark the
+signal explicitly: `assemble_log` (rich/MCP shape only) and `exercise_history`
+emit `off_plan: true` per entry, `get_workout_logs` marks the day wrapper, and
+`get_workout_summary` counts only plan-linked logs in `completed_workouts`
+(rates can no longer exceed 100%) while reporting extras separately as
+`extra_sessions` / `extra_session_dates` (content-bearing days only — an
+emptied husk row does not count). The analysis prompt schema hint
+(`_COACH_SCHEMA` in `src/modules/analysis_queries.py`) documents the
+convention so SQL-writing analyses credit extras as additional volume, never
+plan adherence. A rest day whose log carries content earns the calendar's
+`completed` dot.
 
 **Data model (log archives — 14-day retention):**
 ```

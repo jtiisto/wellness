@@ -715,6 +715,86 @@ class TestReadTools:
         assert isinstance(result, list)
 
 
+# ==================== Off-plan (extra) sessions ====================
+
+
+@pytest.mark.integration
+class TestOffPlanSessions:
+    """An ad-hoc extra session (rest-day Zone 2) must surface as off-plan in
+    every read tool and never count toward plan completion."""
+
+    @pytest.fixture(autouse=True)
+    def setup_mcp(self, test_app, coach_seeded_database, tmp_coach_db):
+        from seeds import seed_extra_session
+
+        self.seed = coach_seeded_database
+        # A rest day: 3 days ago has no plan (seeds cover today + yesterday).
+        # Local time, matching the coach_seeded_database convention.
+        self.rest_day = (date.today() - timedelta(days=3)).isoformat()
+
+        conn = sqlite3.connect(tmp_coach_db)
+        conn.row_factory = sqlite3.Row
+        seed_extra_session(conn, date=self.rest_day)
+        conn.commit()
+        conn.close()
+
+        config = MCPConfig(db_path=tmp_coach_db)
+        mcp = create_mcp_server(config)
+        self.tools = _extract_tools(mcp)
+
+    def test_summary_reports_extra_separately(self):
+        result = self.tools["get_workout_summary"](days=30)
+        assert result["extra_sessions"] == 1
+        assert self.rest_day in result["extra_session_dates"]
+        # The extra session must not inflate plan-based counts: 2 planned
+        # (today + yesterday), 1 logged (today's sample_log).
+        assert result["planned_workouts"] == 2
+        assert result["completed_workouts"] == 1
+        assert result["completion_rate_percent"] == 50.0
+
+    def test_logs_carry_off_plan_flags(self):
+        result = self.tools["get_workout_logs"](
+            start_date=self.rest_day, end_date=self.rest_day
+        )
+        assert len(result) == 1
+        assert result[0]["off_plan"] is True  # day-level wrapper
+        entry = result[0]["log"]["extra_zone2"]
+        assert entry["off_plan"] is True      # exercise-level flag
+        assert entry["duration_min"] == 45
+        assert entry["attempted"] is True
+        assert entry["completed"] is None     # no target to judge against
+
+    def test_planned_day_has_no_off_plan_flags(self):
+        today = self.seed["dates"][0]
+        result = self.tools["get_workout_logs"](start_date=today, end_date=today)
+        assert "off_plan" not in result[0]
+        assert "off_plan" not in result[0]["log"]["cardio_1"]
+
+    def test_exercise_history_includes_extra_marked_off_plan(self):
+        result = self.tools["get_exercise_history"](exercise_slug="zone_2")
+        assert result["exercise"]["slug"] == "zone_2"
+        by_date = {h["date"]: h for h in result["history"]}
+        assert self.rest_day in by_date
+        assert by_date[self.rest_day]["off_plan"] is True
+        assert by_date[self.rest_day]["duration_min"] == 45
+
+    def test_emptied_husk_day_is_not_an_extra_session(self, tmp_coach_db):
+        """A rest-day log whose entries were all deleted (empty day row) must
+        not count as an extra session."""
+        husk_day = (date.today() - timedelta(days=4)).isoformat()  # in-window
+        conn = sqlite3.connect(tmp_coach_db)
+        conn.execute(
+            "INSERT INTO workout_session_logs (session_id, date, last_modified, modified_by) "
+            "VALUES (NULL, ?, '2026-01-01T00:00:00Z', 'test')", (husk_day,)
+        )
+        conn.commit()
+        conn.close()
+
+        result = self.tools["get_workout_summary"](days=30)
+        assert result["extra_sessions"] == 1  # still only the content-bearing one
+        assert husk_day not in result["extra_session_dates"]
+
+
 # ==================== Unit 3: Write Tools Integration Tests ====================
 
 

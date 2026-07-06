@@ -37,7 +37,9 @@ class QueryTools:
         Returns:
             List of logs with date, exercise completion data, and
             pre/post workout stats (readiness metrics, recovery data, etc.)
-            when available
+            when available. A log with "off_plan": true was recorded on a
+            day with no workout plan (an extra session, e.g. ad-hoc Zone 2)
+            — treat it as additional volume, not plan adherence.
         """
         try:
             results = self.db_manager.execute_query("""
@@ -54,11 +56,14 @@ class QueryTools:
                         cursor, row["id"], session_id=row["session_id"]
                     )
 
-                logs.append({
+                log_entry = {
                     "date": row["date"],
                     "last_modified": row["last_modified"],
                     "log": log_data
-                })
+                }
+                if row["session_id"] is None:
+                    log_entry["off_plan"] = True
+                logs.append(log_entry)
 
             return logs
         except Exception as e:
@@ -73,7 +78,10 @@ class QueryTools:
             days: Number of recent days to analyze (max 365, default: 30)
 
         Returns:
-            Summary including planned vs completed workouts, exercise counts, etc.
+            Summary including planned vs completed workouts, exercise counts,
+            and off-plan activity (`extra_sessions` / `extra_session_dates` —
+            sessions logged on days with no plan; they never count toward the
+            completion rates).
         """
         if days > 365:
             raise ValueError("Days cannot exceed 365")

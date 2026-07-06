@@ -16,6 +16,7 @@ import {
     pruneOlderThan,
     maxPlanVersion,
     adoptUploadResults,
+    withEntryDeleted,
 } from './sync-logic.js';
 
 const API_BASE = '/wellness/api/coach';
@@ -157,6 +158,26 @@ export function updateLog(date, exerciseId, data) {
         ...logs[date][exerciseId],
         ...data
     };
+    logs[date]._lastModifiedAt = getUtcNow();
+    logs[date]._lastModifiedBy = syncMetadata.value.clientId;
+
+    workoutLogs.value = logs;
+    markDateDirty(date);
+    saveLogs();
+    scheduler.scheduleUpload();
+}
+
+/**
+ * Delete one exercise entry (e.g. an ad-hoc extra session). A synced entry
+ * becomes a `_deleted` tombstone that uploads through the normal path and is
+ * cleared when the server's reconciled day (without the key) is adopted; a
+ * never-synced entry just disappears locally.
+ */
+export function deleteLogEntry(date, exerciseId) {
+    const logs = deepClone(workoutLogs.value);
+    if (!logs[date]) return;
+
+    logs[date] = withEntryDeleted(logs[date], exerciseId);
     logs[date]._lastModifiedAt = getUtcNow();
     logs[date]._lastModifiedBy = syncMetadata.value.clientId;
 

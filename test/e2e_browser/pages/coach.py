@@ -1,3 +1,5 @@
+import re
+
 from playwright.sync_api import expect
 
 
@@ -128,3 +130,50 @@ class CoachPage:
             return False
         classes = btn.get_attribute("class") or ""
         return "--fired" in classes
+
+    # ---- Extra (off-plan) session — rest-day ad-hoc Zone 2 ----
+
+    def has_extra_session_button(self):
+        return self.page.locator(".extra-session-add-btn").is_visible()
+
+    def add_extra_session(self):
+        """Click 'Add Zone 2 session' to open the draft entry fields."""
+        self.page.locator(".extra-session-add-btn").click()
+        self.page.wait_for_selector(".extra-session-card--draft", timeout=3000)
+
+    def fill_extra_field(self, label, value):
+        """Fill a draft field by its label ('Duration (min)', 'Avg HR', 'Max HR')."""
+        field = self.page.locator(".extra-session-card--draft .cardio-field").filter(
+            has_text=label)
+        field.locator("input[type='number']").fill(str(value))
+
+    def is_extra_save_enabled(self):
+        return self.page.locator(".extra-session-save").is_enabled()
+
+    def save_extra_session(self):
+        self.page.locator(".extra-session-save").click()
+
+    def delete_extra_session(self):
+        """Delete button — discards the draft, or tombstones a saved session."""
+        self.page.locator(".extra-session-delete").click()
+
+    def has_extra_session_card(self):
+        """True when a SAVED (non-draft) extra-session card is visible."""
+        return self.page.locator(
+            ".extra-session-card:not(.extra-session-card--draft)").is_visible()
+
+    def get_extra_session_duration(self):
+        """Duration input value of the saved extra-session card."""
+        return self.page.locator(
+            ".extra-session-card:not(.extra-session-card--draft) .cardio-field"
+        ).filter(has_text="Duration").locator("input").input_value()
+
+    def select_calendar_day(self, date_str, prev_months=0):
+        """Open the calendar and select a day of the currently/adjacent visible
+        month. `prev_months` clicks the ◀ nav first."""
+        self.open_calendar()
+        for _ in range(prev_months):
+            self.page.locator(".calendar-nav").first.click()
+        day = int(date_str.split("-")[2])
+        self.page.locator(".calendar-day:not(.other-month)").filter(
+            has_text=re.compile(rf"^{day}$")).click()

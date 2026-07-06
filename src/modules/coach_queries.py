@@ -16,7 +16,8 @@ from modules.coach_logs import assemble_log
 def workout_summary(db, *, days, today):
     """Summary stats over the last `days`: planned vs completed (presence-based)
     vs fully-completed (every planned exercise met target) workout counts, an
-    exercise-type breakdown, and recent plan dates. `today` is the reference date.
+    exercise-type breakdown, recent plan dates, and off-plan (extra) sessions.
+    `today` is the reference date.
     """
     start_date = (today - timedelta(days=days)).isoformat()
     end_date = today.isoformat()
@@ -29,12 +30,31 @@ def workout_summary(db, *, days, today):
     planned_count = plans_result[0]["count"] if plans_result else 0
 
     # Count logged workouts (presence-based: a session_log row means the user
-    # recorded something). Kept as `completed_workouts` for backward compat.
+    # recorded something). Kept as `completed_workouts` for backward compat —
+    # but only PLANNED days count (session_id linked); off-plan extras are
+    # reported separately so they can't push the completion rate past 100%.
     logs_result = db.execute_query("""
         SELECT id, session_id FROM workout_session_logs
-        WHERE date >= ? AND date <= ?
+        WHERE date >= ? AND date <= ? AND session_id IS NOT NULL
     """, [start_date, end_date])
     completed_count = len(logs_result)
+
+    # Off-plan (extra) sessions — e.g. an ad-hoc Zone 2 on a rest day. Only
+    # content-bearing days count: a husk row whose entries were all deleted is
+    # not a session.
+    extra_rows = db.execute_query("""
+        SELECT l.date FROM workout_session_logs l
+        WHERE l.date >= ? AND l.date <= ? AND l.session_id IS NULL
+          AND EXISTS (
+              SELECT 1 FROM exercise_logs e
+              WHERE e.session_log_id = l.id
+                AND (e.duration_min IS NOT NULL
+                     OR EXISTS (SELECT 1 FROM set_logs s WHERE s.exercise_log_id = e.id)
+                     OR EXISTS (SELECT 1 FROM checklist_log_items c WHERE c.exercise_log_id = e.id))
+          )
+        ORDER BY l.date
+    """, [start_date, end_date])
+    extra_session_dates = [row["date"] for row in extra_rows]
 
     # Derived: sessions that were *fully* completed — every planned exercise met
     # its target (see coach_completion).
@@ -85,6 +105,8 @@ def workout_summary(db, *, days, today):
         "completion_rate_percent": completion_rate,
         "sessions_fully_completed": fully_completed_count,
         "full_completion_rate_percent": full_completion_rate,
+        "extra_sessions": len(extra_session_dates),
+        "extra_session_dates": extra_session_dates,
         "exercise_types_in_recent_plans": exercise_types,
         "recent_plan_dates": [row["date"] for row in recent_dates_result],
     }
@@ -172,6 +194,7 @@ def exercise_history(db, *, exercise_slug, limit=30):
             el.avg_hr,
             el.max_hr,
             el.id as exercise_log_id,
+            el.exercise_id as exercise_id,
             pe.exercise_type as exercise_type,
             pe.target_sets as target_sets,
             pe.target_duration_min as target_duration_min,
@@ -211,6 +234,10 @@ def exercise_history(db, *, exercise_slug, limit=30):
             "completed": completion["completed"],
             "progress": completion["progress"],
         }
+        if session["exercise_id"] is None:
+            # Not linked to a planned exercise — logged outside the plan
+            # (e.g. an ad-hoc extra Zone 2 session on a rest day).
+            entry["off_plan"] = True
         if session["user_note"]:
             entry["user_note"] = session["user_note"]
         if session["duration_min"] is not None:

@@ -23,7 +23,10 @@ import htm from 'htm';
 
 import { BlockView } from './BlockView.js';
 import { SessionFeedback } from './SessionFeedback.js';
+import { ExtraSessionCard } from './ExtraSessionCard.js';
 import { getToday, parseLocalDate } from '../../shared/utils.js';
+import { EXTRA_SESSION_KEY } from '../utils.js';
+import { isDeletedEntry } from '../sync-logic.js';
 
 const html = htm.bind(h);
 
@@ -64,10 +67,25 @@ function statusToState(result) {
 
 export function WorkoutView({ date, plan, log, isEditable = true }) {
     if (!plan) {
+        // Rest day. Today (editable) offers an ad-hoc extra Zone 2 session;
+        // a saved extra session renders read-only on other days/clients.
+        const extraEntry = log?.[EXTRA_SESSION_KEY];
+        const hasExtra = extraEntry && !isDeletedEntry(extraEntry);
         return html`
-            <div class="empty-state">
-                <div class="empty-state-icon">📋</div>
-                <p class="empty-state-text">No workout scheduled for this day</p>
+            <div class="workout-view ${!isEditable ? 'read-only' : ''}">
+                ${!hasExtra && html`
+                    <div class="empty-state">
+                        <div class="empty-state-icon">📋</div>
+                        <p class="empty-state-text">No workout scheduled for this day</p>
+                    </div>
+                `}
+                ${(hasExtra || isEditable) && html`
+                    <${ExtraSessionCard}
+                        date=${date}
+                        entry=${extraEntry}
+                        isEditable=${isEditable}
+                    />
+                `}
             </div>
         `;
     }

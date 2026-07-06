@@ -20,6 +20,32 @@ export function logHasExerciseContent(log) {
     });
 }
 
+/** An entry the user deliberately deleted — a local tombstone awaiting upload.
+ *  The server hard-deletes the row and the adopted `results` day (which lacks
+ *  the key) clears the tombstone. */
+export function isDeletedEntry(entry) {
+    return !!(entry && typeof entry === 'object' && entry._deleted);
+}
+
+/**
+ * Delete one exercise entry from a day's log. If the entry was ever synced
+ * (it carries a server `_lastModified` stamp) it becomes a tombstone keeping
+ * that stamp, so `withBaseTokens` echoes it and the server can arbitrate the
+ * delete against concurrent edits. A never-synced entry is simply removed —
+ * there is nothing server-side to delete. Pure; returns a new log.
+ */
+export function withEntryDeleted(log, exerciseId) {
+    const entry = log[exerciseId];
+    if (!entry || typeof entry !== 'object') return log;
+    const next = { ...log };
+    if (entry._lastModified) {
+        next[exerciseId] = { _deleted: true, _lastModified: entry._lastModified };
+    } else {
+        delete next[exerciseId];
+    }
+    return next;
+}
+
 export function hasFeedbackContent(log) {
     const fb = log.session_feedback;
     return !!fb && (

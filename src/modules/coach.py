@@ -40,6 +40,14 @@ logger = logging.getLogger(__name__)
 # Server retains all data permanently.
 SYNC_WINDOW_DAYS = 60
 
+# Well-known ad-hoc log keys → canonical registry identity. An entry logged
+# under one of these keys has no planned_exercises row (off-plan session), so
+# the slug can't come from the plan join — assign it here so ad-hoc sessions
+# appear in exercise history alongside planned work.
+AD_HOC_LOG_SLUGS = {
+    "extra_zone2": {"slug": "zone_2", "name": "Zone 2", "category": "cardio"},
+}
+
 
 def _migration_1_baseline(cursor):
     """Baseline coach schema (the full pre-registry schema, minus the two
@@ -237,6 +245,8 @@ def _migration_1_baseline(cursor):
     """)
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_deleted_plans_at ON deleted_plans(deleted_at)")
 
+    _create_deleted_exercise_logs(cursor)
+
     # Archive tables for soft-delete safety net (Layer 2)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS workout_session_logs_archive (
@@ -318,6 +328,25 @@ def _migration_4_planned_exercise_tempo(cursor):
         cursor.execute("ALTER TABLE planned_exercises ADD COLUMN tempo TEXT")
 
 
+def _create_deleted_exercise_logs(cursor):
+    """Per-exercise log tombstones (shared by baseline and migration 6).
+
+    A row here means "this exercise entry was deliberately deleted": it lets
+    incremental sync re-deliver the day to other clients and lets `_store_log`
+    reject a stale edit that would otherwise re-insert (resurrect) the deleted
+    row. Tombstones are pruned outside the sync window like `deleted_plans`.
+    """
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS deleted_exercise_logs (
+            date         TEXT NOT NULL,
+            exercise_key TEXT NOT NULL,
+            deleted_at   TEXT NOT NULL,
+            PRIMARY KEY (date, exercise_key)
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_deleted_el_at ON deleted_exercise_logs(deleted_at)")
+
+
 def _migration_5_prescription_fields(cursor):
     """Add the optional strength intensity prescriptions: `target_rpe` (free-form,
     e.g. "6-7" or "8" — TEXT so it can hold a range like target_reps) and
@@ -335,12 +364,19 @@ def _migration_5_prescription_fields(cursor):
 # Ordered (target_version, migration_fn) pairs — see db.run_migrations for the
 # transactional contract. Migration fns are DDL-only and must not manage their
 # own transactions.
+def _migration_6_deleted_exercise_logs(cursor):
+    """Add the per-exercise log tombstone table (log-deletion sync support).
+    Idempotent CREATE IF NOT EXISTS, shared with the baseline."""
+    _create_deleted_exercise_logs(cursor)
+
+
 MIGRATIONS = [
     (1, _migration_1_baseline),
     (2, _migration_2_block_interval_cols),
     (3, _migration_3_exercise_log_token),
     (4, _migration_4_planned_exercise_tempo),
     (5, _migration_5_prescription_fields),
+    (6, _migration_6_deleted_exercise_logs),
 ]
 
 
@@ -472,6 +508,32 @@ def _archive_existing_log(cursor, date_str, superseded_by, now):
                   s["reps"], s["rpe"], s["unit"], s["duration_sec"], s["completed"]))
 
 
+def _adhoc_canonical_slug(cursor, exercise_key, now):
+    """Canonical slug for a well-known ad-hoc (off-plan) log key, or None.
+
+    Self-heals the registry row (INSERT OR IGNORE) so the exercise_logs FK is
+    always satisfiable on a fresh database.
+    """
+    spec = AD_HOC_LOG_SLUGS.get(exercise_key)
+    if spec is None:
+        return None
+    cursor.execute(
+        "INSERT OR IGNORE INTO exercises (slug, name, equipment, category, created_at, source) "
+        "VALUES (?, ?, NULL, ?, ?, 'auto')",
+        (spec["slug"], spec["name"], spec["category"], now),
+    )
+    return spec["slug"]
+
+
+def _delete_exercise_log(cursor, exercise_log_id):
+    """Hard-delete one exercise_logs row with its children. Children are removed
+    explicitly (not via FK cascade) so the behavior doesn't depend on the
+    connection's foreign_keys pragma."""
+    cursor.execute("DELETE FROM set_logs WHERE exercise_log_id = ?", (exercise_log_id,))
+    cursor.execute("DELETE FROM checklist_log_items WHERE exercise_log_id = ?", (exercise_log_id,))
+    cursor.execute("DELETE FROM exercise_logs WHERE id = ?", (exercise_log_id,))
+
+
 def _store_log(conn, date_str, log_data, client_id, now):
     """Apply a coach log upload at per-record granularity (R3).
 
@@ -533,10 +595,45 @@ def _store_log(conn, date_str, log_data, client_id, now):
             "WHERE session_log_id = ? AND exercise_key = ?",
             (session_log_id, exercise_key),
         ).fetchone()
+
+        # Deletion tombstone: the client deliberately removed this entry.
+        # Arbitrated on the same per-exercise token as edits; an absent row
+        # (upload retry) still refreshes the tombstone so the delete is
+        # idempotent and re-delivered to other clients.
+        if exercise_data.get("_deleted"):
+            if existing_ex is not None:
+                if not should_accept_log_write(
+                    existing_ex["last_modified"], exercise_data.get("_baseLastModifiedAt")
+                ):
+                    continue  # remote edit after the deleter's last sync → edit wins
+                _delete_exercise_log(cursor, existing_ex["id"])
+            cursor.execute(
+                "INSERT OR REPLACE INTO deleted_exercise_logs (date, exercise_key, deleted_at) "
+                "VALUES (?, ?, ?)",
+                (date_str, exercise_key, now),
+            )
+            continue
+
         if existing_ex is not None and not should_accept_log_write(
             existing_ex["last_modified"], exercise_data.get("_baseLastModifiedAt")
         ):
             continue  # stale base → keep the server's version of this exercise
+
+        if existing_ex is None:
+            tombstone = cursor.execute(
+                "SELECT 1 FROM deleted_exercise_logs WHERE date = ? AND exercise_key = ?",
+                (date_str, exercise_key),
+            ).fetchone()
+            if tombstone is not None:
+                if exercise_data.get("_baseLastModifiedAt"):
+                    # A base token proves this client is editing the record that
+                    # was deleted → delete wins (else the edit resurrects it).
+                    continue
+                # No base token = a deliberate re-add after deletion.
+                cursor.execute(
+                    "DELETE FROM deleted_exercise_logs WHERE date = ? AND exercise_key = ?",
+                    (date_str, exercise_key),
+                )
 
         exercise_id = None
         canonical_slug = None
@@ -549,6 +646,9 @@ def _store_log(conn, date_str, log_data, client_id, now):
             if pe:
                 exercise_id = pe["id"]
                 canonical_slug = pe["canonical_slug"]
+        if exercise_id is None:
+            # Off-plan entry: no planned_exercises row to take the slug from.
+            canonical_slug = _adhoc_canonical_slug(cursor, exercise_key, now)
 
         if existing_ex is None:
             cursor.execute("""
@@ -665,6 +765,10 @@ def _plans_version(get_db):
     - LOG writes (workout_session_logs.last_modified — without this arm another
       device's logged sets reached a continuously-visible client only on a
       refocus/online event; mid-workout phone+tablet is exactly that case).
+    - log-entry deletions (deleted_exercise_logs.deleted_at — a hard DELETE
+      leaves no child stamp, and the day-level stamp only moves when the
+      feedback record is accepted, so without this arm a delete whose feedback
+      base was stale never moved MAX).
     Accepted cost: any device logging a set triggers the other devices' next
     poll to run a full sync.
     """
@@ -677,6 +781,8 @@ def _plans_version(get_db):
                 SELECT MAX(deleted_at) as v FROM deleted_plans
                 UNION ALL
                 SELECT MAX(last_modified) as v FROM workout_session_logs
+                UNION ALL
+                SELECT MAX(deleted_at) as v FROM deleted_exercise_logs
             )
         """)
         row = cursor.fetchone()
@@ -748,15 +854,24 @@ def _workout_sync_get(get_db, response, client_id, last_sync_time=None):
                         WHERE e.session_log_id = l.id
                           AND e.last_modified > ?
                    )
+                   OR EXISTS (
+                        SELECT 1 FROM deleted_exercise_logs d
+                        WHERE d.date = l.date
+                          AND d.deleted_at > ?
+                   )
                 ORDER BY l.date
-            """, (last_sync_time, last_sync_time))
-            # The EXISTS arm: the day-level stamp bumps only when the FEEDBACK
-            # record is accepted (it is that record's concurrency token, so it
-            # must not move on exercise-only writes). Without it, a day where
-            # only exercise records were accepted — the R3 multi-device merge —
-            # kept its old stamp and was never delivered to the other device's
-            # incremental pull. Propagation reads child stamps; arbitration
-            # semantics are untouched.
+            """, (last_sync_time, last_sync_time, last_sync_time))
+            # The first EXISTS arm: the day-level stamp bumps only when the
+            # FEEDBACK record is accepted (it is that record's concurrency
+            # token, so it must not move on exercise-only writes). Without it,
+            # a day where only exercise records were accepted — the R3
+            # multi-device merge — kept its old stamp and was never delivered
+            # to the other device's incremental pull. Propagation reads child
+            # stamps; arbitration semantics are untouched.
+            # The second EXISTS arm: a deleted exercise entry leaves no child
+            # row to stamp, so a fresh tombstone re-delivers the (kept) day —
+            # the other client adopts the server day, which simply lacks the
+            # deleted key.
         else:
             cursor.execute("""
                 SELECT * FROM workout_session_logs
@@ -788,6 +903,7 @@ def _workout_sync_get(get_db, response, client_id, last_sync_time=None):
         # `cutoff + "T00:00:00Z"`: deleted_at carries sub-second precision, so a
         # fraction-less cutoff would prune the first instant after midnight early.
         cursor.execute("DELETE FROM deleted_plans WHERE deleted_at < ?", (cutoff,))
+        cursor.execute("DELETE FROM deleted_exercise_logs WHERE deleted_at < ?", (cutoff,))
 
         conn.commit()
         return WorkoutSyncResponse(

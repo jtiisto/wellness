@@ -6,6 +6,15 @@
 import { formatDateLocal, parseLocalDate, getToday } from '../shared/utils.js';
 
 /**
+ * Well-known log key for the ad-hoc "extra Zone 2" session on rest days.
+ * There is no plan for such a day — the key itself is the off-plan signal
+ * (the server maps it to canonical_slug 'zone_2'; see AD_HOC_LOG_SLUGS in
+ * src/modules/coach.py — keep the two in sync).
+ */
+export const EXTRA_SESSION_KEY = 'extra_zone2';
+export const EXTRA_SESSION_TITLE = 'Zone 2 — extra session';
+
+/**
  * Format date for display (e.g., "Mon", "Feb 2")
  */
 export function formatDateShort(dateStr) {

@@ -13,6 +13,8 @@ import {
     maxPlanVersion,
     withBaseTokens,
     adoptUploadResults,
+    isDeletedEntry,
+    withEntryDeleted,
 } from '../../public/js/coach/sync-logic.js';
 
 // ---- content predicates --------------------------------------------------
@@ -160,6 +162,84 @@ test('adoptUploadResults: re-modified date keeps local content but advances toke
     assert.equal(next.d2.ex_1.reps, 32);                  // local re-edit kept
     assert.equal(next.d2.ex_1._lastModified, 'srv-ex');   // token advanced
     assert.equal(next.d2._lastModified, 'srv-day');       // day token advanced
+});
+
+// ---- entry deletion (tombstones) ------------------------------------------
+
+test('isDeletedEntry: true only for _deleted-marked entry objects', () => {
+    assert.equal(isDeletedEntry({ _deleted: true, _lastModified: 't' }), true);
+    assert.equal(isDeletedEntry({ duration_min: 45 }), false);
+    assert.equal(isDeletedEntry(null), false);
+    assert.equal(isDeletedEntry(undefined), false);
+    assert.equal(isDeletedEntry('str'), false);
+});
+
+test('withEntryDeleted: synced entry becomes a tombstone keeping its server stamp', () => {
+    const log = {
+        _lastModified: 'day-tok',
+        session_feedback: {},
+        extra_zone2: { duration_min: 45, avg_hr: 128, _lastModified: 'ex-tok' },
+    };
+    const next = withEntryDeleted(log, 'extra_zone2');
+    assert.deepEqual(next.extra_zone2, { _deleted: true, _lastModified: 'ex-tok' });
+    assert.equal(log.extra_zone2.duration_min, 45); // input not mutated
+});
+
+test('withEntryDeleted: never-synced entry is removed outright', () => {
+    const log = { session_feedback: {}, extra_zone2: { duration_min: 45 } };
+    const next = withEntryDeleted(log, 'extra_zone2');
+    assert.ok(!('extra_zone2' in next));
+});
+
+test('withEntryDeleted: missing key is a no-op', () => {
+    const log = { session_feedback: {} };
+    assert.equal(withEntryDeleted(log, 'nope'), log);
+});
+
+test('tombstone day uploads and echoes the tombstone base token', () => {
+    // The tombstone-only day carries no exercise content, but the day was
+    // synced (day _lastModified present) so it rides the deletion-update path.
+    const logs = {
+        d1: {
+            _lastModified: 'day-tok',
+            session_feedback: {},
+            extra_zone2: { _deleted: true, _lastModified: 'ex-tok' },
+        },
+    };
+    const r = selectLogsToUpload(['d1'], logs);
+    assert.deepEqual(r.uploadedDates, ['d1']);
+    assert.equal(r.logsToUpload.d1.extra_zone2._deleted, true);
+    assert.equal(r.logsToUpload.d1.extra_zone2._baseLastModifiedAt, 'ex-tok');
+});
+
+test('adoptUploadResults: adopting the serverRow (without the key) clears the tombstone', () => {
+    const local = {
+        d1: {
+            _lastModified: 'day-tok',
+            session_feedback: {},
+            extra_zone2: { _deleted: true, _lastModified: 'ex-tok' },
+        },
+    };
+    // Accepted delete: the reconciled server day simply lacks the key.
+    const results = { d1: { session_feedback: {}, _lastModified: 'srv-day' } };
+    const next = adoptUploadResults(local, results, { d1: 1 }, { d1: 1 });
+    assert.ok(!('extra_zone2' in next.d1));
+    assert.equal(next.d1._lastModified, 'srv-day');
+});
+
+test('adoptUploadResults: re-modified-mid-sync day keeps its tombstone for the next cycle', () => {
+    const local = {
+        d1: {
+            _lastModified: 'day-tok',
+            session_feedback: {},
+            extra_zone2: { _deleted: true, _lastModified: 'ex-tok' },
+        },
+    };
+    const results = { d1: { session_feedback: {}, _lastModified: 'srv-day' } };
+    // gen advanced (1 → 2): keep local content (the tombstone), advance day token.
+    const next = adoptUploadResults(local, results, { d1: 1 }, { d1: 2 });
+    assert.equal(next.d1.extra_zone2._deleted, true);
+    assert.equal(next.d1._lastModified, 'srv-day');
 });
 
 // ---- pruneOlderThan / maxPlanVersion -------------------------------------

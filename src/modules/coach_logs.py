@@ -161,6 +161,11 @@ def assemble_log(cursor, log_row, *, session_id=None, derive_completion=False):
             entry["attempted"] = completion["attempted"]
             entry["completed"] = completion["completed"]
             entry["progress"] = completion["progress"]
+            if el["exercise_id"] is None:
+                # Not linked to a planned exercise — logged outside the plan
+                # (e.g. an ad-hoc extra Zone 2 on a rest day). Rich shape only;
+                # the lean sync shape stays wire-invariant for the PWA.
+                entry["off_plan"] = True
             completion_results.append(completion)
 
         log[el["exercise_key"]] = entry

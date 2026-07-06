@@ -129,3 +129,34 @@ def seed_coach_plan(conn, *, today, yesterday=None, supersets=False,
         """, (s2, b_y))
 
     return {"session_id": s1}
+
+
+def seed_extra_session(conn, *, date, duration_min=45, avg_hr=128, max_hr=142,
+                       now=None):
+    """Insert an ad-hoc off-plan extra Zone 2 session (rest-day log): a
+    workout_session_logs row with session_id NULL and one exercise_logs row
+    under the well-known key 'extra_zone2' with exercise_id NULL and
+    canonical_slug 'zone_2' — mirroring what the server writes for the PWA's
+    "Add Zone 2 session" flow. Self-heals the zone_2 registry row.
+    """
+    if now is None:
+        now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        INSERT OR IGNORE INTO exercises (slug, name, equipment, category, created_at, source)
+        VALUES ('zone_2', 'Zone 2', NULL, 'cardio', ?, 'auto')
+    """, (now,))
+    cursor.execute("""
+        INSERT INTO workout_session_logs (session_id, date, last_modified, modified_by)
+        VALUES (NULL, ?, ?, 'test')
+    """, (date, now))
+    session_log_id = cursor.lastrowid
+    cursor.execute("""
+        INSERT INTO exercise_logs
+        (session_log_id, exercise_id, exercise_key, duration_min, avg_hr, max_hr,
+         canonical_slug, last_modified)
+        VALUES (?, NULL, 'extra_zone2', ?, ?, ?, 'zone_2', ?)
+    """, (session_log_id, duration_min, avg_hr, max_hr, now))
+
+    return {"session_log_id": session_log_id}
