@@ -250,6 +250,53 @@ def test_target_progress_line_in_grid(page, app_server, seeded_journal):
     assert "tracker-target--met" in target_line.get_attribute("class")
 
 
+def test_collapsed_category_summary_badge(page, app_server, seeded_journal):
+    """A collapsed category shows a schedule/polarity-aware on-track badge:
+    "1 of 2 on track" for a positive category with one done, and the adaptive
+    "logged" wording for a pure-neutral (unspecified-polarity) category.
+    """
+    base = app_server["url"]
+    client_id = seeded_journal["client_id"]
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    # seeded_journal seeds "Water Intake" (quantifiable, unspecified polarity) in
+    # the "health" category — a pure-neutral category with no entry today. Add a
+    # "supplements" category with two positive trackers, one completed.
+    http_requests.post(f"{base}/api/journal/sync/update", json={
+        "clientId": client_id,
+        "config": [
+            {"id": "sup-d3", "name": "Vitamin D3", "category": "supplements",
+             "type": "simple", "polarity": "positive"},
+            {"id": "sup-mag", "name": "Magnesium", "category": "supplements",
+             "type": "simple", "polarity": "positive"},
+        ],
+        "days": {today: {"sup-d3": {"completed": True}}},
+    })
+
+    page.goto(app_server["url"])
+    page.wait_for_selector(".shell", timeout=10000)
+    AppShellPage(page).navigate_to("Journal")
+    # Do NOT expand — the badge lives on the collapsed pill. Wait for the count to
+    # settle to the entry-applied state (config can render a beat before the log).
+    page.wait_for_selector(
+        ".category-header:has-text('supplements') "
+        ".category-summary:has-text('1 of 2 on track')",
+        timeout=15000,
+    )
+
+    supplements = page.locator(".category-header").filter(has_text="supplements")
+    sup_summary = supplements.locator(".category-summary")
+    assert "1 of 2 on track" in sup_summary.inner_text()
+    assert "category-summary--neutral" in sup_summary.get_attribute("class")
+
+    # Pure-neutral category (unspecified polarity) uses "logged", not "on track";
+    # seeded_journal completes Water Intake today, so it reads "All logged" (met).
+    health = page.locator(".category-header").filter(has_text="health")
+    health_summary = health.locator(".category-summary")
+    assert "All logged" in health_summary.inner_text()
+    assert "category-summary--met" in health_summary.get_attribute("class")
+
+
 def test_focus_blur_without_value_change_does_not_update_timestamp(journal_page):
     """Tabbing into and out of the field without editing must not bump the
     'Last updated' timestamp. Otherwise scrolling through trackers would

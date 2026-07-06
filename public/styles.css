@@ -872,6 +872,24 @@ textarea:focus-visible,
     color: var(--text-primary);
     margin: 0;
     padding: 0;
+    min-width: 0; /* let the title yield/wrap so the summary badge never truncates */
+}
+
+/* Collapsed-category summary badge — a schedule/polarity-aware on-track rollup
+   (formatCategorySummary), right-aligned in the pill. Never truncates: it keeps
+   its own line intact (the title yields or wraps instead). */
+.journal .category-summary {
+    margin-left: auto;
+    flex-shrink: 0;
+    padding-left: var(--spacing-sm);
+    font-size: var(--font-size-sm);
+    font-weight: 500;
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+
+.journal .category-summary--met {
+    color: var(--accent-success);
 }
 
 /* Tracker Item */

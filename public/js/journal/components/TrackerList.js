@@ -6,7 +6,7 @@ import { useState, useEffect } from 'preact/hooks';
 import { effect } from '@preact/signals';
 import htm from 'htm';
 import { trackerConfig, selectedDate, dailyLogs, syncMetadata, expandedCategories, toggleCategoryExpanded } from '../store.js';
-import { getLastNDays, shouldShowTracker, groupByCategory } from '../utils.js';
+import { getLastNDays, shouldShowTracker, groupByCategory, categorySummary, formatCategorySummary } from '../utils.js';
 import { getToday } from '../../shared/utils.js';
 import { TrackerItem } from './TrackerItem.js';
 
@@ -131,6 +131,11 @@ export function TrackerList() {
             <div class="main-content">
                 ${categories.map(category => {
                     const isCollapsed = !expanded.has(category);
+                    // Schedule/polarity-aware on-track rollup for the collapsed
+                    // pill; hidden when expanded (the rows themselves are shown).
+                    const summary = isCollapsed
+                        ? formatCategorySummary(categorySummary(grouped[category], date, dayLog))
+                        : null;
                     return html`
                         <div class="category" key=${category}>
                             <button
@@ -141,6 +146,9 @@ export function TrackerList() {
                             >
                                 <span class="category-chevron ${isCollapsed ? 'collapsed' : ''}">▼</span>
                                 <h2 class="category-title">${category}</h2>
+                                ${summary && html`
+                                    <span class="category-summary category-summary--${summary.tone}">${summary.text}</span>
+                                `}
                             </button>
                             ${!isCollapsed && grouped[category].map(tracker => html`
                                 <${TrackerItem} tracker=${tracker} key=${tracker.id} />

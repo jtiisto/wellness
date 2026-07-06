@@ -649,6 +649,74 @@ export function isWithinLastNDays(dateStr, days = 7) {
 }
 
 /**
+ * Roll up a category's trackers into a schedule- and polarity-aware summary for
+ * the selected date — the honest "on track" count behind the collapsed-category
+ * badge. Only trackers *expected* on the date (isExpectedOn) are counted, so an
+ * off-schedule day is never a miss; each counted tracker is bucketed by its
+ * single-day dayStatus (met → onTrack, partial, else notYet). `logged` counts
+ * expected trackers with any entry — the basis of the pure-neutral "logged"
+ * wording, where activity (not the checkbox) is what the label claims.
+ * `allNeutral` is true when every counted tracker is neutral or unspecified
+ * polarity (drives the "logged" vs "on track" wording). Pure — pass the day's
+ * log map ({ id: entry }).
+ *
+ * @param {Array} trackers - the category's trackers (the visible list is fine;
+ *   the isExpectedOn gate re-selects the expected subset)
+ * @param {string} dateStr - Local YYYY-MM-DD
+ * @param {Object} [dayLog] - { trackerId: entry } for that date
+ * @returns {{expected: number, onTrack: number, partial: number, notYet: number, logged: number, allNeutral: boolean}}
+ */
+export function categorySummary(trackers, dateStr, dayLog) {
+    let expected = 0;
+    let onTrack = 0;
+    let partial = 0;
+    let notYet = 0;
+    let logged = 0;
+    let allNeutral = true;
+    for (const t of (trackers || [])) {
+        if (!isExpectedOn(t, dateStr)) {
+            continue;
+        }
+        expected += 1;
+        if (t && t.polarity && t.polarity !== 'neutral') {
+            allNeutral = false;
+        }
+        const ds = dayStatus(t, dateStr, dayLog ? dayLog[t.id] : undefined);
+        if (ds.hasEntry) logged += 1;
+        if (ds.state === 'met') onTrack += 1;
+        else if (ds.state === 'partial') partial += 1;
+        else notYet += 1;
+    }
+    return { expected, onTrack, partial, notYet, logged, allNeutral };
+}
+
+/**
+ * Format a categorySummary into the collapsed-header badge model, or null when
+ * nothing is expected that day (badge suppressed — not-expected ≠ missed). The
+ * verb adapts to polarity composition ("logged" for a pure-neutral category,
+ * else "on track"); an all-met category reads "All …". Kept terse; the caller
+ * lets it wrap rather than truncate. `tone` ∈ 'met' | 'neutral' drives color.
+ *
+ * @param {ReturnType<typeof categorySummary>} summary
+ * @returns {{text: string, tone: string}|null}
+ */
+export function formatCategorySummary(summary) {
+    if (!summary || summary.expected === 0) {
+        return null;
+    }
+    // Pure-neutral categories report activity ("logged" = entry present), not
+    // the checkbox-based on-track count — a measurement with a value entered IS
+    // logged, whatever its checkbox says.
+    const verb = summary.allNeutral ? 'logged' : 'on track';
+    const count = summary.allNeutral ? summary.logged : summary.onTrack;
+    const allMet = count === summary.expected;
+    const text = allMet
+        ? `All ${verb}`
+        : `${count} of ${summary.expected} ${verb}`;
+    return { text, tone: allMet ? 'met' : 'neutral' };
+}
+
+/**
  * Group trackers by category, sorted alphabetically
  * @param {Array} trackers - Array of tracker configs
  * @returns {Object} Object with category names as keys
