@@ -802,9 +802,10 @@ textarea:focus-visible,
     margin-bottom: var(--spacing-lg);
 }
 
-/* Collapsed categories shrink to a single row — no card chrome, just a
-   chevron + label — so the user isn't scrolling past rows of empty dark
-   blocks to reach expanded content. */
+/* Collapsed categories shrink to a single row — a compact bg-tertiary pill
+   (chevron + label) in the same visual family as the Coach .block-header —
+   so the user isn't scrolling past rows of empty dark blocks to reach
+   expanded content. */
 .journal .category:has(.category-header[aria-expanded="false"]) {
     margin-bottom: var(--spacing-sm);
 }
@@ -834,21 +835,24 @@ textarea:focus-visible,
 }
 
 .journal .category-header[aria-expanded="false"] {
-    padding: var(--spacing-xs) var(--spacing-sm);
-    background-color: transparent;
-    border-radius: 0;
+    /* Standalone pill: inherit the base bg-tertiary + spacing-sm/md padding
+       and round all four corners (the base header rounds only the top, for
+       when it sits atop an expanded card). */
+    border-radius: var(--radius-md);
 }
 
 .journal .category-header:last-child {
     border-radius: var(--radius-md);
 }
 
-.journal .category-header:hover {
-    background-color: #0d2a4d;
-}
-
-.journal .category-header[aria-expanded="false"]:hover {
-    background-color: var(--bg-tertiary);
+/* Gate hover behind a real pointer so a touch tap never latches the hover
+   background (which used to leave a collapsed row looking "selected").
+   Collapsed pills share the same hover darken — their resting background is
+   now bg-tertiary, so the old bg-tertiary hover override would be a no-op. */
+@media (hover: hover) {
+    .journal .category-header:hover {
+        background-color: #0d2a4d;
+    }
 }
 
 .journal .category-chevron {
