@@ -56,12 +56,14 @@ class JournalPage:
         self.page.locator(".header-actions button.icon-btn").click()
         self.page.wait_for_selector(".config-screen", timeout=3000)
 
-    def add_tracker(self, name, category, tracker_type="simple", days=None, polarity=None):
+    def add_tracker(self, name, category, tracker_type="simple", days=None,
+                    polarity=None, target=None):
         """Create a tracker via the config form.
 
         `days` (optional): iterable of weekday ints (0=Sun..6=Sat) to schedule
         on — the picker starts at Daily (all on), so this toggles to match.
         `polarity` (optional): 'positive' | 'negative' | 'neutral'.
+        `target` (optional, quantifiable only): raw target text ("10" / "150-170").
         """
         self.page.locator("button.btn-primary").filter(has_text="Add").click()
         self.page.wait_for_selector(".modal-content", timeout=3000)
@@ -69,6 +71,8 @@ class JournalPage:
         selects = self.page.locator(".form-select")
         selects.first.select_option(label=category)
         selects.nth(1).select_option(value=tracker_type)
+        if target is not None:
+            self.page.locator("input[aria-label='Target value or range']").fill(target)
         if days is not None:
             desired = set(days)
             for d in range(7):

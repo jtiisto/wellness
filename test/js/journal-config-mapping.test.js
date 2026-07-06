@@ -101,3 +101,50 @@ test('formatScheduleSummary: Daily / Mon–Fri / slash list', () => {
     assert.equal(formatScheduleSummary([0, 6]), 'Sun/Sat');
     assert.equal(formatScheduleSummary(new Set([6, 1])), 'Mon/Sat');
 });
+
+// ---- buildTrackerSaveFields: target (quantifiable) -----------------------
+
+test('buildTrackerSaveFields: new tracker with a target → single genesis segment', () => {
+    const fields = buildTrackerSaveFields(
+        null, { days: [...ALL_DAYS], polarity: '', target: { min: 150, max: 170 } }, TODAY);
+    assert.deepEqual(fields.targetHistory, [
+        { effectiveFrom: SCHEDULE_GENESIS_DATE, target: { min: 150, max: 170 } },
+    ]);
+});
+
+test('buildTrackerSaveFields: new tracker with null target writes no targetHistory', () => {
+    const fields = buildTrackerSaveFields(
+        null, { days: [...ALL_DAYS], polarity: '', target: null }, TODAY);
+    assert.equal('targetHistory' in fields, false);
+});
+
+test('buildTrackerSaveFields: target undefined leaves targetHistory untouched', () => {
+    const t = { targetHistory: [{ effectiveFrom: SCHEDULE_GENESIS_DATE, target: { min: 10 } }] };
+    const fields = buildTrackerSaveFields(t, { days: [...ALL_DAYS], polarity: '' }, TODAY);
+    assert.equal('targetHistory' in fields, false);
+});
+
+test('buildTrackerSaveFields: editing to a new target updates via the writer', () => {
+    const t = { targetHistory: [{ effectiveFrom: SCHEDULE_GENESIS_DATE, target: { min: 120 } }] };
+    const fields = buildTrackerSaveFields(
+        t, { days: [...ALL_DAYS], polarity: '', target: { min: 150 } }, TODAY);
+    assert.ok(fields.targetHistory);
+    assert.deepEqual(fields.targetHistory[fields.targetHistory.length - 1],
+        { effectiveFrom: TODAY, target: { min: 150 } });
+});
+
+test('buildTrackerSaveFields: editing to the same target is a no-op', () => {
+    const t = { targetHistory: [{ effectiveFrom: SCHEDULE_GENESIS_DATE, target: { min: 120 } }] };
+    const fields = buildTrackerSaveFields(
+        t, { days: [...ALL_DAYS], polarity: '', target: { min: 120 } }, TODAY);
+    assert.equal('targetHistory' in fields, false);
+});
+
+test('buildTrackerSaveFields: clearing a target records a null-target segment', () => {
+    const t = { targetHistory: [{ effectiveFrom: SCHEDULE_GENESIS_DATE, target: { min: 120 } }] };
+    const fields = buildTrackerSaveFields(
+        t, { days: [...ALL_DAYS], polarity: '', target: null }, TODAY);
+    assert.ok(fields.targetHistory);
+    assert.deepEqual(fields.targetHistory[fields.targetHistory.length - 1],
+        { effectiveFrom: TODAY, target: null });
+});

@@ -6,6 +6,7 @@ import {
     SCHEDULE_GENESIS_DATE,
     parseTarget,
     formatTarget,
+    formatTargetInput,
     targetForDate,
     computeTargetHistoryUpdate,
 } from '../../public/js/journal/utils.js';
@@ -141,4 +142,28 @@ test('computeTargetHistoryUpdate: clearing a target records a null-target segmen
     assert.equal(res.changed, true);
     assert.deepEqual(res.targetHistory[res.targetHistory.length - 1],
         { effectiveFrom: TODAY, target: null });
+});
+
+// ---- formatTargetInput (inverse of parseTarget for the config input) -----
+
+test('formatTargetInput: renders re-parseable raw strings', () => {
+    assert.equal(formatTargetInput(null), '');
+    assert.equal(formatTargetInput({}), '');
+    assert.equal(formatTargetInput({ min: 10 }), '10');
+    assert.equal(formatTargetInput({ max: 2 }), '2');
+    assert.equal(formatTargetInput({ min: 150, max: 170 }), '150-170');
+    assert.equal(formatTargetInput({ min: 8, max: 8 }), '8-8');  // exact → range form
+});
+
+test('formatTargetInput ↔ parseTarget round-trips (unchanged polarity)', () => {
+    const cases = [
+        [{ min: 10 }, 'positive'],
+        [{ max: 10 }, 'negative'],
+        [{ min: 150, max: 170 }, 'positive'],
+        [{ min: 8, max: 8 }, 'positive'],
+    ];
+    for (const [target, polarity] of cases) {
+        const round = parseTarget(formatTargetInput(target), polarity).target;
+        assert.deepEqual(round, target, `round-trip failed for ${JSON.stringify(target)}`);
+    }
 });

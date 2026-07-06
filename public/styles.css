@@ -1026,6 +1026,12 @@ textarea:focus-visible,
     color: var(--text-secondary);
 }
 
+.form-error {
+    margin-top: var(--spacing-sm);
+    font-size: var(--font-size-sm);
+    color: var(--accent-error);
+}
+
 .journal .tracker-checkbox {
     flex-shrink: 0;
 }

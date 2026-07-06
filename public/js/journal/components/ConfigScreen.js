@@ -17,6 +17,10 @@ import {
     getScheduleDaysForDate,
     buildTrackerSaveFields,
     formatScheduleSummary,
+    parseTarget,
+    formatTarget,
+    formatTargetInput,
+    targetForDate,
     ALL_DAYS,
     POLARITY_VALUES,
 } from '../utils.js';
@@ -69,6 +73,12 @@ function TrackerForm({ tracker, onSave, onCancel }) {
         (tracker && POLARITY_VALUES.includes(tracker.polarity)) ? tracker.polarity : ''
     );
 
+    // Raw target text ("10" / "150-170"); seeded from the current target so an
+    // unedited save round-trips to a no-op. Only used for quantifiable trackers.
+    const [targetInput, setTargetInput] = useState(
+        tracker ? formatTargetInput(targetForDate(tracker, today)) : ''
+    );
+
     const [newCategory, setNewCategory] = useState('');
     const [useNewCategory, setUseNewCategory] = useState(existingCategories.length === 0);
 
@@ -106,17 +116,28 @@ function TrackerForm({ tracker, onSave, onCancel }) {
             type: formData.type,
         };
 
+        let target;  // undefined = not a quantifiable tracker → leave targetHistory alone
         if (formData.type === 'quantifiable') {
             trackerData.unit = formData.unit;
             trackerData.defaultValue = formData.defaultValue !== '' ? Number(formData.defaultValue) : null;
             trackerData.accumulator = formData.accumulator === true;
+
+            const parsed = parseTarget(targetInput, polarity);
+            if (parsed.error) {
+                alert(parsed.error);
+                return;
+            }
+            target = parsed.target;  // {min?,max?} or null
         }
 
-        // Schedule (scheduleHistory) + polarity — see buildTrackerSaveFields.
-        Object.assign(trackerData, buildTrackerSaveFields(tracker, { days, polarity }, today));
+        // Schedule + polarity + target — see buildTrackerSaveFields.
+        Object.assign(trackerData, buildTrackerSaveFields(tracker, { days, polarity, target }, today));
 
         onSave(trackerData);
     };
+
+    // Live interpretation of the target input under the current polarity.
+    const targetParse = parseTarget(targetInput, polarity);
 
     return html`
         <div class="modal-overlay" onClick=${onCancel}>
@@ -227,6 +248,22 @@ function TrackerForm({ tracker, onSave, onCancel }) {
                                 <span>Running total (accumulator) — tap + to add throughout the day</span>
                             </label>
                         </div>
+                        <div class="form-group">
+                            <label class="form-label">Target</label>
+                            <input
+                                type="text"
+                                class="form-input"
+                                value=${targetInput}
+                                onInput=${(e) => setTargetInput(e.target.value)}
+                                placeholder="e.g. 150 or 150-170"
+                                aria-label="Target value or range"
+                            />
+                            ${targetInput.trim() && targetParse.error
+                                ? html`<div class="form-error">${targetParse.error}</div>`
+                                : (targetParse.target
+                                    ? html`<div class="schedule-summary">Target: ${formatTarget(targetParse.target, formData.unit)}</div>`
+                                    : null)}
+                        </div>
                     `}
 
                     <div class="form-group">
@@ -290,13 +327,14 @@ function TrackerConfigItem({ tracker, onEdit, onDelete }) {
     const polarityLabel = POLARITY_VALUES.includes(tracker.polarity)
         ? tracker.polarity.charAt(0).toUpperCase() + tracker.polarity.slice(1)
         : null;
+    const targetLabel = formatTarget(targetForDate(tracker, getToday()), tracker.unit);
 
     return html`
         <div class="tracker-config-item">
             <div class="tracker-config-info">
                 <div class="tracker-config-name">${tracker.name}</div>
                 <div class="tracker-config-meta">
-                    ${getTypeLabel(tracker.type)} \u2022 ${scheduleLabel}${polarityLabel ? ` \u2022 ${polarityLabel}` : ''}
+                    ${getTypeLabel(tracker.type)} \u2022 ${scheduleLabel}${targetLabel ? ` \u2022 ${targetLabel}` : ''}${polarityLabel ? ` \u2022 ${polarityLabel}` : ''}
                 </div>
             </div>
             <div class="tracker-config-actions">

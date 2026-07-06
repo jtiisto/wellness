@@ -401,16 +401,21 @@ export function normalizeTrackerSchedule(tracker) {
  *   - Empty selection coerces to Daily.
  *   - Polarity. A valid value is written; selecting "unspecified" on a tracker
  *     that had one clears it (`undefined`, dropped from meta_json on upload).
+ *   - Target (quantifiable only). Pass a typed `{min?,max?}` object or null; a
+ *     new tracker with a target gets a single genesis segment, editing delegates
+ *     to `computeTargetHistoryUpdate` (clearing writes a `target:null` segment).
+ *     Pass `target: undefined` (the default) to leave `targetHistory` untouched
+ *     (non-quantifiable types).
  *
  * Returns a partial patch to merge into the tracker; keys are present only when
  * they should be written.
  *
  * @param {Object|null} existingTracker - The tracker being edited, or null for a new one
- * @param {{days: number[], polarity: string}} form - Chosen weekdays (0..6) and polarity
+ * @param {{days: number[], polarity: string, target?: object|null}} form
  * @param {string} today - Local YYYY-MM-DD (caller passes getToday())
- * @returns {{scheduleHistory?: Array, polarity?: string|undefined}}
+ * @returns {{scheduleHistory?: Array, polarity?: string|undefined, targetHistory?: Array}}
  */
-export function buildTrackerSaveFields(existingTracker, { days, polarity }, today) {
+export function buildTrackerSaveFields(existingTracker, { days, polarity, target }, today) {
     const fields = {};
 
     const chosen = normalizeDays(
@@ -432,7 +437,41 @@ export function buildTrackerSaveFields(existingTracker, { days, polarity }, toda
         fields.polarity = undefined; // explicit clear back to unspecified
     }
 
+    // `undefined` = not applicable (leave targetHistory alone); null = no target.
+    if (target !== undefined) {
+        if (!existingTracker) {
+            if (target !== null) {
+                fields.targetHistory = [{ effectiveFrom: SCHEDULE_GENESIS_DATE, target }];
+            }
+        } else {
+            const res = computeTargetHistoryUpdate(existingTracker, target, today);
+            if (res.changed) {
+                fields.targetHistory = res.targetHistory;
+            }
+        }
+    }
+
     return fields;
+}
+
+/**
+ * Inverse of `parseTarget` for seeding the config text input: render a typed
+ * target back to a raw, re-parseable string ("10", "150-170"). Uses the range
+ * form for both range and exact ({min,max}) so a save without edits round-trips
+ * to the same target under the no-op guard; a bare min/max renders as the number
+ * (round-trips as long as the tracker's polarity is unchanged). Empty → "".
+ * @param {{min?: number, max?: number}|null} target
+ * @returns {string}
+ */
+export function formatTargetInput(target) {
+    if (!target || (target.min == null && target.max == null)) {
+        return '';
+    }
+    const { min, max } = target;
+    if (min != null && max != null) {
+        return `${min}-${max}`;
+    }
+    return String(min != null ? min : max);
 }
 
 /**
