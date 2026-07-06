@@ -264,6 +264,20 @@ def _loads_dict(meta_json):
     return parsed if isinstance(parsed, dict) else None
 
 
+def _migration_5_target_column(cursor):
+    """Add the canonical `target_json` column (a tracker's typed value target,
+    effective-dated `targetHistory` as JSON) to `trackers` and
+    `trackers_archive`.
+
+    Brand-new field — no backfill. `target` / `targetHistory` are reserved keys
+    from day one, so the column is the sole home (never in meta_json). Guarded
+    `ADD COLUMN` is idempotent.
+    """
+    for table in ("trackers", "trackers_archive"):
+        if not _column_exists(cursor, table, "target_json"):
+            cursor.execute(f"ALTER TABLE {table} ADD COLUMN target_json TEXT")
+
+
 # Ordered (target_version, migration_fn) pairs. Each migration is applied at
 # most once per DB, tracked via PRAGMA user_version. New schema changes are
 # added as a new entry with the next sequential version number.
@@ -276,6 +290,7 @@ MIGRATIONS = [
     (2, _migration_2_archive_tables),
     (3, _migration_3_schedule_polarity_columns),
     (4, _migration_4_strip_schedule_polarity_from_meta),
+    (5, _migration_5_target_column),
 ]
 
 
@@ -389,7 +404,7 @@ class DeltaSyncResponse(BaseModel):
 # echo back during migration.
 _TRACKER_RESERVED_KEYS = frozenset({
     "id", "name", "category", "type", "lastModifiedAt", "deleted",
-    "scheduleHistory", "polarity",
+    "scheduleHistory", "polarity", "target", "targetHistory",
     "_version", "_baseVersion", "_baseLastModifiedAt",
     "_lastModifiedBy", "_lastModifiedAt", "_deleted",
 })
@@ -397,8 +412,8 @@ _TRACKER_RESERVED_KEYS = frozenset({
 
 def _tracker_meta(item: dict) -> str:
     """Serialize the non-reserved fields of a tracker upload to meta_json.
-    `scheduleHistory` / `polarity` are reserved (they live in dedicated
-    columns), so they are never written into meta_json."""
+    `scheduleHistory` / `polarity` / `targetHistory` are reserved (they live in
+    dedicated columns), so they are never written into meta_json."""
     return json.dumps({
         k: v for k, v in item.items() if k not in _TRACKER_RESERVED_KEYS
     })
@@ -412,17 +427,29 @@ def _schedule_json(item: dict) -> Optional[str]:
     return json.dumps(schedule) if schedule is not None else None
 
 
-def _apply_canonical_schedule_polarity(out: dict, row) -> None:
-    """Emit the canonical `schedule_json` / `polarity` columns onto a
-    public-facing tracker dict. The columns are the single source of truth
-    (meta_json no longer carries these), so any stray copy that slipped in from
-    an old meta blob is dropped first and then set purely from the columns."""
+def _target_json(item: dict) -> Optional[str]:
+    """Serialize a tracker upload's `targetHistory` for its canonical column, or
+    None when absent. `targetHistory` is a reserved key stored only in the
+    `target_json` column (never in `meta_json`)."""
+    target = item.get("targetHistory")
+    return json.dumps(target) if target is not None else None
+
+
+def _apply_canonical_columns(out: dict, row) -> None:
+    """Emit the canonical `schedule_json` / `polarity` / `target_json` columns
+    onto a public-facing tracker dict. The columns are the single source of
+    truth (meta_json no longer carries these), so any stray copy that slipped in
+    from an old meta blob is dropped first and then set purely from the
+    columns."""
     out.pop("scheduleHistory", None)
     out.pop("polarity", None)
+    out.pop("targetHistory", None)
     if row["schedule_json"] is not None:
         out["scheduleHistory"] = json.loads(row["schedule_json"])
     if row["polarity"] is not None:
         out["polarity"] = row["polarity"]
+    if row["target_json"] is not None:
+        out["targetHistory"] = json.loads(row["target_json"])
 
 
 def _tracker_server_row(row, tracker_id: str) -> dict:
@@ -442,7 +469,7 @@ def _tracker_server_row(row, tracker_id: str) -> dict:
     out["type"] = row["type"]
     out["deleted"] = bool(row["deleted"])
     out["lastModifiedAt"] = row["last_modified_at"]
-    _apply_canonical_schedule_polarity(out, row)
+    _apply_canonical_columns(out, row)
     return out
 
 
@@ -532,7 +559,7 @@ def _sync_delta(get_db, since=None, client_id=None):
                 tracker["category"] = row["category"]
                 tracker["type"] = row["type"]
                 tracker["lastModifiedAt"] = row["last_modified_at"]
-                _apply_canonical_schedule_polarity(tracker, row)
+                _apply_canonical_columns(tracker, row)
                 config.append(tracker)
 
             seven_days_ago = (
@@ -589,7 +616,7 @@ def _apply_tracker_upload(
 
     cursor.execute(
         "SELECT name, category, type, meta_json, schedule_json, polarity, "
-        "deleted, last_modified_at FROM trackers WHERE id = ?",
+        "target_json, deleted, last_modified_at FROM trackers WHERE id = ?",
         (tracker_id,),
     )
     row = cursor.fetchone()
@@ -604,8 +631,8 @@ def _apply_tracker_upload(
         cursor.execute(
             "INSERT INTO trackers "
             "(id, name, category, type, meta_json, schedule_json, polarity, "
-            " last_modified_at, deleted) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " target_json, last_modified_at, deleted) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 tracker_id,
                 item.get("name"),
@@ -614,6 +641,7 @@ def _apply_tracker_upload(
                 _tracker_meta(item),
                 _schedule_json(item),
                 item.get("polarity"),
+                _target_json(item),
                 now,
                 1 if is_deleted else 0,
             ),
@@ -635,8 +663,8 @@ def _apply_tracker_upload(
     cursor.execute(
         "INSERT INTO trackers_archive "
         "(tracker_id, name, category, type, meta_json, schedule_json, polarity, "
-        " deleted, last_modified_at, superseded_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " target_json, deleted, last_modified_at, superseded_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             tracker_id,
             row["name"],
@@ -645,6 +673,7 @@ def _apply_tracker_upload(
             row["meta_json"],
             row["schedule_json"],
             row["polarity"],
+            row["target_json"],
             row["deleted"] or 0,
             stored_ts or now,
             now,
@@ -652,8 +681,8 @@ def _apply_tracker_upload(
     )
     cursor.execute(
         "UPDATE trackers SET name = ?, category = ?, type = ?, meta_json = ?, "
-        "schedule_json = ?, polarity = ?, deleted = ?, last_modified_at = ? "
-        "WHERE id = ?",
+        "schedule_json = ?, polarity = ?, target_json = ?, deleted = ?, "
+        "last_modified_at = ? WHERE id = ?",
         (
             item.get("name"),
             item.get("category", ""),
@@ -661,6 +690,7 @@ def _apply_tracker_upload(
             _tracker_meta(item),
             _schedule_json(item),
             item.get("polarity"),
+            _target_json(item),
             1 if is_deleted else 0,
             now,
             tracker_id,

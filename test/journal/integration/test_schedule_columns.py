@@ -129,3 +129,73 @@ class TestSchedulePolarityColumns:
         # The prior version was archived with the OLD schedule + polarity.
         assert json.loads(archived["schedule_json"]) == SCHEDULE
         assert archived["polarity"] == "positive"
+
+
+TARGET = [{"effectiveFrom": "0000-01-01", "target": {"min": 150, "max": 170}}]
+
+
+@pytest.mark.integration
+class TestTargetColumn:
+    def test_upload_captures_target_column_not_in_meta(
+            self, client, journal_registered_client, tmp_journal_db):
+        _upload(client, journal_registered_client, [_tracker(targetHistory=TARGET)])
+        with get_db(tmp_journal_db) as conn:
+            row = conn.execute(
+                "SELECT target_json, meta_json FROM trackers WHERE id = ?",
+                ("tracker-sched",),
+            ).fetchone()
+        assert json.loads(row["target_json"]) == TARGET
+        meta = json.loads(row["meta_json"])
+        assert "targetHistory" not in meta
+        assert "target" not in meta
+
+    def test_absent_target_stores_null(
+            self, client, journal_registered_client, tmp_journal_db):
+        _upload(client, journal_registered_client, [_tracker()])
+        with get_db(tmp_journal_db) as conn:
+            row = conn.execute(
+                "SELECT target_json FROM trackers WHERE id = ?",
+                ("tracker-sched",),
+            ).fetchone()
+        assert row["target_json"] is None
+
+    def test_delta_emits_target_history_toplevel(
+            self, client, journal_registered_client):
+        _upload(client, journal_registered_client, [_tracker(targetHistory=TARGET)])
+        data = client.get("/api/journal/sync/delta").json()
+        tracker = next(t for t in data["config"] if t["id"] == "tracker-sched")
+        assert tracker["targetHistory"] == TARGET
+
+    def test_stale_reject_serverrow_carries_target(
+            self, client, journal_registered_client):
+        first = _upload(client, journal_registered_client, [_tracker(targetHistory=TARGET)])
+        stamp = first["acceptedTrackers"][0]["lastModifiedAt"]
+        time.sleep(0.01)
+        _upload(client, journal_registered_client,
+                [_tracker(name="v2", targetHistory=TARGET, _baseLastModifiedAt=stamp)])
+        resp = _upload(client, journal_registered_client,
+                       [_tracker(name="v3", targetHistory=TARGET, _baseLastModifiedAt=stamp)])
+        rejected = resp["rejectedTrackers"][0]
+        assert rejected["errorKind"] == "stale"
+        assert rejected["serverRow"]["targetHistory"] == TARGET
+
+    def test_update_changes_target_and_archives_prior(
+            self, client, journal_registered_client, tmp_journal_db):
+        first = _upload(client, journal_registered_client, [_tracker(targetHistory=TARGET)])
+        stamp = first["acceptedTrackers"][0]["lastModifiedAt"]
+        time.sleep(0.01)
+        new_target = [
+            {"effectiveFrom": "0000-01-01", "target": {"min": 150, "max": 170}},
+            {"effectiveFrom": "2026-07-06", "target": {"min": 160}},
+        ]
+        _upload(client, journal_registered_client,
+                [_tracker(targetHistory=new_target, _baseLastModifiedAt=stamp)])
+        with get_db(tmp_journal_db) as conn:
+            live = conn.execute(
+                "SELECT target_json FROM trackers WHERE id = ?",
+                ("tracker-sched",)).fetchone()
+            archived = conn.execute(
+                "SELECT target_json FROM trackers_archive WHERE tracker_id = ? "
+                "ORDER BY id DESC LIMIT 1", ("tracker-sched",)).fetchone()
+        assert json.loads(live["target_json"]) == new_target
+        assert json.loads(archived["target_json"]) == TARGET

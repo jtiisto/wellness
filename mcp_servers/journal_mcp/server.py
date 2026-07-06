@@ -692,6 +692,8 @@ means:
   defaultValue, accumulator (schedule/polarity are NOT here — see below)
 - schedule_json: Canonical weekday schedule (`scheduleHistory` segments as JSON)
 - polarity: Canonical `'positive' | 'negative' | 'neutral'` (or NULL)
+- target_json: Canonical typed value target (`targetHistory` segments as JSON;
+  each segment's `target` is `{min?, max?}` or null)
 - deleted: Soft delete flag — 1 means hidden from UI but retained for history
 - last_modified_at: Server-stamped timestamp (opaque sync token)
 

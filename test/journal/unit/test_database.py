@@ -81,7 +81,7 @@ class TestInitDatabase:
             cols = {row[1] for row in cursor.fetchall()}
             assert cols == {
                 'id', 'tracker_id', 'name', 'category', 'type', 'meta_json',
-                'schedule_json', 'polarity',
+                'schedule_json', 'polarity', 'target_json',
                 'deleted', 'last_modified_at', 'superseded_at',
             }
 
@@ -102,6 +102,22 @@ class TestInitDatabase:
             columns = {row[1] for row in cursor.fetchall()}
         assert 'schedule_json' in columns
         assert 'polarity' in columns
+
+    def test_migration_5_adds_target_column_idempotently(self, test_app, tmp_journal_db):
+        """Migration 5 adds the canonical target_json column (trackers + archive);
+        the guarded ALTER is a no-op on a second run."""
+        import modules.journal as journal
+        with get_db(tmp_journal_db) as conn:
+            cursor = conn.cursor()
+            cursor.execute("PRAGMA table_info(trackers)")
+            assert 'target_json' in {row[1] for row in cursor.fetchall()}
+            cursor.execute("PRAGMA table_info(trackers_archive)")
+            assert 'target_json' in {row[1] for row in cursor.fetchall()}
+            # Re-running is safe (guarded ADD COLUMN).
+            journal._migration_5_target_column(cursor)
+            conn.commit()
+            cursor.execute("PRAGMA table_info(trackers)")
+            assert 'target_json' in {row[1] for row in cursor.fetchall()}
 
     def test_migration_3_backfills_from_meta_json(self, test_app, tmp_journal_db):
         """Migration 3's backfill lifts scheduleHistory/polarity out of an

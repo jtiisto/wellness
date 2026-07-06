@@ -77,14 +77,41 @@ function daysEqual(a, b) {
 }
 
 /**
+ * Select the effective-dated segment that applies on `dateStr` from a history
+ * array of `{ effectiveFrom, ... }` objects: the segment with the greatest
+ * `effectiveFrom <= dateStr`, falling back to the earliest when `dateStr`
+ * precedes them all. `effectiveFrom` is compared as a plain YYYY-MM-DD string
+ * (== chronological for zero-padded ISO dates; no Date, no timezone). Returns
+ * null for an absent/empty history. Shared by schedule and target derivation.
+ *
+ * @param {Array<{effectiveFrom: string}>} history
+ * @param {string} dateStr - Local YYYY-MM-DD date
+ * @returns {Object|null} the chosen segment, or null
+ */
+export function selectSegmentForDate(history, dateStr) {
+    if (!Array.isArray(history) || history.length === 0) {
+        return null;
+    }
+    let chosen = null;
+    for (const seg of history) {
+        if (seg.effectiveFrom <= dateStr &&
+            (chosen === null || seg.effectiveFrom > chosen.effectiveFrom)) {
+            chosen = seg;
+        }
+    }
+    if (chosen === null) {
+        // dateStr precedes every segment — use the earliest.
+        chosen = history.reduce(
+            (a, b) => (b.effectiveFrom < a.effectiveFrom ? b : a));
+    }
+    return chosen;
+}
+
+/**
  * Resolve the set of weekdays a tracker is scheduled on, as of a given date.
  *
  * Priority (see docs/ARCHITECTURE.md "Tracker scheduling"):
- *   1. `scheduleHistory` (effective-dated segments) — pick the segment with the
- *      greatest `effectiveFrom <= dateStr`; if the date precedes every segment,
- *      fall back to the earliest. `effectiveFrom` is compared as a plain
- *      YYYY-MM-DD string (== chronological for zero-padded ISO dates; no Date,
- *      no timezone).
+ *   1. `scheduleHistory` (effective-dated segments) — see selectSegmentForDate.
  *   2. Legacy `frequency: 'weekly'` → just `weeklyDay`.
  *   3. Legacy `frequency: 'daily'`, or nothing at all → every day.
  *
@@ -93,21 +120,9 @@ function daysEqual(a, b) {
  * @returns {Set<number>} weekdays (0=Sun..6=Sat)
  */
 export function getScheduleDaysForDate(tracker, dateStr) {
-    const history = tracker && tracker.scheduleHistory;
-    if (Array.isArray(history) && history.length > 0) {
-        let chosen = null;
-        for (const seg of history) {
-            if (seg.effectiveFrom <= dateStr &&
-                (chosen === null || seg.effectiveFrom > chosen.effectiveFrom)) {
-                chosen = seg;
-            }
-        }
-        if (chosen === null) {
-            // dateStr precedes every segment — use the earliest.
-            chosen = history.reduce(
-                (a, b) => (b.effectiveFrom < a.effectiveFrom ? b : a));
-        }
-        return new Set(normalizeDays(chosen.days));
+    const seg = selectSegmentForDate(tracker && tracker.scheduleHistory, dateStr);
+    if (seg !== null) {
+        return new Set(normalizeDays(seg.days));
     }
 
     if (tracker && tracker.frequency === 'weekly') {
@@ -115,6 +130,84 @@ export function getScheduleDaysForDate(tracker, dateStr) {
     }
 
     return new Set(ALL_DAYS);
+}
+
+/**
+ * Resolve a tracker's value target as of a given date: the `target` object
+ * (`{min?, max?}`) from the effective-dated `targetHistory` segment in effect on
+ * `dateStr`, or null when there is no target (absent history, or a segment whose
+ * `target` is null — a target removed effective-dated). See docs/ARCHITECTURE.md
+ * "Tracker targets".
+ *
+ * @param {Object} tracker - Tracker config object
+ * @param {string} dateStr - Local YYYY-MM-DD date
+ * @returns {{min?: number, max?: number}|null}
+ */
+export function targetForDate(tracker, dateStr) {
+    const seg = selectSegmentForDate(tracker && tracker.targetHistory, dateStr);
+    return seg ? (seg.target ?? null) : null;
+}
+
+/**
+ * Parse a target text input into a typed `{min?, max?}` object.
+ *
+ *   - "" / whitespace → no target (`{ target: null, error: null }`)
+ *   - "150-170" → `{ min: 150, max: 170 }` (range)
+ *   - "10" → polarity-defaulted: `{ max: 10 }` for negative, else `{ min: 10 }`
+ *   - min > max, non-numeric, or negative input → `error` set, `target: null`
+ *
+ * @param {string} str
+ * @param {string} polarity - 'positive' | 'negative' | 'neutral' | undefined
+ * @returns {{target: ({min?: number, max?: number}|null), error: (string|null)}}
+ */
+export function parseTarget(str, polarity) {
+    if (str == null) {
+        return { target: null, error: null };
+    }
+    const s = String(str).trim();
+    if (s === '') {
+        return { target: null, error: null };
+    }
+    const range = s.match(/^(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)$/);
+    if (range) {
+        const min = Number(range[1]);
+        const max = Number(range[2]);
+        if (min > max) {
+            return { target: null, error: 'Range start must be ≤ end' };
+        }
+        return { target: { min, max }, error: null };
+    }
+    const single = s.match(/^(\d+(?:\.\d+)?)$/);
+    if (single) {
+        const n = Number(single[1]);
+        return {
+            target: polarity === 'negative' ? { max: n } : { min: n },
+            error: null,
+        };
+    }
+    return { target: null, error: 'Enter a number (e.g. 10) or range (e.g. 150-170)' };
+}
+
+/**
+ * Format a typed target for display, appending the unit when present:
+ * "≥ 10 g", "≤ 2", "150–170 g", "8 g" (exact). Empty/absent target → "".
+ * @param {{min?: number, max?: number}|null} target
+ * @param {string} [unit]
+ * @returns {string}
+ */
+export function formatTarget(target, unit) {
+    if (!target || (target.min == null && target.max == null)) {
+        return '';
+    }
+    const suffix = unit ? ` ${unit}` : '';
+    const { min, max } = target;
+    if (min != null && max != null) {
+        return min === max ? `${min}${suffix}` : `${min}–${max}${suffix}`;
+    }
+    if (min != null) {
+        return `≥ ${min}${suffix}`;
+    }
+    return `≤ ${max}${suffix}`;
 }
 
 /**
@@ -176,47 +269,89 @@ export function shouldShowTracker(tracker, dateStr, dayLog) {
  * @param {string} today - Local YYYY-MM-DD (caller passes getToday())
  * @returns {{changed: boolean, scheduleHistory: Array<{effectiveFrom: string, days: number[]}>|undefined}}
  */
+// Shared apply-from-today write rule for effective-dated segment histories
+// (schedule + target). Given the value in effect today (`currentValue`) and the
+// new value, returns `{ changed, history }`:
+//   - no-op (values equal) → changed:false, history returned unchanged (same ref)
+//   - first edit (no history) → genesis segment (old value) + today segment (new)
+//   - same-day re-edit (latest effectiveFrom === today) → replace that segment
+//   - later change → append a today segment
+// `equals(a, b)` compares values; `makeSegment(effectiveFrom, value)` builds a
+// segment of the appropriate shape.
+function applySegmentEdit({ history, currentValue, newValue, today, equals, makeSegment }) {
+    if (equals(newValue, currentValue)) {
+        return { changed: false, history };
+    }
+    const hist = (Array.isArray(history) && history.length > 0) ? history : null;
+    if (hist === null) {
+        return {
+            changed: true,
+            history: [
+                makeSegment(SCHEDULE_GENESIS_DATE, currentValue),
+                makeSegment(today, newValue),
+            ],
+        };
+    }
+    const latest = hist.reduce((a, b) => (b.effectiveFrom > a.effectiveFrom ? b : a));
+    if (latest.effectiveFrom === today) {
+        return {
+            changed: true,
+            history: hist.map(seg => (seg === latest ? makeSegment(today, newValue) : seg)),
+        };
+    }
+    return { changed: true, history: [...hist, makeSegment(today, newValue)] };
+}
+
+function targetsEqual(a, b) {
+    const an = a || null;
+    const bn = b || null;
+    if (an === null && bn === null) {
+        return true;
+    }
+    if (an === null || bn === null) {
+        return false;
+    }
+    return (an.min ?? null) === (bn.min ?? null) && (an.max ?? null) === (bn.max ?? null);
+}
+
 export function computeScheduleHistoryUpdate(tracker, newDays, today) {
     const days = normalizeDays(newDays);
     const currentDays = normalizeDays(
         Array.from(getScheduleDaysForDate(tracker, today)));
+    const res = applySegmentEdit({
+        history: tracker && tracker.scheduleHistory,
+        currentValue: currentDays,
+        newValue: days,
+        today,
+        equals: daysEqual,
+        makeSegment: (effectiveFrom, value) => ({ effectiveFrom, days: value }),
+    });
+    return { changed: res.changed, scheduleHistory: res.history };
+}
 
-    if (daysEqual(days, currentDays)) {
-        return { changed: false, scheduleHistory: tracker && tracker.scheduleHistory };
-    }
-
-    const history = (tracker && Array.isArray(tracker.scheduleHistory) &&
-                     tracker.scheduleHistory.length > 0)
-        ? tracker.scheduleHistory
-        : null;
-
-    if (history === null) {
-        // First edit: split the past (old schedule) from today (new schedule).
-        return {
-            changed: true,
-            scheduleHistory: [
-                { effectiveFrom: SCHEDULE_GENESIS_DATE, days: currentDays },
-                { effectiveFrom: today, days },
-            ],
-        };
-    }
-
-    const latest = history.reduce(
-        (a, b) => (b.effectiveFrom > a.effectiveFrom ? b : a));
-
-    if (latest.effectiveFrom === today) {
-        // Same-day re-edit: replace in place rather than duplicating today.
-        return {
-            changed: true,
-            scheduleHistory: history.map(
-                seg => (seg === latest ? { ...seg, days } : seg)),
-        };
-    }
-
-    return {
-        changed: true,
-        scheduleHistory: [...history, { effectiveFrom: today, days }],
-    };
+/**
+ * Compute the tracker's next `targetHistory` after the user sets a new typed
+ * target, following the same apply-from-today write rules as
+ * `computeScheduleHistoryUpdate` (no-op guard / genesis split / same-day replace
+ * / append). `newTarget` is a `{min?, max?}` object or null (target cleared). A
+ * cleared target is recorded as an effective-dated segment carrying
+ * `target: null`, so past target-based adherence is preserved.
+ *
+ * @param {Object} tracker - Current tracker config (may carry targetHistory)
+ * @param {{min?: number, max?: number}|null} newTarget
+ * @param {string} today - Local YYYY-MM-DD (caller passes getToday())
+ * @returns {{changed: boolean, targetHistory: Array<{effectiveFrom: string, target: object|null}>|undefined}}
+ */
+export function computeTargetHistoryUpdate(tracker, newTarget, today) {
+    const res = applySegmentEdit({
+        history: tracker && tracker.targetHistory,
+        currentValue: targetForDate(tracker, today),
+        newValue: newTarget || null,
+        today,
+        equals: targetsEqual,
+        makeSegment: (effectiveFrom, value) => ({ effectiveFrom, target: value }),
+    });
+    return { changed: res.changed, targetHistory: res.history };
 }
 
 /**
