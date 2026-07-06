@@ -211,6 +211,144 @@ export function formatTarget(target, unit) {
 }
 
 /**
+ * Per-day target judgment — a pure JS twin of `_target_status` in
+ * mcp_servers/journal_mcp/adherence.py, kept faithful so the grid and the
+ * MCP/coach never disagree. `target` is a non-null `{min?, max?}`. Returns
+ * 'met' | 'partial' | 'missed'.
+ *
+ * The polarity no-entry gate is applied FIRST, before any bound check, for every
+ * target kind: with no entry a negative-polarity tracker is 'met' (absence =
+ * avoided) and anything else is 'missed'. An entry with a null value is 'missed'.
+ * Bounds (entry + value present):
+ *   - at-least ({min}): met if value >= min; partial if 0 < value < min; else missed
+ *   - at-most ({max}): met if value <= max; over → missed (no partial)
+ *   - range ({min,max}): met in-range; partial if value < min; over → missed
+ *
+ * @param {{min?: number, max?: number}} target
+ * @param {number|null} value
+ * @param {boolean} hasEntry
+ * @param {string} [polarity] - 'positive' | 'negative' | 'neutral' | undefined
+ * @returns {'met'|'partial'|'missed'}
+ */
+export function targetStatus(target, value, hasEntry, polarity) {
+    if (!hasEntry) {
+        return polarity === 'negative' ? 'met' : 'missed';
+    }
+    if (value == null) {
+        return 'missed';
+    }
+    const min = target ? (target.min ?? null) : null;
+    const max = target ? (target.max ?? null) : null;
+    if (min != null && max != null) {
+        if (value < min) return 'partial';
+        if (value > max) return 'missed';
+        return 'met';
+    }
+    if (min != null) {
+        if (value >= min) return 'met';
+        return value > 0 ? 'partial' : 'missed';
+    }
+    if (max != null) {
+        return value <= max ? 'met' : 'missed';
+    }
+    return 'missed';
+}
+
+/**
+ * Resolve a tracker's status on a given date from that day's log entry, using the
+ * target in effect (targetForDate) and polarity — the single-day judgment the
+ * grid and (later) the category summary roll up. Mirrors how adherence.py judges
+ * a scheduled day:
+ *   - Targeted: delegate to targetStatus (met/partial/missed).
+ *   - Untargeted: strict checkbox parity — positive/neutral is 'met' iff the
+ *     checkbox is set; negative is 'met' iff there is no entry (avoided). A value
+ *     with no checkbox is NOT 'met' (no logged-counts special case).
+ *
+ * Pass the raw day-log record (`{completed?, value?}`) or null/undefined when
+ * nothing is logged — NOT a `{}` fallback — so "no entry" stays distinguishable.
+ *
+ * @param {Object} tracker
+ * @param {string} dateStr - Local YYYY-MM-DD
+ * @param {Object|null|undefined} entry
+ * @returns {{state: string, hasTarget: boolean, target: (object|null), value: (number|null), hasEntry: boolean, polarity: (string|undefined)}}
+ */
+export function dayStatus(tracker, dateStr, entry) {
+    const target = targetForDate(tracker, dateStr);
+    const hasTarget = target != null;
+    const hasEntry = entry != null;
+    const value = hasEntry ? (entry.value ?? null) : null;
+    const completed = hasEntry && entry.completed === true;
+    const polarity = tracker && tracker.polarity;
+    let state;
+    if (hasTarget) {
+        state = targetStatus(target, value, hasEntry, polarity);
+    } else if (polarity === 'negative') {
+        state = hasEntry ? 'missed' : 'met';
+    } else {
+        state = completed ? 'met' : 'missed';
+    }
+    return { state, hasTarget, target, value, hasEntry, polarity };
+}
+
+/**
+ * Build the inline target-progress display model for a quantifiable tracker row
+ * from a dayStatus result + the tracker's unit. Presentation only — the
+ * semantics live in dayStatus/targetStatus. Returns null when no target is in
+ * effect. Framing per kind (see docs/ARCHITECTURE.md "Tracker targets"):
+ *   - at-least ({min}): progress — "120 / ≥ 150 g" + a fill ratio (value/min).
+ *   - at-most ({max}): headroom — "1 of ≤ 2 · 1 left" (no fill); over the ceiling
+ *     reads as a calm warning ("over by N"), never an error.
+ *   - range ({min,max}): membership — "160 in 150–170 g" (no fill).
+ * `tone` ∈ 'met' | 'partial' | 'over' | 'neutral' drives the row color; a
+ * negative tracker with no entry is 'met' ("avoided"), never failure.
+ *
+ * @param {ReturnType<typeof dayStatus>} ds
+ * @param {string} [unit]
+ * @returns {{text: string, tone: string, fillPct: (number|null)}|null}
+ */
+export function formatTargetProgress(ds, unit) {
+    if (!ds || !ds.hasTarget || !ds.target) {
+        return null;
+    }
+    const { target, value, hasEntry, state, polarity } = ds;
+    const label = formatTarget(target, unit);
+    const min = target.min ?? null;
+    const max = target.max ?? null;
+    const isRange = min != null && max != null;
+    const isAtLeast = !isRange && min != null;
+    const isAtMost = !isRange && max != null;
+
+    if (!hasEntry) {
+        if (polarity === 'negative') {
+            return { text: `${label} · avoided`, tone: 'met', fillPct: null };
+        }
+        return { text: label, tone: 'neutral', fillPct: isAtLeast ? 0 : null };
+    }
+
+    const shown = value == null ? '—' : String(value);
+
+    if (isAtLeast) {
+        const tone = state === 'met' ? 'met' : (state === 'partial' ? 'partial' : 'neutral');
+        const fillPct = (value != null && min > 0)
+            ? Math.max(0, Math.min(1, value / min)) * 100
+            : 0;
+        return { text: `${shown} / ${label}`, tone, fillPct };
+    }
+    if (isAtMost) {
+        const over = value != null && value > max;
+        const suffix = value == null ? ''
+            : (over ? ` · over by ${value - max}` : ` · ${max - value} left`);
+        return { text: `${shown} of ${label}${suffix}`, tone: over ? 'over' : 'met', fillPct: null };
+    }
+    // range
+    let tone = 'neutral';
+    if (state === 'met') tone = 'met';
+    else if (state === 'partial') tone = 'partial';
+    else if (value != null && value > max) tone = 'over';
+    return { text: `${shown} in ${label}`, tone, fillPct: null };
+}
+
+/**
  * Whether a tracker is expected on a given date — its schedule (as of that date)
  * includes that date's local weekday.
  * @param {Object} tracker - Tracker config object

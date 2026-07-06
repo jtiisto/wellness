@@ -14,6 +14,7 @@ import {
     isDayEditable,
 } from '../store.js';
 import { NumericInput } from '../../shared/numeric-input.js';
+import { dayStatus, formatTargetProgress } from '../utils.js';
 
 const html = htm.bind(h);
 
@@ -57,7 +58,8 @@ export function TrackerItem({ tracker }) {
         }
     }, [accumModal.open]);
 
-    const entry = logs[date]?.[tracker.id] || {};
+    const rawEntry = logs[date]?.[tracker.id];
+    const entry = rawEntry || {};
     const editable = isDayEditable(date);
 
     const completed = entry.completed ?? false;
@@ -71,6 +73,13 @@ export function TrackerItem({ tracker }) {
     // for trackers (e.g. protein) that get bumped throughout the day.
     const lastUpdatedLabel = tracker.type === 'quantifiable'
         ? formatLastUpdated(lastUpdatedIso, date)
+        : null;
+
+    // Inline target progress for quantifiable trackers with a target in effect
+    // on this date — reflects the logged value regardless of the checkbox, so
+    // value-only progress (e.g. an accumulator) is visible without committing.
+    const targetInfo = tracker.type === 'quantifiable'
+        ? formatTargetProgress(dayStatus(tracker, date, rawEntry), tracker.unit)
         : null;
 
     const handleCompletedChange = (e) => {
@@ -198,6 +207,16 @@ export function TrackerItem({ tracker }) {
                     </div>
                 `}
             </div>
+            ${targetInfo && html`
+                <div class="tracker-target tracker-target--${targetInfo.tone}">
+                    <span class="tracker-target-label">${targetInfo.text}</span>
+                    ${targetInfo.fillPct != null && html`
+                        <div class="tracker-target-bar" aria-hidden="true">
+                            <div class="tracker-target-fill" style="width: ${targetInfo.fillPct}%"></div>
+                        </div>
+                    `}
+                </div>
+            `}
             ${tracker.type === 'note' && html`
                 <div class="tracker-note-input">
                     <textarea

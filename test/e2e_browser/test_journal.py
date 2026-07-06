@@ -202,6 +202,54 @@ def test_accumulator_modal_dismisses_via_overlay(journal_with_accumulator):
     assert row.locator("input[type='number']").input_value() == "100"
 
 
+def test_target_progress_line_in_grid(page, app_server, seeded_journal):
+    """A targeted accumulator row shows the inline progress line
+    ("100 / ≥ 150 g", partial tone) and flips to met when the value crosses
+    the target via the + modal.
+    """
+    base = app_server["url"]
+    client_id = seeded_journal["client_id"]
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    http_requests.post(f"{base}/api/journal/sync/update", json={
+        "clientId": client_id,
+        "config": [{
+            "id": "tracker-protein-target",
+            "name": "Protein Goal",
+            "category": "nutrition",
+            "type": "quantifiable",
+            "unit": "g",
+            "accumulator": True,
+            "targetHistory": [{"effectiveFrom": "0000-01-01", "target": {"min": 150}}],
+        }],
+        "days": {today: {"tracker-protein-target": {"value": 100}}},
+    })
+
+    page.goto(app_server["url"])
+    page.wait_for_selector(".shell", timeout=10000)
+    AppShellPage(page).navigate_to("Journal")
+    journal = JournalPage(page)
+    journal.wait_for_loaded()
+    journal.wait_for_trackers()
+
+    row = page.locator(".tracker-item").filter(has_text="Protein Goal")
+    target_line = row.locator(".tracker-target")
+    assert "100 / ≥ 150 g" in target_line.inner_text()
+    assert "tracker-target--partial" in target_line.get_attribute("class")
+    assert target_line.locator(".tracker-target-fill").count() == 1
+
+    # Cross the threshold via the accumulator + modal: 100 + 60 = 160.
+    row.locator(".tracker-accum-btn").click()
+    page.wait_for_timeout(200)
+    overlay = page.locator(".modal-overlay")
+    overlay.locator("input[type='number']").fill("60")
+    overlay.locator("button[type='submit']").click()
+    page.wait_for_timeout(300)
+
+    assert "160 / ≥ 150 g" in target_line.inner_text()
+    assert "tracker-target--met" in target_line.get_attribute("class")
+
+
 def test_focus_blur_without_value_change_does_not_update_timestamp(journal_page):
     """Tabbing into and out of the field without editing must not bump the
     'Last updated' timestamp. Otherwise scrolling through trackers would

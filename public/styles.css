@@ -968,6 +968,59 @@ textarea:focus-visible,
     color: var(--text-muted);
 }
 
+/* Inline target progress under a quantifiable tracker row. Presentation model
+   built by formatTargetProgress(); the tone class drives the color. Negative
+   trackers read as avoidance (met/calm) and an exceeded ceiling as a warning —
+   never error red here. */
+.journal .tracker-target {
+    margin-top: var(--spacing-xs);
+    padding-left: 40px; /* align with the tracker name, past the checkbox */
+    font-size: var(--font-size-sm);
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-xs);
+}
+
+.journal .tracker-target-label {
+    color: var(--text-secondary);
+}
+
+.journal .tracker-target--met .tracker-target-label {
+    color: var(--accent-success);
+}
+
+.journal .tracker-target--partial .tracker-target-label {
+    color: var(--app-accent);
+}
+
+.journal .tracker-target--over .tracker-target-label {
+    color: var(--accent-warning);
+}
+
+.journal .tracker-target--neutral .tracker-target-label {
+    color: var(--text-muted);
+}
+
+/* At-least progress fill — only rendered for {min} targets (real progress). */
+.journal .tracker-target-bar {
+    height: 3px;
+    max-width: 220px;
+    border-radius: var(--radius-full);
+    background-color: var(--border-color);
+    overflow: hidden;
+}
+
+.journal .tracker-target-fill {
+    height: 100%;
+    border-radius: var(--radius-full);
+    background-color: var(--app-accent);
+    transition: width 0.2s ease;
+}
+
+.journal .tracker-target--met .tracker-target-fill {
+    background-color: var(--accent-success);
+}
+
 /* Inline checkbox+label row used in config forms */
 .form-checkbox {
     display: inline-flex;
