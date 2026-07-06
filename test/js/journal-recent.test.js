@@ -64,3 +64,28 @@ test('recentDayStates: honors a custom window length and tolerates missing logs'
     assert.deepEqual(r.map(x => x.date), ['2026-07-04', '2026-07-05', '2026-07-06']);
     assert.ok(r.every(x => x.state === 'met')); // negative no-entry = met
 });
+
+test('recentDayStates: untargeted-neutral tracker uses noted/quiet, not met/missed', () => {
+    const t = { id: 'h', polarity: 'neutral' }; // e.g. "Headache" observation, daily
+    const logs = {
+        '2026-07-06': { h: { completed: true } }, // entry → noted
+        '2026-07-02': { h: { value: 1 } },        // entry (value) → noted
+    };
+    const byDate = Object.fromEntries(recentDayStates(t, END, logs, 7).map(x => [x.date, x.state]));
+    assert.equal(byDate['2026-07-06'], 'noted');
+    assert.equal(byDate['2026-07-02'], 'noted');
+    assert.equal(byDate['2026-07-01'], 'quiet'); // expected, no entry
+    const states = Object.values(byDate);
+    assert.ok(!states.includes('met') && !states.includes('missed'), JSON.stringify(byDate));
+});
+
+test('recentDayStates: a neutral observation still marks off-schedule days "off"', () => {
+    const t = {
+        id: 'h', polarity: 'neutral',
+        scheduleHistory: [{ effectiveFrom: SCHEDULE_GENESIS_DATE, days: [1, 2, 3, 4, 5] }],
+    };
+    const byDate = Object.fromEntries(recentDayStates(t, END, {}, 7).map(x => [x.date, x.state]));
+    assert.equal(byDate['2026-07-04'], 'off');   // Saturday
+    assert.equal(byDate['2026-07-05'], 'off');   // Sunday
+    assert.equal(byDate['2026-07-06'], 'quiet'); // Monday, expected neutral, no entry
+});

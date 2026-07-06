@@ -1,7 +1,8 @@
-// Unit tests for the collapsed-category on-track summary — the schedule- and
-// polarity-aware rollup (categorySummary) and its badge formatter
-// (formatCategorySummary). The per-tracker semantics mirror dayStatus (covered
-// in journal-targets.test.js); these tests focus on the rollup + wording.
+// Unit tests for the collapsed-category on-track summary — the actionable/
+// observation rollup (categorySummary) and its badge formatter
+// (formatCategorySummary). Untargeted neutral trackers are observations, not
+// goals: excluded from the on-track fraction, counted as `observed`. Per-tracker
+// semantics mirror dayStatus (covered in journal-targets.test.js).
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
@@ -21,7 +22,7 @@ test('categorySummary: not-expected trackers are excluded (off-schedule ≠ miss
     };
     const daily = { id: 'd', polarity: 'positive' };
     const s = categorySummary([weekendOnly, daily], MON, { d: { completed: true } });
-    assert.equal(s.expected, 1);   // weekendOnly is not expected on Monday
+    assert.equal(s.actionable, 1);   // weekendOnly is not expected on Monday
     assert.equal(s.onTrack, 1);
 });
 
@@ -32,16 +33,16 @@ test('categorySummary: mixed polarity — negative-empty counts as on track', ()
         { id: 'v', polarity: 'negative' },   // no entry → met (avoided)
     ];
     const s = categorySummary(trackers, MON, { p: { completed: true } });
-    assert.equal(s.expected, 3);
-    assert.equal(s.onTrack, 2);    // p (checked) + v (avoided)
-    assert.equal(s.notYet, 1);     // q
-    assert.equal(s.allNeutral, false);
+    assert.equal(s.actionable, 3);
+    assert.equal(s.onTrack, 2);      // p (checked) + v (avoided)
+    assert.equal(s.notYet, 1);       // q
+    assert.equal(s.observed, 0);
 });
 
 test('categorySummary: a logged negative tracker is not "on track"', () => {
     const s = categorySummary([{ id: 'v', polarity: 'negative' }], MON, { v: { value: 1 } });
-    assert.equal(s.expected, 1);
-    assert.equal(s.onTrack, 0);    // logged = not avoided
+    assert.equal(s.actionable, 1);
+    assert.equal(s.onTrack, 0);      // logged = not avoided
 });
 
 test('categorySummary: targeted tracker uses value-vs-target; partial is bucketed', () => {
@@ -55,77 +56,72 @@ test('categorySummary: targeted tracker uses value-vs-target; partial is buckete
     assert.deepEqual([partial.onTrack, partial.partial, partial.notYet], [0, 1, 0]);
 });
 
-test('categorySummary: allNeutral for neutral/unspecified polarity only', () => {
-    const s = categorySummary([
-        { id: 'a' },                        // unspecified
-        { id: 'b', polarity: 'neutral' },   // neutral
-    ], MON, {});
-    assert.equal(s.allNeutral, true);
-    assert.equal(s.expected, 2);
-    assert.equal(s.onTrack, 0);             // neither completed
-    assert.equal(s.logged, 0);
-});
-
-test('categorySummary: logged counts entries, not checkboxes (neutral value-only)', () => {
-    // A neutral measurement with a value entered but the checkbox untouched IS
-    // logged — the pure-neutral badge must count it, even though the strict
-    // checkbox-parity on-track judgment does not.
-    const s = categorySummary([
-        { id: 'weight', polarity: 'neutral', type: 'quantifiable' },
-    ], MON, { weight: { value: 82.4 } });
-    assert.equal(s.expected, 1);
-    assert.equal(s.logged, 1);
-    assert.equal(s.onTrack, 0);             // checkbox parity: unchecked ≠ met
-    assert.deepEqual(
-        formatCategorySummary(s),
-        { text: 'All logged', tone: 'met' });
-});
-
-test('categorySummary: a targeted neutral reads "on track", not "logged"', () => {
-    // Neutral polarity but a target in effect → value-vs-target is meaningful, so
-    // allNeutral flips false and the badge uses the on-track count, not logged.
-    const targeted = [
-        { id: 'a', polarity: 'neutral',
-          targetHistory: [{ effectiveFrom: SCHEDULE_GENESIS_DATE, target: { min: 150, max: 170 } }] },
-        { id: 'b', polarity: 'neutral',
-          targetHistory: [{ effectiveFrom: SCHEDULE_GENESIS_DATE, target: { min: 150, max: 170 } }] },
+test('categorySummary: untargeted neutral observations are excluded from the fraction', () => {
+    const trackers = [
+        { id: 'p1', polarity: 'positive' },       // completed → met
+        { id: 'p2', polarity: 'positive' },       // no entry → missed
+        { id: 'headache', polarity: 'neutral' },  // observation — excluded
     ];
-    const s = categorySummary(targeted, MON, { a: { value: 160 }, b: { value: 100 } });
-    assert.equal(s.allNeutral, false);   // a target makes on-track meaningful
-    assert.equal(s.onTrack, 1);          // a in range (met); b below (partial)
+    const s = categorySummary(trackers, MON, { p1: { completed: true }, headache: { value: 1 } });
+    assert.equal(s.actionable, 2);   // denominator is 2 (headache excluded), not 3
+    assert.equal(s.onTrack, 1);
+    assert.equal(s.observed, 1);     // headache logged (activity)
     assert.deepEqual(formatCategorySummary(s), { text: '1 of 2 on track', tone: 'neutral' });
 
-    // Contrast: all-neutral AND untargeted still reads "logged" via the entry count.
-    const untargeted = [{ id: 'c', polarity: 'neutral' }, { id: 'd', polarity: 'neutral' }];
-    const s2 = categorySummary(untargeted, MON, { c: { value: 5 } });
-    assert.equal(s2.allNeutral, true);
-    assert.deepEqual(formatCategorySummary(s2), { text: '1 of 2 logged', tone: 'neutral' });
+    // Whether the observation is logged does not change the on-track fraction.
+    const sNoObs = categorySummary(trackers, MON, { p1: { completed: true } });
+    assert.equal(sNoObs.actionable, 2);
+    assert.equal(sNoObs.onTrack, 1);
+    assert.equal(sNoObs.observed, 0);
+    assert.deepEqual(formatCategorySummary(sNoObs), { text: '1 of 2 on track', tone: 'neutral' });
+});
+
+test('categorySummary: a pure-observation category reads "K logged" (no denominator)', () => {
+    const trackers = [
+        { id: 'headache', polarity: 'neutral' },
+        { id: 'mood-note', polarity: 'neutral' },
+    ];
+    const s = categorySummary(trackers, MON, { headache: { value: 1 } });
+    assert.equal(s.actionable, 0);
+    assert.equal(s.observed, 1);
+    assert.deepEqual(formatCategorySummary(s), { text: '1 logged', tone: 'neutral' });
+});
+
+test('categorySummary: a targeted neutral is actionable (on track, not logged)', () => {
+    const t = {
+        id: 'weight', polarity: 'neutral',
+        targetHistory: [{ effectiveFrom: SCHEDULE_GENESIS_DATE, target: { min: 150, max: 170 } }],
+    };
+    const s = categorySummary([t], MON, { weight: { value: 160 } });
+    assert.equal(s.actionable, 1);
+    assert.equal(s.onTrack, 1);
+    assert.equal(s.observed, 0);
+    assert.deepEqual(formatCategorySummary(s), { text: 'All on track', tone: 'met' });
 });
 
 // ---- formatCategorySummary -----------------------------------------------
 
-test('formatCategorySummary: null when nothing is expected (badge suppressed)', () => {
-    assert.equal(formatCategorySummary({ expected: 0, onTrack: 0, logged: 0, allNeutral: true }), null);
+test('formatCategorySummary: null when nothing actionable and nothing observed', () => {
     assert.equal(formatCategorySummary(null), null);
+    assert.equal(formatCategorySummary({ actionable: 0, onTrack: 0, observed: 0 }), null);
 });
 
-test('formatCategorySummary: partial → "N of M on track" (neutral tone)', () => {
-    assert.deepEqual(
-        formatCategorySummary({ expected: 4, onTrack: 3, allNeutral: false }),
+test('formatCategorySummary: on-track fraction (partial → neutral, all met → met)', () => {
+    assert.deepEqual(formatCategorySummary({ actionable: 4, onTrack: 3, observed: 2 }),
         { text: '3 of 4 on track', tone: 'neutral' });
-});
-
-test('formatCategorySummary: all met → "All on track" (met tone)', () => {
-    assert.deepEqual(
-        formatCategorySummary({ expected: 3, onTrack: 3, allNeutral: false }),
+    assert.deepEqual(formatCategorySummary({ actionable: 3, onTrack: 3, observed: 0 }),
         { text: 'All on track', tone: 'met' });
 });
 
-test('formatCategorySummary: pure-neutral category counts logged entries', () => {
-    assert.deepEqual(
-        formatCategorySummary({ expected: 4, onTrack: 0, logged: 2, allNeutral: true }),
-        { text: '2 of 4 logged', tone: 'neutral' });
-    assert.deepEqual(
-        formatCategorySummary({ expected: 2, onTrack: 0, logged: 2, allNeutral: true }),
-        { text: 'All logged', tone: 'met' });
+test('formatCategorySummary: observation activity is dropped when actionable > 0', () => {
+    // A mixed category still shows only the on-track fraction (compact preview).
+    assert.deepEqual(formatCategorySummary({ actionable: 2, onTrack: 2, observed: 5 }),
+        { text: 'All on track', tone: 'met' });
+});
+
+test('formatCategorySummary: pure observations → "K logged", no "All", neutral tone', () => {
+    assert.deepEqual(formatCategorySummary({ actionable: 0, onTrack: 0, observed: 3 }),
+        { text: '3 logged', tone: 'neutral' });
+    assert.deepEqual(formatCategorySummary({ actionable: 0, onTrack: 0, observed: 1 }),
+        { text: '1 logged', tone: 'neutral' });
 });

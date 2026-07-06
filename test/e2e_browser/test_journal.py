@@ -251,9 +251,9 @@ def test_target_progress_line_in_grid(page, app_server, seeded_journal):
 
 
 def test_collapsed_category_summary_badge(page, app_server, seeded_journal):
-    """A collapsed category shows a schedule/polarity-aware on-track badge:
-    "1 of 2 on track" for a positive category with one done, and the adaptive
-    "logged" wording for a pure-neutral (unspecified-polarity) category.
+    """A collapsed category shows a schedule/polarity-aware badge: "1 of 2 on
+    track" for a positive category with one done, and denominator-free "K logged"
+    activity for a pure-observation (untargeted-neutral) category.
     """
     base = app_server["url"]
     client_id = seeded_journal["client_id"]
@@ -289,12 +289,13 @@ def test_collapsed_category_summary_badge(page, app_server, seeded_journal):
     assert "1 of 2 on track" in sup_summary.inner_text()
     assert "category-summary--neutral" in sup_summary.get_attribute("class")
 
-    # Pure-neutral category (unspecified polarity) uses "logged", not "on track";
-    # seeded_journal completes Water Intake today, so it reads "All logged" (met).
+    # The "health" category is a pure observation: Water Intake has unspecified
+    # polarity and no target, so it is not actionable — it reports denominator-free
+    # activity ("1 logged", neutral tone), not an "on track"/"All" judgment.
     health = page.locator(".category-header").filter(has_text="health")
     health_summary = health.locator(".category-summary")
-    assert "All logged" in health_summary.inner_text()
-    assert "category-summary--met" in health_summary.get_attribute("class")
+    assert "1 logged" in health_summary.inner_text()
+    assert "category-summary--neutral" in health_summary.get_attribute("class")
 
 
 def test_recent_dot_row_on_expanded_tracker(page, app_server, seeded_journal):

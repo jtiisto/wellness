@@ -1080,6 +1080,18 @@ textarea:focus-visible,
     opacity: 0.4;
 }
 
+/* Untargeted-neutral observations (e.g. "Headache") are logged-vs-quiet, not
+   met/missed: a noted day is a dim filled dot, a quiet day near-invisible — no
+   success/fail palette, since there is no goal. */
+.journal .tracker-dot--noted {
+    background-color: var(--text-muted);
+}
+
+.journal .tracker-dot--quiet {
+    background-color: var(--border-color);
+    opacity: 0.3;
+}
+
 /* Avoidance trackers: an avoided (met) day is a good but calm outcome, not a
    celebratory one — mute it to neutral rather than success green. */
 .journal .tracker-dots--avoid .tracker-dot--met {

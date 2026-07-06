@@ -649,84 +649,98 @@ export function isWithinLastNDays(dateStr, days = 7) {
 }
 
 /**
- * Roll up a category's trackers into a schedule- and polarity-aware summary for
- * the selected date — the honest "on track" count behind the collapsed-category
- * badge. Only trackers *expected* on the date (isExpectedOn) are counted, so an
- * off-schedule day is never a miss; each counted tracker is bucketed by its
- * single-day dayStatus (met → onTrack, partial, else notYet). `logged` counts
- * expected trackers with any entry — the basis of the pure-neutral "logged"
- * wording, where activity (not the checkbox) is what the label claims.
- * `allNeutral` is true only when "on track" is meaningless for every counted
- * tracker — each is neutral/unspecified polarity AND untargeted — which drives
- * the "logged" wording; a target (value-vs-goal) or a non-neutral polarity flips
- * the wording to "on track". Pure — pass the day's log map ({ id: entry }).
+ * Roll up a category's trackers into an "on track" summary for the selected date,
+ * behind the collapsed-category badge. Only trackers *expected* on the date
+ * (isExpectedOn) are considered, so an off-schedule day is never a miss.
+ *
+ * A tracker is **actionable** when there is a goal to be "on track" against: a
+ * non-neutral polarity (a habit to build or avoid) OR a target in effect that day
+ * (value-vs-goal). Untargeted *neutral* trackers are **observations** (e.g. a
+ * "Headache" log) — there is nothing to be on-track about, so judging them by
+ * checkbox is noise: they are EXCLUDED from the on-track counters and their
+ * entries are tallied separately as `observed`.
+ *
+ *   - `actionable` — expected actionable trackers (the on-track denominator).
+ *   - `onTrack` / `partial` / `notYet` — those bucketed by single-day dayStatus
+ *     (sum to `actionable`).
+ *   - `observed` — expected untargeted-neutral trackers that have an entry that
+ *     day (activity, not a goal).
+ *
+ * Pure — pass the day's log map ({ id: entry }).
  *
  * @param {Array} trackers - the category's trackers (the visible list is fine;
  *   the isExpectedOn gate re-selects the expected subset)
  * @param {string} dateStr - Local YYYY-MM-DD
  * @param {Object} [dayLog] - { trackerId: entry } for that date
- * @returns {{expected: number, onTrack: number, partial: number, notYet: number, logged: number, allNeutral: boolean}}
+ * @returns {{actionable: number, onTrack: number, partial: number, notYet: number, observed: number}}
  */
 export function categorySummary(trackers, dateStr, dayLog) {
-    let expected = 0;
+    let actionable = 0;
     let onTrack = 0;
     let partial = 0;
     let notYet = 0;
-    let logged = 0;
-    let allNeutral = true;
+    let observed = 0;
     for (const t of (trackers || [])) {
         if (!isExpectedOn(t, dateStr)) {
             continue;
         }
-        expected += 1;
         const ds = dayStatus(t, dateStr, dayLog ? dayLog[t.id] : undefined);
-        // "logged" wording only when "on track" is meaningless for every member:
-        // a non-neutral polarity OR a target in effect makes it meaningful.
-        if ((t && t.polarity && t.polarity !== 'neutral') || ds.hasTarget) {
-            allNeutral = false;
+        const isActionable = (t && t.polarity && t.polarity !== 'neutral') || ds.hasTarget;
+        if (isActionable) {
+            actionable += 1;
+            if (ds.state === 'met') onTrack += 1;
+            else if (ds.state === 'partial') partial += 1;
+            else notYet += 1;
+        } else if (ds.hasEntry) {
+            observed += 1;
         }
-        if (ds.hasEntry) logged += 1;
-        if (ds.state === 'met') onTrack += 1;
-        else if (ds.state === 'partial') partial += 1;
-        else notYet += 1;
     }
-    return { expected, onTrack, partial, notYet, logged, allNeutral };
+    return { actionable, onTrack, partial, notYet, observed };
 }
 
 /**
  * Format a categorySummary into the collapsed-header badge model, or null when
- * nothing is expected that day (badge suppressed — not-expected ≠ missed). The
- * verb adapts to polarity composition ("logged" for a pure-neutral category,
- * else "on track"); an all-met category reads "All …". Kept terse; the caller
- * lets it wrap rather than truncate. `tone` ∈ 'met' | 'neutral' drives color.
+ * there is nothing worth saying. Three cases:
+ *   - actionable > 0 → the on-track fraction ("N of M on track", or "All on
+ *     track" in met tone when all are met). Observation activity is intentionally
+ *     dropped here to keep a mixed category's badge compact.
+ *   - actionable == 0 && observed > 0 → denominator-free "K logged" (neutral
+ *     tone) — pure observations have no expectation, so no "N of M" and no "All".
+ *   - otherwise → null (suppressed; "0 logged" or an empty day is just noise).
+ * `tone` ∈ 'met' | 'neutral' drives color.
  *
  * @param {ReturnType<typeof categorySummary>} summary
  * @returns {{text: string, tone: string}|null}
  */
 export function formatCategorySummary(summary) {
-    if (!summary || summary.expected === 0) {
+    if (!summary) {
         return null;
     }
-    // Pure-neutral categories report activity ("logged" = entry present), not
-    // the checkbox-based on-track count — a measurement with a value entered IS
-    // logged, whatever its checkbox says.
-    const verb = summary.allNeutral ? 'logged' : 'on track';
-    const count = summary.allNeutral ? summary.logged : summary.onTrack;
-    const allMet = count === summary.expected;
-    const text = allMet
-        ? `All ${verb}`
-        : `${count} of ${summary.expected} ${verb}`;
-    return { text, tone: allMet ? 'met' : 'neutral' };
+    const { actionable, onTrack, observed } = summary;
+    if (actionable > 0) {
+        const allMet = onTrack === actionable;
+        return {
+            text: allMet ? 'All on track' : `${onTrack} of ${actionable} on track`,
+            tone: allMet ? 'met' : 'neutral',
+        };
+    }
+    if (observed > 0) {
+        return { text: `${observed} logged`, tone: 'neutral' };
+    }
+    return null;
 }
 
 /**
  * The last `n` local calendar days ending on `endDateStr` (oldest → newest), each
- * with its single-day state for `tracker` — the "recent texture" dot row. Each
- * day is either 'off' (the tracker is not expected that day — off-schedule ≠
- * missed, so the dot can be muted) or the `dayStatus` state
- * ('met' | 'partial' | 'missed') derived from that day's RAW log entry. Purely
- * the single-day predicate repeated across the window: no streaks, no rates, no
- * clamping — windowed adherence stays in the MCP.
+ * with its single-day state for `tracker` — the "recent texture" dot row. A day is:
+ *   - 'off' — the tracker is not expected that day (off-schedule ≠ missed);
+ *   - for an **actionable** tracker (non-neutral polarity or a target in effect),
+ *     the `dayStatus` state ('met' | 'partial' | 'missed');
+ *   - for an untargeted **neutral** tracker (an observation), 'noted' (an entry
+ *     exists) or 'quiet' (none) — logged-vs-quiet, not a met/missed judgment.
+ * The observation re-framing lives here, in the presentation-window helper;
+ * `dayStatus` / `targetStatus` (the MCP parity pins) are untouched. Purely the
+ * single-day predicate repeated: no streaks, no rates, no clamping.
  *
  * @param {Object} tracker
  * @param {string} endDateStr - Local YYYY-MM-DD of the newest day (usually today)
@@ -746,7 +760,13 @@ export function recentDayStates(tracker, endDateStr, logs, n = 7) {
             state = 'off';
         } else {
             const entry = (logs && logs[dateStr]) ? (logs[dateStr][tracker.id] ?? null) : null;
-            state = dayStatus(tracker, dateStr, entry).state;
+            const ds = dayStatus(tracker, dateStr, entry);
+            const isActionable = (tracker && tracker.polarity && tracker.polarity !== 'neutral') || ds.hasTarget;
+            if (isActionable) {
+                state = ds.state; // met | partial | missed
+            } else {
+                state = ds.hasEntry ? 'noted' : 'quiet';
+            }
         }
         out.push({ date: dateStr, state });
     }
