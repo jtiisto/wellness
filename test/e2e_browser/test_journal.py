@@ -578,37 +578,33 @@ def test_delete_tracker_via_config(journal_app_page, app_server, seeded_journal)
 
 
 def test_schedule_days_and_polarity_via_config(journal_page, app_server):
-    """A Mon–Fri quantifiable tracker created via config round-trips
-    scheduleHistory + polarity + a typed value target to the server, shows a
-    schedule/target/polarity summary in the config list, and is hidden on
-    weekend dates in the grid (shown on weekdays).
+    """A Mon–Fri tracker created via config round-trips scheduleHistory +
+    polarity to the server, shows a schedule/polarity summary in the config
+    list, and is hidden on weekend dates in the grid (shown on weekdays).
     """
     page = journal_page.page
     journal_page.open_config()
     journal_page.add_tracker(
-        "Meds", "health", tracker_type="quantifiable",
-        days=[1, 2, 3, 4, 5], polarity="positive", target="150-170")
+        "Meds", "health", tracker_type="simple",
+        days=[1, 2, 3, 4, 5], polarity="positive")
 
     # Sync so the tracker reaches the server and dirty state clears (which
     # unlocks past dates in the grid).
     page.wait_for_timeout(3500)
     page.wait_for_selector(".sync-dot.green", timeout=10000)
 
-    # Config list summarizes the schedule + target + polarity.
+    # Config list summarizes the schedule + polarity.
     meta = page.locator(".tracker-config-item").filter(
         has_text="Meds").locator(".tracker-config-meta").inner_text()
     assert "Mon–Fri" in meta
-    assert "150–170" in meta   # formatted target (en-dash, no unit)
     assert "Positive" in meta
 
-    # Server round-trip: scheduleHistory (Mon–Fri) + polarity + targetHistory survive sync.
+    # Server round-trip: scheduleHistory (Mon–Fri) + polarity survive sync.
     resp = http_requests.get(f"{app_server['url']}/api/journal/sync/delta")
     tracker = next(t for t in resp.json().get("config", []) if t["name"] == "Meds")
     assert tracker.get("polarity") == "positive"
     hist = tracker.get("scheduleHistory")
     assert hist and hist[-1]["days"] == [1, 2, 3, 4, 5]
-    thist = tracker.get("targetHistory")
-    assert thist and thist[-1]["target"] == {"min": 150, "max": 170}
 
     # Grid visibility: pick a weekend and a weekday date from the last-7-days
     # selector (index 0 = 6 days ago .. index 6 = today). Python weekday():
@@ -769,6 +765,33 @@ def test_legacy_weekly_tracker_normalizes_and_converges(journal_page, app_server
     assert "frequency" not in tracker
     assert "weeklyDay" not in tracker
     assert tracker["scheduleHistory"] == [{"effectiveFrom": "0000-01-01", "days": [1]}]
+
+
+def test_quantifiable_target_via_config(journal_page, app_server):
+    """A quantifiable tracker created via config round-trips a typed value
+    target: the config label shows the formatted target with unit, and the
+    server carries the single genesis targetHistory segment.
+    """
+    page = journal_page.page
+    journal_page.open_config()
+    journal_page.add_tracker(
+        "Protein", "health", tracker_type="quantifiable",
+        unit="g", target="150-170")
+
+    page.wait_for_timeout(3500)
+    page.wait_for_selector(".sync-dot.green", timeout=10000)
+
+    # Config label shows the formatted target with unit.
+    meta = page.locator(".tracker-config-item").filter(
+        has_text="Protein").locator(".tracker-config-meta").inner_text()
+    assert "150–170 g" in meta
+
+    # Server round-trip: a single genesis targetHistory segment.
+    resp = http_requests.get(f"{app_server['url']}/api/journal/sync/delta")
+    tracker = next(t for t in resp.json().get("config", []) if t["name"] == "Protein")
+    assert tracker.get("targetHistory") == [
+        {"effectiveFrom": "0000-01-01", "target": {"min": 150, "max": 170}}
+    ]
 
 
 def test_add_tracker_from_config(journal_page):
