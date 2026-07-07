@@ -104,4 +104,15 @@ def create_router() -> APIRouter:
             coach_db, start=start, end=end, today=date.today()
         )
 
+    @router.get("/cardio")
+    @_source_db_guard
+    def cardio(
+        start: Optional[str] = Query(None, pattern=_DATE_PATTERN),
+        end: Optional[str] = Query(None, pattern=_DATE_PATTERN),
+    ):
+        start, end = _date_params(start, end)
+        return trends_queries.cardio_weekly(
+            coach_db, start=start, end=end, today=date.today()
+        )
+
     return router

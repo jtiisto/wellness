@@ -148,3 +148,90 @@ def strength_history(client, tmp_coach_db):
         "bench_dates": [_iso(d) for d in bench_dates],
         "offplan_date": _iso(offplan_date),
     }
+
+
+@pytest.fixture
+def cardio_history(client, tmp_coach_db):
+    """Cardio spreads covering every attribution rule:
+
+    - planned steady (type 'duration') sessions with duration+HR, incl. one
+      SHORT (<20 min) and one HR-less (both excluded from the aerobic proxy)
+    - a planned interval (type 'interval') session with content
+    - a rest-day extra (extra_zone2, plan-less day) with duration+HR
+    - a RELINKED extra: plan exists for the date and the day row is
+      session-linked, but the entry keeps the ad-hoc key → still extra
+    - an orphan cardio row (planned day, ordinary key, exercise_id NULL) —
+      excluded from every cardio stat (unknown provenance)
+    """
+    today = date.today()
+    conn = sqlite3.connect(tmp_coach_db)
+    cur = conn.cursor()
+
+    def plan_day(d, ptype, key, name):
+        cur.execute(
+            "INSERT INTO workout_sessions (date, day_name, last_modified, modified_by) "
+            "VALUES (?, 'Cardio', ?, 'test')", (_iso(d), NOW),
+        )
+        session_id = cur.lastrowid
+        cur.execute(
+            "INSERT INTO session_blocks (session_id, position, block_type, title) "
+            "VALUES (?, 0, 'cardio', 'Conditioning')", (session_id,),
+        )
+        block_id = cur.lastrowid
+        cur.execute(
+            "INSERT INTO planned_exercises (session_id, block_id, exercise_key, "
+            "position, name, exercise_type, target_duration_min) "
+            "VALUES (?, ?, ?, 0, ?, ?, 30)",
+            (session_id, block_id, key, name, ptype),
+        )
+        pe_id = cur.lastrowid
+        cur.execute(
+            "INSERT INTO workout_session_logs (session_id, date, last_modified, modified_by) "
+            "VALUES (?, ?, ?, 'test')", (session_id, _iso(d), NOW),
+        )
+        return cur.lastrowid, pe_id, session_id
+
+    def log_entry(log_id, pe_id, key, duration, hr):
+        cur.execute(
+            "INSERT INTO exercise_logs (session_log_id, exercise_id, exercise_key, "
+            "duration_min, avg_hr, last_modified) VALUES (?, ?, ?, ?, ?, ?)",
+            (log_id, pe_id, key, duration, hr, NOW),
+        )
+        return cur.lastrowid
+
+    steady_dates = [today - timedelta(days=n) for n in (16, 9, 3)]
+    log_id, pe_id, _ = plan_day(steady_dates[0], "duration", "z2", "Zone 2 Bike")
+    log_entry(log_id, pe_id, "z2", 45.0, 142)
+    log_id, pe_id, _ = plan_day(steady_dates[1], "duration", "z2", "Zone 2 Bike")
+    log_entry(log_id, pe_id, "z2", 15.0, 138)      # short: counted, no proxy
+    log_id, pe_id, _ = plan_day(steady_dates[2], "duration", "z2", "Zone 2 Bike")
+    log_entry(log_id, pe_id, "z2", 40.0, None)     # HR-less: counted, no proxy
+
+    interval_date = today - timedelta(days=8)
+    log_id, pe_id, _ = plan_day(interval_date, "interval", "vo2", "Bike Intervals")
+    log_entry(log_id, pe_id, "vo2", 24.0, 165)
+
+    # Rest-day extra.
+    extra_date = today - timedelta(days=6)
+    cur.execute(
+        "INSERT INTO workout_session_logs (session_id, date, last_modified, modified_by) "
+        "VALUES (NULL, ?, ?, 'test')", (_iso(extra_date), NOW),
+    )
+    log_entry(cur.lastrowid, None, "extra_zone2", 30.0, 128)
+
+    # Relinked extra + orphan share one planned day.
+    relink_date = today - timedelta(days=2)
+    log_id, pe_id, _ = plan_day(relink_date, "duration", "z2", "Zone 2 Bike")
+    log_entry(log_id, pe_id, "z2", 35.0, 140)          # the planned work
+    log_entry(log_id, None, "extra_zone2", 25.0, 126)  # relinked extra
+    log_entry(log_id, None, "removed_cardio", 30.0, 150)  # orphan: excluded
+
+    conn.commit()
+    conn.close()
+    return {
+        "today": today,
+        "steady_dates": [_iso(d) for d in steady_dates],
+        "interval_date": _iso(interval_date),
+        "extra_date": _iso(extra_date),
+        "relink_date": _iso(relink_date),
+    }

@@ -223,6 +223,92 @@ def strength_exercise_series(coach_db, *, slug, start=None, end):
     }
 
 
+# ==================== Cardio ====================
+
+# All cardio-relevant log rows. Zone 2 identification is TYPE-based
+# (planned_exercises.exercise_type='duration'), not slug-based — prod Zone 2
+# slugs are fragmented (zone_2, zone_2_block, zone_2_flush, ...). Extras are
+# the off-plan predicate; orphaned rows (exercise_id NULL, ordinary key, on a
+# planned day) match neither arm and are deliberately excluded — their
+# provenance is unknown.
+_CARDIO_ROWS_SQL = """
+    SELECT wsl.date AS date,
+           el.duration_min AS duration_min,
+           el.avg_hr AS avg_hr,
+           pe.exercise_type AS ptype,
+           (el.exercise_id IS NULL AND
+            (wsl.session_id IS NULL OR el.exercise_key IN ({adhoc}))) AS off_plan,
+           (SELECT COUNT(*) FROM set_logs s WHERE s.exercise_log_id = el.id) AS set_count
+    FROM exercise_logs el
+    JOIN workout_session_logs wsl ON wsl.id = el.session_log_id
+    LEFT JOIN planned_exercises pe ON pe.id = el.exercise_id
+    ORDER BY wsl.date
+"""
+
+# Aerobic-proxy inclusion floor: steady sessions shorter than this carry too
+# little signal for an avg-HR trend.
+STEADY_PROXY_MIN_DURATION = 20
+
+
+def cardio_weekly(coach_db, *, start=None, end, today):
+    """Weekly Zone 2 minutes split planned/extra, interval session counts,
+    and the steady-session points for the aerobic proxy (avg HR of ≥20-min
+    steady work). Weeks follow the volume conventions (Monday buckets,
+    floored start, `partial` flag, zero weeks emitted, All → earliest row)."""
+    adhoc_keys = list(AD_HOC_LOG_SLUGS)
+    sql = _CARDIO_ROWS_SQL.format(adhoc=",".join("?" for _ in adhoc_keys))
+    with coach_db.get_db() as conn:
+        with read_transaction(conn) as cursor:
+            rows = cursor.execute(sql, adhoc_keys).fetchall()
+
+    def is_planned_steady(r):
+        return r["ptype"] == "duration" and r["duration_min"] is not None
+
+    def is_extra(r):
+        return bool(r["off_plan"]) and r["duration_min"] is not None
+
+    def is_interval(r):
+        return r["ptype"] == "interval" and (
+            r["duration_min"] is not None or r["set_count"] > 0
+        )
+
+    cardio_rows = [r for r in rows
+                   if r["date"] <= end and (is_planned_steady(r) or is_extra(r) or is_interval(r))]
+    if start:
+        range_start = date.fromisoformat(start)
+    elif cardio_rows:
+        range_start = date.fromisoformat(min(r["date"] for r in cardio_rows))
+    else:
+        return {"weeks": [], "steady_sessions": []}
+    floor = week_start(range_start).isoformat()
+    cardio_rows = [r for r in cardio_rows if r["date"] >= floor]
+
+    weeks = []
+    for monday, sunday in week_buckets(range_start, date.fromisoformat(end)):
+        in_week = [r for r in cardio_rows
+                   if monday.isoformat() <= r["date"] <= sunday.isoformat()]
+        weeks.append({
+            "week_start": monday.isoformat(),
+            "partial": monday <= today <= sunday,
+            "zone2_planned_min": round(sum(
+                r["duration_min"] for r in in_week if is_planned_steady(r)), 1),
+            "zone2_extra_min": round(sum(
+                r["duration_min"] for r in in_week if is_extra(r)), 1),
+            "interval_sessions": sum(1 for r in in_week if is_interval(r)),
+        })
+
+    steady_sessions = [
+        {"date": r["date"], "avg_hr": r["avg_hr"],
+         "duration_min": r["duration_min"], "off_plan": bool(r["off_plan"])}
+        for r in cardio_rows
+        if (is_planned_steady(r) or is_extra(r))
+        and r["avg_hr"] is not None
+        and r["duration_min"] >= STEADY_PROXY_MIN_DURATION
+    ]
+
+    return {"weeks": weeks, "steady_sessions": steady_sessions}
+
+
 def strength_weekly_volume(coach_db, *, start=None, end, today):
     """Weekly tonnage (kg) + hard-set counts, with a per-exercise breakdown
     for stacking (tonnage desc; slug-less rows group under their exercise_key).

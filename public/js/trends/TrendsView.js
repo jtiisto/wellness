@@ -13,6 +13,7 @@ import htm from 'htm';
 import { Header } from '../shared/header.js';
 import { activeScreen, setActiveScreen, initializeStore } from './store.js';
 import { StrengthScreen } from './components/StrengthScreen.js';
+import { CardioScreen } from './components/CardioScreen.js';
 
 const html = htm.bind(h);
 
@@ -26,6 +27,7 @@ const SCREENS = [
 // Screens land phase by phase; unshipped ones render the stub.
 const SCREEN_COMPONENTS = {
     strength: StrengthScreen,
+    cardio: CardioScreen,
 };
 
 function StubScreen({ label }) {
