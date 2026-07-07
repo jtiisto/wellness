@@ -111,6 +111,56 @@ class TestDbAccessor:
             assert conn.execute("SELECT COUNT(*) FROM t").fetchone()[0] == 0
 
 
+class TestReadOnlyAccess:
+    """mode=ro support for cross-module readers (trends)."""
+
+    def _seed(self, path):
+        conn = sqlite3.connect(path)
+        conn.execute("CREATE TABLE t (v TEXT)")
+        conn.execute("INSERT INTO t (v) VALUES ('x')")
+        conn.commit()
+        conn.close()
+
+    def test_read_only_reads(self, tmp_path):
+        db_path = tmp_path / "ro.db"
+        self._seed(db_path)
+        acc = DbAccessor(db_path, read_only=True)
+        with acc.get_db() as conn:
+            assert conn.execute("SELECT v FROM t").fetchone()["v"] == "x"
+
+    def test_read_only_refuses_writes(self, tmp_path):
+        db_path = tmp_path / "ro.db"
+        self._seed(db_path)
+        acc = DbAccessor(db_path, read_only=True)
+        with acc.get_db() as conn:
+            with pytest.raises(sqlite3.OperationalError, match="readonly"):
+                conn.execute("INSERT INTO t (v) VALUES ('nope')")
+
+    def test_read_only_refuses_to_create_missing_file(self, tmp_path):
+        """mode=ro must NOT create the file (plain connect would) — the
+        signal a cross-module reader needs to degrade gracefully."""
+        missing = tmp_path / "does_not_exist.db"
+        acc = DbAccessor(missing, read_only=True)
+        with pytest.raises(sqlite3.OperationalError):
+            with acc.get_db() as conn:
+                conn.execute("SELECT 1")
+        assert not missing.exists()
+
+    def test_read_only_of_wal_database(self, tmp_path):
+        """A WAL-mode DB (all module DBs are WAL) reads fine via mode=ro
+        same-user (documented -shm caveat in get_db)."""
+        db_path = tmp_path / "wal.db"
+        conn = sqlite3.connect(db_path)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("CREATE TABLE t (v TEXT)")
+        conn.execute("INSERT INTO t (v) VALUES ('wal-x')")
+        conn.commit()
+        conn.close()
+        acc = DbAccessor(db_path, read_only=True)
+        with acc.get_db() as conn:
+            assert conn.execute("SELECT v FROM t").fetchone()["v"] == "wal-x"
+
+
 class TestUtcDaysAgo:
     """R5: utc_days_ago is the helper for *instant* cutoffs (Z-suffixed)."""
 

@@ -35,7 +35,7 @@ def utc_days_ago(n: int) -> str:
 
 
 @contextmanager
-def get_db(db_path, foreign_keys=False):
+def get_db(db_path, foreign_keys=False, read_only=False):
     """Context manager for database connections.
 
     CONVENTION: never call this on the asyncio event loop. Handlers are sync
@@ -43,8 +43,19 @@ def get_db(db_path, foreign_keys=False):
     (analysis submit/run_report, coach workout hooks) route their DB work
     through `asyncio.to_thread`. A blocking sqlite3 call here can hold the loop
     for up to busy_timeout (5s) under contention.
+
+    `read_only=True` opens with the sqlite URI `mode=ro` (the MCP servers'
+    pattern): the connection refuses writes (OperationalError) AND refuses to
+    create a missing file — exactly what a cross-module reader (trends) wants.
+    Note: reading a WAL database via mode=ro still needs filesystem access to
+    its `-shm` file, so reader and writer must run as the same user (true
+    here: one server process owns coach/journal; the Garmin DB is written by
+    the user's own sync job).
     """
-    conn = sqlite3.connect(db_path)
+    if read_only:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    else:
+        conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA busy_timeout = 5000")
     if foreign_keys:
@@ -69,12 +80,14 @@ class DbAccessor:
     (e.g. the analysis module's `analysis_db` functions).
     """
 
-    def __init__(self, db_path, *, foreign_keys=False):
+    def __init__(self, db_path, *, foreign_keys=False, read_only=False):
         self.path = db_path
         self._foreign_keys = foreign_keys
+        self._read_only = read_only
 
     def get_db(self):
-        return get_db(self.path, foreign_keys=self._foreign_keys)
+        return get_db(self.path, foreign_keys=self._foreign_keys,
+                      read_only=self._read_only)
 
 
 @contextmanager

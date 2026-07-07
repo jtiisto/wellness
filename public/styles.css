@@ -53,6 +53,8 @@
     --coach-accent-soft: rgba(45, 212, 191, 0.18);
     --analysis-accent: #a78bfa;
     --analysis-accent-soft: rgba(167, 139, 250, 0.18);
+    --trends-accent: #38bdf8;
+    --trends-accent-soft: rgba(56, 189, 248, 0.18);
 
     --border-color: #2a2a4a;
     --input-bg: #252540;
@@ -96,6 +98,10 @@
 .analysis {
     --app-accent: var(--analysis-accent);
     --app-accent-soft: var(--analysis-accent-soft);
+}
+.trends {
+    --app-accent: var(--trends-accent);
+    --app-accent-soft: var(--trends-accent-soft);
 }
 
 /* ==================== Reset & Base ==================== */
@@ -2884,4 +2890,44 @@ textarea:focus-visible,
     font-size: var(--font-size-sm);
     color: var(--text-secondary);
     text-align: center;
+}
+
+/* ==================== Trends Module ==================== */
+
+/* Sub-tab bar (Overview / Strength / Cardio / Journal) — the Analysis
+   tab-bar idiom, scoped to trends. */
+.trends .trends-tabs {
+    display: flex;
+    gap: var(--spacing-xs);
+    padding: 0 var(--spacing-md);
+    background-color: var(--bg-secondary);
+    border-bottom: 1px solid var(--border-color);
+}
+
+.trends .trends-tab {
+    padding: var(--spacing-sm) var(--spacing-md);
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: var(--text-muted);
+    font-size: var(--font-size-sm);
+    font-family: inherit;
+    cursor: pointer;
+    transition: color 0.2s, border-color 0.2s;
+}
+
+.trends .trends-tab:hover { color: var(--text-secondary); }
+
+.trends .trends-tab.active {
+    color: var(--text-primary);
+    border-bottom-color: var(--app-accent);
+}
+
+.trends .trends-main {
+    padding: var(--spacing-md);
+}
+
+.trends .empty-state-text {
+    font-size: var(--font-size-md);
+    margin-bottom: var(--spacing-md);
 }

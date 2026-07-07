@@ -4,12 +4,12 @@ import pytest
 
 
 class TestListModules:
-    def test_returns_three_modules(self, client):
-        """GET /api/modules should return 3 modules."""
+    def test_returns_all_modules(self, client):
+        """GET /api/modules should return all 4 modules."""
         resp = client.get("/api/modules")
         assert resp.status_code == 200
         data = resp.json()
-        assert len(data) == 3
+        assert len(data) == 4
 
     def test_each_module_has_required_fields(self, client):
         """Each module should have id, name, icon, color fields."""
@@ -22,12 +22,13 @@ class TestListModules:
             assert "color" in m
 
     def test_module_ids(self, client):
-        """Module IDs should include journal, coach, analysis."""
+        """Module IDs should include journal, coach, analysis, trends."""
         resp = client.get("/api/modules")
         ids = [m["id"] for m in resp.json()]
         assert "journal" in ids
         assert "coach" in ids
         assert "analysis" in ids
+        assert "trends" in ids
 
     def test_module_names_are_nonempty(self, client):
         """Module names should not be empty."""
@@ -71,7 +72,7 @@ class TestDisabledModules:
 
     def test_empty_disabled_modules(self, monkeypatch):
         """Empty WELLNESS_DISABLED_MODULES should enable all modules."""
-        from config import get_enabled_modules
+        from config import get_enabled_modules, MODULES
         monkeypatch.setenv("WELLNESS_DISABLED_MODULES", "")
         enabled = get_enabled_modules()
-        assert len(enabled) == 3
+        assert len(enabled) == len(MODULES) == 4

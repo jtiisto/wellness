@@ -68,6 +68,9 @@ def app_server(tmp_path_factory):
         "JOURNAL_DB_PATH": str(db_dir / "journal.db"),
         "COACH_DB_PATH": str(db_dir / "coach.db"),
         "ANALYSIS_DB_PATH": str(db_dir / "analysis.db"),
+        # Nonexistent by default: trends' weight chart exercises its
+        # available:false path and no e2e run touches the real ~/.garmy DB.
+        "GARMIN_DB_PATH": str(db_dir / "garmin_health.db"),
     }
 
     for k, v in env_vars.items():

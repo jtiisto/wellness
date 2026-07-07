@@ -248,14 +248,17 @@ def create_app(db_path_overrides=None):
     """Build a fully-wired Wellness ASGI app.
 
     Each enabled module declares its router factory as "module.path:function" in
-    config; the factory takes a db_path and returns an APIRouter whose handlers
-    capture that path (R2 — no module-global DB path). Adding a module is a
-    config-only change.
+    config; a factory for a DB-owning module (has "db_env") takes a db_path and
+    returns an APIRouter whose handlers capture that path (R2 — no module-global
+    DB path). A DB-LESS module (no "db_env", e.g. trends) gets its factory
+    called with no argument and resolves its own read-only sources via config
+    helpers. Adding a module is a config-only change.
 
     ``db_path_overrides`` maps a module id ("journal"/"coach"/"analysis") to a
     DB path that supersedes the configured one. Production calls
     ``create_app()`` with no overrides; tests pass per-test temp paths so each
-    test gets a fully isolated app+DB without poking module globals.
+    test gets a fully isolated app+DB without poking module globals. (DB-less
+    modules follow the owners' env vars, so they need no override entry.)
     """
     inner_app = FastAPI(title="Wellness", lifespan=lifespan)
 
@@ -269,10 +272,13 @@ def create_app(db_path_overrides=None):
     overrides = db_path_overrides or {}
     enabled_modules = get_enabled_modules()
     for module in enabled_modules:
-        db = overrides.get(module["id"], get_db_path(module))
         module_path, factory_name = module["router_factory"].split(":")
         create_router = getattr(importlib.import_module(module_path), factory_name)
-        inner_app.include_router(create_router(db), prefix=module["api_prefix"])
+        if "db_env" in module:
+            router = create_router(overrides.get(module["id"], get_db_path(module)))
+        else:
+            router = create_router()  # DB-less module resolves its own sources
+        inner_app.include_router(router, prefix=module["api_prefix"])
 
     @inner_app.get("/api/modules")
     def list_modules():

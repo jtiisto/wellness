@@ -38,6 +38,10 @@ const ICONS = {
         <rect x="10" y="6" width="4" height="15" rx="1"/>
         <rect x="17" y="3" width="4" height="18" rx="1"/>
     </svg>`,
+    'trending-up': html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="22" height="22">
+        <polyline points="3 17 9 11 13 15 21 7"/>
+        <polyline points="15 7 21 7 21 13"/>
+    </svg>`,
     grid: html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="22" height="22">
         <rect x="3" y="3" width="7" height="7"/>
         <rect x="14" y="3" width="7" height="7"/>
@@ -80,6 +84,7 @@ async function loadModuleComponent(moduleId) {
         journal:  () => import('./journal/JournalView.js'),
         coach:    () => import('./coach/CoachView.js'),
         analysis: () => import('./analysis/AnalysisView.js'),
+        trends:   () => import('./trends/TrendsView.js'),
     };
 
     const loader = importMap[moduleId];

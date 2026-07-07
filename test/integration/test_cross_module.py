@@ -25,7 +25,7 @@ class TestCrossModuleSmoke:
         """Modules list should be reachable via /api/modules."""
         resp = client.get("/api/modules")
         assert resp.status_code == 200
-        assert len(resp.json()) == 3
+        assert len(resp.json()) == 4
 
     def test_all_modules_have_distinct_prefixes(self, client):
         """Verify each module responds on its own prefix without conflicts."""
