@@ -292,6 +292,16 @@ Both MCP servers accept environment variables to override database paths:
 | `JOURNAL_DB_PATH` | `mcp_servers/../data/journal.db` | Path to journal SQLite database |
 | `COACH_DB_PATH` | `mcp_servers/../data/coach.db` | Path to coach SQLite database |
 
+### Trends module (server)
+
+The Trends module reads the coach/journal databases via the same
+`COACH_DB_PATH` / `JOURNAL_DB_PATH` variables (read-only), plus the Garmin
+health DB for the body-weight chart:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GARMIN_DB_PATH` | `~/.garmy/health.db` | Garmin health SQLite DB (written by the external sync job). Read-only; the weight chart hides gracefully when the file is absent. |
+
 ---
 
 ## Troubleshooting

@@ -19,8 +19,10 @@ Conventions (see docs/ARCHITECTURE.md "Trends" and the plan spec):
   with the key set taken from `AD_HOC_LOG_SLUGS` so the two can't drift.
 """
 import json
+import sqlite3
 from collections import Counter, defaultdict
 from datetime import date, timedelta
+from pathlib import Path
 
 from modules.coach_logs import AD_HOC_LOG_SLUGS
 from modules.db import read_transaction
@@ -368,6 +370,45 @@ def journal_tracker_detail(journal_db, *, tracker_id, start=None, end, today):
             t["target_json"], t["meta_json"],
             first_date=first_entry, today=today.isoformat(),
         ),
+    }
+
+
+# ==================== Body weight (Garmin) ====================
+
+
+def weight_series(garmin_db, *, start=None, end):
+    """Daily body weight (kg) from the Garmin health DB's body_composition
+    table — last measurement per day. The DB is external (written by the
+    user's sync job) and may legitimately be absent or unreadable: degrade to
+    {"available": False} so the chart hides instead of erroring."""
+    if not Path(garmin_db.path).exists():
+        return {"available": False, "series": []}
+    try:
+        with garmin_db.get_db() as conn:
+            params = [end]
+            sql = (
+                # Bare column + MAX(timestamp_gmt) in GROUP BY: SQLite
+                # (documented behavior) returns the weight from the row that
+                # holds the max timestamp — i.e. the day's LAST measurement.
+                "SELECT measurement_date AS date, weight_grams, MAX(timestamp_gmt) "
+                "FROM body_composition "
+                "WHERE weight_grams IS NOT NULL AND measurement_date <= ?"
+            )
+            if start:
+                sql += " AND measurement_date >= ?"
+                params.append(start)
+            sql += " GROUP BY measurement_date ORDER BY measurement_date"
+            rows = conn.execute(sql, params).fetchall()
+    except sqlite3.Error:
+        # Missing table / schema drift / mode=ro open race — hide, don't 500.
+        return {"available": False, "series": []}
+
+    return {
+        "available": True,
+        "series": [
+            {"date": str(r["date"]), "kg": round(r["weight_grams"] / 1000, 1)}
+            for r in rows
+        ],
     }
 
 

@@ -136,4 +136,14 @@ def create_router() -> APIRouter:
         except ValueError as e:
             raise HTTPException(status_code=404, detail=str(e))
 
+    @router.get("/weight")
+    def weight(
+        start: Optional[str] = Query(None, pattern=_DATE_PATTERN),
+        end: Optional[str] = Query(None, pattern=_DATE_PATTERN),
+    ):
+        # No 503 guard: weight_series degrades to available:false itself —
+        # an absent Garmin DB is a supported state, not an error.
+        start, end = _date_params(start, end)
+        return trends_queries.weight_series(garmin_db, start=start, end=end)
+
     return router

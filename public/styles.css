@@ -3098,3 +3098,9 @@ textarea:focus-visible,
     font-size: var(--font-size-sm); color: var(--text-primary);
 }
 .trends .trends-streak-best { color: var(--text-muted); }
+
+.trends .trends-latest {
+    font-size: var(--font-size-lg);
+    font-weight: 700;
+    color: var(--text-primary);
+}

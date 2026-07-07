@@ -15,6 +15,7 @@ import { activeScreen, setActiveScreen, initializeStore } from './store.js';
 import { StrengthScreen } from './components/StrengthScreen.js';
 import { CardioScreen } from './components/CardioScreen.js';
 import { JournalScreen } from './components/JournalScreen.js';
+import { OverviewScreen } from './components/OverviewScreen.js';
 
 const html = htm.bind(h);
 
@@ -27,6 +28,7 @@ const SCREENS = [
 
 // Screens land phase by phase; unshipped ones render the stub.
 const SCREEN_COMPONENTS = {
+    overview: OverviewScreen,
     strength: StrengthScreen,
     cardio: CardioScreen,
     journal: JournalScreen,
