@@ -12,6 +12,7 @@ import htm from 'htm';
 
 import { Header } from '../shared/header.js';
 import { activeScreen, setActiveScreen, initializeStore } from './store.js';
+import { StrengthScreen } from './components/StrengthScreen.js';
 
 const html = htm.bind(h);
 
@@ -21,6 +22,11 @@ const SCREENS = [
     { id: 'cardio', label: 'Cardio' },
     { id: 'journal', label: 'Journal' },
 ];
+
+// Screens land phase by phase; unshipped ones render the stub.
+const SCREEN_COMPONENTS = {
+    strength: StrengthScreen,
+};
 
 function StubScreen({ label }) {
     return html`
@@ -58,7 +64,9 @@ export default function TrendsView() {
                 `)}
             </div>
             <main class="main-content trends-main">
-                <${StubScreen} label=${SCREENS.find(s => s.id === screen)?.label || 'Trends'} />
+                ${SCREEN_COMPONENTS[screen]
+                    ? h(SCREEN_COMPONENTS[screen], {})
+                    : html`<${StubScreen} label=${SCREENS.find(s => s.id === screen)?.label || 'Trends'} />`}
             </main>
         </div>
     `;
