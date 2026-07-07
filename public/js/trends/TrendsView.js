@@ -14,6 +14,7 @@ import { Header } from '../shared/header.js';
 import { activeScreen, setActiveScreen, initializeStore } from './store.js';
 import { StrengthScreen } from './components/StrengthScreen.js';
 import { CardioScreen } from './components/CardioScreen.js';
+import { JournalScreen } from './components/JournalScreen.js';
 
 const html = htm.bind(h);
 
@@ -28,6 +29,7 @@ const SCREENS = [
 const SCREEN_COMPONENTS = {
     strength: StrengthScreen,
     cardio: CardioScreen,
+    journal: JournalScreen,
 };
 
 function StubScreen({ label }) {

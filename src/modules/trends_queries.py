@@ -18,11 +18,17 @@ Conventions (see docs/ARCHITECTURE.md "Trends" and the plan spec):
 - Off-plan semantics mirror `coach_logs.is_off_plan_entry`, applied in SQL
   with the key set taken from `AD_HOC_LOG_SLUGS` so the two can't drift.
 """
+import json
 from collections import Counter, defaultdict
 from datetime import date, timedelta
 
 from modules.coach_logs import AD_HOC_LOG_SLUGS
 from modules.db import read_transaction
+from modules.journal_adherence import (
+    compute_adherence,
+    compute_streaks,
+    target_band_segments,
+)
 
 # lbs per kg — the single conversion constant.
 _LBS_PER_KG = 1 / 0.45359237
@@ -220,6 +226,148 @@ def strength_exercise_series(coach_db, *, slug, start=None, end):
                      "equipment": info["equipment"], "category": info["category"]},
         "unit": unit,
         "sessions": sessions,
+    }
+
+
+# ==================== Journal ====================
+
+
+def _tracker_meta(meta_json):
+    try:
+        parsed = json.loads(meta_json) if meta_json else {}
+        return parsed if isinstance(parsed, dict) else {}
+    except (ValueError, TypeError):
+        return {}
+
+
+def _is_actionable(polarity):
+    return polarity in ("positive", "negative")
+
+
+def journal_trackers(journal_db):
+    """Picker: quantifiable trackers ∪ actionable trackers (positive/negative
+    polarity), excluding deleted and never-logged ones. Ordered by last_entry
+    DESC (most recently active first), name ASC secondary."""
+    with journal_db.get_db() as conn:
+        with read_transaction(conn) as cursor:
+            rows = cursor.execute("""
+                SELECT t.id, t.name, t.type, t.polarity, t.meta_json,
+                       t.target_json,
+                       MIN(e.date) AS first_entry, MAX(e.date) AS last_entry
+                FROM trackers t
+                JOIN entries e ON e.tracker_id = t.id
+                WHERE t.deleted = 0
+                GROUP BY t.id
+            """).fetchall()
+
+    trackers = []
+    for r in rows:
+        if r["type"] != "quantifiable" and not _is_actionable(r["polarity"]):
+            continue
+        meta = _tracker_meta(r["meta_json"])
+        trackers.append({
+            "id": r["id"],
+            "name": r["name"],
+            "type": r["type"],
+            "unit": meta.get("unit"),
+            "polarity": r["polarity"],
+            "actionable": _is_actionable(r["polarity"]),
+            "has_target": bool(r["target_json"]),
+            "first_entry": r["first_entry"],
+            "last_entry": r["last_entry"],
+        })
+    trackers.sort(key=lambda t: t["name"])
+    trackers.sort(key=lambda t: t["last_entry"], reverse=True)
+    return {"trackers": trackers}
+
+
+def journal_tracker_detail(journal_db, *, tracker_id, start=None, end, today):
+    """Values + stepped target segments + weekly adherence buckets + streaks
+    for one tracker. Effective start = max(start, first_entry): pre-tracking
+    epochs are gaps, never misses. Weekly rows = one compute_adherence call
+    per Monday bucket, mapped per polarity/target; a zero-scheduled week
+    (pause / fully off-schedule) is `paused` and renders muted.
+    Raises ValueError for an unknown/deleted tracker (→ 404)."""
+    with journal_db.get_db() as conn:
+        with read_transaction(conn) as cursor:
+            t = cursor.execute(
+                "SELECT id, name, type, polarity, meta_json, schedule_json, "
+                "target_json FROM trackers WHERE id = ? AND deleted = 0",
+                (tracker_id,),
+            ).fetchone()
+            if t is None:
+                raise ValueError(f"Unknown tracker: {tracker_id}")
+            entry_rows = cursor.execute(
+                "SELECT date, value, completed FROM entries "
+                "WHERE tracker_id = ? ORDER BY date",
+                (tracker_id,),
+            ).fetchall()
+
+    if not entry_rows:
+        raise ValueError(f"Tracker has no entries: {tracker_id}")
+    first_entry = entry_rows[0]["date"]
+    last_entry = entry_rows[-1]["date"]
+
+    eff_start = max(start or first_entry, first_entry)
+    entries = {r["date"]: r["completed"] for r in entry_rows}
+    values = {r["date"]: r["value"] for r in entry_rows}
+    meta = _tracker_meta(t["meta_json"])
+
+    in_range = [r for r in entry_rows if eff_start <= r["date"] <= end]
+
+    weekly = []
+    if eff_start <= end:
+        for monday, sunday in week_buckets(date.fromisoformat(eff_start),
+                                           date.fromisoformat(end)):
+            m = compute_adherence(
+                t["schedule_json"], t["polarity"], t["type"], entries,
+                monday.isoformat(), min(sunday, date.fromisoformat(end)).isoformat(),
+                target_json=t["target_json"], values=values,
+                meta_json=t["meta_json"],
+            )
+            scheduled = m["scheduled_days"]
+            has_target = "target_met_days" in m
+            if has_target:
+                met = m["target_met_days"]
+                partial_days = m["target_partial_days"]
+            elif t["polarity"] == "negative":
+                met = scheduled - m["logged_days"]
+                partial_days = 0
+            else:
+                met = m["done_days"]
+                partial_days = 0
+            rate_key = f"{m['metric_kind']}_rate"
+            weekly.append({
+                "week_start": monday.isoformat(),
+                "partial": monday <= today <= sunday,
+                "paused": scheduled == 0,
+                "scheduled_days": scheduled,
+                "met": met,
+                "partial_days": partial_days,
+                "missed": max(0, scheduled - met - partial_days),
+                "rate": m.get(rate_key, m["coverage_rate"]),
+                "metric_kind": m["metric_kind"],
+            })
+
+    return {
+        "tracker": {
+            "id": t["id"], "name": t["name"], "type": t["type"],
+            "unit": meta.get("unit"), "polarity": t["polarity"],
+            "actionable": _is_actionable(t["polarity"]),
+            "has_target": bool(t["target_json"]),
+            "first_entry": first_entry, "last_entry": last_entry,
+        },
+        "values": [
+            {"date": r["date"], "value": r["value"], "completed": r["completed"]}
+            for r in in_range
+        ],
+        "target_segments": target_band_segments(t["target_json"], eff_start, end),
+        "weekly_adherence": weekly,
+        "streaks": compute_streaks(
+            t["schedule_json"], t["polarity"], entries, values,
+            t["target_json"], t["meta_json"],
+            first_date=first_entry, today=today.isoformat(),
+        ),
     }
 
 

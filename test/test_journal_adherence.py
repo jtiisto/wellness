@@ -393,3 +393,119 @@ class TestLegacyWeeklyFallback:
         r = compute_adherence(
             None, "positive", "simple", {}, MON, SUN, meta_json=meta)
         assert r["scheduled_days"] == 7
+
+
+@pytest.mark.unit
+class TestDayStatus:
+    def test_off_on_unscheduled_day(self):
+        assert day_status(MON_FRI, "positive", {}, {}, None, None, SAT) == "off"
+
+    def test_pause_segment_is_off(self):
+        paused = json.dumps([
+            {"effectiveFrom": GENESIS, "days": [1, 2, 3, 4, 5]},
+            {"effectiveFrom": WED, "days": []},
+        ])
+        assert day_status(paused, "positive", {TUE: 1}, {}, None, None, TUE) == "met"
+        assert day_status(paused, "positive", {}, {}, None, None, THU) == "off"
+
+    def test_targeted_day_uses_value(self):
+        target = json.dumps([{"effectiveFrom": GENESIS, "target": {"min": 150}}])
+        assert day_status(None, "positive", {MON: 0}, {MON: 160}, target, None, MON) == "met"
+        assert day_status(None, "positive", {MON: 1}, {MON: 100}, target, None, MON) == "partial"
+        assert day_status(None, "positive", {}, {}, target, None, MON) == "missed"
+
+    def test_untargeted_positive_is_checkbox(self):
+        assert day_status(None, "positive", {MON: 1}, {}, None, None, MON) == "met"
+        assert day_status(None, "positive", {MON: 0}, {}, None, None, MON) == "missed"
+        assert day_status(None, "positive", {}, {}, None, None, MON) == "missed"
+
+    def test_negative_absence_is_met(self):
+        assert day_status(None, "negative", {}, {}, None, None, MON) == "met"
+        assert day_status(None, "negative", {MON: 1}, {}, None, None, MON) == "missed"
+
+    def test_legacy_weekly_fallback(self):
+        meta = json.dumps({"frequency": "weekly", "weeklyDay": 3})  # Wednesday
+        assert day_status(None, "positive", {WED: 1}, {}, None, meta, WED) == "met"
+        assert day_status(None, "positive", {}, {}, None, meta, THU) == "off"
+
+
+@pytest.mark.unit
+class TestComputeStreaks:
+    def test_basic_run_and_reset(self):
+        # Mon,Tue met; Wed missed; Thu,Fri met → best 2, current 2 (as of Fri).
+        entries = {MON: 1, TUE: 1, THU: 1, FRI: 1}
+        r = compute_streaks(MON_FRI, "positive", entries, {}, None, None,
+                            first_date=MON, today=FRI)
+        assert r == {"current": 2, "best": 2}
+
+    def test_off_days_are_transparent(self):
+        # Mon–Fri schedule: met Fri, weekend off, met next Mon → streak of 2.
+        entries = {FRI: 1, NEXT_MON: 1}
+        r = compute_streaks(MON_FRI, "positive", entries, {}, None, None,
+                            first_date=FRI, today=NEXT_MON)
+        assert r["current"] == 2
+
+    def test_pause_window_is_transparent(self):
+        paused_midway = json.dumps([
+            {"effectiveFrom": GENESIS, "days": [0, 1, 2, 3, 4, 5, 6]},
+            {"effectiveFrom": WED, "days": []},
+        ])
+        # Met Mon,Tue then paused Wed→Sun: current streak survives the pause.
+        entries = {MON: 1, TUE: 1}
+        r = compute_streaks(paused_midway, "positive", entries, {}, None, None,
+                            first_date=MON, today=SUN)
+        assert r == {"current": 2, "best": 2}
+
+    def test_today_unmet_does_not_break(self):
+        entries = {MON: 1, TUE: 1}  # Wed (today) not logged yet
+        r = compute_streaks(MON_FRI, "positive", entries, {}, None, None,
+                            first_date=MON, today=WED)
+        assert r["current"] == 2
+
+    def test_today_met_counts(self):
+        entries = {MON: 1, TUE: 1, WED: 1}
+        r = compute_streaks(MON_FRI, "positive", entries, {}, None, None,
+                            first_date=MON, today=WED)
+        assert r["current"] == 3
+
+    def test_negative_avoidance_streak(self):
+        # Daily negative tracker: entry on Wed breaks the absence streak.
+        entries = {WED: 1}
+        r = compute_streaks(None, "negative", entries, {}, None, None,
+                            first_date=MON, today=FRI)
+        assert r["current"] == 2   # Thu, Fri avoided
+        assert r["best"] == 2      # Mon, Tue equally
+
+    def test_no_first_date(self):
+        assert compute_streaks(None, "positive", {}, {}, None, None,
+                               first_date=None, today=MON) == {"current": 0, "best": 0}
+
+
+@pytest.mark.unit
+class TestTargetBandSegments:
+    def test_change_mid_window_splits_with_day_before_boundary(self):
+        target = json.dumps([
+            {"effectiveFrom": GENESIS, "target": {"min": 100}},
+            {"effectiveFrom": WED, "target": {"min": 150}},
+        ])
+        segs = target_band_segments(target, MON, FRI)
+        assert segs == [
+            {"start": MON, "end": TUE, "min": 100, "max": None},
+            {"start": WED, "end": FRI, "min": 150, "max": None},
+        ]
+
+    def test_null_target_window_is_a_gap(self):
+        target = json.dumps([
+            {"effectiveFrom": GENESIS, "target": None},
+            {"effectiveFrom": WED, "target": {"max": 2}},
+        ])
+        segs = target_band_segments(target, MON, FRI)
+        assert segs == [{"start": WED, "end": FRI, "min": None, "max": 2}]
+
+    def test_absent_history(self):
+        assert target_band_segments(None, MON, FRI) == []
+
+    def test_range_target(self):
+        target = json.dumps([{"effectiveFrom": GENESIS, "target": {"min": 150, "max": 170}}])
+        segs = target_band_segments(target, MON, MON)
+        assert segs == [{"start": MON, "end": MON, "min": 150, "max": 170}]

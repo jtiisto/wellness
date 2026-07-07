@@ -3076,3 +3076,25 @@ textarea:focus-visible,
 .trends .trends-pr-slug { display: block; color: var(--text-muted); font-size: 0.75rem; }
 .trends .trends-pr-vals { text-align: right; color: var(--text-primary); font-size: var(--font-size-sm); }
 .trends .trends-pr-detail { display: block; color: var(--text-muted); font-size: 0.75rem; }
+
+/* Journal trends: target band, value dots, adherence ribbon, streaks */
+.trends .trends-band { fill: var(--app-accent); opacity: 0.12; }
+.trends .trends-dot--value { fill: var(--text-secondary); }
+
+.trends .trends-ribbon-cell { stroke: none; }
+.trends .trends-ribbon--met { fill: var(--accent-success); }
+.trends .trends-ribbon--partial { fill: var(--accent-warning); }
+.trends .trends-ribbon--missed { fill: var(--accent-error); opacity: 0.55; }
+.trends .trends-ribbon--muted { fill: var(--text-muted); opacity: 0.25; }
+.trends .trends-ribbon--inprogress { fill: none; stroke: var(--text-secondary); stroke-dasharray: 3 2; opacity: 0.7; }
+
+.trends .trends-legend--met::before { color: var(--accent-success); }
+.trends .trends-legend--partial::before { color: var(--accent-warning); }
+.trends .trends-legend--missedleg::before { color: var(--accent-error); }
+.trends .trends-legend--mutedleg::before { color: var(--text-muted); }
+
+.trends .trends-streaks {
+    display: flex; gap: var(--spacing-sm); align-items: baseline;
+    font-size: var(--font-size-sm); color: var(--text-primary);
+}
+.trends .trends-streak-best { color: var(--text-muted); }

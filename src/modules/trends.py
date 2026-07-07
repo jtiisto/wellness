@@ -115,4 +115,25 @@ def create_router() -> APIRouter:
             coach_db, start=start, end=end, today=date.today()
         )
 
+    @router.get("/journal/trackers")
+    @_source_db_guard
+    def journal_trackers():
+        return trends_queries.journal_trackers(journal_db)
+
+    @router.get("/journal/tracker/{tracker_id}")
+    @_source_db_guard
+    def journal_tracker_detail(
+        tracker_id: str,
+        start: Optional[str] = Query(None, pattern=_DATE_PATTERN),
+        end: Optional[str] = Query(None, pattern=_DATE_PATTERN),
+    ):
+        start, end = _date_params(start, end)
+        try:
+            return trends_queries.journal_tracker_detail(
+                journal_db, tracker_id=tracker_id, start=start, end=end,
+                today=date.today(),
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+
     return router

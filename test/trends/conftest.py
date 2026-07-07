@@ -235,3 +235,80 @@ def cardio_history(client, tmp_coach_db):
         "extra_date": _iso(extra_date),
         "relink_date": _iso(relink_date),
     }
+
+
+@pytest.fixture
+def journal_history(client, tmp_journal_db):
+    """Journal spreads for the trends endpoints:
+
+    - 'Protein' (quantifiable, positive, targeted min=150 effective 10 days
+      ago — a genesis untargeted era before that) with values across 3 weeks
+    - 'Alcohol' (simple, negative) with sparse entries (avoidance semantics)
+    - 'Mood' (quantifiable, NEUTRAL, untargeted) — in the picker via type,
+      not actionable
+    - 'Stretch' (simple, positive) PAUSED 7 days ago (empty-days segment)
+    - 'Old Habit' deleted=1 and 'Never Logged' without entries — both excluded
+    """
+    today = date.today()
+    conn = sqlite3.connect(tmp_journal_db)
+    cur = conn.cursor()
+
+    def tracker(tid, name, ttype, polarity=None, meta=None, schedule=None, target=None):
+        import json as _json
+        cur.execute(
+            "INSERT INTO trackers (id, name, category, type, meta_json, "
+            "schedule_json, polarity, target_json, last_modified_at, deleted) "
+            "VALUES (?, ?, 'health', ?, ?, ?, ?, ?, ?, 0)",
+            (tid, name, ttype,
+             _json.dumps(meta) if meta else "{}",
+             _json.dumps(schedule) if schedule else None,
+             polarity,
+             _json.dumps(target) if target else None,
+             NOW),
+        )
+
+    def entry(tid, d, value=None, completed=1):
+        cur.execute(
+            "INSERT INTO entries (date, tracker_id, value, completed, last_modified_at) "
+            "VALUES (?, ?, ?, ?, ?)", (_iso(d), tid, value, completed, NOW),
+        )
+
+    target_from = _iso(today - timedelta(days=10))
+    tracker("t-protein", "Protein", "quantifiable", polarity="positive",
+            meta={"unit": "g"},
+            target=[{"effectiveFrom": "0000-01-01", "target": None},
+                    {"effectiveFrom": target_from, "target": {"min": 150}}])
+    for n in range(20, -1, -1):
+        d = today - timedelta(days=n)
+        # Values ramp 120→170; every 5th day unlogged.
+        if n % 5 == 0 and n != 0:
+            continue
+        entry("t-protein", d, value=120 + (20 - n) * 2.5, completed=0)
+
+    tracker("t-alcohol", "Alcohol", "simple", polarity="negative")
+    entry("t-alcohol", today - timedelta(days=4))
+    entry("t-alcohol", today - timedelta(days=12))
+
+    tracker("t-mood", "Mood", "quantifiable", polarity="neutral",
+            meta={"unit": "1-10"})
+    entry("t-mood", today - timedelta(days=1), value=7)
+
+    pause_from = _iso(today - timedelta(days=7))
+    tracker("t-stretch", "Stretch", "simple", polarity="positive",
+            schedule=[{"effectiveFrom": "0000-01-01", "days": [0, 1, 2, 3, 4, 5, 6]},
+                      {"effectiveFrom": pause_from, "days": []}])
+    for n in (13, 12, 11, 10, 9, 8):
+        entry("t-stretch", today - timedelta(days=n))
+
+    tracker("t-old", "Old Habit", "simple", polarity="positive")
+    cur.execute("UPDATE trackers SET deleted = 1 WHERE id = 't-old'")
+    entry("t-old", today - timedelta(days=3))
+    tracker("t-never", "Never Logged", "quantifiable", polarity="positive")
+
+    conn.commit()
+    conn.close()
+    return {
+        "today": today,
+        "target_from": target_from,
+        "pause_from": pause_from,
+    }
