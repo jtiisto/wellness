@@ -17,14 +17,26 @@ e.g. an owning module disabled) to a 503 rather than a 500 traceback.
 import functools
 import logging
 import sqlite3
+from datetime import date
 from pathlib import Path
+from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 
 from config import get_module_db_path, get_garmin_db_path
+from modules import trends_queries
 from modules.db import DbAccessor
 
 logger = logging.getLogger(__name__)
+
+# YYYY-MM-DD; range params are local calendar dates (repo convention).
+_DATE_PATTERN = r"^\d{4}-\d{2}-\d{2}$"
+
+
+def _date_params(start: Optional[str], end: Optional[str]):
+    """Normalize range params: end defaults to local today (the client always
+    sends it; the default keeps curl/exploratory use sane)."""
+    return start, end or date.today().isoformat()
 
 
 def _source_db_guard(fn):
@@ -56,5 +68,40 @@ def create_router() -> APIRouter:
     # Endpoints land phase by phase (strength → cardio → journal → weight →
     # overview); the accessors above are the only construction-time work, so
     # startup cost is nil and no migration runs (trends owns no schema).
+
+    @router.get("/strength/exercises")
+    @_source_db_guard
+    def strength_exercises(
+        start: Optional[str] = Query(None, pattern=_DATE_PATTERN),
+        end: Optional[str] = Query(None, pattern=_DATE_PATTERN),
+    ):
+        start, end = _date_params(start, end)
+        return trends_queries.strength_exercises(coach_db, start=start, end=end)
+
+    @router.get("/strength/exercise/{slug}")
+    @_source_db_guard
+    def strength_exercise_series(
+        slug: str,
+        start: Optional[str] = Query(None, pattern=_DATE_PATTERN),
+        end: Optional[str] = Query(None, pattern=_DATE_PATTERN),
+    ):
+        start, end = _date_params(start, end)
+        try:
+            return trends_queries.strength_exercise_series(
+                coach_db, slug=slug, start=start, end=end
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+
+    @router.get("/strength/volume")
+    @_source_db_guard
+    def strength_volume(
+        start: Optional[str] = Query(None, pattern=_DATE_PATTERN),
+        end: Optional[str] = Query(None, pattern=_DATE_PATTERN),
+    ):
+        start, end = _date_params(start, end)
+        return trends_queries.strength_weekly_volume(
+            coach_db, start=start, end=end, today=date.today()
+        )
 
     return router
