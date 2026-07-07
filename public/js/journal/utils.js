@@ -133,6 +133,45 @@ export function getScheduleDaysForDate(tracker, dateStr) {
 }
 
 /**
+ * The weekday set a paused tracker should restore to when unpaused — the `days`
+ * of the most recent `scheduleHistory` segment that actually has days (so the
+ * pause segment's empty `days: []` is skipped, as are any older empty segments).
+ * Segment recency is by greatest `effectiveFrom`, matching the order-independent
+ * selection everywhere else in this module. Fallbacks when no non-empty segment
+ * exists: the legacy `frequency: 'weekly'` day (`[weeklyDay]`) if valid, else
+ * ALL_DAYS (Daily) — so a tracker born paused resumes to Daily. Used to prefill
+ * the config weekday picker; returns a normalized (sorted, deduped) array.
+ *
+ * @param {Object} tracker - Tracker config object
+ * @returns {number[]} weekdays (0=Sun..6=Sat), sorted
+ */
+export function lastActiveScheduleDays(tracker) {
+    const history = tracker && tracker.scheduleHistory;
+    if (Array.isArray(history) && history.length > 0) {
+        let chosen = null;
+        for (const seg of history) {
+            const days = normalizeDays(seg && seg.days);
+            if (days.length === 0) {
+                continue;
+            }
+            if (chosen === null || seg.effectiveFrom > chosen.effectiveFrom) {
+                chosen = { effectiveFrom: seg.effectiveFrom, days };
+            }
+        }
+        if (chosen !== null) {
+            return chosen.days;
+        }
+    }
+    if (tracker && tracker.frequency === 'weekly') {
+        const weeklyDay = Number(tracker.weeklyDay);
+        if (Number.isInteger(weeklyDay) && weeklyDay >= 0 && weeklyDay <= 6) {
+            return [weeklyDay];
+        }
+    }
+    return [...ALL_DAYS];
+}
+
+/**
  * Resolve a tracker's value target as of a given date: the `target` object
  * (`{min?, max?}`) from the effective-dated `targetHistory` segment in effect on
  * `dateStr`, or null when there is no target (absent history, or a segment whose
@@ -566,7 +605,15 @@ export function normalizeTrackerSchedule(tracker) {
  *     segment (a tracker created today has no prior history). Editing an
  *     existing tracker delegates to `computeScheduleHistoryUpdate`, so an
  *     unchanged day-set writes nothing.
- *   - Empty selection coerces to Daily.
+ *   - Empty selection coerces to Daily — a footgun-guard against saving a
+ *     tracker onto *no* days. `paused` is the deliberate opt-out (below).
+ *   - Paused. Pass `paused: true` to save an **empty-days** schedule (`[]`),
+ *     bypassing the empty→Daily coercion. A new paused tracker gets a single
+ *     genesis `days: []` segment; editing delegates to
+ *     `computeScheduleHistoryUpdate` with `[]` (pause appends a today `[]`
+ *     segment, same-day unpause replaces it). An empty schedule is hidden from
+ *     the grid, mutes the dots, and yields null adherence rates — see
+ *     docs/ARCHITECTURE.md "Tracker scheduling". `days` is ignored when paused.
  *   - Polarity. A valid value is written; selecting "unspecified" on a tracker
  *     that had one clears it (`undefined`, dropped from meta_json on upload).
  *   - Target (quantifiable only). Pass a typed `{min?,max?}` object or null; a
@@ -579,15 +626,20 @@ export function normalizeTrackerSchedule(tracker) {
  * they should be written.
  *
  * @param {Object|null} existingTracker - The tracker being edited, or null for a new one
- * @param {{days: number[], polarity: string, target?: object|null}} form
+ * @param {{days: number[], polarity: string, target?: object|null, paused?: boolean}} form
  * @param {string} today - Local YYYY-MM-DD (caller passes getToday())
  * @returns {{scheduleHistory?: Array, polarity?: string|undefined, targetHistory?: Array}}
  */
-export function buildTrackerSaveFields(existingTracker, { days, polarity, target }, today) {
+export function buildTrackerSaveFields(existingTracker, { days, polarity, target, paused }, today) {
     const fields = {};
 
-    const chosen = normalizeDays(
-        (Array.isArray(days) && days.length > 0) ? days : ALL_DAYS);
+    // Paused → an empty-days schedule, bypassing the empty→Daily coercion the
+    // non-paused path keeps as a footgun-guard. Both branches below reduce a
+    // brand-new empty schedule to a single genesis `[]` segment
+    // (`!daysEqual([], ALL_DAYS)`), and an edit to `computeScheduleHistoryUpdate`.
+    const chosen = paused
+        ? []
+        : normalizeDays((Array.isArray(days) && days.length > 0) ? days : ALL_DAYS);
     if (!existingTracker) {
         if (!daysEqual(chosen, ALL_DAYS)) {
             fields.scheduleHistory = [{ effectiveFrom: SCHEDULE_GENESIS_DATE, days: chosen }];
@@ -643,15 +695,19 @@ export function formatTargetInput(target) {
 }
 
 /**
- * Human-readable summary of a weekday set for the config list: "Daily",
- * "Mon–Fri", or a slash-joined short-name list ("Mon/Wed/Fri", "Sun/Sat").
+ * Human-readable summary of a weekday set for the config list: "Paused" (empty
+ * set — the tracker is paused, see buildTrackerSaveFields), "Daily", "Mon–Fri",
+ * or a slash-joined short-name list ("Mon/Wed/Fri", "Sun/Sat").
  * @param {Set<number>|number[]} daysInput
  * @returns {string}
  */
 export function formatScheduleSummary(daysInput) {
     const days = normalizeDays(
         Array.isArray(daysInput) ? daysInput : Array.from(daysInput || []));
-    if (days.length === 0 || daysEqual(days, ALL_DAYS)) {
+    if (days.length === 0) {
+        return 'Paused';
+    }
+    if (daysEqual(days, ALL_DAYS)) {
         return 'Daily';
     }
     if (daysEqual(days, [1, 2, 3, 4, 5])) {

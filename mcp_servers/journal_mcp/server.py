@@ -739,7 +739,10 @@ table, read the columns directly:
   schedule in effect on date D is the segment with the greatest
   `effectiveFrom <= D` (the earliest segment when D precedes all of them). It is
   effective-dated so past days keep the schedule that was in effect then — a
-  later change never rewrites history. Interpreting it in SQL needs JSON1
+  later change never rewrites history. A segment with an **empty** `days` (`[]`)
+  means the tracker was **paused** from that date forward (zero scheduled days →
+  hidden in the UI and null adherence rates); treat such a window as an
+  intentional pause, not missed days. Interpreting it in SQL needs JSON1
   (`json_extract` / `json_each`).
 - `polarity`: `"positive"` (a habit to build), `"negative"` (a behavior to
   avoid), or `"neutral"` (a plain measurement). Absent = unspecified/neutral.

@@ -15,6 +15,7 @@ import {
     getCategories,
     groupByCategory,
     getScheduleDaysForDate,
+    lastActiveScheduleDays,
     buildTrackerSaveFields,
     formatScheduleSummary,
     parseTarget,
@@ -61,12 +62,24 @@ function TrackerForm({ tracker, onSave, onCancel }) {
         accumulator: tracker?.accumulator === true,
     });
 
+    // A tracker with an empty schedule as of today is paused (see
+    // buildTrackerSaveFields / docs "Tracker scheduling").
+    const [paused, setPaused] = useState(
+        tracker ? getScheduleDaysForDate(tracker, today).size === 0 : false
+    );
+
     // Weekday schedule (0=Sun..6=Sat). Seed from the tracker's current schedule
     // as of today (handles scheduleHistory + legacy frequency/weeklyDay); a new
-    // tracker defaults to Daily.
+    // tracker defaults to Daily. For a paused tracker the current set is empty,
+    // so seed the picker from lastActiveScheduleDays instead — otherwise
+    // unpausing without touching the picker would coerce back to Daily and lose
+    // the pre-pause days. The picker keeps this selection (dimmed) while paused
+    // so the user sees what resume restores.
     const [days, setDays] = useState(
         tracker
-            ? Array.from(getScheduleDaysForDate(tracker, today)).sort((a, b) => a - b)
+            ? (getScheduleDaysForDate(tracker, today).size === 0
+                ? lastActiveScheduleDays(tracker)
+                : Array.from(getScheduleDaysForDate(tracker, today)).sort((a, b) => a - b))
             : [...ALL_DAYS]
     );
     const [polarity, setPolarity] = useState(
@@ -137,8 +150,9 @@ function TrackerForm({ tracker, onSave, onCancel }) {
             target = null;
         }
 
-        // Schedule + polarity + target — see buildTrackerSaveFields.
-        Object.assign(trackerData, buildTrackerSaveFields(tracker, { days, polarity, target }, today));
+        // Schedule + polarity + target — see buildTrackerSaveFields. `paused`
+        // saves an empty-days schedule (bypasses the empty→Daily coercion).
+        Object.assign(trackerData, buildTrackerSaveFields(tracker, { days, polarity, target, paused }, today));
 
         onSave(trackerData);
     };
@@ -275,24 +289,39 @@ function TrackerForm({ tracker, onSave, onCancel }) {
 
                     <div class="form-group">
                         <label class="form-label">Scheduled days</label>
-                        <div class="day-toggle-group" role="group" aria-label="Scheduled days">
-                            ${WEEKDAY_PICKER.map(day => html`
-                                <button
-                                    type="button"
-                                    class="day-toggle ${days.includes(day.value) ? 'active' : ''}"
-                                    data-day=${day.value}
-                                    aria-pressed=${days.includes(day.value)}
-                                    aria-label=${DAY_FULL_NAMES[day.value]}
-                                    onClick=${() => toggleDay(day.value)}
-                                    key=${day.value}
-                                >${day.label}</button>
-                            `)}
+                        <label class="form-checkbox">
+                            <input
+                                type="checkbox"
+                                checked=${paused}
+                                onChange=${(e) => setPaused(e.target.checked)}
+                                aria-label="Paused"
+                            />
+                            <span>Paused</span>
+                        </label>
+                        <div class="form-hint">Hidden from the daily view; adherence pauses. History is kept.</div>
+                        <div class="day-picker ${paused ? 'day-picker--disabled' : ''}">
+                            <div class="day-toggle-group" role="group" aria-label="Scheduled days">
+                                ${WEEKDAY_PICKER.map(day => html`
+                                    <button
+                                        type="button"
+                                        class="day-toggle ${days.includes(day.value) ? 'active' : ''}"
+                                        data-day=${day.value}
+                                        aria-pressed=${days.includes(day.value)}
+                                        aria-label=${DAY_FULL_NAMES[day.value]}
+                                        onClick=${() => toggleDay(day.value)}
+                                        disabled=${paused}
+                                        key=${day.value}
+                                    >${day.label}</button>
+                                `)}
+                            </div>
+                            <div class="day-toggle-presets">
+                                <button type="button" class="btn btn-secondary" onClick=${() => setDays([...ALL_DAYS])} disabled=${paused}>Daily</button>
+                                <button type="button" class="btn btn-secondary" onClick=${() => setDays([1, 2, 3, 4, 5])} disabled=${paused}>Weekdays</button>
+                            </div>
                         </div>
-                        <div class="day-toggle-presets">
-                            <button type="button" class="btn btn-secondary" onClick=${() => setDays([...ALL_DAYS])}>Daily</button>
-                            <button type="button" class="btn btn-secondary" onClick=${() => setDays([1, 2, 3, 4, 5])}>Weekdays</button>
-                        </div>
-                        <div class="schedule-summary">${formatScheduleSummary(days)}</div>
+                        <div class="schedule-summary">${paused
+                            ? 'Paused'
+                            : formatScheduleSummary(days.length > 0 ? days : ALL_DAYS)}</div>
                     </div>
 
                     <div class="form-group">

@@ -1165,6 +1165,20 @@ textarea:focus-visible,
     color: var(--text-secondary);
 }
 
+/* Secondary hint under a config control (e.g. the Paused toggle explanation) */
+.form-hint {
+    margin-top: var(--spacing-xs);
+    font-size: var(--font-size-sm);
+    color: var(--text-muted);
+}
+
+/* Weekday picker dimmed while the tracker is paused — still shows the days
+   resume restores, but is non-interactive (buttons also carry `disabled`). */
+.day-picker--disabled {
+    opacity: 0.45;
+    pointer-events: none;
+}
+
 .form-error {
     margin-top: var(--spacing-sm);
     font-size: var(--font-size-sm);

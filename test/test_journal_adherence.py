@@ -87,6 +87,35 @@ class TestComputeAdherence:
         assert r["coverage_rate"] is None
         assert r["missed_days"] == 0
 
+    def test_mid_window_pause_counts_only_pre_pause_days(self):
+        # Paused tracker = an empty-days segment. Mon–Fri from genesis, paused
+        # (days []) effective Wed: over Mon..Fri only Mon,Tue are scheduled
+        # (pre-pause); Wed..Fri fall in the pause window (0 scheduled days), so
+        # the rate is computed on the pre-pause days only — the pause is NOT
+        # counted as missed.
+        schedule = json.dumps([
+            {"effectiveFrom": GENESIS, "days": [1, 2, 3, 4, 5]},
+            {"effectiveFrom": WED, "days": []},
+        ])
+        r = compute_adherence(schedule, "positive", "simple", {MON: 1, TUE: 1}, MON, FRI)
+        assert r["scheduled_days"] == 2          # Mon, Tue (before the pause)
+        assert r["done_days"] == 2
+        assert r["missed_days"] == 0             # Wed..Fri are paused, not missed
+        assert r["adherence_rate"] == 1.0        # 2/2, pre-pause days only
+        assert r["coverage_rate"] == 1.0
+
+    def test_fully_paused_window_null_rates(self):
+        # A genesis empty-days segment = paused from day one → zero scheduled
+        # days, every rate null ("nothing to measure"), and a stray entry lands
+        # off-schedule rather than counting as a scheduled/missed day.
+        paused = json.dumps([{"effectiveFrom": GENESIS, "days": []}])
+        r = compute_adherence(paused, "positive", "simple", {MON: 1}, MON, FRI)
+        assert r["scheduled_days"] == 0
+        assert r["adherence_rate"] is None
+        assert r["coverage_rate"] is None
+        assert r["missed_days"] == 0
+        assert r["off_schedule_entries"] == 1
+
     def test_genesis_sentinel_never_date_parsed(self):
         # date.fromisoformat('0000-01-01') would raise; the sentinel must only be
         # string-compared. A genesis-only schedule must flow through cleanly.

@@ -19,6 +19,7 @@ import {
     POLARITY_VALUES,
     getDayOfWeek,
     getScheduleDaysForDate,
+    lastActiveScheduleDays,
     isExpectedOn,
     shouldShowTracker,
     computeScheduleHistoryUpdate,
@@ -380,4 +381,51 @@ test('write helper: a value-EQUAL edit still clears pending future segments', ()
     const res = computeScheduleHistoryUpdate(t, ALL_DAYS, MON);  // equals today's value
     assert.equal(res.changed, true);
     assert.ok(res.scheduleHistory.every(seg => seg.effectiveFrom <= MON));
+});
+
+// ---- lastActiveScheduleDays (unpause restore-days) ------------------------
+
+test('lastActiveScheduleDays: most recent non-empty segment wins, skipping the pause segment', () => {
+    const t = {
+        scheduleHistory: [
+            { effectiveFrom: SCHEDULE_GENESIS_DATE, days: ALL_DAYS },
+            { effectiveFrom: '2026-06-01', days: [1, 2, 3, 4, 5] }, // narrowed to Mon–Fri
+            { effectiveFrom: '2026-07-01', days: [] },              // paused
+        ],
+    };
+    assert.deepEqual(lastActiveScheduleDays(t), [1, 2, 3, 4, 5]);
+});
+
+test('lastActiveScheduleDays: is order-independent (unsorted history)', () => {
+    const t = {
+        scheduleHistory: [
+            { effectiveFrom: '2026-07-01', days: [] },
+            { effectiveFrom: '2026-06-01', days: [2, 4] },
+            { effectiveFrom: SCHEDULE_GENESIS_DATE, days: ALL_DAYS },
+        ],
+    };
+    assert.deepEqual(lastActiveScheduleDays(t), [2, 4]);
+});
+
+test('lastActiveScheduleDays: normalizes the chosen segment (sort/dedupe/range)', () => {
+    const t = { scheduleHistory: [{ effectiveFrom: SCHEDULE_GENESIS_DATE, days: [5, 1, 1, 9, 3] }] };
+    assert.deepEqual(lastActiveScheduleDays(t), [1, 3, 5]);
+});
+
+test('lastActiveScheduleDays: a born-paused tracker (only empty segments) falls back to Daily', () => {
+    const t = { scheduleHistory: [{ effectiveFrom: SCHEDULE_GENESIS_DATE, days: [] }] };
+    assert.deepEqual(lastActiveScheduleDays(t), ALL_DAYS);
+});
+
+test('lastActiveScheduleDays: legacy weekly falls back to [weeklyDay]', () => {
+    assert.deepEqual(lastActiveScheduleDays({ frequency: 'weekly', weeklyDay: 3 }), [3]);
+});
+
+test('lastActiveScheduleDays: legacy weekly with an invalid day falls back to Daily', () => {
+    assert.deepEqual(lastActiveScheduleDays({ frequency: 'weekly', weeklyDay: 9 }), ALL_DAYS);
+});
+
+test('lastActiveScheduleDays: no schedule at all falls back to Daily', () => {
+    assert.deepEqual(lastActiveScheduleDays({}), ALL_DAYS);
+    assert.deepEqual(lastActiveScheduleDays({ scheduleHistory: [] }), ALL_DAYS);
 });

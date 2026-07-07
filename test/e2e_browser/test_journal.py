@@ -943,6 +943,76 @@ def test_quantifiable_target_via_config(journal_page, app_server):
     ]
 
 
+def test_pause_toggle_hides_and_restores_tracker(journal_page):
+    """Toggling Paused in config saves an empty-days schedule: the tracker
+    drops off the day grid; reopening config shows the toggle checked and the
+    weekday picker dimmed; unpausing restores it to the grid with its prior days.
+
+    A Daily tracker is used so grid visibility is day-of-week agnostic (Daily
+    always includes today; pausing hides it because it then has no scheduled
+    day and no entry today).
+    """
+    page = journal_page.page
+
+    # Create a Daily tracker in the seeded "health" category (shares the grid
+    # with Water Intake, so the grid still renders after the tracker is hidden).
+    journal_page.open_config()
+    journal_page.add_tracker("Pausable", "health", tracker_type="simple")
+    assert "Daily" in page.locator(".tracker-config-item").filter(
+        has_text="Pausable").locator(".tracker-config-meta").inner_text()
+
+    # Back to the grid — the tracker is visible today.
+    page.locator("button[aria-label='Back']").click()
+    journal_page.wait_for_trackers()
+    assert "Pausable" in journal_page.get_tracker_names()
+
+    # Reopen config, edit, toggle Paused, save.
+    journal_page.open_config()
+    page.locator(".tracker-config-item").filter(
+        has_text="Pausable").locator("button[title='Edit']").click()
+    page.wait_for_selector(".modal-content", timeout=3000)
+    paused_cb = page.locator(".form-checkbox").filter(
+        has_text="Paused").locator("input[type='checkbox']")
+    paused_cb.check()
+    page.locator("button[type='submit']").click()
+    page.wait_for_selector(".modal-content", state="hidden", timeout=3000)
+
+    # Config list now summarizes the tracker as Paused.
+    assert "Paused" in page.locator(".tracker-config-item").filter(
+        has_text="Pausable").locator(".tracker-config-meta").inner_text()
+
+    # Back to the grid — the paused tracker is hidden (no entry today).
+    page.locator("button[aria-label='Back']").click()
+    journal_page.wait_for_trackers()
+    grid_names = journal_page.get_tracker_names()
+    assert "Water Intake" in grid_names          # grid rendered
+    assert "Pausable" not in grid_names
+
+    # Reopen config and edit — the Paused toggle is checked and the weekday
+    # picker is dimmed (but still shows the days a resume would restore).
+    journal_page.open_config()
+    page.locator(".tracker-config-item").filter(
+        has_text="Pausable").locator("button[title='Edit']").click()
+    page.wait_for_selector(".modal-content", timeout=3000)
+    paused_cb = page.locator(".form-checkbox").filter(
+        has_text="Paused").locator("input[type='checkbox']")
+    assert paused_cb.is_checked()
+    assert page.locator(".day-picker--disabled").count() == 1
+    assert page.locator(".day-picker--disabled .day-toggle").first.is_disabled()
+
+    # Unpause and save.
+    paused_cb.uncheck()
+    page.locator("button[type='submit']").click()
+    page.wait_for_selector(".modal-content", state="hidden", timeout=3000)
+    assert "Daily" in page.locator(".tracker-config-item").filter(
+        has_text="Pausable").locator(".tracker-config-meta").inner_text()
+
+    # Back to the grid — the tracker reappears with its restored (Daily) schedule.
+    page.locator("button[aria-label='Back']").click()
+    journal_page.wait_for_trackers()
+    assert "Pausable" in journal_page.get_tracker_names()
+
+
 def test_add_tracker_from_config(journal_page):
     """Creating a new tracker via the form adds it to the list."""
     page = journal_page.page
