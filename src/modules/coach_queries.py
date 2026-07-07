@@ -10,7 +10,7 @@ from datetime import timedelta
 from difflib import SequenceMatcher
 
 from modules.coach_completion import derive_exercise_completion
-from modules.coach_logs import assemble_log
+from modules.coach_logs import AD_HOC_LOG_SLUGS, assemble_log, is_off_plan_entry
 
 
 def workout_summary(db, *, days, today):
@@ -29,31 +29,49 @@ def workout_summary(db, *, days, today):
     """, [start_date, end_date])
     planned_count = plans_result[0]["count"] if plans_result else 0
 
-    # Count logged workouts (presence-based: a session_log row means the user
-    # recorded something). Kept as `completed_workouts` for backward compat —
-    # but only PLANNED days count (session_id linked); off-plan extras are
-    # reported separately so they can't push the completion rate past 100%.
+    # Count logged workouts. Kept as `completed_workouts` for backward compat,
+    # but only PLANNED work counts: the day must be plan-linked AND carry
+    # session feedback or at least one content-bearing PLAN-LINKED exercise
+    # row. Off-plan extras are reported separately so they can't push the
+    # completion rate past 100% — and a planned day whose only content is an
+    # ad-hoc extra (a plan authored after the extra synced relinks the day's
+    # session_id) does not masquerade as a completed planned workout.
+    adhoc_keys = list(AD_HOC_LOG_SLUGS)
+    adhoc_placeholders = ",".join("?" for _ in adhoc_keys)
     logs_result = db.execute_query("""
-        SELECT id, session_id FROM workout_session_logs
-        WHERE date >= ? AND date <= ? AND session_id IS NOT NULL
+        SELECT l.id, l.session_id FROM workout_session_logs l
+        WHERE l.date >= ? AND l.date <= ? AND l.session_id IS NOT NULL
+          AND (
+              COALESCE(l.pain_discomfort, '') <> ''
+              OR COALESCE(l.general_notes, '') <> ''
+              OR EXISTS (
+                  SELECT 1 FROM exercise_logs e
+                  WHERE e.session_log_id = l.id
+                    AND e.exercise_id IS NOT NULL
+                    AND (e.duration_min IS NOT NULL
+                         OR EXISTS (SELECT 1 FROM set_logs s WHERE s.exercise_log_id = e.id)
+                         OR EXISTS (SELECT 1 FROM checklist_log_items c WHERE c.exercise_log_id = e.id))
+              )
+          )
     """, [start_date, end_date])
     completed_count = len(logs_result)
 
-    # Off-plan (extra) sessions — e.g. an ad-hoc Zone 2 on a rest day. Only
-    # content-bearing days count: a husk row whose entries were all deleted is
-    # not a session.
-    extra_rows = db.execute_query("""
-        SELECT l.date FROM workout_session_logs l
-        WHERE l.date >= ? AND l.date <= ? AND l.session_id IS NULL
-          AND EXISTS (
-              SELECT 1 FROM exercise_logs e
-              WHERE e.session_log_id = l.id
-                AND (e.duration_min IS NOT NULL
-                     OR EXISTS (SELECT 1 FROM set_logs s WHERE s.exercise_log_id = e.id)
-                     OR EXISTS (SELECT 1 FROM checklist_log_items c WHERE c.exercise_log_id = e.id))
-          )
+    # Off-plan (extra) sessions, judged at ENTRY level via the shared
+    # definition (coach_logs.is_off_plan_entry): an unlinked entry on a
+    # plan-less day, or a well-known ad-hoc key on any day — robust against a
+    # plan being authored after the extra synced. Only content-bearing entries
+    # count: a husk row whose entries were all deleted is not a session.
+    extra_rows = db.execute_query(f"""
+        SELECT DISTINCT l.date FROM workout_session_logs l
+        JOIN exercise_logs e ON e.session_log_id = l.id
+        WHERE l.date >= ? AND l.date <= ?
+          AND e.exercise_id IS NULL
+          AND (l.session_id IS NULL OR e.exercise_key IN ({adhoc_placeholders}))
+          AND (e.duration_min IS NOT NULL
+               OR EXISTS (SELECT 1 FROM set_logs s WHERE s.exercise_log_id = e.id)
+               OR EXISTS (SELECT 1 FROM checklist_log_items c WHERE c.exercise_log_id = e.id))
         ORDER BY l.date
-    """, [start_date, end_date])
+    """, [start_date, end_date, *adhoc_keys])
     extra_session_dates = [row["date"] for row in extra_rows]
 
     # Derived: sessions that were *fully* completed — every planned exercise met
@@ -189,12 +207,14 @@ def exercise_history(db, *, exercise_slug, limit=30):
     sessions = db.execute_query("""
         SELECT
             wsl.date,
+            wsl.session_id as session_id,
             el.user_note,
             el.duration_min,
             el.avg_hr,
             el.max_hr,
             el.id as exercise_log_id,
             el.exercise_id as exercise_id,
+            el.exercise_key as exercise_key,
             pe.exercise_type as exercise_type,
             pe.target_sets as target_sets,
             pe.target_duration_min as target_duration_min,
@@ -234,9 +254,11 @@ def exercise_history(db, *, exercise_slug, limit=30):
             "completed": completion["completed"],
             "progress": completion["progress"],
         }
-        if session["exercise_id"] is None:
-            # Not linked to a planned exercise — logged outside the plan
-            # (e.g. an ad-hoc extra Zone 2 session on a rest day).
+        if is_off_plan_entry(
+            session["exercise_id"], session["exercise_key"], session["session_id"]
+        ):
+            # A genuine extra session (rest-day or ad-hoc-keyed) — orphaned
+            # logs of removed planned exercises are NOT labeled off-plan.
             entry["off_plan"] = True
         if session["user_note"]:
             entry["user_note"] = session["user_note"]

@@ -80,6 +80,50 @@ def _segment_days_for_date(schedule, date_str):
     return _normalize_days(seg.get("days"))
 
 
+def _legacy_weekly_days(meta_json):
+    """Legacy pre-scheduleHistory shape: meta_json `{"frequency": "weekly",
+    "weeklyDay": N}` → frozenset({N}), else None.
+
+    Mirrors the client twin (`getScheduleDaysForDate` fallback +
+    `normalizeTrackerSchedule` in public/js/journal/utils.js): a tracker the
+    PWA has not loaded since the schedule migration has schedule_json NULL but
+    may still be weekly via these meta fields — judging it as daily here made
+    a perfectly-adhered weekly habit read ~87% missed. An invalid weeklyDay
+    means daily (the normalize rule), so return None for it.
+    """
+    if not meta_json:
+        return None
+    try:
+        meta = json.loads(meta_json)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(meta, dict) or meta.get("frequency") != "weekly":
+        return None
+    day = meta.get("weeklyDay")
+    if isinstance(day, bool) or not isinstance(day, int) or not 0 <= day <= 6:
+        return None
+    return frozenset({day})
+
+
+def _coerce_numeric(value):
+    """A day's logged value as a float, or None when absent/non-numeric.
+
+    Entries share one `value` column across tracker types, so a tracker
+    converted from (or to) type 'note' can carry free-text values; a targeted
+    comparison must treat those as "no usable value" (→ 'missed'), never
+    raise. Booleans are explicitly not values."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value)
+        except ValueError:
+            return None
+    return None
+
+
 def _target_for_date(target_history, date_str):
     """The typed target (`{min?, max?}`) in effect on `date_str`, or None when
     there is no target — an absent history or a `target: null` segment (a target
@@ -106,6 +150,7 @@ def _target_status(target, value, has_entry, polarity):
     """
     if not has_entry:
         return "met" if polarity == "negative" else "missed"
+    value = _coerce_numeric(value)
     if value is None:
         return "missed"
     min_v = target.get("min")
@@ -142,13 +187,16 @@ def _metric_kind(polarity):
 
 
 def compute_adherence(schedule_json, polarity, tracker_type, entries,
-                      window_start, window_end, target_json=None, values=None):
+                      window_start, window_end, target_json=None, values=None,
+                      meta_json=None):
     """Adherence metrics for one tracker over the inclusive window
     [`window_start`, `window_end`] (real `YYYY-MM-DD` strings).
 
     `entries` maps a date string to that day's `completed` value (1/0/None);
     `values` (optional) maps a date string to the day's numeric `value`, needed
-    only when the tracker has a target.
+    only when the tracker has a target. `meta_json` (optional) supplies the
+    legacy frequency/weeklyDay fallback for trackers whose schedule_json has
+    not been normalized yet (see _legacy_weekly_days).
 
     Without a target, "done" is `completed == 1` and the output is unchanged from
     the pre-target tool. With a target in effect on a day (`targetHistory`),
@@ -170,6 +218,9 @@ def compute_adherence(schedule_json, polarity, tracker_type, entries,
     schedule = _load_json_list(schedule_json)
     target_history = _load_json_list(target_json)
     has_target = target_history is not None
+    # Un-normalized legacy weekly tracker: no scheduleHistory yet, weekly via
+    # meta fields — must match the client twin, not default to daily.
+    legacy_days = _legacy_weekly_days(meta_json) if not schedule else None
 
     scheduled_days = logged_days = done_days = off_schedule_entries = 0
     target_met_days = target_partial_days = rate_met_days = 0
@@ -179,7 +230,9 @@ def compute_adherence(schedule_json, polarity, tracker_type, entries,
         date_str = day.isoformat()
         weekday = day.isoweekday() % 7  # Mon=1..Sun=7 -> Sun=0..Sat=6
         has_entry = date_str in entries
-        if weekday in _segment_days_for_date(schedule, date_str):
+        day_set = (legacy_days if legacy_days is not None
+                   else _segment_days_for_date(schedule, date_str))
+        if weekday in day_set:
             scheduled_days += 1
             if has_entry:
                 logged_days += 1

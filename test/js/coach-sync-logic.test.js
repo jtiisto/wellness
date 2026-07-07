@@ -15,6 +15,8 @@ import {
     adoptUploadResults,
     isDeletedEntry,
     withEntryDeleted,
+    withEntryUpdated,
+    logHasPendingDeletions,
 } from '../../public/js/coach/sync-logic.js';
 
 // ---- content predicates --------------------------------------------------
@@ -185,15 +187,61 @@ test('withEntryDeleted: synced entry becomes a tombstone keeping its server stam
     assert.equal(log.extra_zone2.duration_min, 45); // input not mutated
 });
 
-test('withEntryDeleted: never-synced entry is removed outright', () => {
+test('withEntryDeleted: unstamped entry still becomes a tombstone (no silent resurrection)', () => {
+    // The entry may exist server-side (upload response lost) — removing the
+    // key outright let the server copy resurrect on the next pull with no
+    // record of the delete intent. A stampless tombstone uploads, is rejected
+    // (hard cutover), and the adopted server row lets the user re-delete.
     const log = { session_feedback: {}, extra_zone2: { duration_min: 45 } };
     const next = withEntryDeleted(log, 'extra_zone2');
-    assert.ok(!('extra_zone2' in next));
+    assert.deepEqual(next.extra_zone2, { _deleted: true });
 });
 
 test('withEntryDeleted: missing key is a no-op', () => {
     const log = { session_feedback: {} };
     assert.equal(withEntryDeleted(log, 'nope'), log);
+});
+
+test('withEntryUpdated: plain merge over a normal entry', () => {
+    const log = { ex_1: { duration_min: 30, _lastModified: 't1' } };
+    const next = withEntryUpdated(log, 'ex_1', { avg_hr: 128 });
+    assert.deepEqual(next.ex_1, { duration_min: 30, avg_hr: 128, _lastModified: 't1' });
+});
+
+test('withEntryUpdated: write over a pending tombstone becomes a marked re-add keeping the stamp', () => {
+    // The H1 data-loss bug: spreading over the tombstone kept _deleted: true
+    // (and the old stamp), so the server processed the re-added session as a
+    // deletion. The re-add drops _deleted, KEEPS the stamp (base token that
+    // wins over the still-live server row when the delete never uploaded),
+    // and carries _readd so the server's resurrection guard accepts it when
+    // the delete DID land.
+    const log = {
+        _lastModified: 'day-tok',
+        extra_zone2: { _deleted: true, _lastModified: 'ex-tok' },
+    };
+    const next = withEntryUpdated(log, 'extra_zone2', { duration_min: 45, avg_hr: 128 });
+    assert.deepEqual(next.extra_zone2, {
+        duration_min: 45, avg_hr: 128, _readd: true, _lastModified: 'ex-tok',
+    });
+    assert.ok(!('_deleted' in next.extra_zone2));
+});
+
+test('withEntryUpdated: re-add over an UNSTAMPED tombstone carries no stamp', () => {
+    const log = { extra_zone2: { _deleted: true } };
+    const next = withEntryUpdated(log, 'extra_zone2', { duration_min: 45 });
+    assert.deepEqual(next.extra_zone2, { duration_min: 45, _readd: true });
+});
+
+test('logHasPendingDeletions + selectLogsToUpload: a tombstone-only never-synced day uploads', () => {
+    const logs = {
+        d1: { session_feedback: {}, extra_zone2: { _deleted: true } },
+    };
+    assert.ok(logHasPendingDeletions(logs.d1));
+    const r = selectLogsToUpload(['d1'], logs);
+    assert.deepEqual(r.uploadedDates, ['d1']);
+    assert.deepEqual(r.unsatisfiableDates, []);
+    // No stamp → no base token → the server arbitrates it as a hard-cutover.
+    assert.ok(!('_baseLastModifiedAt' in r.logsToUpload.d1.extra_zone2));
 });
 
 test('tombstone day uploads and echoes the tombstone base token', () => {
@@ -227,19 +275,70 @@ test('adoptUploadResults: adopting the serverRow (without the key) clears the to
     assert.equal(next.d1._lastModified, 'srv-day');
 });
 
-test('adoptUploadResults: re-modified-mid-sync day keeps its tombstone for the next cycle', () => {
+test('adoptUploadResults re-modified: REJECTED delete adopts the surviving server record (never advances the tombstone token)', () => {
+    // The F4 bug: advancing the tombstone's token to the server stamp made the
+    // next retry's base match, turning the rejected delete into an accepted
+    // one — destroying the other client's newer edit. An uploaded tombstone
+    // has been arbitrated: serverRow carrying the key IS the verdict.
+    const uploaded = {
+        d1: { extra_zone2: { _deleted: true, _lastModified: 't1', _baseLastModifiedAt: 't1' } },
+    };
+    const local = {
+        d1: {
+            _lastModified: 'day-tok',
+            session_feedback: { general_notes: 'mid-sync edit' },
+            extra_zone2: { _deleted: true, _lastModified: 't1' },
+        },
+    };
+    const results = {
+        d1: {
+            session_feedback: {},
+            _lastModified: 'srv-day',
+            extra_zone2: { duration_min: 60, _lastModified: 't2' },  // remote edit won
+        },
+    };
+    const next = adoptUploadResults(local, results, { d1: 1 }, { d1: 2 }, uploaded);
+    assert.deepEqual(next.d1.extra_zone2, { duration_min: 60, _lastModified: 't2' });
+    assert.equal(next.d1.session_feedback.general_notes, 'mid-sync edit'); // re-edit kept
+});
+
+test('adoptUploadResults re-modified: ACCEPTED delete drops the tombstone', () => {
+    const uploaded = {
+        d1: { extra_zone2: { _deleted: true, _lastModified: 't1', _baseLastModifiedAt: 't1' } },
+    };
+    const local = {
+        d1: {
+            _lastModified: 'day-tok',
+            session_feedback: { general_notes: 'mid-sync edit' },
+            extra_zone2: { _deleted: true, _lastModified: 't1' },
+        },
+    };
+    const results = { d1: { session_feedback: {}, _lastModified: 'srv-day' } };  // key gone
+    const next = adoptUploadResults(local, results, { d1: 1 }, { d1: 2 }, uploaded);
+    assert.ok(!('extra_zone2' in next.d1));
+    assert.equal(next.d1._lastModified, 'srv-day');
+});
+
+test('adoptUploadResults re-modified: a tombstone created MID-SYNC is kept, token untouched', () => {
+    // Not in the upload → not yet arbitrated. It must survive with its
+    // original base so the next cycle arbitrates it properly.
+    const uploaded = { d1: { ex_other: { reps: 5, _baseLastModifiedAt: 'o1' } } };
     const local = {
         d1: {
             _lastModified: 'day-tok',
             session_feedback: {},
-            extra_zone2: { _deleted: true, _lastModified: 'ex-tok' },
+            extra_zone2: { _deleted: true, _lastModified: 't1' },  // deleted mid-sync
         },
     };
-    const results = { d1: { session_feedback: {}, _lastModified: 'srv-day' } };
-    // gen advanced (1 → 2): keep local content (the tombstone), advance day token.
-    const next = adoptUploadResults(local, results, { d1: 1 }, { d1: 2 });
-    assert.equal(next.d1.extra_zone2._deleted, true);
-    assert.equal(next.d1._lastModified, 'srv-day');
+    const results = {
+        d1: {
+            session_feedback: {},
+            _lastModified: 'srv-day',
+            extra_zone2: { duration_min: 45, _lastModified: 't1' },
+        },
+    };
+    const next = adoptUploadResults(local, results, { d1: 1 }, { d1: 2 }, uploaded);
+    assert.deepEqual(next.d1.extra_zone2, { _deleted: true, _lastModified: 't1' });
 });
 
 // ---- pruneOlderThan / maxPlanVersion -------------------------------------

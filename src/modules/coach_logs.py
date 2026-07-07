@@ -16,6 +16,34 @@ from modules.coach_completion import (
 # is shared with journal.
 from modules.sync_arbitration import should_accept_log_write  # noqa: F401
 
+# Well-known ad-hoc log keys → canonical registry identity. An entry logged
+# under one of these keys is a deliberate off-plan session (e.g. an extra
+# Zone 2 on a rest day): it has no planned_exercises row, so the sync layer
+# assigns its canonical slug from here, and the read layer uses the key to
+# tell a genuine extra from an orphaned log of a since-removed planned
+# exercise. Lives in this shared domain module so coach.py (sync write path)
+# and coach_queries.py (analysis read path) stay in lockstep. The client twin
+# is EXTRA_SESSION_KEY in public/js/coach/utils.js.
+AD_HOC_LOG_SLUGS = {
+    "extra_zone2": {"slug": "zone_2", "name": "Zone 2", "category": "cardio"},
+}
+
+
+def is_off_plan_entry(exercise_id, exercise_key, session_id):
+    """The single definition of an OFF-PLAN (extra) exercise entry.
+
+    An entry is off-plan when it has no planned-exercise link AND either the
+    whole day has no plan (rest-day session) or the key is a well-known ad-hoc
+    key (extra work on a planned day). The second arm keeps the label correct
+    even when a plan is authored AFTER the extra session synced (the day-level
+    session_id gets relinked on the next upload) — and keeps orphaned logs of
+    removed planned exercises (plan exists, ordinary key) from being mislabeled
+    as extras.
+    """
+    return exercise_id is None and (
+        session_id is None or exercise_key in AD_HOC_LOG_SLUGS
+    )
+
 
 def workout_stats(cursor, session_id):
     """Fetch pre/post workout stats for a session from hook result tables.
@@ -161,10 +189,10 @@ def assemble_log(cursor, log_row, *, session_id=None, derive_completion=False):
             entry["attempted"] = completion["attempted"]
             entry["completed"] = completion["completed"]
             entry["progress"] = completion["progress"]
-            if el["exercise_id"] is None:
-                # Not linked to a planned exercise — logged outside the plan
-                # (e.g. an ad-hoc extra Zone 2 on a rest day). Rich shape only;
-                # the lean sync shape stays wire-invariant for the PWA.
+            if is_off_plan_entry(el["exercise_id"], el["exercise_key"], log_row["session_id"]):
+                # A genuine extra session (e.g. ad-hoc Zone 2 on a rest day) —
+                # NOT an orphaned log of a removed planned exercise. Rich shape
+                # only; the lean sync shape stays wire-invariant for the PWA.
                 entry["off_plan"] = True
             completion_results.append(completion)
 

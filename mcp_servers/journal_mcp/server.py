@@ -556,11 +556,16 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
         `get_journal_summary` is unchanged and stays entries-based — completion
         and adherence are separate axes.
 
-        Window: defaults to the last `days` days ending today; override with
-        `start_date` / `end_date` (YYYY-MM-DD). Per tracker the start is clamped
-        to its first-ever entry date, so a tracker never accrues misses for days
-        before it was first used; a tracker with no entries (or none in the
-        window) is omitted (nothing to measure). Deleted trackers are excluded.
+        Window: defaults to the last `days` calendar days ending today
+        (inclusive — e.g. days=7 ends today and starts 6 days ago, matching the
+        PWA's 7-day dot row); override with `start_date` / `end_date`
+        (YYYY-MM-DD). Per tracker the start is clamped to its first-ever entry
+        date, so a tracker never accrues misses for days before it was first
+        used; a tracker with no entries at all, or whose first activity is
+        after the window, is omitted (nothing to measure). A tracker whose
+        entries all PRECEDE the window is still reported — an abandoned but
+        still-scheduled habit showing 0% is exactly what this tool exists to
+        surface. Deleted trackers are excluded.
 
         Polarity picks the headline metric (`metric_kind`): `positive` →
         `adherence_rate` (done/scheduled); `negative` → `avoidance_rate`
@@ -584,12 +589,15 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
             raise ValueError("Days cannot exceed 366")
         try:
             end = end_date or date.today().isoformat()
+            # days-1: the window is inclusive of both ends, so `days` calendar
+            # days ending at `end` start days-1 before it (days=7 → today and
+            # the 6 preceding days, matching the client's 7-day dot row).
             start = start_date or (
-                date.fromisoformat(end) - timedelta(days=days)
+                date.fromisoformat(end) - timedelta(days=days - 1)
             ).isoformat()
 
             tracker_query = (
-                "SELECT id, name, schedule_json, polarity, type, target_json "
+                "SELECT id, name, schedule_json, polarity, type, target_json, meta_json "
                 "FROM trackers WHERE deleted = 0"
             )
             params: List[Any] = []
@@ -623,6 +631,7 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
                     tracker["schedule_json"], tracker["polarity"],
                     tracker["type"], entries, eff_start, end,
                     target_json=tracker["target_json"], values=values,
+                    meta_json=tracker["meta_json"],
                 )
                 results.append({
                     "tracker": tracker["name"],

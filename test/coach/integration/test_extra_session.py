@@ -205,6 +205,51 @@ class TestLogEntryDeletion:
         assert _tombstone(conn, today) is not None
         conn.close()
 
+    def test_readd_marker_wins_over_live_row(self, client, coach_registered_client, tmp_coach_db):
+        """H1 window: the delete never reached the server (row still live).
+        The client's re-add keeps the tombstone's stamp as base + `_readd`;
+        it must win as a normal stamped update."""
+        today = _today()
+        _, stamp = _upload_extra(client, coach_registered_client, today)
+
+        # Delete + re-add happened client-side before any upload; only the
+        # re-add reaches the server.
+        data = _post_log(client, coach_registered_client, today, {
+            "session_feedback": {},
+            EXTRA_KEY: {"duration_min": 45, "_readd": True, "_baseLastModifiedAt": stamp},
+        })
+
+        assert data["results"][today][EXTRA_KEY]["duration_min"] == 45
+        conn = _db(tmp_coach_db)
+        assert _exercise_row(conn, today)["duration_min"] == 45
+        assert _tombstone(conn, today) is None
+        conn.close()
+
+    def test_readd_marker_clears_server_tombstone(
+        self, client, coach_registered_client, tmp_coach_db
+    ):
+        """Delete landed (row gone, tombstone written), response lost, client
+        re-adds keeping the old stamp + `_readd`: accepted, tombstone cleared —
+        the resurrection guard must not treat it as a stale edit."""
+        today = _today()
+        server_day, stamp = _upload_extra(client, coach_registered_client, today)
+        _post_log(client, coach_registered_client, today, {
+            "session_feedback": {},
+            "_baseLastModifiedAt": server_day["_lastModified"],
+            EXTRA_KEY: {"_deleted": True, "_baseLastModifiedAt": stamp},
+        })
+
+        data = _post_log(client, coach_registered_client, today, {
+            "session_feedback": {},
+            EXTRA_KEY: {"duration_min": 45, "_readd": True, "_baseLastModifiedAt": stamp},
+        })
+
+        assert data["results"][today][EXTRA_KEY]["duration_min"] == 45
+        conn = _db(tmp_coach_db)
+        assert _exercise_row(conn, today)["duration_min"] == 45
+        assert _tombstone(conn, today) is None
+        conn.close()
+
     def test_deliberate_readd_clears_tombstone(
         self, client, coach_registered_client, tmp_coach_db
     ):

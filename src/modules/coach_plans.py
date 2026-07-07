@@ -477,16 +477,24 @@ def store_plan(cursor, date_str, plan, modified_by="mcp"):
     validate_plan(plan)
     now = get_utc_now()
 
-    # Guard: refuse to replace plans that have workout logs attached.
+    # Guard: refuse to REPLACE a plan that has workout logs attached.
     # Use update_exercise/add_exercise/remove_exercise instead.
-    log_row = cursor.execute(
-        "SELECT id FROM workout_session_logs WHERE date = ?", [date_str]
+    # Scoped to replacement only: a log row on a date with NO plan is a normal
+    # state since ad-hoc extra sessions (rest-day Zone 2) — creating the
+    # first plan for such a date must not be blocked (the DELETE below would
+    # remove nothing, so nothing logged is at risk).
+    existing_plan = cursor.execute(
+        "SELECT id FROM workout_sessions WHERE date = ?", [date_str]
     ).fetchone()
-    if log_row:
-        raise ValueError(
-            f"Cannot replace plan for {date_str}: a workout log exists. "
-            f"Use update_exercise, add_exercise, or remove_exercise to edit in place."
-        )
+    if existing_plan:
+        log_row = cursor.execute(
+            "SELECT id FROM workout_session_logs WHERE date = ?", [date_str]
+        ).fetchone()
+        if log_row:
+            raise ValueError(
+                f"Cannot replace plan for {date_str}: a workout log exists. "
+                f"Use update_exercise, add_exercise, or remove_exercise to edit in place."
+            )
 
     # Delete existing session for this date (CASCADE cleans blocks, exercises, checklist)
     cursor.execute("DELETE FROM workout_sessions WHERE date = ?", [date_str])

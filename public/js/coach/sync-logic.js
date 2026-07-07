@@ -27,22 +27,60 @@ export function isDeletedEntry(entry) {
     return !!(entry && typeof entry === 'object' && entry._deleted);
 }
 
+/** A day carrying at least one pending local tombstone. Such a day must
+ *  upload even when it has no other content and was never synced — the
+ *  delete intent has to reach the server. */
+export function logHasPendingDeletions(log) {
+    return Object.values(log).some(val => isDeletedEntry(val));
+}
+
 /**
- * Delete one exercise entry from a day's log. If the entry was ever synced
- * (it carries a server `_lastModified` stamp) it becomes a tombstone keeping
- * that stamp, so `withBaseTokens` echoes it and the server can arbitrate the
- * delete against concurrent edits. A never-synced entry is simply removed —
- * there is nothing server-side to delete. Pure; returns a new log.
+ * Merge a content write into one exercise entry. Normally a shallow merge over
+ * the existing entry — EXCEPT when the existing entry is a pending delete
+ * tombstone: writing over a tombstone is a deliberate RE-ADD. The `_deleted`
+ * flag is dropped (a plain spread would keep it and the server would process
+ * the re-added session as a deletion, silently discarding it), the tombstone's
+ * server stamp is KEPT, and the entry is marked `_readd: true`:
+ *   - delete not yet uploaded → the server row still exists; the kept stamp
+ *     is the base token that lets the re-add win as a normal update (a
+ *     token-less create would be rejected as a hard cutover and the OLD
+ *     session would come back).
+ *   - delete already accepted server-side → the row is gone and a server
+ *     tombstone exists; `_readd` tells the resurrection guard this client SAW
+ *     the delete (it authored it), so the insert is accepted and the
+ *     tombstone cleared — while stale edits without the marker stay rejected.
+ * `_readd` is transient: the server never stores or echoes it, so adopting
+ * any sync result clears it. Pure; returns a new log.
+ */
+export function withEntryUpdated(log, exerciseId, data) {
+    const prev = log[exerciseId];
+    if (!isDeletedEntry(prev)) {
+        return { ...log, [exerciseId]: { ...prev, ...data } };
+    }
+    const readd = { ...data, _readd: true };
+    if (prev._lastModified) readd._lastModified = prev._lastModified;
+    return { ...log, [exerciseId]: readd };
+}
+
+/**
+ * Delete one exercise entry from a day's log: the entry becomes a `_deleted`
+ * tombstone. A synced entry keeps its server `_lastModified` stamp so
+ * `withBaseTokens` echoes it and the server arbitrates the delete against
+ * concurrent edits. An UNSTAMPED entry (uploaded but the response was lost,
+ * or never uploaded) still becomes a tombstone — without a base token the
+ * server rejects the delete against an existing row (hard cutover) and
+ * returns the row, which the client adopts; the user deletes once more with
+ * the fresh stamp and converges. Removing the key instead (the old behavior)
+ * silently resurrected the server's copy on the next pull with no local
+ * record of the delete intent. Pure; returns a new log.
  */
 export function withEntryDeleted(log, exerciseId) {
     const entry = log[exerciseId];
     if (!entry || typeof entry !== 'object') return log;
     const next = { ...log };
-    if (entry._lastModified) {
-        next[exerciseId] = { _deleted: true, _lastModified: entry._lastModified };
-    } else {
-        delete next[exerciseId];
-    }
+    next[exerciseId] = entry._lastModified
+        ? { _deleted: true, _lastModified: entry._lastModified }
+        : { _deleted: true };
     return next;
 }
 
@@ -110,7 +148,7 @@ export function selectLogsToUpload(dirtyDates, localLogs) {
             unsatisfiableDates.push(date);  // pruned out of the window
             continue;
         }
-        if (logHasUploadableContent(log) || logIsSyncedToServer(log)) {
+        if (logHasUploadableContent(log) || logIsSyncedToServer(log) || logHasPendingDeletions(log)) {
             logsToUpload[date] = withBaseTokens(log);
         } else {
             unsatisfiableDates.push(date);  // empty + never synced
@@ -151,9 +189,14 @@ export function withBaseTokens(log) {
  * log (it stays dirty and re-uploads next cycle). Replaces R1-2a's
  * applyAcceptedTokens + adoptRejectedServerRows with one mechanism.
  *
+ * `uploadedLogs` (the `logsToUpload` map actually sent) lets the re-modified
+ * branch tell an ARBITRATED tombstone (it was in the upload — the serverRow is
+ * its verdict) from one created mid-sync (not yet arbitrated) — see
+ * advanceRecordTokens.
+ *
  * @returns {Object} next logs
  */
-export function adoptUploadResults(localLogs, results, snapshotGens, dirtyDateGenerations) {
+export function adoptUploadResults(localLogs, results, snapshotGens, dirtyDateGenerations, uploadedLogs = null) {
     if (!results) return localLogs;
     const next = { ...localLogs };
     for (const [date, serverRow] of Object.entries(results)) {
@@ -165,7 +208,7 @@ export function adoptUploadResults(localLogs, results, snapshotGens, dirtyDateGe
             // so the next upload echoes a fresh base rather than the stale
             // pre-sync one (which the now-advanced server would reject, losing the
             // re-edit). Content is kept; only `_lastModified` tokens move forward.
-            next[date] = advanceRecordTokens(localLogs[date], serverRow);
+            next[date] = advanceRecordTokens(localLogs[date], serverRow, uploadedLogs?.[date]);
         } else {
             next[date] = serverRow;  // not re-modified → adopt the merged day wholesale
         }
@@ -175,11 +218,30 @@ export function adoptUploadResults(localLogs, results, snapshotGens, dirtyDateGe
 
 /** Copy the server row's `_lastModified` tokens (day + per-record) onto the local
  *  log, keeping all local content. For a re-modified-mid-sync date (see
- *  adoptUploadResults). Pure shallow copy. */
-function advanceRecordTokens(localLog, serverRow) {
+ *  adoptUploadResults). Pure shallow copy.
+ *
+ *  Tombstones are the exception to "keep local content": a tombstone that was
+ *  IN the upload has just been arbitrated, and its verdict must be applied —
+ *  serverRow carries the key (delete rejected: a newer remote edit won) →
+ *  adopt the surviving server record; serverRow lacks the key (delete
+ *  accepted) → drop the tombstone. Merely advancing its token (the old
+ *  behavior) turned a REJECTED delete into a winning delete on the next
+ *  cycle: the advanced token matched the server stamp, so the retry
+ *  destroyed the other client's newer edit. A tombstone NOT in the upload
+ *  (created mid-sync) is kept as-is, token untouched — it has not been
+ *  arbitrated yet and re-uploads next cycle with its original base. */
+function advanceRecordTokens(localLog, serverRow, uploadedLog = null) {
     const out = { ...localLog };
     if (serverRow._lastModified) out._lastModified = serverRow._lastModified;
     for (const [key, val] of Object.entries(localLog)) {
+        if (val && typeof val === 'object' && isDeletedEntry(val)) {
+            if (isDeletedEntry(uploadedLog?.[key])) {
+                const srvRec = serverRow[key];
+                if (srvRec && typeof srvRec === 'object') out[key] = srvRec;
+                else delete out[key];
+            }
+            continue;  // mid-sync tombstone: keep, do not advance its token
+        }
         const srvRec = serverRow[key];
         if (val && typeof val === 'object' && srvRec && srvRec._lastModified) {
             out[key] = { ...val, _lastModified: srvRec._lastModified };

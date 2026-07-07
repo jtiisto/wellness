@@ -95,6 +95,35 @@ def test_delete_propagates_to_server(rest_day_page, app_page):
     assert not rest_day_page.has_extra_session_card()
 
 
+def test_delete_then_immediate_readd_survives(rest_day_page, app_page):
+    """Regression (review H1): re-adding over a pending delete tombstone must
+    not merge `_deleted` into the new entry. Save → sync → delete → re-add
+    immediately (inside the upload debounce) → the new session must persist."""
+    rest_day_page.add_extra_session()
+    rest_day_page.fill_extra_field("Duration (min)", 30)
+    rest_day_page.save_extra_session()
+    app_page.wait_for_selector(".sync-dot.green", timeout=15000)
+
+    # Delete, then re-add before the delete has a chance to upload.
+    rest_day_page.delete_extra_session()
+    app_page.wait_for_selector(".extra-session-add-btn", timeout=3000)
+    rest_day_page.add_extra_session()
+    rest_day_page.fill_extra_field("Duration (min)", 45)
+    rest_day_page.save_extra_session()
+
+    # The saved card must appear AND stay (the bug made it vanish instantly).
+    app_page.wait_for_selector(
+        ".extra-session-card:not(.extra-session-card--draft)", timeout=5000)
+    app_page.wait_for_selector(".sync-dot.green", timeout=15000)
+    assert rest_day_page.get_extra_session_duration() == "45"
+
+    app_page.reload()
+    app_page.wait_for_selector(".coach", timeout=10000)
+    app_page.wait_for_selector(
+        ".extra-session-card:not(.extra-session-card--draft)", timeout=10000)
+    assert rest_day_page.get_extra_session_duration() == "45"
+
+
 def test_calendar_dot_shows_completed_for_extra_session(rest_day_page, app_page):
     """A rest day with a logged extra session earns the completed status dot."""
     rest_day_page.add_extra_session()

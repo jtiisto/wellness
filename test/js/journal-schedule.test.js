@@ -351,3 +351,33 @@ test('normalizeTrackerSchedule: visibility identical pre/post for legacy daily',
             `visibility diverged on ${d}`);
     }
 });
+
+test('write helper: an edit supersedes FUTURE-dated segments (clock-skew artifacts)', () => {
+    // A future segment would silently override today's edit the day it
+    // arrives — segment selection picks the greatest effectiveFrom <= date.
+    const t = {
+        scheduleHistory: [
+            { effectiveFrom: SCHEDULE_GENESIS_DATE, days: ALL_DAYS },
+            { effectiveFrom: '2026-07-10', days: [3] },  // future vs MON edit day
+        ],
+    };
+    const res = computeScheduleHistoryUpdate(t, [1, 2, 3, 4, 5], MON);
+    assert.equal(res.changed, true);
+    assert.ok(res.scheduleHistory.every(seg => seg.effectiveFrom <= MON));
+    const latest = res.scheduleHistory[res.scheduleHistory.length - 1];
+    assert.deepEqual(latest, { effectiveFrom: MON, days: [1, 2, 3, 4, 5] });
+});
+
+test('write helper: a value-EQUAL edit still clears pending future segments', () => {
+    // The user just confirmed today's value; the pending future flip must not
+    // survive the confirmation as a no-op.
+    const t = {
+        scheduleHistory: [
+            { effectiveFrom: SCHEDULE_GENESIS_DATE, days: ALL_DAYS },
+            { effectiveFrom: '2026-07-10', days: [3] },
+        ],
+    };
+    const res = computeScheduleHistoryUpdate(t, ALL_DAYS, MON);  // equals today's value
+    assert.equal(res.changed, true);
+    assert.ok(res.scheduleHistory.every(seg => seg.effectiveFrom <= MON));
+});

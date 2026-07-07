@@ -19,7 +19,7 @@ from pydantic import BaseModel
 
 from config import get_hook_path
 from modules.coach_plans import assemble_plan
-from modules.coach_logs import assemble_log, should_accept_log_write
+from modules.coach_logs import AD_HOC_LOG_SLUGS, assemble_log, should_accept_log_write
 from modules.db import (
     DbAccessor,
     get_utc_now,
@@ -39,14 +39,6 @@ logger = logging.getLogger(__name__)
 # Sync window: only send plans/logs within this many days to clients.
 # Server retains all data permanently.
 SYNC_WINDOW_DAYS = 60
-
-# Well-known ad-hoc log keys → canonical registry identity. An entry logged
-# under one of these keys has no planned_exercises row (off-plan session), so
-# the slug can't come from the plan join — assign it here so ad-hoc sessions
-# appear in exercise history alongside planned work.
-AD_HOC_LOG_SLUGS = {
-    "extra_zone2": {"slug": "zone_2", "name": "Zone 2", "category": "cardio"},
-}
 
 
 def _migration_1_baseline(cursor):
@@ -625,11 +617,16 @@ def _store_log(conn, date_str, log_data, client_id, now):
                 (date_str, exercise_key),
             ).fetchone()
             if tombstone is not None:
-                if exercise_data.get("_baseLastModifiedAt"):
+                if exercise_data.get("_baseLastModifiedAt") and not exercise_data.get("_readd"):
                     # A base token proves this client is editing the record that
                     # was deleted → delete wins (else the edit resurrects it).
+                    # Exception: `_readd` marks a client that authored the delete
+                    # itself and then deliberately re-added — its write keeps the
+                    # old stamp (needed to win when its delete has NOT reached the
+                    # server yet, i.e. the row still exists) but must not be
+                    # mistaken for a stale edit here.
                     continue
-                # No base token = a deliberate re-add after deletion.
+                # No base token, or an explicit re-add = deliberate re-creation.
                 cursor.execute(
                     "DELETE FROM deleted_exercise_logs WHERE date = ? AND exercise_key = ?",
                     (date_str, exercise_key),

@@ -116,7 +116,7 @@ function TrackerForm({ tracker, onSave, onCancel }) {
             type: formData.type,
         };
 
-        let target;  // undefined = not a quantifiable tracker → leave targetHistory alone
+        let target;  // undefined = leave targetHistory alone
         if (formData.type === 'quantifiable') {
             trackerData.unit = formData.unit;
             trackerData.defaultValue = formData.defaultValue !== '' ? Number(formData.defaultValue) : null;
@@ -128,6 +128,13 @@ function TrackerForm({ tracker, onSave, onCancel }) {
                 return;
             }
             target = parsed.target;  // {min?,max?} or null
+        } else if (tracker && targetForDate(tracker, today) != null) {
+            // Leaving the quantifiable type while a target is in effect: clear
+            // it explicitly (null-target segment). Only quantifiable trackers
+            // render the target input, so a stale target would otherwise stay
+            // in force forever — judging every checkbox-only day 'missed' —
+            // with no UI path to remove it.
+            target = null;
         }
 
         // Schedule + polarity + target — see buildTrackerSaveFields.

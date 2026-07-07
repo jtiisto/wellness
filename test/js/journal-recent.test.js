@@ -89,3 +89,21 @@ test('recentDayStates: a neutral observation still marks off-schedule days "off"
     assert.equal(byDate['2026-07-05'], 'off');   // Sunday
     assert.equal(byDate['2026-07-06'], 'quiet'); // Monday, expected neutral, no entry
 });
+
+test('recentDayStates: days before earliestKnownDate render "off", not missed/quiet (pruned logs)', () => {
+    // Browsing back: the window ending at END reaches days the store has
+    // pruned — absence there is "unknown", not a fabricated miss.
+    const t = { id: 't', polarity: 'positive' };
+    const byDate = Object.fromEntries(
+        recentDayStates(t, END, {}, 7, '2026-07-03').map(x => [x.date, x.state]));
+    assert.equal(byDate['2026-06-30'], 'off');
+    assert.equal(byDate['2026-07-01'], 'off');
+    assert.equal(byDate['2026-07-02'], 'off');
+    assert.equal(byDate['2026-07-03'], 'missed');  // inside the window: judged
+    assert.equal(byDate['2026-07-06'], 'missed');
+});
+
+test('recentDayStates: no earliestKnownDate keeps the old judge-everything behavior', () => {
+    const r = recentDayStates({ id: 't', polarity: 'positive' }, END, {}, 7);
+    assert.ok(r.every(x => x.state === 'missed'));
+});

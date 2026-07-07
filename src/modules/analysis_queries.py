@@ -44,12 +44,13 @@ _COACH_SCHEMA = (
     "sets/duration. Infer completion from set_logs / duration_min.)\n"
     "- set_logs: join on exercise_log_id → exercise_logs.id. Columns: "
     "set_num, weight, reps, rpe, unit, duration_sec, completed.\n"
-    "- Off-plan (extra) sessions: a workout_session_logs row with session_id "
-    "NULL (its exercise_logs rows have exercise_id NULL) is a session logged "
-    "on a rest day, outside the plan. The exercise_key 'extra_zone2' is an "
-    "ad-hoc Zone 2 cardio session (canonical_slug 'zone_2'). Credit these as "
-    "additional training volume; never count them toward plan completion or "
-    "adherence.\n"
+    "- Off-plan (extra) sessions: an exercise_logs row with exercise_id NULL "
+    "on a plan-less day (workout_session_logs.session_id NULL), or under the "
+    "well-known exercise_key 'extra_zone2' (ad-hoc Zone 2, canonical_slug "
+    "'zone_2') on any day, is a session logged outside the plan. Credit these "
+    "as additional training volume; never count them toward plan completion "
+    "or adherence. (An exercise_id-NULL row with an ordinary key on a planned "
+    "day is an orphan of a removed planned exercise, not an extra.)\n"
 )
 
 _JOURNAL_SCHEMA = (

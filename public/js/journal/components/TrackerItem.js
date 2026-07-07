@@ -14,7 +14,7 @@ import {
     isDayEditable,
 } from '../store.js';
 import { NumericInput } from '../../shared/numeric-input.js';
-import { dayStatus, formatTargetProgress, recentDayStates } from '../utils.js';
+import { dayStatus, formatTargetProgress, recentDayStates, localDataWindowStart } from '../utils.js';
 
 const html = htm.bind(h);
 
@@ -84,8 +84,10 @@ export function TrackerItem({ tracker }) {
 
     // 7-day "recent texture" dot row — the single-day dayStatus repeated over the
     // last week ending on the selected date; off-schedule days are 'off' so the
-    // dots can mute them (off-schedule ≠ missed).
-    const recentStates = recentDayStates(tracker, date, logs, 7);
+    // dots can mute them (off-schedule ≠ missed). Days older than the local
+    // 7-day log window are muted too — their logs are pruned, so judging them
+    // would fabricate 'missed' from absent data (visible when browsing back).
+    const recentStates = recentDayStates(tracker, date, logs, 7, localDataWindowStart(7));
 
     const handleCompletedChange = (e) => {
         if (!editable) return;
@@ -121,7 +123,12 @@ export function TrackerItem({ tracker }) {
         // NumericInput fires onValueChange on blur even when the field was
         // only focused, so we no-op when nothing actually changed — otherwise
         // tabbing through inputs would bump every "Last updated" timestamp.
-        const prev = entry.value ?? null;
+        // Compare against the DISPLAYED value (which falls back to
+        // defaultValue), not the stored entry: on a tracker with a
+        // defaultValue and no entry, blur echoes the displayed default and a
+        // stored-value comparison would silently CREATE a log entry — which
+        // now flips polarity/target day judgments (a "logged" day).
+        const prev = value ?? null;
         const next = v ?? null;
         if (prev === next) return;
         updateEntry(date, tracker.id, { value: v });

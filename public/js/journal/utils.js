@@ -230,10 +230,28 @@ export function formatTarget(target, unit) {
  * @param {string} [polarity] - 'positive' | 'negative' | 'neutral' | undefined
  * @returns {'met'|'partial'|'missed'}
  */
+/**
+ * A day's logged value as a number, or null when absent/non-numeric. Entries
+ * share one `value` field across tracker types, so a tracker converted
+ * from/to type 'note' can carry free-text values — a targeted comparison must
+ * treat those as "no usable value" ('missed'), never as silently satisfying a
+ * range (NaN comparisons are all false, which read as in-range). Twin of
+ * adherence.py's _coerce_numeric — keep in lockstep.
+ */
+function coerceNumericValue(value) {
+    if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+    if (typeof value === 'string' && value.trim() !== '') {
+        const n = Number(value);
+        return Number.isFinite(n) ? n : null;
+    }
+    return null;
+}
+
 export function targetStatus(target, value, hasEntry, polarity) {
     if (!hasEntry) {
         return polarity === 'negative' ? 'met' : 'missed';
     }
+    value = coerceNumericValue(value);
     if (value == null) {
         return 'missed';
     }
@@ -325,26 +343,33 @@ export function formatTargetProgress(ds, unit) {
         return { text: label, tone: 'neutral', fillPct: isAtLeast ? 0 : null };
     }
 
+    // Math runs on the coerced numeric value (twin rule of targetStatus): an
+    // entry whose value is absent or non-numeric has NO usable value — it must
+    // render neutral, not 'met' (dayStatus scores it 'missed'; the row must
+    // not contradict the day dot). The raw value is still what gets displayed.
+    const num = coerceNumericValue(value);
     const shown = value == null ? '—' : String(value);
 
     if (isAtLeast) {
         const tone = state === 'met' ? 'met' : (state === 'partial' ? 'partial' : 'neutral');
-        const fillPct = (value != null && min > 0)
-            ? Math.max(0, Math.min(1, value / min)) * 100
+        const fillPct = (num != null && min > 0)
+            ? Math.max(0, Math.min(1, num / min)) * 100
             : 0;
         return { text: `${shown} / ${label}`, tone, fillPct };
     }
     if (isAtMost) {
-        const over = value != null && value > max;
-        const suffix = value == null ? ''
-            : (over ? ` · over by ${value - max}` : ` · ${max - value} left`);
+        if (num == null) {
+            return { text: `${shown} of ${label}`, tone: 'neutral', fillPct: null };
+        }
+        const over = num > max;
+        const suffix = over ? ` · over by ${num - max}` : ` · ${max - num} left`;
         return { text: `${shown} of ${label}${suffix}`, tone: over ? 'over' : 'met', fillPct: null };
     }
     // range
     let tone = 'neutral';
     if (state === 'met') tone = 'met';
     else if (state === 'partial') tone = 'partial';
-    else if (value != null && value > max) tone = 'over';
+    else if (num != null && num > max) tone = 'over';
     return { text: `${shown} in ${label}`, tone, fillPct: null };
 }
 
@@ -417,10 +442,16 @@ export function shouldShowTracker(tracker, dateStr, dayLog) {
 // `equals(a, b)` compares values; `makeSegment(effectiveFrom, value)` builds a
 // segment of the appropriate shape.
 function applySegmentEdit({ history, currentValue, newValue, today, equals, makeSegment }) {
-    if (equals(newValue, currentValue)) {
+    const hist = (Array.isArray(history) && history.length > 0) ? history : null;
+    // Segments dated AFTER today (cross-device clock skew artifacts) would
+    // silently override this edit the day they arrive — segment selection
+    // picks the greatest effectiveFrom <= date. Any edit made today
+    // supersedes them, INCLUDING a value-equal one (the user just confirmed
+    // today's value; the pending future flip must not survive it).
+    const hasFuture = hist !== null && hist.some(seg => seg.effectiveFrom > today);
+    if (equals(newValue, currentValue) && !hasFuture) {
         return { changed: false, history };
     }
-    const hist = (Array.isArray(history) && history.length > 0) ? history : null;
     if (hist === null) {
         return {
             changed: true,
@@ -430,14 +461,13 @@ function applySegmentEdit({ history, currentValue, newValue, today, equals, make
             ],
         };
     }
-    const latest = hist.reduce((a, b) => (b.effectiveFrom > a.effectiveFrom ? b : a));
-    if (latest.effectiveFrom === today) {
-        return {
-            changed: true,
-            history: hist.map(seg => (seg === latest ? makeSegment(today, newValue) : seg)),
-        };
-    }
-    return { changed: true, history: [...hist, makeSegment(today, newValue)] };
+    // Drop today's and future segments; append the new today segment. Covers
+    // the same-day re-edit (replace) and the future-segment supersede in one
+    // rule — segment selection is order-independent, so append position is fine.
+    return {
+        changed: true,
+        history: [...hist.filter(seg => seg.effectiveFrom < today), makeSegment(today, newValue)],
+    };
 }
 
 function targetsEqual(a, b) {
@@ -637,6 +667,20 @@ export function formatScheduleSummary(daysInput) {
  * @param {number} days - Number of days
  * @returns {boolean}
  */
+/**
+ * The oldest local date the journal store still holds logs for — the twin of
+ * `pruneOldLogs`/`isWithinLastNDays` (days back from today, midnight-local).
+ * Dot rows and other lookbacks must not judge days older than this: their
+ * logs are pruned locally, so absence there means "unknown", not "missed".
+ */
+export function localDataWindowStart(days = 7) {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const cutoff = new Date(today);
+    cutoff.setDate(today.getDate() - days);
+    return formatDateLocal(cutoff);
+}
+
 export function isWithinLastNDays(dateStr, days = 7) {
     const date = parseLocalDate(dateStr);
     const today = new Date();
@@ -748,7 +792,7 @@ export function formatCategorySummary(summary) {
  * @param {number} [n=7] - window length in days
  * @returns {Array<{date: string, state: string}>} oldest → newest
  */
-export function recentDayStates(tracker, endDateStr, logs, n = 7) {
+export function recentDayStates(tracker, endDateStr, logs, n = 7, earliestKnownDate = null) {
     const end = parseLocalDate(endDateStr);
     const out = [];
     for (let i = n - 1; i >= 0; i--) {
@@ -756,7 +800,12 @@ export function recentDayStates(tracker, endDateStr, logs, n = 7) {
         d.setDate(end.getDate() - i);
         const dateStr = formatDateLocal(d);
         let state;
-        if (!isExpectedOn(tracker, dateStr)) {
+        if (earliestKnownDate && dateStr < earliestKnownDate) {
+            // Before the local data window (logs pruned / never synced): the
+            // day's truth is unknown — mute it like an off-schedule day
+            // instead of fabricating 'missed'/'quiet' from absent data.
+            state = 'off';
+        } else if (!isExpectedOn(tracker, dateStr)) {
             state = 'off';
         } else {
             const entry = (logs && logs[dateStr]) ? (logs[dateStr][tracker.id] ?? null) : null;

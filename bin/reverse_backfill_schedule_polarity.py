@@ -7,8 +7,14 @@ The C3 single-source cleanup (journal migration 4) moved `scheduleHistory` /
 pre-C3 revision (which read the fields from `meta_json`), first run this script
 to re-embed the column values into `meta_json`, so the old readers work again.
 
-Idempotent and safe to run repeatedly. Live `trackers` only (archives are
-historical). Does not touch the columns.
+It also NULLs the columns and resets `PRAGMA user_version` to 2 (pre-lift), so
+that ROLLING FORWARD later reruns migrations 3-4: schedule/polarity edits made
+under the old code (which only writes meta_json) are re-lifted into the columns
+instead of being silently shadowed by the stale pre-rollback column values.
+
+Run with the server STOPPED, immediately before switching code — a running
+new-code server reads the (now NULL) columns. Idempotent and safe to run
+repeatedly. Live `trackers` only (archives are historical).
 
 Usage:
     python bin/reverse_backfill_schedule_polarity.py [DB_PATH]
@@ -56,6 +62,13 @@ def reverse_backfill(db_path):
                     (json.dumps(meta), row["id"]),
                 )
                 updated += 1
+        # Hand authority back to meta_json: NULL the columns and rewind the
+        # migration cursor to pre-lift, so the next new-code start reruns
+        # migration 3 (lift meta → columns) + 4 (strip meta copies) and picks
+        # up any edits the old code made in the meantime. Without this, roll-
+        # forward kept the stale column values and silently reverted them.
+        cursor.execute("UPDATE trackers SET schedule_json = NULL, polarity = NULL")
+        cursor.execute("PRAGMA user_version = 2")
         conn.commit()
         return updated
     finally:

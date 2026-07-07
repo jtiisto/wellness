@@ -778,6 +778,118 @@ class TestOffPlanSessions:
         assert by_date[self.rest_day]["off_plan"] is True
         assert by_date[self.rest_day]["duration_min"] == 45
 
+    def test_plan_creation_allowed_on_extra_session_date(self, tmp_coach_db):
+        """An ad-hoc extra session must not block authoring the FIRST plan for
+        that date (the guard is scoped to replacing a plan that has logs)."""
+        plan = {
+            "day_name": "Late Plan",
+            "location": "Gym",
+            "phase": "Foundation",
+            "blocks": [{
+                "block_type": "strength",
+                "title": "Main",
+                "exercises": [{
+                    "id": "ex_late", "name": "Late Squat", "type": "strength",
+                    "target_sets": 3, "target_reps": "10",
+                }],
+            }],
+        }
+        result = self.tools["set_workout_plan"](date=self.rest_day, plan=plan)
+        assert result["success"] is True
+
+        # The ad-hoc log survived plan creation untouched.
+        conn = sqlite3.connect(tmp_coach_db)
+        conn.row_factory = sqlite3.Row
+        ex = conn.execute(
+            """SELECT el.* FROM exercise_logs el
+               JOIN workout_session_logs sl ON sl.id = el.session_log_id
+               WHERE sl.date = ? AND el.exercise_key = 'extra_zone2'""",
+            (self.rest_day,),
+        ).fetchone()
+        conn.close()
+        assert ex is not None and ex["duration_min"] == 45
+
+    def test_relinked_extra_day_stays_extra(self, tmp_coach_db):
+        """A plan authored AFTER the extra session synced relinks the day's
+        session_id on the next upload — the extra must stay an extra (not
+        become a 'completed planned workout')."""
+        plan = {
+            "day_name": "Late Plan",
+            "location": "Gym",
+            "phase": "Foundation",
+            "blocks": [{
+                "block_type": "strength",
+                "title": "Main",
+                "exercises": [{
+                    "id": "ex_late", "name": "Late Squat", "type": "strength",
+                    "target_sets": 3, "target_reps": "10",
+                }],
+            }],
+        }
+        self.tools["set_workout_plan"](date=self.rest_day, plan=plan)
+
+        # Simulate the sync relink (_store_log's feedback UPDATE sets session_id).
+        conn = sqlite3.connect(tmp_coach_db)
+        conn.execute(
+            """UPDATE workout_session_logs
+               SET session_id = (SELECT id FROM workout_sessions WHERE date = ?)
+               WHERE date = ?""",
+            (self.rest_day, self.rest_day),
+        )
+        conn.commit()
+        conn.close()
+
+        summary = self.tools["get_workout_summary"](days=30)
+        assert self.rest_day in summary["extra_session_dates"]
+        assert summary["extra_sessions"] == 1
+        # Only today's real planned log counts completed — the extra-only
+        # relinked day must not.
+        assert summary["completed_workouts"] == 1
+
+        logs = self.tools["get_workout_logs"](
+            start_date=self.rest_day, end_date=self.rest_day
+        )
+        assert logs[0]["log"]["extra_zone2"]["off_plan"] is True
+
+    def test_orphaned_planned_log_not_off_plan(self, tmp_coach_db):
+        """A log entry whose planned exercise was later removed (exercise_id
+        NULL, ordinary key, day HAS a plan) is an orphan — not an extra."""
+        today = self.seed["dates"][0]
+        conn = sqlite3.connect(tmp_coach_db)
+        conn.execute(
+            """INSERT INTO exercise_logs
+               (session_log_id, exercise_id, exercise_key, duration_min, last_modified)
+               SELECT id, NULL, 'removed_ex', 12, '2026-01-01T00:00:00Z'
+               FROM workout_session_logs WHERE date = ?""",
+            (today,),
+        )
+        conn.commit()
+        conn.close()
+
+        logs = self.tools["get_workout_logs"](start_date=today, end_date=today)
+        assert "off_plan" not in logs[0]["log"]["removed_ex"]
+
+        summary = self.tools["get_workout_summary"](days=30)
+        assert today not in summary["extra_session_dates"]
+
+    def test_feedback_only_planned_day_counts_completed(self, tmp_coach_db):
+        """Presence semantics kept for planned days: session feedback alone
+        (no exercise rows) still counts the day as a completed workout."""
+        yesterday = self.seed["dates"][1]  # has a plan, no log yet
+        conn = sqlite3.connect(tmp_coach_db)
+        conn.execute(
+            """INSERT INTO workout_session_logs
+               (session_id, date, general_notes, last_modified, modified_by)
+               SELECT id, ?, 'easy day', '2026-01-01T00:00:00Z', 'test'
+               FROM workout_sessions WHERE date = ?""",
+            (yesterday, yesterday),
+        )
+        conn.commit()
+        conn.close()
+
+        summary = self.tools["get_workout_summary"](days=30)
+        assert summary["completed_workouts"] == 2  # today's log + feedback-only day
+
     def test_emptied_husk_day_is_not_an_extra_session(self, tmp_coach_db):
         """A rest-day log whose entries were all deleted (empty day row) must
         not count as an extra session."""

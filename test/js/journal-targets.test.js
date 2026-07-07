@@ -324,3 +324,36 @@ test('formatTargetProgress: range membership (in / below / above)', () => {
     assert.equal(_prog(t, { value: 100 }, 'g').tone, 'partial');    // below
     assert.equal(_prog(t, { value: 200 }, 'g').tone, 'over');       // above
 });
+
+test('targetStatus: non-numeric string values are missed for every target kind (twin of _coerce_numeric)', () => {
+    // NaN comparisons are all false — without coercion a string inside a
+    // RANGE target silently read as 'met'.
+    assert.equal(targetStatus({ min: 1, max: 5 }, 'three', true, 'positive'), 'missed');
+    assert.equal(targetStatus({ max: 2 }, 'skipped it', true, 'negative'), 'missed');
+    assert.equal(targetStatus({ min: 150 }, 'lots', true, 'positive'), 'missed');
+});
+
+test('targetStatus: numeric strings still count', () => {
+    assert.equal(targetStatus({ min: 150 }, '160', true, 'positive'), 'met');
+    assert.equal(targetStatus({ min: 1, max: 5 }, '3', true, 'positive'), 'met');
+});
+
+test('formatTargetProgress: at-most with a value-less entry is neutral, matching the missed day dot', () => {
+    const t = {
+        id: 't', polarity: 'negative', unit: 'drinks',
+        targetHistory: [{ effectiveFrom: SCHEDULE_GENESIS_DATE, target: { max: 2 } }],
+    };
+    const p = _prog(t, { completed: true }, 'drinks');  // entry, no value
+    assert.equal(p.tone, 'neutral');                     // was 'met' — contradicted dayStatus
+    assert.ok(p.text.startsWith('—'));
+});
+
+test('formatTargetProgress: non-numeric string value never reads as met/over math', () => {
+    const t = {
+        id: 't', polarity: 'negative', unit: 'drinks',
+        targetHistory: [{ effectiveFrom: SCHEDULE_GENESIS_DATE, target: { max: 2 } }],
+    };
+    const p = _prog(t, { value: 'a couple' }, 'drinks');
+    assert.equal(p.tone, 'neutral');
+    assert.ok(p.text.startsWith('a couple'));  // raw value still displayed
+});

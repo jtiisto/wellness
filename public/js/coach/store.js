@@ -17,6 +17,7 @@ import {
     maxPlanVersion,
     adoptUploadResults,
     withEntryDeleted,
+    withEntryUpdated,
 } from './sync-logic.js';
 
 const API_BASE = '/wellness/api/coach';
@@ -154,10 +155,11 @@ export function updateLog(date, exerciseId, data) {
         };
     }
 
-    logs[date][exerciseId] = {
-        ...logs[date][exerciseId],
-        ...data
-    };
+    // Tombstone-aware merge: a write over a pending delete tombstone is a
+    // deliberate re-add and must discard the tombstone (see withEntryUpdated) —
+    // a plain spread would keep `_deleted: true` and the server would process
+    // the new data as a deletion.
+    logs[date] = withEntryUpdated(logs[date], exerciseId, data);
     logs[date]._lastModifiedAt = getUtcNow();
     logs[date]._lastModifiedBy = syncMetadata.value.clientId;
 
@@ -362,7 +364,7 @@ async function triggerSync() {
             // rather than clobbered by the server's now-stale row.
             workoutLogs.value = adoptUploadResults(
                 workoutLogs.value, results, snapshotGens,
-                syncMetadata.value.dirtyDateGenerations,
+                syncMetadata.value.dirtyDateGenerations, logsToUpload,
             );
 
             debugLog('coach-sync', 'upload success', { dates: Object.keys(results).length });
@@ -515,7 +517,7 @@ export async function forceSync() {
                 const uploadResult = await uploadResponse.json();
                 workoutLogs.value = adoptUploadResults(
                     workoutLogs.value, uploadResult.results || {}, snapshotGens,
-                    syncMetadata.value.dirtyDateGenerations,
+                    syncMetadata.value.dirtyDateGenerations, logsToUpload,
                 );
                 uploadedDates = Object.keys(logsToUpload);
             }

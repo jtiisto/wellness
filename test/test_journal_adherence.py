@@ -281,3 +281,67 @@ class TestTargetAdherence:
         assert r["target_met_days"] == 1          # Tue met (<=2)
         # Blended numerator = Mon (no entry, avoided) + Tue (met) = 2.
         assert r["avoidance_rate"] == round(2 / 3, 3)
+
+
+@pytest.mark.unit
+class TestValueCoercion:
+    """Stale targets can meet non-numeric values (a tracker converted from/to
+    'note' shares the entries.value column) — the comparison must degrade to
+    'missed', never raise (review F6)."""
+
+    def _target(self, **kw):
+        return json.dumps([{"effectiveFrom": GENESIS, "target": kw}])
+
+    def test_string_value_is_missed_not_crash(self):
+        r = compute_adherence(
+            None, "negative", "quantifiable", {MON: 1}, MON, MON,
+            target_json=self._target(max=2), values={MON: "skipped it"})
+        assert r["target_met_days"] == 0
+        assert r["avoidance_rate"] == 0.0
+
+    def test_string_value_never_satisfies_a_range(self):
+        # NaN-style comparisons must not read as in-range (the client-twin bug).
+        r = compute_adherence(
+            None, "positive", "quantifiable", {MON: 1}, MON, MON,
+            target_json=self._target(min=1, max=5), values={MON: "three"})
+        assert r["target_met_days"] == 0
+
+    def test_numeric_string_still_counts(self):
+        r = compute_adherence(
+            None, "positive", "quantifiable", {MON: 1}, MON, MON,
+            target_json=self._target(min=150), values={MON: "160"})
+        assert r["target_met_days"] == 1
+
+
+@pytest.mark.unit
+class TestLegacyWeeklyFallback:
+    """schedule_json NULL + meta_json {frequency: weekly, weeklyDay} must be
+    judged weekly, mirroring the client twin — not defaulted to daily
+    (review F7: a perfect weekly habit read ~87% missed)."""
+
+    def test_legacy_weekly_scheduled_only_on_weekly_day(self):
+        meta = json.dumps({"frequency": "weekly", "weeklyDay": 3})  # Wednesday
+        r = compute_adherence(
+            None, "positive", "simple", {WED: 1}, MON, SUN, meta_json=meta)
+        assert r["scheduled_days"] == 1
+        assert r["done_days"] == 1
+        assert r["adherence_rate"] == 1.0
+        assert r["off_schedule_entries"] == 0
+
+    def test_legacy_weekly_invalid_day_falls_back_to_daily(self):
+        meta = json.dumps({"frequency": "weekly", "weeklyDay": 9})
+        r = compute_adherence(
+            None, "positive", "simple", {}, MON, SUN, meta_json=meta)
+        assert r["scheduled_days"] == 7  # normalize rule: invalid → daily
+
+    def test_schedule_json_wins_over_legacy_meta(self):
+        meta = json.dumps({"frequency": "weekly", "weeklyDay": 3})
+        r = compute_adherence(
+            MON_FRI, "positive", "simple", {}, MON, SUN, meta_json=meta)
+        assert r["scheduled_days"] == 5  # canonical column, not the legacy shape
+
+    def test_legacy_daily_meta_stays_daily(self):
+        meta = json.dumps({"frequency": "daily"})
+        r = compute_adherence(
+            None, "positive", "simple", {}, MON, SUN, meta_json=meta)
+        assert r["scheduled_days"] == 7
