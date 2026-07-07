@@ -9,7 +9,26 @@ import time
 
 import pytest
 
-from journal_mcp.adherence import compute_adherence
+# Canonical location (moved from journal_mcp.adherence, which now re-exports).
+from modules.journal_adherence import (
+    compute_adherence,
+    compute_streaks,
+    day_status,
+    target_band_segments,
+)
+
+
+@pytest.mark.unit
+def test_mcp_shim_reexports_canonical_functions():
+    """The journal MCP's historical import surface must stay identical to the
+    shared domain module (one implementation, re-exported)."""
+    import journal_mcp.adherence as shim
+    import modules.journal_adherence as canonical
+    assert shim.compute_adherence is canonical.compute_adherence
+    assert shim.day_status is canonical.day_status
+    assert shim.compute_streaks is canonical.compute_streaks
+    assert shim.target_band_segments is canonical.target_band_segments
+
 
 GENESIS = "0000-01-01"
 MON_FRI = json.dumps([{"effectiveFrom": GENESIS, "days": [1, 2, 3, 4, 5]}])
