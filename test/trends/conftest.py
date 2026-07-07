@@ -199,7 +199,10 @@ def cardio_history(client, tmp_coach_db):
         )
         return cur.lastrowid
 
-    steady_dates = [today - timedelta(days=n) for n in (16, 9, 3)]
+    # Offsets chosen to avoid strength_history's dates ({37,23,9,2} sessions,
+    # {5} plan-less log) — the two fixtures compose in the overview tests and
+    # workout_sessions.date / workout_session_logs.date are UNIQUE.
+    steady_dates = [today - timedelta(days=n) for n in (16, 17, 3)]
     log_id, pe_id, _ = plan_day(steady_dates[0], "duration", "z2", "Zone 2 Bike")
     log_entry(log_id, pe_id, "z2", 45.0, 142)
     log_id, pe_id, _ = plan_day(steady_dates[1], "duration", "z2", "Zone 2 Bike")
@@ -220,7 +223,7 @@ def cardio_history(client, tmp_coach_db):
     log_entry(cur.lastrowid, None, "extra_zone2", 30.0, 128)
 
     # Relinked extra + orphan share one planned day.
-    relink_date = today - timedelta(days=2)
+    relink_date = today - timedelta(days=1)
     log_id, pe_id, _ = plan_day(relink_date, "duration", "z2", "Zone 2 Bike")
     log_entry(log_id, pe_id, "z2", 35.0, 140)          # the planned work
     log_entry(log_id, None, "extra_zone2", 25.0, 126)  # relinked extra

@@ -8,14 +8,17 @@ import { useEffect, useState } from 'preact/hooks';
 import { effect } from '@preact/signals';
 import htm from 'htm';
 
-import { fetchCached, range } from '../store.js';
-import { dayIndex, linearScale, seriesToPoints, linePath, rollingMean } from '../chart-logic.js';
+import { fetchCached, range, setActiveScreen } from '../store.js';
+import {
+    dayIndex, linearScale, seriesToPoints, linePath, rollingMean, sparklinePoints,
+} from '../chart-logic.js';
 import { RangeSelector, StaleBadge, rangeStart, spread, YAxis, XAxis } from './primitives.js';
 import { getToday } from '../../shared/utils.js';
 
 const html = htm.bind(h);
 
 export function OverviewScreen() {
+    const [overview, setOverview] = useState(null);
     const [weight, setWeight] = useState(null);
     const [error, setError] = useState(null);
     const [, forceRender] = useState(0);
@@ -32,6 +35,14 @@ export function OverviewScreen() {
     useEffect(() => {
         let cancelled = false;
         setError(null);
+        fetchCached('overview', '/overview')
+            .then(d => !cancelled && setOverview(d))
+            .catch(err => !cancelled && setError(err.message));
+        return () => { cancelled = true; };
+    }, []);
+
+    useEffect(() => {
+        let cancelled = false;
         fetchCached(`weight:${range.value}`, `/weight${q}`)
             .then(d => !cancelled && setWeight(d))
             .catch(err => !cancelled && setError(err.message));
@@ -42,13 +53,88 @@ export function OverviewScreen() {
         <div class="trends-screen">
             <div class="trends-toolbar">
                 <${RangeSelector}/>
-                <${StaleBadge} cacheKeys=${[`weight:${range.value}`]}/>
+                <${StaleBadge} cacheKeys=${['overview', `weight:${range.value}`]}/>
             </div>
             ${error && html`<div class="trends-error">${error}</div>`}
+            ${overview && html`
+                <div class="trends-tiles">
+                    <${StatTile}
+                        label="Zone 2 this week" unit="min"
+                        value=${overview.zone2.this_week_min}
+                        avg=${overview.zone2.four_week_avg_min}
+                        spark=${overview.zone2.sparkline.map(w => w.planned_min + w.extra_min)}
+                        onClick=${() => setActiveScreen('cardio')}/>
+                    <${StatTile}
+                        label="Tonnage this week" unit="kg"
+                        value=${overview.tonnage.this_week_kg}
+                        avg=${overview.tonnage.four_week_avg_kg}
+                        spark=${overview.tonnage.sparkline.map(w => w.tonnage_kg)}
+                        onClick=${() => setActiveScreen('strength')}/>
+                </div>
+                ${overview.prs.count_30d > 0 && html`<${PRTile} prs=${overview.prs}/>`}
+                ${overview.adherence_focus.length > 0 && html`
+                    <${FocusCard} focus=${overview.adherence_focus}/>
+                `}
+            `}
             ${weight && weight.available && weight.series.length > 0 && html`
                 <${WeightCard} series=${weight.series}/>
             `}
         </div>
+    `;
+}
+
+function StatTile({ label, unit, value, avg, spark, onClick }) {
+    const pts = sparklinePoints(spark, 96, 26);
+    const delta = avg ? Math.round((value / avg - 1) * 100) : null;
+    return html`
+        <button class="trends-tile" onClick=${onClick}>
+            <div class="trends-tile-label">${label}</div>
+            <div class="trends-tile-value">${value}<span class="trends-unit">${unit}</span></div>
+            ${avg != null && html`
+                <div class="trends-tile-avg">
+                    4wk avg ${avg}${delta != null ? ` · ${delta >= 0 ? '+' : ''}${delta}%` : ''}
+                </div>
+            `}
+            ${pts && html`
+                <svg viewBox="0 0 96 26" class="trends-sparkline" aria-hidden="true">
+                    <polyline points=${pts} class="trends-sparkline-line"/>
+                </svg>
+            `}
+        </button>
+    `;
+}
+
+function PRTile({ prs }) {
+    const l = prs.latest;
+    return html`
+        <section class="trends-card trends-pr-tile">
+            <span class="trends-pr-badge">🏆 ${prs.count_30d} PR${prs.count_30d === 1 ? '' : 's'} in 30d</span>
+            ${l && html`<span class="trends-pr-latest">
+                latest: ${l.name} e1RM ${l.e1rm} ${l.unit} (${l.date})
+            </span>`}
+        </section>
+    `;
+}
+
+function FocusCard({ focus }) {
+    return html`
+        <section class="trends-card">
+            <h3 class="trends-card-title">Adherence focus
+                <span class="trends-unit">weakest, rolling 14d</span></h3>
+            ${focus.map(f => html`
+                <div class="trends-focus-row" key=${f.tracker_id}>
+                    <div class="trends-focus-name">${f.name}
+                        <span class="trends-focus-rate">${Math.round(f.rate * 100)}% ${f.metric_kind}</span>
+                    </div>
+                    <div class="trends-focus-dots">
+                        ${f.ribbon.map(r => html`
+                            <span key=${r.date} class="trends-day-dot trends-day--${r.status}"
+                                  title="${r.date}: ${r.status}"></span>
+                        `)}
+                    </div>
+                </div>
+            `)}
+        </section>
     `;
 }
 

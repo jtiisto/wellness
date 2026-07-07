@@ -136,6 +136,11 @@ def create_router() -> APIRouter:
         except ValueError as e:
             raise HTTPException(status_code=404, detail=str(e))
 
+    @router.get("/overview")
+    @_source_db_guard
+    def overview():
+        return trends_queries.overview(coach_db, journal_db, today=date.today())
+
     @router.get("/weight")
     def weight(
         start: Optional[str] = Query(None, pattern=_DATE_PATTERN),

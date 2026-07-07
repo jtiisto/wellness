@@ -415,6 +415,71 @@ The Analysis module has no bidirectional sync protocol — all authoritative sta
 4. Claude Code CLI runs with MCP tool access, generating a markdown report
 5. Report is stored in `analysis.db` and displayed in the UI
 
+**Retirement status.** Analysis is superseded by Trends (below) for glanceable
+stats, and by interactive LLM sessions for interpretation. It is retired at
+runtime — `WELLNESS_DISABLED_MODULES=analysis` in the prod service
+environment — which unmounts its routes (API 404s), drops it from
+`/api/modules` (no tab), and skips its startup recovery. The code stays
+dormant and tested; removal is a later decision.
+
+### Trends: Read-Only Cross-Module Aggregates
+
+Trends is the "what happened" surface: deterministic chart aggregates over
+coach + journal + Garmin data — zero LLM, no prose insights (interpretation
+lives in interactive Claude sessions against the MCP servers). Product spec
+and decisions: `plans/trends-module-feature-set.md` (local-only).
+
+**The deliberate exception to module DB isolation.** Trends owns NO database.
+Its registry entry has no `db_env`/`db_default`; `create_app` calls its
+factory with no argument, and the factory builds its OWN **read-only**
+accessors (`DbAccessor(..., read_only=True)`, sqlite URI `mode=ro`) to the
+coach/journal paths via `config.get_module_db_path` — honoring the same env
+vars the owners use, which is also what isolates tests for free — plus the
+external Garmin health DB (`GARMIN_DB_PATH`, default `~/.garmy/health.db`,
+written by the user's sync job). `mode=ro` refuses writes AND refuses to
+create missing files; a missing/unmigrated source surfaces as 503 on coach/
+journal endpoints and as `{"available": false}` on `/weight` (an absent
+Garmin DB is a supported state — the chart hides). Note: reading a WAL DB via
+`mode=ro` needs `-shm` file access, so reader and writer must be the same
+user (they are: one server process; the Garmin job runs as the user).
+Multi-SELECT aggregates run inside `read_transaction` for a consistent
+snapshot while the owning modules write. Trends never writes, runs no
+migrations, and must NEVER borrow the owning module's accessor.
+
+**Aggregation conventions** (`src/modules/trends_queries.py`): local calendar
+dates; ISO Monday weeks (weekly aggregates floor `start` to Monday, the week
+containing today is `"partial": true` so it isn't compared against complete
+weeks); per-exercise weights in the exercise's dominant logged unit,
+cross-exercise sums in kg; Epley e1RM with the true-single special case;
+qualifying set = logged weight+reps (the legacy per-set `completed` tick is
+ignored); Zone 2 is exercise-TYPE-based (`duration`) because prod slugs are
+fragmented; off-plan attribution reuses `coach_logs.is_off_plan_entry`
+semantics with keys from `AD_HOC_LOG_SLUGS`; journal weekly adherence = one
+`compute_adherence` call per week bucket (the shared function stays
+untouched — it lives in `modules/journal_adherence.py`, extracted from the
+journal MCP which now re-exports); streaks count scheduled days only (pause
+windows transparent; an unmet TODAY doesn't break the current streak); PRs =
+session e1RM strictly above the slug's prior all-time max (first session is
+baseline). Overview thresholds are config-free constants in
+`trends_queries.py`.
+
+**Frontend** (`public/js/trends/`): hand-rolled SVG charts — all
+data→geometry math is PURE in `chart-logic.js` (node:test target, the
+sync-logic purity pattern); components are thin htm/preact consumers styled
+via CSS variables. Offline: `store.js fetchCached` is network-first with a
+LocalForage write-through carrying `fetchedAt`; on network failure the cached
+payload serves and a stale badge shows its age (the Analysis cache pattern
+plus the staleness stamp it lacked). Range selector 4w/12w/6m/All is shared
+across screens.
+
+**Testing pattern** (product decision): endpoints tested hard (exact JSON,
+`test/trends/`), chart geometry as pure node tests
+(`test/js/trends-chart-logic.test.js`), e2e minimal and structural (tab
+renders, picker flow, offline cache + stale badge) — NO pixel/visual
+assertions; the user reviews visuals directly. Both test harnesses pin
+`GARMIN_DB_PATH` to a nonexistent temp path so no test ever reads the real
+`~/.garmy/health.db`.
+
 ## Shared Frontend Utilities
 
 The `public/js/shared/` directory contains cross-module utilities:

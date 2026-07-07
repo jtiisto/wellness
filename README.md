@@ -10,8 +10,11 @@ Daily habit and health tracking with multi-device sync. Track supplements, habit
 ### Coach
 Workout planning and logging. Supports structured workout plans with blocks (warmup, strength, cardio), set-level tracking (weight, reps, RPE), and multiple exercise types including strength, cardio, duration, and checklists. Rest days can take an ad-hoc "extra" Zone 2 session (off-plan, deletable, reported separately from plan completion by the analysis tools). Plans are managed server-side; logs sync from clients with per-record server-token arbitration (the server is the only arbiter — client clock skew can never reject or overwrite a legitimate edit). Automatic sync with debounced uploads and periodic polling for plan changes. Configurable pre/post-workout hooks fire shell scripts to capture stats (e.g., Garmin training readiness) before exercise overwrites them.
 
-### Analysis
-LLM-powered health insights. Submits structured prompts to Claude Code CLI with access to all data via MCP servers. Includes pre-built queries for post-workout analysis, pre-workout readiness checks, and weekly performance reviews. Custom queries can be added in `src/modules/user_queries.py` (gitignored) for personal or sensitive analysis like migraine trigger assessments. Reports are generated asynchronously using stream-json output and rendered as markdown, with CLI execution metadata (cost, duration, turns) tracked per report.
+### Trends
+Read-only progress charts — the deterministic "what happened" counterpart to interactive LLM analysis. Per-exercise strength progression (top set + estimated 1RM with an RPE overlay), weekly tonnage, weekly Zone 2 minutes split planned-vs-extra, an aerobic-base proxy, journal value-vs-target charts with effective-dated target bands, weekly adherence ribbons with streaks, body weight from the Garmin sync DB, and an overview of headline tiles with PR detection. Hand-rolled SVG, offline-cached with staleness badges, zero LLM. Trends owns no database: it reads coach/journal/Garmin data through its own read-only accessors (a deliberate, documented exception to module DB isolation).
+
+### Analysis (retired, dormant)
+LLM-powered async reports, superseded by Trends (glanceable stats) and interactive Claude sessions (interpretation). Disabled in production via `WELLNESS_DISABLED_MODULES=analysis`; the code remains in the tree and under test. Submits structured prompts to Claude Code CLI with MCP data access; reports render as markdown with CLI execution metadata tracked per report.
 
 ## Tech Stack
 
@@ -42,7 +45,7 @@ wellness/
 ├── src/                    # FastAPI backend
 │   ├── server.py           # Main app, static file serving
 │   ├── config.py           # Module config, DB path resolution
-│   └── modules/            # Journal, Coach, Analysis routers
+│   └── modules/            # Journal, Coach, Trends, Analysis routers + shared domain
 ├── public/                 # PWA frontend (no build step)
 │   ├── js/                 # Preact components per module
 │   │   ├── shared/         # Sync scheduler, settings, debug log, data export

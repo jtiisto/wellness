@@ -25,7 +25,7 @@ const cache = localforage.createInstance({
 export const range = signal(localStorage.getItem('trends_range') || '12w');
 
 // Active sub-screen: 'overview' | 'strength' | 'cardio' | 'journal'.
-export const activeScreen = signal(localStorage.getItem('trends_screen') || 'strength');
+export const activeScreen = signal(localStorage.getItem('trends_screen') || 'overview');
 
 // cacheKey -> fetchedAt (ms). Set ONLY when a cached payload is served
 // because the network failed; cleared on any fresh fetch of that key.

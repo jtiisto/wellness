@@ -29,6 +29,7 @@ from modules.db import read_transaction
 from modules.journal_adherence import (
     compute_adherence,
     compute_streaks,
+    day_status,
     target_band_segments,
 )
 
@@ -370,6 +371,175 @@ def journal_tracker_detail(journal_db, *, tracker_id, start=None, end, today):
             t["target_json"], t["meta_json"],
             first_date=first_entry, today=today.isoformat(),
         ),
+    }
+
+
+# ==================== Overview ====================
+
+# Overview constants (decision: config-free, tuned against current data;
+# iterate from real use).
+OVERVIEW_SPARKLINE_WEEKS = 8
+OVERVIEW_FOCUS_WINDOW_DAYS = 14      # rolling adherence window for focus rows
+OVERVIEW_FOCUS_ACTIVE_DAYS = 28      # tracker must have an entry this recently
+OVERVIEW_FOCUS_COUNT = 3
+PR_WINDOW_DAYS = 30
+
+
+def detect_prs(sessions):
+    """PRs from per-session top-set records `[{slug, date, e1rm, ...}]`
+    (date-ascending): a session is a PR when its e1RM STRICTLY exceeds the
+    slug's prior all-time max. A slug's first-ever session is the baseline,
+    not a PR."""
+    prs = []
+    best = {}
+    for s in sessions:
+        prev = best.get(s["slug"])
+        if prev is None:
+            best[s["slug"]] = s["e1rm"]
+            continue
+        if s["e1rm"] > prev:
+            prs.append(s)
+            best[s["slug"]] = s["e1rm"]
+    return prs
+
+
+def _per_session_e1rms(coach_db):
+    """All-time per-slug per-session top e1RM records, date-ascending, in the
+    slug's dominant unit — the detect_prs input."""
+    with coach_db.get_db() as conn:
+        with read_transaction(conn) as cursor:
+            rows = [r for r in _fetch_qualifying_sets(cursor) if r["slug"]]
+            registry = _registry(cursor)
+
+    by_slug = defaultdict(list)
+    for r in rows:
+        by_slug[r["slug"]].append(r)
+
+    sessions = []
+    for slug, slug_rows in by_slug.items():
+        unit = _dominant_unit(slug_rows)
+        by_date = defaultdict(list)
+        for r in slug_rows:
+            by_date[r["date"]].append(r)
+        for d, day_rows in by_date.items():
+            top = max(
+                ({"w": convert_weight(r["weight"], _norm_unit(r["unit"]), unit),
+                  "reps": r["reps"]} for r in day_rows),
+                key=lambda s: (epley_e1rm(s["w"], s["reps"]), s["w"]),
+            )
+            sessions.append({
+                "slug": slug,
+                "name": registry[slug]["name"] if slug in registry else slug,
+                "date": d,
+                "e1rm": round(epley_e1rm(top["w"], top["reps"]), 1),
+                "weight": round(top["w"], 1),
+                "reps": top["reps"],
+                "unit": unit,
+            })
+    sessions.sort(key=lambda s: s["date"])
+    return sessions
+
+
+def overview(coach_db, journal_db, *, today):
+    """The landing tiles: this-ISO-week Zone 2 + tonnage vs the mean of the 4
+    previous COMPLETE weeks (with 8-week sparklines), the ≤3 weakest actionable
+    trackers by rolling 14-day adherence, and PRs in the last 30 days."""
+    spark_start = (week_start(today) - timedelta(weeks=OVERVIEW_SPARKLINE_WEEKS - 1))
+    end = today.isoformat()
+
+    cardio = cardio_weekly(coach_db, start=spark_start.isoformat(), end=end, today=today)
+    volume = strength_weekly_volume(coach_db, start=spark_start.isoformat(), end=end, today=today)
+
+    def tile(weeks, value_of):
+        if not weeks:
+            return {"this_week": 0, "four_week_avg": None, "sparkline": []}
+        this_week = value_of(weeks[-1]) if weeks[-1]["partial"] else 0
+        complete = [w for w in weeks if not w["partial"]]
+        prev4 = complete[-4:]
+        return {
+            "this_week": round(this_week, 1),
+            "four_week_avg": round(sum(value_of(w) for w in prev4) / len(prev4), 1)
+                             if prev4 else None,
+        }
+
+    zone2_tile = tile(cardio["weeks"],
+                      lambda w: w["zone2_planned_min"] + w["zone2_extra_min"])
+    zone2_tile["sparkline"] = [
+        {"week_start": w["week_start"], "planned_min": w["zone2_planned_min"],
+         "extra_min": w["zone2_extra_min"]}
+        for w in cardio["weeks"]
+    ]
+    tonnage_tile = tile(volume["weeks"], lambda w: w["tonnage_kg"])
+    tonnage_tile["sparkline"] = [
+        {"week_start": w["week_start"], "tonnage_kg": w["tonnage_kg"]}
+        for w in volume["weeks"]
+    ]
+
+    # Adherence focus: weakest actionable trackers over a rolling 14d window.
+    focus_cutoff = (today - timedelta(days=OVERVIEW_FOCUS_ACTIVE_DAYS)).isoformat()
+    window_start = (today - timedelta(days=OVERVIEW_FOCUS_WINDOW_DAYS - 1)).isoformat()
+    with journal_db.get_db() as conn:
+        with read_transaction(conn) as cursor:
+            trackers = cursor.execute("""
+                SELECT t.id, t.name, t.polarity, t.type, t.meta_json,
+                       t.schedule_json, t.target_json, MAX(e.date) AS last_entry
+                FROM trackers t
+                JOIN entries e ON e.tracker_id = t.id
+                WHERE t.deleted = 0 AND t.polarity IN ('positive', 'negative')
+                GROUP BY t.id
+                HAVING last_entry >= ?
+            """, (focus_cutoff,)).fetchall()
+            tracker_entries = {}
+            for t in trackers:
+                rows = cursor.execute(
+                    "SELECT date, value, completed FROM entries "
+                    "WHERE tracker_id = ? AND date >= ?",
+                    (t["id"], window_start),
+                ).fetchall()
+                tracker_entries[t["id"]] = rows
+
+    focus = []
+    for t in trackers:
+        rows = tracker_entries[t["id"]]
+        entries = {r["date"]: r["completed"] for r in rows}
+        values = {r["date"]: r["value"] for r in rows}
+        m = compute_adherence(
+            t["schedule_json"], t["polarity"], t["type"], entries,
+            window_start, end, target_json=t["target_json"], values=values,
+            meta_json=t["meta_json"],
+        )
+        rate = m.get(f"{m['metric_kind']}_rate")
+        if rate is None:
+            continue  # paused / nothing scheduled — not a focus candidate
+        ribbon = []
+        d = date.fromisoformat(window_start)
+        while d <= today:
+            ribbon.append({"date": d.isoformat(), "status": day_status(
+                t["schedule_json"], t["polarity"], entries, values,
+                t["target_json"], t["meta_json"], d.isoformat())})
+            d += timedelta(days=1)
+        focus.append({
+            "tracker_id": t["id"], "name": t["name"],
+            "metric_kind": m["metric_kind"], "rate": rate, "ribbon": ribbon,
+        })
+    focus.sort(key=lambda f: f["rate"])
+    focus = focus[:OVERVIEW_FOCUS_COUNT]
+
+    # PRs in the last 30 days.
+    pr_cutoff = (today - timedelta(days=PR_WINDOW_DAYS)).isoformat()
+    all_prs = detect_prs(_per_session_e1rms(coach_db))
+    recent = [p for p in all_prs if p["date"] >= pr_cutoff]
+
+    return {
+        "zone2": {"this_week_min": zone2_tile["this_week"],
+                  "four_week_avg_min": zone2_tile["four_week_avg"],
+                  "sparkline": zone2_tile["sparkline"]},
+        "tonnage": {"this_week_kg": tonnage_tile["this_week"],
+                    "four_week_avg_kg": tonnage_tile["four_week_avg"],
+                    "sparkline": tonnage_tile["sparkline"]},
+        "adherence_focus": focus,
+        "prs": {"count_30d": len(recent),
+                "latest": recent[-1] if recent else None},
     }
 
 

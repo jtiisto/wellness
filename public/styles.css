@@ -3104,3 +3104,53 @@ textarea:focus-visible,
     font-weight: 700;
     color: var(--text-primary);
 }
+
+/* Overview tiles + focus rows */
+.trends .trends-tiles {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--spacing-md);
+    margin-bottom: var(--spacing-md);
+}
+
+.trends .trends-tile {
+    background: var(--bg-card);
+    border: none;
+    border-radius: var(--radius-md);
+    padding: var(--spacing-md);
+    text-align: left;
+    font-family: inherit;
+    color: var(--text-primary);
+    cursor: pointer;
+}
+
+.trends .trends-tile-label { font-size: var(--font-size-sm); color: var(--text-secondary); }
+.trends .trends-tile-value { font-size: var(--font-size-xl); font-weight: 700; margin: 2px 0; }
+.trends .trends-tile-value .trends-unit { margin-left: 4px; }
+.trends .trends-tile-avg { font-size: 0.75rem; color: var(--text-muted); }
+.trends .trends-sparkline { width: 100%; height: 26px; margin-top: var(--spacing-xs); }
+.trends .trends-sparkline-line { fill: none; stroke: var(--app-accent); stroke-width: 1.5; opacity: 0.8; }
+
+.trends .trends-pr-tile {
+    display: flex; justify-content: space-between; align-items: baseline;
+    gap: var(--spacing-sm); flex-wrap: wrap;
+}
+.trends .trends-pr-badge { color: var(--text-primary); font-weight: 600; font-size: var(--font-size-sm); }
+.trends .trends-pr-latest { color: var(--text-muted); font-size: var(--font-size-sm); }
+
+.trends .trends-focus-row { padding: var(--spacing-sm) 0; border-bottom: 1px solid var(--border-color); }
+.trends .trends-focus-row:last-child { border-bottom: none; }
+.trends .trends-focus-name {
+    display: flex; justify-content: space-between; font-size: var(--font-size-sm);
+    color: var(--text-primary); margin-bottom: var(--spacing-xs);
+}
+.trends .trends-focus-rate { color: var(--text-muted); }
+.trends .trends-focus-dots { display: flex; gap: 3px; }
+.trends .trends-day-dot {
+    width: 10px; height: 10px; border-radius: 50%; display: inline-block;
+    background: var(--bg-tertiary);
+}
+.trends .trends-day--met { background: var(--accent-success); }
+.trends .trends-day--partial { background: var(--accent-warning); }
+.trends .trends-day--missed { background: var(--accent-error); opacity: 0.6; }
+.trends .trends-day--off { background: var(--text-muted); opacity: 0.25; }
