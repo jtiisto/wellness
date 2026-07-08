@@ -509,9 +509,10 @@ def _per_session_e1rms(coach_db, garmin_db):
 
 
 def overview(coach_db, journal_db, garmin_db, *, today):
-    """The landing tiles: this-ISO-week Zone 2 + tonnage vs the mean of the 4
-    previous COMPLETE weeks (with 8-week sparklines), the ≤3 weakest actionable
-    trackers by rolling 14-day adherence, and PRs in the last 30 days."""
+    """The landing tiles: last COMPLETE ISO week's Zone 2 + tonnage vs the
+    mean of the 4 complete weeks before it (this week rides along as a
+    no-delta "so far"; 8-week sparklines), the ≤3 weakest actionable trackers
+    by rolling 14-day adherence, and PRs in the last 30 days."""
     spark_start = (week_start(today) - timedelta(weeks=OVERVIEW_SPARKLINE_WEEKS - 1))
     end = today.isoformat()
 
@@ -520,13 +521,19 @@ def overview(coach_db, journal_db, garmin_db, *, today):
                                     start=spark_start.isoformat(), end=end, today=today)
 
     def tile(weeks, value_of):
+        """Headline = the LAST COMPLETE week vs the mean of the 4 complete
+        weeks before it — always a like-for-like comparison (a week-to-date
+        total vs complete weeks is only valid moments before the week ends).
+        The in-progress week rides along as `this_week` with no delta."""
         if not weeks:
-            return {"this_week": 0, "four_week_avg": None, "sparkline": []}
+            return {"this_week": 0, "last_week": None, "four_week_avg": None,
+                    "sparkline": []}
         this_week = value_of(weeks[-1]) if weeks[-1]["partial"] else 0
         complete = [w for w in weeks if not w["partial"]]
-        prev4 = complete[-4:]
+        prev4 = complete[-5:-1]
         return {
             "this_week": round(this_week, 1),
+            "last_week": round(value_of(complete[-1]), 1) if complete else None,
             "four_week_avg": round(sum(value_of(w) for w in prev4) / len(prev4), 1)
                              if prev4 else None,
         }
@@ -601,9 +608,11 @@ def overview(coach_db, journal_db, garmin_db, *, today):
 
     return {
         "zone2": {"this_week_min": zone2_tile["this_week"],
+                  "last_week_min": zone2_tile["last_week"],
                   "four_week_avg_min": zone2_tile["four_week_avg"],
                   "sparkline": zone2_tile["sparkline"]},
         "tonnage": {"this_week_kg": tonnage_tile["this_week"],
+                    "last_week_kg": tonnage_tile["last_week"],
                     "four_week_avg_kg": tonnage_tile["four_week_avg"],
                     "sparkline": tonnage_tile["sparkline"]},
         "adherence_focus": focus,

@@ -59,15 +59,17 @@ export function OverviewScreen() {
             ${overview && html`
                 <div class="trends-tiles">
                     <${StatTile}
-                        label="Zone 2 this week" unit="min"
-                        value=${overview.zone2.this_week_min}
+                        label="Zone 2 last week" unit="min"
+                        value=${overview.zone2.last_week_min}
                         avg=${overview.zone2.four_week_avg_min}
+                        soFar=${overview.zone2.this_week_min}
                         spark=${overview.zone2.sparkline.map(w => w.planned_min + w.extra_min)}
                         onClick=${() => setActiveScreen('cardio')}/>
                     <${StatTile}
-                        label="Tonnage this week" unit="kg"
-                        value=${overview.tonnage.this_week_kg}
+                        label="Tonnage last week" unit="kg"
+                        value=${overview.tonnage.last_week_kg}
                         avg=${overview.tonnage.four_week_avg_kg}
+                        soFar=${overview.tonnage.this_week_kg}
                         spark=${overview.tonnage.sparkline.map(w => w.tonnage_kg)}
                         onClick=${() => setActiveScreen('strength')}/>
                 </div>
@@ -83,18 +85,21 @@ export function OverviewScreen() {
     `;
 }
 
-function StatTile({ label, unit, value, avg, spark, onClick }) {
+function StatTile({ label, unit, value, avg, soFar, spark, onClick }) {
     const pts = sparklinePoints(spark, 96, 26);
-    const delta = avg ? Math.round((value / avg - 1) * 100) : null;
+    // Delta compares COMPLETE weeks only (value = last complete week); the
+    // in-progress week renders as a delta-free "so far" line.
+    const delta = avg && value != null ? Math.round((value / avg - 1) * 100) : null;
     return html`
         <button class="trends-tile" onClick=${onClick}>
             <div class="trends-tile-label">${label}</div>
-            <div class="trends-tile-value">${value}<span class="trends-unit">${unit}</span></div>
+            <div class="trends-tile-value">${value ?? 0}<span class="trends-unit">${unit}</span></div>
             ${avg != null && html`
                 <div class="trends-tile-avg">
                     4wk avg ${avg}${delta != null ? ` · ${delta >= 0 ? '+' : ''}${delta}%` : ''}
                 </div>
             `}
+            <div class="trends-tile-avg">this week so far: ${soFar} ${unit}</div>
             ${pts && html`
                 <svg viewBox="0 0 96 26" class="trends-sparkline" aria-hidden="true">
                     <polyline points=${pts} class="trends-sparkline-line"/>

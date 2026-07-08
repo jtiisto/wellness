@@ -1,8 +1,10 @@
 """Integration tests for the trends overview endpoint + PR detection."""
 
+from datetime import timedelta
+
 import pytest
 
-from modules.trends_queries import detect_prs
+from modules.trends_queries import detect_prs, week_start
 
 
 @pytest.mark.unit
@@ -44,6 +46,21 @@ class TestOverviewEndpoint:
         assert len(data["tonnage"]["sparkline"]) >= 3
         assert data["tonnage"]["this_week_kg"] >= 0
 
+        # Headline = LAST COMPLETE week vs the mean of the 4 complete weeks
+        # before it (never week-to-date vs complete weeks). Cross-check
+        # against the volume endpoint over the same 8-week window.
+        today = strength_history["today"]
+        spark_start = (week_start(today) - timedelta(weeks=7)).isoformat()
+        weeks = client.get(
+            f"/api/trends/strength/volume?start={spark_start}&end={today.isoformat()}"
+        ).json()["weeks"]
+        complete = [w for w in weeks if not w["partial"]]
+        assert data["tonnage"]["last_week_kg"] == complete[-1]["tonnage_kg"]
+        prev4 = complete[-5:-1]
+        assert data["tonnage"]["four_week_avg_kg"] == round(
+            sum(w["tonnage_kg"] for w in prev4) / len(prev4), 1)
+        assert data["tonnage"]["this_week_kg"] == weeks[-1]["tonnage_kg"]
+
         # Focus rows: actionable only, weakest-first, ≤3, each with a 14-day ribbon.
         focus = data["adherence_focus"]
         assert len(focus) <= 3
@@ -73,7 +90,9 @@ class TestOverviewEndpoint:
         assert len(spark) == 8
         assert all(w["planned_min"] == 0 and w["extra_min"] == 0 for w in spark)
         assert data["zone2"]["this_week_min"] == 0
+        assert data["zone2"]["last_week_min"] == 0
         assert data["tonnage"]["this_week_kg"] == 0
+        assert data["tonnage"]["last_week_kg"] == 0
         assert data["adherence_focus"] == []
         assert data["prs"] == {"count_30d": 0, "latest": None}
 
