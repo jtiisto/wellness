@@ -15,6 +15,7 @@ import {
     steppedBandRects, rollingMean, ribbonCells,
 } from '../chart-logic.js';
 import { RangeSelector, StaleBadge, rangeStart, spread, YAxis, XAxis } from './primitives.js';
+import { BarChartStacked } from './BarChartStacked.js';
 import { getToday } from '../../shared/utils.js';
 
 const html = htm.bind(h);
@@ -94,6 +95,9 @@ export function JournalScreen() {
                 ${detail.tracker.actionable && html`
                     <${AdherenceCard} detail=${detail}/>
                 `}
+                ${detail.weekly_usage && html`
+                    <${UsageCard} weeks=${detail.weekly_usage}/>
+                `}
             `}
         </div>
     `;
@@ -139,10 +143,13 @@ function ValueTargetCard({ detail }) {
         x: xScale(dayIndex(v.date, origin)), label: v.date.slice(5),
     })), 5);
 
+    const subtitle = [detail.tracker.unit, '7d mean',
+                      detail.target_segments.length ? 'target band' : null]
+        .filter(Boolean).join(' · ');
     return html`
         <section class="trends-card">
             <h3 class="trends-card-title">${detail.tracker.name}
-                <span class="trends-unit">${detail.tracker.unit || ''} · 7d mean · target band</span></h3>
+                <span class="trends-unit">${subtitle}</span></h3>
             <svg viewBox="0 0 ${W} ${H}" class="trends-chart" role="img">
                 <${YAxis} yMin=${yMin - pad} yMax=${yMax + pad} yScale=${yScale}
                           x0=${M.left} x1=${W - M.right}/>
@@ -156,6 +163,22 @@ function ValueTargetCard({ detail }) {
                 `)}
                 <${XAxis} ticks=${ticks} y=${H - 6}/>
             </svg>
+        </section>
+    `;
+}
+
+function UsageCard({ weeks }) {
+    // Episodic observations (an as-needed med): the signal is how OFTEN,
+    // not the (often constant) value — entries per ISO week.
+    const stackWeeks = weeks.map(w => ({
+        week_start: w.week_start, partial: w.partial, values: { count: w.count },
+    }));
+    return html`
+        <section class="trends-card">
+            <h3 class="trends-card-title">Usage <span class="trends-unit">times per week</span></h3>
+            <${BarChartStacked} weeks=${stackWeeks} height=${120}
+                                keys=${[{ key: 'count', cssClass: 'trends-stack-0' }]}
+                                yFormat=${(v) => Math.round(v)}/>
         </section>
     `;
 }

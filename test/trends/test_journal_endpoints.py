@@ -135,6 +135,28 @@ class TestJournalTrackerDetail:
         assert len(data["values"]) == 1
         assert len(data["weekly_adherence"]) <= 2  # first-entry week (+ boundary)
 
+    def test_neutral_tracker_gets_weekly_usage(self, client, journal_history):
+        # Neutral (non-actionable) trackers report entries-per-week buckets —
+        # the meaningful trend for episodic observations.
+        today = journal_history["today"]
+        start = _iso(today - timedelta(days=14))
+        data = client.get(
+            f"/api/trends/journal/tracker/t-mood?start={start}"
+        ).json()
+        assert data["tracker"]["actionable"] is False
+        usage = data["weekly_usage"]
+        assert sum(w["count"] for w in usage) == 1     # one entry yesterday
+        assert usage[-1]["partial"] in (True, False)
+        assert all(set(w) == {"week_start", "partial", "count"} for w in usage)
+        # Buckets align with the adherence weeks (same eff_start flooring).
+        assert [w["week_start"] for w in usage] == \
+               [w["week_start"] for w in data["weekly_adherence"]]
+
+    def test_actionable_tracker_has_no_weekly_usage(self, client, journal_history):
+        data = client.get("/api/trends/journal/tracker/t-protein").json()
+        assert data["tracker"]["actionable"] is True
+        assert "weekly_usage" not in data
+
     def test_unknown_and_deleted_404(self, client, journal_history):
         assert client.get("/api/trends/journal/tracker/nope").status_code == 404
         assert client.get("/api/trends/journal/tracker/t-old").status_code == 404

@@ -354,6 +354,9 @@ def journal_tracker_detail(journal_db, *, tracker_id, start=None, end, today):
     epochs are gaps, never misses. Weekly rows = one compute_adherence call
     per Monday bucket, mapped per polarity/target; a zero-scheduled week
     (pause / fully off-schedule) is `paused` and renders muted.
+    NEUTRAL (non-actionable) trackers additionally get `weekly_usage`
+    entry-count buckets — for episodic observations (an as-needed med) the
+    signal is how OFTEN, not the value, which is frequently constant.
     Raises ValueError for an unknown/deleted tracker (→ 404)."""
     with journal_db.get_db() as conn:
         with read_transaction(conn) as cursor:
@@ -419,7 +422,7 @@ def journal_tracker_detail(journal_db, *, tracker_id, start=None, end, today):
                 "metric_kind": m["metric_kind"],
             })
 
-    return {
+    result = {
         "tracker": {
             "id": t["id"], "name": t["name"], "type": t["type"],
             "unit": meta.get("unit"), "polarity": t["polarity"],
@@ -439,6 +442,19 @@ def journal_tracker_detail(journal_db, *, tracker_id, start=None, end, today):
             first_date=first_entry, today=today.isoformat(),
         ),
     }
+    if not result["tracker"]["actionable"] and eff_start <= end:
+        in_range_dates = [r["date"] for r in in_range]
+        result["weekly_usage"] = [
+            {
+                "week_start": monday.isoformat(),
+                "partial": monday <= today <= sunday,
+                "count": sum(1 for d in in_range_dates
+                             if monday.isoformat() <= d <= sunday.isoformat()),
+            }
+            for monday, sunday in week_buckets(date.fromisoformat(eff_start),
+                                               date.fromisoformat(end))
+        ]
+    return result
 
 
 # ==================== Overview ====================
