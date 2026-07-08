@@ -93,10 +93,15 @@ def test_exercise_picker_flow(trends_page):
     page = trends_page
     page.locator(".trends-tab", has_text="Strength").click()
     page.wait_for_selector(".trends-picker", timeout=10000)
-    options = page.locator(".trends-picker option").all_text_contents()
-    # Name only — the slug suffix appears solely for duplicate display names.
+    # The picker is a pill button opening the app bottom sheet (not the OS
+    # select dialog); options are name-only — the slug suffix appears solely
+    # for duplicate display names.
+    page.locator(".trends-picker").click()
+    page.wait_for_selector(".trends-picker-option", timeout=10000)
+    options = page.locator(".trends-picker-option").all_text_contents()
     assert any("Bench Press" in o for o in options)
     assert not any("bench_press" in o for o in options)
+    page.locator(".trends-picker-option", has_text="Bench Press").first.click()
     page.wait_for_selector(".trends-card svg.trends-chart", timeout=10000)
     assert page.locator(".trends-chart circle.trends-dot").count() >= 3
 

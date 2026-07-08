@@ -3012,13 +3012,15 @@ textarea:focus-visible,
     color: var(--app-accent);
 }
 
-/* Compact pill-style picker (matches the range-selector chips, not the
-   form-edit selects): auto width, ellipsized long names. */
+/* Compact pill picker (matches the range-selector chips): a button that
+   opens the app bottom sheet (PillSelect) — never the OS select dialog. */
 .trends .trends-picker {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--spacing-xs);
     margin-bottom: var(--spacing-md);
-    width: auto;
     max-width: 100%;
-    padding: var(--spacing-xs) var(--spacing-md) var(--spacing-xs) var(--spacing-sm);
+    padding: var(--spacing-xs) var(--spacing-sm);
     background: var(--bg-card);
     border: 1px solid var(--border-color);
     border-radius: var(--radius-full);
@@ -3026,12 +3028,41 @@ textarea:focus-visible,
     font-size: var(--font-size-sm);
     font-family: inherit;
     cursor: pointer;
-    text-overflow: ellipsis;
 }
 
-.trends .trends-picker:focus {
+.trends .trends-picker:focus-visible {
     outline: none;
     border-color: var(--app-accent, var(--accent-primary));
+}
+
+.trends .trends-picker-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.trends .trends-picker svg { flex-shrink: 0; color: var(--text-muted); }
+
+.trends-picker-options { display: flex; flex-direction: column; }
+
+.trends-picker-option {
+    min-height: var(--tap-target);
+    padding: var(--spacing-sm) var(--spacing-md);
+    background: none;
+    border: none;
+    border-bottom: 1px solid var(--border-color);
+    color: var(--text-primary);
+    font-size: var(--font-size-md);
+    font-family: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.trends-picker-option:last-child { border-bottom: none; }
+
+.trends-picker-option.active {
+    color: var(--app-accent, var(--accent-primary));
+    font-weight: 600;
 }
 
 .trends .trends-chart { width: 100%; height: auto; display: block; }

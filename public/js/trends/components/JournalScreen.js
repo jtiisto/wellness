@@ -16,6 +16,7 @@ import {
 } from '../chart-logic.js';
 import { RangeSelector, StaleBadge, rangeStart, spread, YAxis, XAxis } from './primitives.js';
 import { BarChartStacked } from './BarChartStacked.js';
+import { PillSelect } from './PillSelect.js';
 import { getToday } from '../../shared/utils.js';
 
 const html = htm.bind(h);
@@ -78,14 +79,11 @@ export function JournalScreen() {
                 <div class="trends-chart-empty">No trackers with entries yet</div>
             `}
             ${trackers && trackers.length > 0 && html`
-                <select class="trends-picker" value=${selected}
-                        onChange=${(e) => setSelected(e.target.value)}>
-                    ${trackers.map(t => html`
-                        <option key=${t.id} value=${t.id}>
-                            ${t.name}${t.unit ? ` (${t.unit})` : ''}
-                        </option>
-                    `)}
-                </select>
+                <${PillSelect} title="Tracker" value=${selected} onChange=${setSelected}
+                    options=${trackers.map(t => ({
+                        value: t.id,
+                        label: `${t.name}${t.unit ? ` (${t.unit})` : ''}`,
+                    }))}/>
             `}
 
             ${detail && html`

@@ -13,6 +13,7 @@ import { dayIndex } from '../chart-logic.js';
 import { LineChart } from './LineChart.js';
 import { BarChartStacked } from './BarChartStacked.js';
 import { RangeSelector, StaleBadge, rangeStart, spread } from './primitives.js';
+import { PillSelect } from './PillSelect.js';
 import { getToday } from '../../shared/utils.js';
 
 const html = htm.bind(h);
@@ -88,21 +89,18 @@ export function StrengthScreen() {
                 <div class="trends-chart-empty">No logged sets yet</div>
             `}
             ${exercises && exercises.length > 0 && html`
-                <select class="trends-picker" value=${selected}
-                        onChange=${(e) => setSelected(e.target.value)}>
-                    ${(() => {
+                <${PillSelect} title="Exercise" value=${selected} onChange=${setSelected}
+                    options=${(() => {
                         // Names only; a slug suffix appears ONLY when two
                         // entries share a display name (near-duplicate slugs
                         // stay spottable without cluttering the common case).
                         const dupes = {};
                         exercises.forEach(e => { dupes[e.name] = (dupes[e.name] || 0) + 1; });
-                        return exercises.map(e => html`
-                            <option key=${e.slug} value=${e.slug}>
-                                ${dupes[e.name] > 1 ? `${e.name} (${e.slug})` : e.name}
-                            </option>
-                        `);
-                    })()}
-                </select>
+                        return exercises.map(e => ({
+                            value: e.slug,
+                            label: dupes[e.name] > 1 ? `${e.name} (${e.slug})` : e.name,
+                        }));
+                    })()}/>
             `}
 
             ${series && html`<${ProgressionCard} series=${series} showRpe=${showRpe}
