@@ -13,8 +13,8 @@ Workout planning and logging. Supports structured workout plans with blocks (war
 ### Trends
 Read-only progress charts — the deterministic "what happened" counterpart to interactive LLM analysis. Per-exercise strength progression (top set + estimated 1RM with an RPE overlay), weekly tonnage, weekly Zone 2 minutes split planned-vs-extra, an aerobic-base proxy, journal value-vs-target charts with effective-dated target bands, weekly adherence ribbons with streaks, body weight from the Garmin sync DB, and an overview of headline tiles with PR detection. Hand-rolled SVG, offline-cached with staleness badges, zero LLM. Trends owns no database: it reads coach/journal/Garmin data through its own read-only accessors (a deliberate, documented exception to module DB isolation).
 
-### Analysis (retired, dormant)
-LLM-powered async reports, superseded by Trends (glanceable stats) and interactive Claude sessions (interpretation). Disabled in production via `WELLNESS_DISABLED_MODULES=analysis`; the code remains in the tree and under test. Submits structured prompts to Claude Code CLI with MCP data access; reports render as markdown with CLI execution metadata tracked per report.
+### Analysis
+LLM-powered async reports. Submits structured prompts to Claude Code CLI with MCP data access; reports render as markdown with CLI execution metadata tracked per report. Enabled by default like every module; a deployment can switch it off with `WELLNESS_DISABLED_MODULES=analysis` (e.g. where Trends plus interactive Claude sessions cover the same need). The module stays maintained and tested either way.
 
 ## Tech Stack
 

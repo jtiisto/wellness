@@ -302,20 +302,23 @@ health DB for the body-weight chart:
 |----------|---------|-------------|
 | `GARMIN_DB_PATH` | `~/.garmy/health.db` | Garmin health SQLite DB (written by the external sync job). Read-only; the weight chart hides gracefully when the file is absent. |
 
-### Retiring the Analysis module
+### Disabling modules (optional)
 
-Trends replaces the Analysis tab. To retire Analysis in production, add to the
+All modules are enabled by default — a fresh checkout serves every tab.
+A deployment can switch modules off with a comma-separated list in the
 server's environment (systemd unit or `bin/server.sh` environment):
 
 ```
 WELLNESS_DISABLED_MODULES=analysis
 ```
 
-Effects: `/api/analysis/*` routes are not mounted (404), the module disappears
-from `/api/modules` (no tab; a client whose saved active module was Analysis
-falls back to the first module), and its startup report-recovery is skipped.
-The code and its tests remain in the repo — re-enabling is removing the
-variable and restarting.
+Effects per disabled module: its API routes are not mounted (404), it
+disappears from `/api/modules` (no tab; a client whose saved active module
+was disabled falls back to the first module), and its startup work is
+skipped (e.g. Analysis report-recovery). Disabled modules stay maintained
+and tested — re-enabling is removing the variable and restarting. Example:
+a deployment that prefers Trends + interactive LLM sessions can disable
+Analysis this way.
 
 ---
 

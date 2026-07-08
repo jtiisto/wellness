@@ -415,12 +415,12 @@ The Analysis module has no bidirectional sync protocol — all authoritative sta
 4. Claude Code CLI runs with MCP tool access, generating a markdown report
 5. Report is stored in `analysis.db` and displayed in the UI
 
-**Retirement status.** Analysis is superseded by Trends (below) for glanceable
-stats, and by interactive LLM sessions for interpretation. It is retired at
-runtime — `WELLNESS_DISABLED_MODULES=analysis` in the prod service
-environment — which unmounts its routes (API 404s), drops it from
-`/api/modules` (no tab), and skips its startup recovery. The code stays
-dormant and tested; removal is a later decision.
+**Runtime toggle.** Analysis is enabled by default, like every module. A
+deployment that prefers Trends (below) for glanceable stats and interactive
+LLM sessions for interpretation can switch it off with
+`WELLNESS_DISABLED_MODULES=analysis`, which unmounts its routes (API 404s),
+drops it from `/api/modules` (no tab), and skips its startup recovery. The
+module stays maintained and tested regardless of the toggle.
 
 ### Trends: Read-Only Cross-Module Aggregates
 
