@@ -3065,6 +3065,25 @@ textarea:focus-visible,
     font-weight: 600;
 }
 
+/* Constant-series stat: a fixed-dose tracker shows its value, not a flat line. */
+.trends .trends-constant {
+    display: flex;
+    align-items: baseline;
+    gap: var(--spacing-md);
+    flex-wrap: wrap;
+}
+
+.trends .trends-constant-value {
+    font-size: var(--font-size-xl);
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.trends .trends-constant-note {
+    color: var(--text-muted);
+    font-size: var(--font-size-sm);
+}
+
 .trends .trends-chart { width: 100%; height: auto; display: block; }
 
 .trends .trends-chart-empty {

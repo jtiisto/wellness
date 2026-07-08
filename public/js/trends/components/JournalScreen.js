@@ -110,6 +110,24 @@ function ValueTargetCard({ detail }) {
         </section>`;
     }
 
+    // A constant series (fixed-dose supplement) charts as a meaningless flat
+    // line — collapse it to the value itself; the adherence ribbon / usage
+    // bars below carry the actual signal.
+    if (new Set(values.map(v => v.value)).size === 1) {
+        return html`<section class="trends-card">
+            <h3 class="trends-card-title">${detail.tracker.name}</h3>
+            <div class="trends-constant">
+                <span class="trends-constant-value">${values[0].value}
+                    <span class="trends-unit">${detail.tracker.unit || ''}</span></span>
+                <span class="trends-constant-note">
+                    ${values.length === 1
+                        ? 'the only entry in range'
+                        : `same value for all ${values.length} entries in range`}
+                </span>
+            </div>
+        </section>`;
+    }
+
     const W = 360, H = 200;
     const M = { top: 10, right: 10, bottom: 22, left: 40 };
     const origin = values[0].date;
