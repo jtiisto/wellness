@@ -283,10 +283,12 @@ def journal_history(client, tmp_journal_db):
                     {"effectiveFrom": target_from, "target": {"min": 150}}])
     for n in range(20, -1, -1):
         d = today - timedelta(days=n)
-        # Values ramp 120→170; every 5th day unlogged.
+        # Values ramp 120→170; every 5th day unlogged. completed=1 mirrors
+        # prod (the accumulator UI checks the box) and makes the pre-target
+        # era's checkbox-met days observable in weekly buckets.
         if n % 5 == 0 and n != 0:
             continue
-        entry("t-protein", d, value=120 + (20 - n) * 2.5, completed=0)
+        entry("t-protein", d, value=120 + (20 - n) * 2.5, completed=1)
 
     tracker("t-alcohol", "Alcohol", "simple", polarity="negative")
     entry("t-alcohol", today - timedelta(days=4))

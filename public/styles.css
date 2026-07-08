@@ -3064,6 +3064,11 @@ textarea:focus-visible,
 .trends .trends-legend--alt::before { color: #a78bfa; }
 .trends .trends-legend--secondary::before { color: var(--accent-warning); }
 .trends .trends-legend--muted::before { content: ''; }
+/* Volume-stack swatches — keep in step with .trends-stack-N fills above. */
+.trends .trends-legend--stack0::before { color: var(--app-accent); }
+.trends .trends-legend--stack1::before { color: #a78bfa; }
+.trends .trends-legend--stack2::before { color: #4ade80; }
+.trends .trends-legend--stackother::before { color: var(--text-muted); }
 
 /* PR board */
 .trends .trends-pr-row {

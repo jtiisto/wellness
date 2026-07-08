@@ -168,6 +168,9 @@ function AdherenceCard({ detail }) {
     const cellW = Math.min(24, ((W - M.left - M.right) / Math.max(weeks.length, 1)) * 0.8);
     const cells = ribbonCells(weeks, (i) => xScale(i), cellW);
     const kind = detail.weekly_adherence[0]?.metric_kind || 'adherence';
+    const ticks = spread(weeks.map((w, i) => ({
+        x: xScale(i), label: w.week_start.slice(5),
+    })), 5);
 
     return html`
         <section class="trends-card">
@@ -204,6 +207,7 @@ function AdherenceCard({ detail }) {
                         `}
                     </g>
                 `)}
+                <${XAxis} ticks=${ticks} y=${H - 8}/>
             </svg>
             <div class="trends-legend">
                 <span class="trends-legend-item trends-legend--met">met</span>

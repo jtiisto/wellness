@@ -329,9 +329,12 @@ def journal_tracker_detail(journal_db, *, tracker_id, start=None, end, today):
                 meta_json=t["meta_json"],
             )
             scheduled = m["scheduled_days"]
-            has_target = "target_met_days" in m
+            has_target = "blended_met_days" in m
             if has_target:
-                met = m["target_met_days"]
+                # Blended, not target_met_days: a week before the target took
+                # effect must count its checkbox-met days, or the whole
+                # pre-target history renders as missed.
+                met = m["blended_met_days"]
                 partial_days = m["target_partial_days"]
             elif t["polarity"] == "negative":
                 met = scheduled - m["logged_days"]

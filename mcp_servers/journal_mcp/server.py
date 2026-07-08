@@ -762,8 +762,10 @@ interprets each tracker's effective-dated weekday schedule per date and reports
 scheduled vs. logged/done days, per-polarity (`adherence` / `avoidance` /
 `coverage`). When a tracker has a target in effect on a day, "done" for that day
 is whether the day's **value** meets the target (not the checkbox), and the
-result adds `target` (as of window end), `target_met_days`, and
-`target_partial_days`; the per-polarity rate then uses `target_met_days`
+result adds `target` (as of window end), `target_met_days`,
+`target_partial_days` (targeted-day-only), and `blended_met_days`; the
+per-polarity rate's numerator is `blended_met_days` — on days before the
+target took effect it falls back to that day's untargeted criterion
 (positive→`adherence_rate`, negative→`avoidance_rate`; neutral keeps
 `coverage_rate` = logged/scheduled). No-entry counts as MET for negative
 trackers (absence = avoided) and MISSED for positive/neutral. `get_journal_summary`

@@ -169,11 +169,18 @@ function VolumeCard({ weeks }) {
         ...top.map((slug, i) => ({ key: slug, cssClass: `trends-stack-${i}` })),
         { key: 'other', cssClass: 'trends-stack-other' },
     ];
+    const hasOther = stackWeeks.some(w => w.values.other > 0);
     return html`
         <section class="trends-card">
             <h3 class="trends-card-title">Weekly volume <span class="trends-unit">kg</span></h3>
             <${BarChartStacked} weeks=${stackWeeks} keys=${keys}
                                 yFormat=${(v) => v >= 1000 ? `${Math.round(v / 100) / 10}t` : v}/>
+            <div class="trends-legend">
+                ${top.map((slug, i) => html`
+                    <span key=${slug} class="trends-legend-item trends-legend--stack${i}">${slug}</span>
+                `)}
+                ${hasOther && html`<span class="trends-legend-item trends-legend--stackother">other</span>`}
+            </div>
         </section>
     `;
 }

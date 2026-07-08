@@ -1,6 +1,6 @@
 """Integration tests for the trends journal endpoints."""
 
-from datetime import timedelta
+from datetime import date, timedelta
 
 import pytest
 
@@ -61,17 +61,42 @@ class TestJournalTrackerDetail:
         assert set(data["streaks"]) == {"current", "best"}
 
     def test_weekly_adherence_blends_target_eras(self, client, journal_history):
+        # Regression: weekly `met` must be the BLENDED count — weeks before
+        # the target took effect count checkbox-met days, not 0 (the bug that
+        # rendered a daily habit's whole pre-target history as missed).
         today = journal_history["today"]
+        target_from = journal_history["target_from"]
         start = _iso(today - timedelta(days=21))
         weeks = client.get(
             f"/api/trends/journal/tracker/t-protein?start={start}"
         ).json()["weekly_adherence"]
 
+        def expected_status(d):
+            n = (today - d).days
+            logged = 0 <= n <= 20 and not (n % 5 == 0 and n != 0)
+            if _iso(d) >= target_from:               # targeted era: value vs min=150
+                if not logged:
+                    return "missed"
+                value = 120 + (20 - n) * 2.5
+                return "met" if value >= 150 else "partial"
+            return "met" if logged else "missed"     # checkbox era (completed=1)
+
         assert all(w["metric_kind"] == "adherence" for w in weeks)
-        # Current week flagged partial; each week's buckets are consistent.
-        for w in weeks:
-            assert w["met"] + w["partial_days"] + w["missed"] <= w["scheduled_days"] or w["paused"]
         assert weeks[-1]["partial"] is True
+        for w in weeks:
+            monday = date.fromisoformat(w["week_start"])
+            days = [monday + timedelta(days=k) for k in range(7)
+                    if monday + timedelta(days=k) <= today]
+            statuses = [expected_status(d) for d in days]
+            assert w["scheduled_days"] == len(days)
+            assert w["met"] == statuses.count("met")
+            assert w["partial_days"] == statuses.count("partial")
+            assert w["missed"] == statuses.count("missed")
+        # The blend is actually exercised: some pre-target week has met days.
+        pre_target = [w for w in weeks
+                      if _iso(date.fromisoformat(w["week_start"]) + timedelta(days=6))
+                      < target_from]
+        assert pre_target and any(w["met"] > 0 for w in pre_target)
 
     def test_negative_tracker_avoidance_mapping(self, client, journal_history):
         today = journal_history["today"]

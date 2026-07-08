@@ -209,9 +209,11 @@ def compute_adherence(schedule_json, polarity, tracker_type, entries,
     `_target_status`, including the per-polarity no-entry rule) — this fixes the
     accumulator undercount (value logging never sets the checkbox).
 
-    `target` (echoed as of `window_end`), `target_met_days`, and
-    `target_partial_days` (targeted-day-only breakdown) are added only when the
-    tracker has a `targetHistory`. Per polarity when a target is present, the rate
+    `target` (echoed as of `window_end`), `target_met_days`,
+    `target_partial_days` (targeted-day-only breakdown), and `blended_met_days`
+    (the rate numerator below — the count a per-day consumer should display as
+    "met") are added only when the tracker has a `targetHistory`. Per polarity
+    when a target is present, the rate
     numerator is a per-date **blended** met count: positive →
     `adherence_rate = blended_met / scheduled_days`; negative → `avoidance_rate =
     blended_met / scheduled_days`; neutral → `coverage_rate` is unchanged (logged
@@ -285,6 +287,7 @@ def compute_adherence(schedule_json, polarity, tracker_type, entries,
         result["target"] = _target_for_date(target_history, window_end)
         result["target_met_days"] = target_met_days
         result["target_partial_days"] = target_partial_days
+        result["blended_met_days"] = rate_met_days
     if metric_kind == "adherence":
         result["adherence_rate"] = _rate(
             rate_met_days if has_target else done_days, scheduled_days)

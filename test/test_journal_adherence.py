@@ -282,6 +282,7 @@ class TestTargetAdherence:
         assert "target" not in r
         assert "target_met_days" not in r
         assert "target_partial_days" not in r
+        assert "blended_met_days" not in r
         assert r["adherence_rate"] == 1.0
 
     def test_zero_scheduled_days_with_target_null_rates(self):
@@ -314,6 +315,7 @@ class TestTargetAdherence:
         assert r["target_met_days"] == 1          # Tue met (targeted-only)
         assert r["target_partial_days"] == 1      # Wed partial
         # Blended numerator = Mon (checkbox) + Tue (met) = 2, NOT target_met_days.
+        assert r["blended_met_days"] == 2         # exposed for per-week display
         assert r["adherence_rate"] == round(2 / 3, 3)
 
     def test_blended_rate_negative_pretarget_no_entry_counts(self):
@@ -328,6 +330,7 @@ class TestTargetAdherence:
             target_json=target_json, values={TUE: 1, WED: 3})
         assert r["target_met_days"] == 1          # Tue met (<=2)
         # Blended numerator = Mon (no entry, avoided) + Tue (met) = 2.
+        assert r["blended_met_days"] == 2
         assert r["avoidance_rate"] == round(2 / 3, 3)
 
 
