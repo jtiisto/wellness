@@ -3012,7 +3012,27 @@ textarea:focus-visible,
     color: var(--app-accent);
 }
 
-.trends .trends-picker { margin-bottom: var(--spacing-md); width: 100%; }
+/* Compact pill-style picker (matches the range-selector chips, not the
+   form-edit selects): auto width, ellipsized long names. */
+.trends .trends-picker {
+    margin-bottom: var(--spacing-md);
+    width: auto;
+    max-width: 100%;
+    padding: var(--spacing-xs) var(--spacing-md) var(--spacing-xs) var(--spacing-sm);
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-full);
+    color: var(--text-primary);
+    font-size: var(--font-size-sm);
+    font-family: inherit;
+    cursor: pointer;
+    text-overflow: ellipsis;
+}
+
+.trends .trends-picker:focus {
+    outline: none;
+    border-color: var(--app-accent, var(--accent-primary));
+}
 
 .trends .trends-chart { width: 100%; height: auto; display: block; }
 

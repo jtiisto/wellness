@@ -88,11 +88,20 @@ export function StrengthScreen() {
                 <div class="trends-chart-empty">No logged sets yet</div>
             `}
             ${exercises && exercises.length > 0 && html`
-                <select class="form-select trends-picker" value=${selected}
+                <select class="trends-picker" value=${selected}
                         onChange=${(e) => setSelected(e.target.value)}>
-                    ${exercises.map(e => html`
-                        <option key=${e.slug} value=${e.slug}>${e.name} (${e.slug})</option>
-                    `)}
+                    ${(() => {
+                        // Names only; a slug suffix appears ONLY when two
+                        // entries share a display name (near-duplicate slugs
+                        // stay spottable without cluttering the common case).
+                        const dupes = {};
+                        exercises.forEach(e => { dupes[e.name] = (dupes[e.name] || 0) + 1; });
+                        return exercises.map(e => html`
+                            <option key=${e.slug} value=${e.slug}>
+                                ${dupes[e.name] > 1 ? `${e.name} (${e.slug})` : e.name}
+                            </option>
+                        `);
+                    })()}
                 </select>
             `}
 
@@ -173,6 +182,10 @@ function VolumeCard({ weeks }) {
         { key: 'other', cssClass: 'trends-stack-other' },
     ];
     const hasOther = stackWeeks.some(w => w.values.other > 0);
+    const names = {};
+    for (const w of weeks) {
+        for (const e of w.by_exercise) names[e.slug] = e.name;
+    }
     return html`
         <section class="trends-card">
             <h3 class="trends-card-title">Weekly volume <span class="trends-unit">kg</span></h3>
@@ -180,7 +193,7 @@ function VolumeCard({ weeks }) {
                                 yFormat=${(v) => v >= 1000 ? `${Math.round(v / 100) / 10}t` : v}/>
             <div class="trends-legend">
                 ${top.map((slug, i) => html`
-                    <span key=${slug} class="trends-legend-item trends-legend--stack${i}">${slug}</span>
+                    <span key=${slug} class="trends-legend-item trends-legend--stack${i}">${names[slug] || slug}</span>
                 `)}
                 ${hasOther && html`<span class="trends-legend-item trends-legend--stackother">other</span>`}
             </div>

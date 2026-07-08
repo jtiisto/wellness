@@ -78,7 +78,7 @@ export function JournalScreen() {
                 <div class="trends-chart-empty">No trackers with entries yet</div>
             `}
             ${trackers && trackers.length > 0 && html`
-                <select class="form-select trends-picker" value=${selected}
+                <select class="trends-picker" value=${selected}
                         onChange=${(e) => setSelected(e.target.value)}>
                     ${trackers.map(t => html`
                         <option key=${t.id} value=${t.id}>
