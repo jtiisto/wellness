@@ -76,3 +76,19 @@ class TestOverviewEndpoint:
         assert data["tonnage"]["this_week_kg"] == 0
         assert data["adherence_focus"] == []
         assert data["prs"] == {"count_30d": 0, "latest": None}
+
+
+@pytest.mark.integration
+class TestOverviewAssistedPRs:
+    def test_less_assistance_is_a_pr(self, assisted_history, monkeypatch):
+        # d2 dropped assistance 50 → 30 within the 30-day PR window: the
+        # effective-load e1RM strictly increases, so it must count as a PR.
+        monkeypatch.setenv("GARMIN_DB_PATH", str(assisted_history["garmin_path"]))
+        import server as server_mod
+        from fastapi.testclient import TestClient
+        with TestClient(server_mod.create_app()) as c:
+            data = c.get("/wellness/api/trends/overview").json()
+
+        assert data["prs"]["count_30d"] >= 1
+        assert data["prs"]["latest"]["slug"] == "assisted_pull_up"
+        assert data["prs"]["latest"]["date"] == assisted_history["d2"].isoformat()

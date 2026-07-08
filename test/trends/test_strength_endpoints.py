@@ -68,7 +68,7 @@ class TestStrengthSeries:
 
         # 90x8 day: top set by e1RM (both sets equal → tie), RPE = mean(8.0)
         d1 = by_date[strength_history["bench_dates"][1]]
-        assert d1["top_set"] == {"weight": 90, "reps": 8}
+        assert d1["top_set"] == {"weight": 90, "reps": 8, "assistance": None}
         assert d1["e1rm"] == 114.0
         assert d1["top_set_rpe"] == 8.0  # None RPE excluded from the mean
 
@@ -86,7 +86,7 @@ class TestStrengthSeries:
         # Plan-less day row is included and flagged.
         off = by_date[strength_history["offplan_date"]]
         assert off["off_plan"] is True
-        assert off["top_set"] == {"weight": 70, "reps": 12}
+        assert off["top_set"] == {"weight": 70, "reps": 12, "assistance": None}
 
     def test_range_filters_sessions(self, client, strength_history):
         start = _iso(strength_history["today"] - timedelta(days=7))
@@ -163,3 +163,92 @@ class TestStrengthVolume:
     def test_empty_db_returns_empty_weeks(self, client):
         # No strength_history fixture: fresh tmp coach DB.
         assert client.get("/api/trends/strength/volume").json() == {"weeks": []}
+
+
+@pytest.mark.integration
+class TestAssistedEffectiveLoad:
+    """Assisted exercises (registry equipment='assisted'): the logged weight
+    is machine assistance, so aggregates score EFFECTIVE load = Garmin body
+    weight − assistance; without body-weight data assisted sets drop out."""
+
+    def _fresh_client(self, garmin_path, monkeypatch):
+        # The trends router resolves GARMIN_DB_PATH at create_app time; the
+        # base conftest pins it to a nonexistent file, so re-point and build.
+        monkeypatch.setenv("GARMIN_DB_PATH", str(garmin_path))
+        import server as server_mod
+        from fastapi.testclient import TestClient
+        return TestClient(server_mod.create_app())
+
+    def test_series_scores_effective_load(self, assisted_history, monkeypatch):
+        from modules.trends_queries import convert_weight, epley_e1rm
+
+        with self._fresh_client(assisted_history["garmin_path"], monkeypatch) as c:
+            data = c.get("/wellness/api/trends/strength/exercise/assisted_pull_up").json()
+
+        assert data["exercise"]["equipment"] == "assisted"
+        assert len(data["sessions"]) == 2
+        s1, s2 = data["sessions"]
+
+        # d1 (bw 90.7 kg): the 50-assist ×8 set out-e1RMs the 45-assist ×6.
+        bw1 = convert_weight(90.7, "kg", "lbs")
+        assert s1["top_set"]["assistance"] == 50
+        assert s1["top_set"]["weight"] == round(bw1 - 50, 1)
+        assert s1["e1rm"] == round(epley_e1rm(bw1 - 50, 8), 1)
+
+        # d2 (bw stepped down to 88.4 kg): less assistance AND less bw.
+        bw2 = convert_weight(88.4, "kg", "lbs")
+        assert s2["top_set"]["assistance"] == 30
+        assert s2["top_set"]["weight"] == round(bw2 - 30, 1)
+        assert s2["e1rm"] == round(epley_e1rm(bw2 - 30, 6), 1)
+        # Dropping assistance 50 → 30 IS progress: e1RM strictly increases.
+        assert s2["e1rm"] > s1["e1rm"]
+
+    def test_picker_bests_use_effective_load(self, assisted_history, monkeypatch):
+        from modules.trends_queries import convert_weight
+
+        with self._fresh_client(assisted_history["garmin_path"], monkeypatch) as c:
+            data = c.get("/wellness/api/trends/strength/exercises").json()
+        by_slug = {e["slug"]: e for e in data["exercises"]}
+
+        apu = by_slug["assisted_pull_up"]
+        assert apu["equipment"] == "assisted"
+        # All-time best weight is the LEAST-assisted session, not Feb-style
+        # max assistance.
+        bw2 = convert_weight(88.4, "kg", "lbs")
+        assert apu["all_time"]["best_weight"]["weight"] == round(bw2 - 30, 1)
+        assert apu["all_time"]["best_weight"]["assistance"] == 30
+        assert apu["all_time"]["best_e1rm"]["assistance"] == 30
+
+        # Plain exercises: equipment passthrough, assistance null.
+        bench = by_slug["bench_press"]
+        assert bench["equipment"] is None
+        assert bench["all_time"]["best_weight"]["assistance"] is None
+
+    def test_volume_counts_effective_not_assistance(self, assisted_history, monkeypatch):
+        from modules.trends_queries import convert_weight, to_kg
+
+        with self._fresh_client(assisted_history["garmin_path"], monkeypatch) as c:
+            data = c.get("/wellness/api/trends/strength/volume").json()
+
+        d2 = assisted_history["d2"].isoformat()
+        week = next(w for w in data["weeks"]
+                    if w["week_start"] <= d2
+                    and d2 <= (date.fromisoformat(w["week_start"]) + timedelta(days=6)).isoformat())
+        apu = next(x for x in week["by_exercise"] if x["slug"] == "assisted_pull_up")
+        bw2 = convert_weight(88.4, "kg", "lbs")
+        assert apu["tonnage_kg"] == round(to_kg(bw2 - 30, "lbs") * 6, 1)
+
+    def test_without_garmin_assisted_sets_drop_out(self, assisted_history, client):
+        # Default client: GARMIN_DB_PATH nonexistent. Assisted sets must not
+        # be scored raw — they disappear; plain exercises are unaffected.
+        picker = client.get("/api/trends/strength/exercises").json()
+        slugs = {e["slug"] for e in picker["exercises"]}
+        assert "assisted_pull_up" not in slugs
+        assert "bench_press" in slugs
+
+        series = client.get("/api/trends/strength/exercise/assisted_pull_up").json()
+        assert series["sessions"] == []
+
+        volume = client.get("/api/trends/strength/volume").json()
+        assert all(x["slug"] != "assisted_pull_up"
+                   for w in volume["weeks"] for x in w["by_exercise"])

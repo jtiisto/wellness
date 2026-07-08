@@ -5,6 +5,7 @@ from datetime import date
 import pytest
 
 from modules.trends_queries import (
+    _bw_kg_for,
     convert_weight,
     epley_e1rm,
     to_kg,
@@ -49,3 +50,26 @@ class TestWeightMath:
     def test_to_kg(self):
         assert to_kg(10, "kg") == 10
         assert round(to_kg(100, "lbs"), 2) == 45.36
+
+
+@pytest.mark.unit
+class TestBwKgFor:
+    """_bw_kg_for: nearest body-weight sample at-or-before the date, falling
+    back to the earliest after; None only when there are no samples."""
+
+    SAMPLES = [("2026-02-01", 90.0), ("2026-03-01", 88.0), ("2026-04-01", 87.5)]
+
+    def test_empty_samples_is_none(self):
+        assert _bw_kg_for([], "2026-03-15") is None
+
+    def test_exact_date_matches(self):
+        assert _bw_kg_for(self.SAMPLES, "2026-03-01") == 88.0
+
+    def test_between_samples_uses_most_recent_before(self):
+        assert _bw_kg_for(self.SAMPLES, "2026-03-15") == 88.0
+
+    def test_after_last_uses_last(self):
+        assert _bw_kg_for(self.SAMPLES, "2026-06-01") == 87.5
+
+    def test_before_first_falls_back_to_earliest(self):
+        assert _bw_kg_for(self.SAMPLES, "2026-01-01") == 90.0

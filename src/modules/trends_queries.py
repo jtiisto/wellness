@@ -17,7 +17,14 @@ Conventions (see docs/ARCHITECTURE.md "Trends" and the plan spec):
   legacy per-set `completed` tick is deliberately ignored here).
 - Off-plan semantics mirror `coach_logs.is_off_plan_entry`, applied in SQL
   with the key set taken from `AD_HOC_LOG_SLUGS` so the two can't drift.
+- ASSISTED exercises (registry `equipment='assisted'`: the logged weight is
+  machine assistance, so more weight = easier): every strength aggregate
+  scores them by EFFECTIVE load = body weight (Garmin, nearest sample) minus
+  assistance, with the raw assistance echoed alongside. Without a resolvable
+  body weight the set is dropped from the aggregates — never scored raw,
+  which would rank Feb's 45 lb assist above Jul's 20 lb as a "best".
 """
+import bisect
 import json
 import sqlite3
 from collections import Counter, defaultdict
@@ -121,6 +128,55 @@ def _registry(cursor):
     }
 
 
+ASSISTED_EQUIPMENT = "assisted"
+
+
+def _bw_kg_for(samples, date_str):
+    """Body weight (kg) in effect on `date_str` from date-ascending
+    `[(date, kg)]` samples: the most recent sample at-or-before the date,
+    else the earliest after (bw drifts slowly; a set logged days before the
+    first-ever sample is still better scored than dropped). None when empty."""
+    if not samples:
+        return None
+    dates = [s[0] for s in samples]
+    i = bisect.bisect_right(dates, date_str)
+    return samples[i - 1][1] if i else samples[0][1]
+
+
+def _apply_assisted_effective(rows, registry, garmin_db):
+    """Rewrite assisted-exercise rows (registry equipment='assisted') to their
+    EFFECTIVE load: body weight minus assistance, in the row's own unit, with
+    the raw machine weight kept as `assistance`. Rows whose effective load
+    can't be resolved (no Garmin data, or assistance >= body weight) are
+    dropped — a raw assistance weight must never be ranked as if lifted.
+    Non-assisted rows pass through unchanged; the Garmin DB is only opened
+    when an assisted row is actually present."""
+    assisted = {slug for slug, info in registry.items()
+                if info["equipment"] == ASSISTED_EQUIPMENT}
+    if not any(r["slug"] in assisted for r in rows):
+        return rows
+    bw = weight_series(garmin_db, end="9999-12-31")
+    samples = ([(s["date"], s["kg"]) for s in bw["series"]]
+               if bw["available"] else [])
+    out = []
+    for r in rows:
+        if r["slug"] not in assisted:
+            out.append(r)
+            continue
+        bw_kg = _bw_kg_for(samples, r["date"])
+        if bw_kg is None:
+            continue
+        unit = _norm_unit(r["unit"])
+        effective = convert_weight(bw_kg, "kg", unit) - r["weight"]
+        if effective <= 0:
+            continue
+        row = {k: r[k] for k in r.keys()}
+        row["assistance"] = r["weight"]
+        row["weight"] = effective
+        out.append(row)
+    return out
+
+
 def _dominant_unit(rows) -> str:
     counts = Counter(_norm_unit(r["unit"]) for r in rows)
     # Deterministic tie-break: lbs (the schema default) wins ties.
@@ -136,16 +192,18 @@ def _best_of(rows, unit):
     for r in rows:
         w = convert_weight(r["weight"], _norm_unit(r["unit"]), unit)
         e = epley_e1rm(w, r["reps"])
+        assist = r["assistance"] if "assistance" in r.keys() else None
         if best_w is None or (w, r["reps"]) > (best_w["weight"], best_w["reps"]):
-            best_w = {"weight": round(w, 1), "reps": r["reps"], "date": r["date"]}
+            best_w = {"weight": round(w, 1), "reps": r["reps"], "date": r["date"],
+                      "assistance": assist}
         if best_e is None or e > best_e["_e"]:
             best_e = {"_e": e, "value": round(e, 1), "weight": round(w, 1),
-                      "reps": r["reps"], "date": r["date"]}
+                      "reps": r["reps"], "date": r["date"], "assistance": assist}
     best_e.pop("_e")
     return {"best_weight": best_w, "best_e1rm": best_e}
 
 
-def strength_exercises(coach_db, *, start=None, end):
+def strength_exercises(coach_db, garmin_db, *, start=None, end):
     """Picker + PR board: every canonical slug with ≥1 qualifying set, ordered
     `last_used DESC, name ASC` (recent-usage first; alphabetical secondary so
     near-duplicate slugs sit adjacent — the no-consolidation decision).
@@ -154,6 +212,7 @@ def strength_exercises(coach_db, *, start=None, end):
         with read_transaction(conn) as cursor:
             rows = [r for r in _fetch_qualifying_sets(cursor) if r["slug"]]
             registry = _registry(cursor)
+    rows = _apply_assisted_effective(rows, registry, garmin_db)
 
     by_slug = defaultdict(list)
     for r in rows:
@@ -168,6 +227,7 @@ def strength_exercises(coach_db, *, start=None, end):
         exercises.append({
             "slug": slug,
             "name": info["name"] if info else slug,
+            "equipment": info["equipment"] if info else None,
             "last_used": max(r["date"] for r in slug_rows),
             "session_count": len({r["date"] for r in slug_rows}),
             "unit": unit,
@@ -182,7 +242,7 @@ def strength_exercises(coach_db, *, start=None, end):
     return {"exercises": exercises}
 
 
-def strength_exercise_series(coach_db, *, slug, start=None, end):
+def strength_exercise_series(coach_db, garmin_db, *, slug, start=None, end):
     """Per-session progression for one canonical slug: top set (max e1RM;
     tie → higher weight), its RPE (ties → mean of non-null RPEs among tied
     sets), set count, and the off-plan flag of the top set's row.
@@ -197,6 +257,7 @@ def strength_exercise_series(coach_db, *, slug, start=None, end):
                 raise ValueError(f"Unknown exercise slug: {slug}")
             rows = [r for r in _fetch_qualifying_sets(cursor) if r["slug"] == slug]
 
+    rows = _apply_assisted_effective(rows, {slug: info}, garmin_db)
     rows = [r for r in rows if (not start or r["date"] >= start) and r["date"] <= end]
     unit = _dominant_unit(rows) if rows else "lbs"
 
@@ -210,14 +271,17 @@ def strength_exercise_series(coach_db, *, slug, start=None, end):
         for r in by_date[d]:
             w = convert_weight(r["weight"], _norm_unit(r["unit"]), unit)
             scored.append({"w": w, "reps": r["reps"], "e": epley_e1rm(w, r["reps"]),
-                           "rpe": r["rpe"], "off_plan": bool(r["off_plan"])})
+                           "rpe": r["rpe"], "off_plan": bool(r["off_plan"]),
+                           "assistance": (r["assistance"]
+                                          if "assistance" in r.keys() else None)})
         top_key = max((s["e"], s["w"]) for s in scored)
         tied = [s for s in scored if (s["e"], s["w"]) == top_key]
         rpes = [s["rpe"] for s in tied if s["rpe"] is not None]
         top = tied[0]
         sessions.append({
             "date": d,
-            "top_set": {"weight": round(top["w"], 1), "reps": top["reps"]},
+            "top_set": {"weight": round(top["w"], 1), "reps": top["reps"],
+                        "assistance": top["assistance"]},
             "e1rm": round(top["e"], 1),
             "top_set_rpe": round(sum(rpes) / len(rpes), 1) if rpes else None,
             "set_count": len(scored),
@@ -406,13 +470,14 @@ def detect_prs(sessions):
     return prs
 
 
-def _per_session_e1rms(coach_db):
+def _per_session_e1rms(coach_db, garmin_db):
     """All-time per-slug per-session top e1RM records, date-ascending, in the
     slug's dominant unit — the detect_prs input."""
     with coach_db.get_db() as conn:
         with read_transaction(conn) as cursor:
             rows = [r for r in _fetch_qualifying_sets(cursor) if r["slug"]]
             registry = _registry(cursor)
+    rows = _apply_assisted_effective(rows, registry, garmin_db)
 
     by_slug = defaultdict(list)
     for r in rows:
@@ -443,7 +508,7 @@ def _per_session_e1rms(coach_db):
     return sessions
 
 
-def overview(coach_db, journal_db, *, today):
+def overview(coach_db, journal_db, garmin_db, *, today):
     """The landing tiles: this-ISO-week Zone 2 + tonnage vs the mean of the 4
     previous COMPLETE weeks (with 8-week sparklines), the ≤3 weakest actionable
     trackers by rolling 14-day adherence, and PRs in the last 30 days."""
@@ -451,7 +516,8 @@ def overview(coach_db, journal_db, *, today):
     end = today.isoformat()
 
     cardio = cardio_weekly(coach_db, start=spark_start.isoformat(), end=end, today=today)
-    volume = strength_weekly_volume(coach_db, start=spark_start.isoformat(), end=end, today=today)
+    volume = strength_weekly_volume(coach_db, garmin_db,
+                                    start=spark_start.isoformat(), end=end, today=today)
 
     def tile(weeks, value_of):
         if not weeks:
@@ -530,7 +596,7 @@ def overview(coach_db, journal_db, *, today):
 
     # PRs in the last 30 days.
     pr_cutoff = (today - timedelta(days=PR_WINDOW_DAYS)).isoformat()
-    all_prs = detect_prs(_per_session_e1rms(coach_db))
+    all_prs = detect_prs(_per_session_e1rms(coach_db, garmin_db))
     recent = [p for p in all_prs if p["date"] >= pr_cutoff]
 
     return {
@@ -671,15 +737,17 @@ def cardio_weekly(coach_db, *, start=None, end, today):
     return {"weeks": weeks, "steady_sessions": steady_sessions}
 
 
-def strength_weekly_volume(coach_db, *, start=None, end, today):
+def strength_weekly_volume(coach_db, garmin_db, *, start=None, end, today):
     """Weekly tonnage (kg) + hard-set counts, with a per-exercise breakdown
     for stacking (tonnage desc; slug-less rows group under their exercise_key).
     Weeks with no work are emitted with zeros (continuous axis). All-range
-    (`start` None) starts at the earliest qualifying set."""
+    (`start` None) starts at the earliest qualifying set. Assisted sets count
+    their EFFECTIVE load (bw − assistance) — assistance is not tonnage."""
     with coach_db.get_db() as conn:
         with read_transaction(conn) as cursor:
             rows = _fetch_qualifying_sets(cursor)
             registry = _registry(cursor)
+    rows = _apply_assisted_effective(rows, registry, garmin_db)
 
     rows = [r for r in rows if r["date"] <= end]
     if start:

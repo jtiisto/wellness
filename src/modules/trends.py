@@ -11,6 +11,10 @@ JOURNAL_DB_PATH) plus GARMIN_DB_PATH for the body-weight series.
 
 The Garmin DB may legitimately be absent (dev machines without the sync job);
 the /weight endpoint degrades to {"available": false} and the chart hides.
+Strength endpoints also read it, but only when an ASSISTED exercise
+(registry equipment='assisted') has qualifying sets — effective load =
+body weight − assistance; without body-weight data those sets drop out of
+the aggregates rather than being scored as if the assistance were lifted.
 Other endpoints map sqlite3.OperationalError (missing/unmigrated source DB —
 e.g. an owning module disabled) to a 503 rather than a 500 traceback.
 """
@@ -76,7 +80,7 @@ def create_router() -> APIRouter:
         end: Optional[str] = Query(None, pattern=_DATE_PATTERN),
     ):
         start, end = _date_params(start, end)
-        return trends_queries.strength_exercises(coach_db, start=start, end=end)
+        return trends_queries.strength_exercises(coach_db, garmin_db, start=start, end=end)
 
     @router.get("/strength/exercise/{slug}")
     @_source_db_guard
@@ -88,7 +92,7 @@ def create_router() -> APIRouter:
         start, end = _date_params(start, end)
         try:
             return trends_queries.strength_exercise_series(
-                coach_db, slug=slug, start=start, end=end
+                coach_db, garmin_db, slug=slug, start=start, end=end
             )
         except ValueError as e:
             raise HTTPException(status_code=404, detail=str(e))
@@ -101,7 +105,7 @@ def create_router() -> APIRouter:
     ):
         start, end = _date_params(start, end)
         return trends_queries.strength_weekly_volume(
-            coach_db, start=start, end=end, today=date.today()
+            coach_db, garmin_db, start=start, end=end, today=date.today()
         )
 
     @router.get("/cardio")
@@ -139,7 +143,9 @@ def create_router() -> APIRouter:
     @router.get("/overview")
     @_source_db_guard
     def overview():
-        return trends_queries.overview(coach_db, journal_db, today=date.today())
+        return trends_queries.overview(
+            coach_db, journal_db, garmin_db, today=date.today()
+        )
 
     @router.get("/weight")
     def weight(

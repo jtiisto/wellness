@@ -454,7 +454,16 @@ cross-exercise sums in kg; Epley e1RM with the true-single special case;
 qualifying set = logged weight+reps (the legacy per-set `completed` tick is
 ignored); Zone 2 is exercise-TYPE-based (`duration`) because prod slugs are
 fragmented; off-plan attribution reuses `coach_logs.is_off_plan_entry`
-semantics with keys from `AD_HOC_LOG_SLUGS`; journal weekly adherence = one
+semantics with keys from `AD_HOC_LOG_SLUGS`; ASSISTED exercises (registry
+`exercises.equipment='assisted'` — the logged weight is machine assistance,
+more = easier) are scored by EFFECTIVE load = Garmin body weight (nearest
+sample at-or-before the session, else earliest after) minus assistance across
+every strength aggregate (series, bests, PRs, tonnage), with the raw
+assistance echoed as `assistance`; when no body weight is resolvable those
+sets DROP OUT of the aggregates rather than being ranked as if the assistance
+were lifted (the classification is registry data — ingest infers `assisted`
+from the name as a default, but the math never parses names); journal weekly
+adherence = one
 `compute_adherence` call per week bucket (the shared function stays
 untouched — it lives in `modules/journal_adherence.py`, extracted from the
 journal MCP which now re-exports); streaks count scheduled days only (pause

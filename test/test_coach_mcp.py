@@ -131,6 +131,28 @@ class TestIsBodyweightOrBand:
 
 
 @pytest.mark.unit
+class TestInferEquipment:
+    """_infer_equipment: 'assisted' outranks bodyweight/machine keywords — the
+    logged weight on those moves is machine ASSISTANCE, and Trends scores them
+    as body weight minus it (never as an unweighted or machine lift)."""
+
+    def test_assisted_beats_bodyweight_and_machine_keywords(self):
+        from coach_mcp.exercise_registry import _infer_equipment
+        assert _infer_equipment({"name": "Assisted Pull-Up"}) == "assisted"
+        assert _infer_equipment({"name": "Machine Assisted Dips"}) == "assisted"
+
+    def test_explicit_equipment_still_wins(self):
+        from coach_mcp.exercise_registry import _infer_equipment
+        assert _infer_equipment(
+            {"name": "Assisted Dips", "equipment": "machine"}) == "machine"
+
+    def test_non_assisted_names_unaffected(self):
+        from coach_mcp.exercise_registry import _infer_equipment
+        assert _infer_equipment({"name": "Push-ups"}) == "bodyweight"
+        assert _infer_equipment({"name": "KB Swings"}) == "kettlebell"
+
+
+@pytest.mark.unit
 class TestTransformBlockToExercises:
     """Tests for _transform_block_to_exercises block-level transform."""
 

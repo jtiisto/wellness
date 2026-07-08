@@ -106,6 +106,7 @@ export function StrengthScreen() {
 
 function ProgressionCard({ series, showRpe, onToggleRpe }) {
     const sessions = series.sessions;
+    const assisted = series.exercise.equipment === 'assisted';
     if (!sessions.length) {
         return html`<section class="trends-card">
             <h3 class="trends-card-title">${series.exercise.name}</h3>
@@ -131,7 +132,9 @@ function ProgressionCard({ series, showRpe, onToggleRpe }) {
         <section class="trends-card">
             <div class="trends-card-head">
                 <h3 class="trends-card-title">${series.exercise.name}
-                    <span class="trends-unit">top set · e1RM (${series.unit})</span></h3>
+                    <span class="trends-unit">${assisted
+                        ? `effective load (bw − assist) · e1RM (${series.unit})`
+                        : `top set · e1RM (${series.unit})`}</span></h3>
                 <button class="trends-toggle ${showRpe ? 'active' : ''}"
                         onClick=${onToggleRpe}>RPE</button>
             </div>
@@ -197,7 +200,9 @@ function PRBoard({ exercises }) {
                         <div class="trends-pr-vals">
                             <span title="best e1RM">${e.all_time.best_e1rm.value} ${e.unit}</span>
                             <span class="trends-pr-detail">
-                                ${e.all_time.best_weight.weight}×${e.all_time.best_weight.reps}
+                                ${e.all_time.best_weight.weight}×${e.all_time.best_weight.reps}${
+                                    e.all_time.best_weight.assistance != null
+                                        ? ` (assist ${e.all_time.best_weight.assistance})` : ''}
                                 · ${e.all_time.best_e1rm.date}
                             </span>
                         </div>

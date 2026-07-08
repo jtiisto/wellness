@@ -317,3 +317,97 @@ def journal_history(client, tmp_journal_db):
         "target_from": target_from,
         "pause_from": pause_from,
     }
+
+
+@pytest.fixture
+def assisted_history(client, tmp_coach_db, tmp_path):
+    """An ASSISTED exercise (registry equipment='assisted') plus a plain bench
+    row, and a Garmin DB whose body weight steps 90.7 → 88.4 kg between the
+    two assisted sessions. The weight logged on assisted sets is machine
+    ASSISTANCE — aggregates must score effective load = bw − assistance.
+
+    Returns dates + the Garmin path; tests that want the effective-load math
+    must re-point GARMIN_DB_PATH at `garmin_path` and build a fresh app (the
+    default conftest pins it to a nonexistent file — that default state IS the
+    degradation case: assisted sets drop out of every aggregate).
+    """
+    today = date.today()
+    conn = sqlite3.connect(tmp_coach_db)
+    cur = conn.cursor()
+
+    cur.execute(
+        "INSERT OR IGNORE INTO exercises (slug, name, equipment, category, created_at, source) "
+        "VALUES ('assisted_pull_up', 'Assisted Pull-Up', 'assisted', 'strength', ?, 'test')",
+        (NOW,),
+    )
+    cur.execute(
+        "INSERT OR IGNORE INTO exercises (slug, name, category, created_at, source) "
+        "VALUES ('bench_press', 'Bench Press', 'strength', ?, 'test')", (NOW,),
+    )
+
+    def seed_planned_day(d, entries):
+        cur.execute(
+            "INSERT INTO workout_sessions (date, day_name, last_modified, modified_by) "
+            "VALUES (?, 'Strength', ?, 'test')", (_iso(d), NOW),
+        )
+        session_id = cur.lastrowid
+        cur.execute(
+            "INSERT INTO session_blocks (session_id, position, block_type, title) "
+            "VALUES (?, 0, 'strength', 'Main')", (session_id,),
+        )
+        block_id = cur.lastrowid
+        cur.execute(
+            "INSERT INTO workout_session_logs (session_id, date, last_modified, modified_by) "
+            "VALUES (?, ?, ?, 'test')", (session_id, _iso(d), NOW),
+        )
+        log_id = cur.lastrowid
+        for pos, (key, slug, sets) in enumerate(entries):
+            cur.execute(
+                "INSERT INTO planned_exercises (session_id, block_id, exercise_key, "
+                "position, name, exercise_type, target_sets, canonical_slug) "
+                "VALUES (?, ?, ?, ?, ?, 'strength', 3, ?)",
+                (session_id, block_id, key, pos, key, slug),
+            )
+            pe_id = cur.lastrowid
+            cur.execute(
+                "INSERT INTO exercise_logs (session_log_id, exercise_id, exercise_key, "
+                "canonical_slug, last_modified) VALUES (?, ?, ?, ?, ?)",
+                (log_id, pe_id, key, slug, NOW),
+            )
+            el_id = cur.lastrowid
+            for set_num, (w, reps, rpe, unit) in enumerate(sets, 1):
+                cur.execute(
+                    "INSERT INTO set_logs (exercise_log_id, set_num, weight, reps, rpe, unit) "
+                    "VALUES (?, ?, ?, ?, ?, ?)", (el_id, set_num, w, reps, rpe, unit),
+                )
+
+    d1, d2 = today - timedelta(days=21), today - timedelta(days=7)
+    seed_planned_day(d1, [
+        # Two assisted sets: the 50-assist set has MORE reps, so it wins the
+        # top-set contest on effective e1RM despite more assistance.
+        ("apu", "assisted_pull_up", [(45, 6, 7.0, "lbs"), (50, 8, 7.5, "lbs")]),
+        ("bench", "bench_press", [(100, 5, 8.0, "lbs")]),
+    ])
+    seed_planned_day(d2, [
+        ("apu", "assisted_pull_up", [(30, 6, 8.0, "lbs")]),
+    ])
+    conn.commit()
+    conn.close()
+
+    garmin_path = tmp_path / "garmin_assisted.db"
+    g = sqlite3.connect(garmin_path)
+    g.execute(
+        "CREATE TABLE body_composition (sample_pk TEXT PRIMARY KEY, "
+        "measurement_date DATE, timestamp_gmt DATETIME, weight_grams FLOAT)"
+    )
+    g.executemany(
+        "INSERT INTO body_composition VALUES (?, ?, ?, ?)",
+        [
+            ("s1", _iso(today - timedelta(days=30)), "2026-06-07 07:00:00", 90700.0),
+            ("s2", _iso(today - timedelta(days=10)), "2026-06-27 07:00:00", 88400.0),
+        ],
+    )
+    g.commit()
+    g.close()
+
+    return {"today": today, "d1": d1, "d2": d2, "garmin_path": garmin_path}

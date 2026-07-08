@@ -69,6 +69,13 @@ def _infer_equipment(ex: Dict[str, Any]) -> Optional[str]:
 
     name = ex.get("name", "").lower()
 
+    # Assisted before anything else: "Assisted Pull-Up" must classify as
+    # 'assisted' (the logged weight is machine ASSISTANCE — Trends scores it
+    # as body weight minus that), never as an unweighted bodyweight move or
+    # as 'machine'.
+    if "assisted" in name:
+        return "assisted"
+
     # Check bodyweight keywords first
     if any(kw in name for kw in _BODYWEIGHT_KEYWORDS):
         return "bodyweight"
