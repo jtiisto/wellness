@@ -208,10 +208,15 @@ def _migration_4_strip_schedule_polarity_from_meta(cursor):
     `meta_json` blob — live `trackers` and `trackers_archive` — so the columns
     are the only copy.
 
-    Belt-and-suspenders for live rows: if a row's column is NULL but its
-    meta_json still carried a value (e.g. it somehow missed migration 3's
-    backfill), lift the value into the column BEFORE stripping, so no schedule /
-    polarity is lost. Archive rows are stripped only (historical snapshots).
+    Belt-and-suspenders for ALL rows — live and archive: if a row's column is
+    NULL but its meta_json still carried a value (e.g. it missed migration 3's
+    backfill, which touches only live rows), lift the value into the column
+    BEFORE stripping, so no schedule / polarity is lost. Archive rows
+    originally skipped the lift ("historical snapshots"), but for rows
+    archived between the Phase-1 client and the migration-3 deploy the
+    meta_json WAS the only copy — stripping it defeated the archive's 14-day
+    recovery purpose (review 2026-07-06 P1; matters for migration replays via
+    the reverse-backfill roll-forward and old-backup restores).
 
     Idempotent (a re-run finds no keys to strip), tolerant of absent/malformed
     meta_json, and leaves all other meta keys untouched.
@@ -238,17 +243,26 @@ def _migration_4_strip_schedule_polarity_from_meta(cursor):
             (json.dumps(meta), new_schedule, new_polarity, tracker_id),
         )
 
-    cursor.execute("SELECT id, meta_json FROM trackers_archive")
-    for archive_id, meta_json in cursor.fetchall():
+    cursor.execute(
+        "SELECT id, meta_json, schedule_json, polarity FROM trackers_archive"
+    )
+    for archive_id, meta_json, schedule_json, polarity in cursor.fetchall():
         meta = _loads_dict(meta_json)
         if meta is None or (
                 "scheduleHistory" not in meta and "polarity" not in meta):
             continue
+        new_schedule = schedule_json
+        if schedule_json is None and meta.get("scheduleHistory") is not None:
+            new_schedule = json.dumps(meta["scheduleHistory"])
+        new_polarity = polarity
+        if polarity is None and meta.get("polarity") is not None:
+            new_polarity = meta["polarity"]
         meta.pop("scheduleHistory", None)
         meta.pop("polarity", None)
         cursor.execute(
-            "UPDATE trackers_archive SET meta_json = ? WHERE id = ?",
-            (json.dumps(meta), archive_id),
+            "UPDATE trackers_archive SET meta_json = ?, schedule_json = ?, "
+            "polarity = ? WHERE id = ?",
+            (json.dumps(meta), new_schedule, new_polarity, archive_id),
         )
 
 

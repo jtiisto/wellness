@@ -173,8 +173,10 @@ class TestInitDatabase:
 
     def test_migration_4_strips_schedule_polarity_from_meta(self, test_app, tmp_journal_db):
         """Migration 4 strips scheduleHistory/polarity from live + archive
-        meta_json (other keys preserved), lifts a live NULL-column value into the
-        column first, tolerates malformed meta, and is idempotent."""
+        meta_json (other keys preserved), lifts a NULL-column value into the
+        column first — for archive rows too, or a pre-column snapshot's only
+        schedule copy is destroyed (review 2026-07-06 P1) — tolerates
+        malformed meta, and is idempotent."""
         import json
         import modules.journal as journal
 
@@ -206,7 +208,9 @@ class TestInitDatabase:
                 "VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, 0)",
                 ("t-bad", "Bad", "c", "simple", "{not json", "2026-01-01T00:00:00Z"),
             )
-            # Archive row carrying the fields → stripped (no column lift).
+            # Archive row carrying the fields in meta ONLY (NULL columns) →
+            # lifted into the columns, then stripped (P1: the meta was the
+            # snapshot's only copy; strip-only destroyed it).
             cursor.execute(
                 "INSERT INTO trackers_archive (tracker_id, name, category, type, "
                 "meta_json, schedule_json, polarity, deleted, last_modified_at, superseded_at) "
@@ -223,8 +227,8 @@ class TestInitDatabase:
             live = {r["id"]: r for r in cursor.execute(
                 "SELECT id, meta_json, schedule_json, polarity FROM trackers").fetchall()}
             arch = cursor.execute(
-                "SELECT meta_json FROM trackers_archive WHERE tracker_id = ?",
-                ("t-arch",)).fetchone()
+                "SELECT meta_json, schedule_json, polarity FROM trackers_archive "
+                "WHERE tracker_id = ?", ("t-arch",)).fetchone()
 
         # Dual row: stripped from meta, columns intact, other key preserved.
         dual_meta = json.loads(live["t-dual"]["meta_json"])
@@ -241,10 +245,13 @@ class TestInitDatabase:
         # Malformed meta untouched.
         assert live["t-bad"]["meta_json"] == "{not json"
 
-        # Archive stripped, other key preserved.
+        # Archive: lifted into the columns, stripped from meta, other key
+        # preserved — the snapshot keeps its schedule/polarity copy.
         arch_meta = json.loads(arch["meta_json"])
         assert "scheduleHistory" not in arch_meta and "polarity" not in arch_meta
         assert arch_meta["unit"] == "x"
+        assert json.loads(arch["schedule_json"]) == schedule
+        assert arch["polarity"] == "neutral"
 
         # Idempotent: a second pass changes nothing.
         with get_db(tmp_journal_db) as conn:
