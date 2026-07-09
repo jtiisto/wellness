@@ -65,6 +65,7 @@ export function StrengthScreen() {
     useEffect(() => {
         if (!selected) return;
         let cancelled = false;
+        setError(null);  // a prior failure must not outlive its fetch (F20)
         localStorage.setItem('trends_exercise', selected);
         fetchCached(`strength/${selected}:${range.value}`,
                     `/strength/exercise/${encodeURIComponent(selected)}${q}`)
@@ -211,9 +212,9 @@ function PRBoard({ exercises }) {
                         <div class="trends-pr-vals">
                             <span title="best e1RM">${e.all_time.best_e1rm.value} ${e.unit}</span>
                             <span class="trends-pr-detail">
-                                ${e.all_time.best_weight.weight}×${e.all_time.best_weight.reps}${
-                                    e.all_time.best_weight.assistance != null
-                                        ? ` (assist ${e.all_time.best_weight.assistance})` : ''}
+                                ${e.all_time.best_e1rm.weight}×${e.all_time.best_e1rm.reps}${
+                                    e.all_time.best_e1rm.assistance != null
+                                        ? ` (assist ${e.all_time.best_e1rm.assistance})` : ''}
                                 · ${e.all_time.best_e1rm.date}
                             </span>
                         </div>

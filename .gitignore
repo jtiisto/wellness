@@ -10,8 +10,9 @@ venv/
 .coverage
 htmlcov/
 
-# Databases
-data/*.db
+# Databases — the whole dir: nothing tracked lives here, and the WAL/SHM
+# sidecars carry the same personal data as the .db files (review F19).
+data/
 
 # Runtime
 server.log

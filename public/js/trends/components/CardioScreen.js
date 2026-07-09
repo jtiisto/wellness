@@ -40,8 +40,21 @@ export function CardioScreen() {
         return () => { cancelled = true; };
     }, [q]);
 
-    if (error) return html`<div class="trends-screen"><div class="trends-error">${error}</div></div>`;
-    if (!data) return html`<div class="trends-screen"><div class="trends-chart-empty">Loading…</div></div>`;
+    // Error/loading states keep the toolbar: an offline failure on an
+    // uncached range must not remove the way BACK to a cached one (F7).
+    if (error || !data) {
+        return html`
+            <div class="trends-screen">
+                <div class="trends-toolbar">
+                    <${RangeSelector}/>
+                    <${StaleBadge} cacheKeys=${[`cardio:${range.value}`]}/>
+                </div>
+                ${error
+                    ? html`<div class="trends-error">${error}</div>`
+                    : html`<div class="trends-chart-empty">Loading…</div>`}
+            </div>
+        `;
+    }
 
     const stackWeeks = data.weeks.map(w => ({
         week_start: w.week_start,

@@ -318,6 +318,20 @@ class TestTargetAdherence:
         assert r["blended_met_days"] == 2         # exposed for per-week display
         assert r["adherence_rate"] == round(2 / 3, 3)
 
+    def test_blended_rate_neutral_pretarget_checkbox_counts(self):
+        # Neutral lumps with positive on untargeted days (day_status parity):
+        # a pre-target completed day must count in blended_met_days (F12).
+        target_json = json.dumps([
+            {"effectiveFrom": GENESIS, "target": None},
+            {"effectiveFrom": TUE, "target": {"min": 5}},
+        ])
+        r = compute_adherence(
+            None, None, "quantifiable", {MON: 1, TUE: 1}, MON, TUE,
+            target_json=target_json, values={TUE: 7})
+        assert r["metric_kind"] == "coverage"
+        assert r["blended_met_days"] == 2      # Mon checkbox + Tue target-met
+        assert r["coverage_rate"] == 1.0       # coverage itself unchanged
+
     def test_blended_rate_negative_pretarget_no_entry_counts(self):
         # Target added Tue. Mon has no target and no entry → avoided → counts
         # toward avoidance_rate (blended).
@@ -478,6 +492,33 @@ class TestComputeStreaks:
                             first_date=MON, today=FRI)
         assert r["current"] == 2   # Thu, Fri avoided
         assert r["best"] == 2      # Mon, Tue equally
+
+    def test_today_negative_lapse_resets(self):
+        # A negative-polarity entry TODAY is an irreversible miss — the lapse
+        # already happened; it must reset current, not read as pending (F9).
+        entries = {WED: 1}
+        r = compute_streaks(None, "negative", entries, {}, None, None,
+                            first_date=MON, today=WED)
+        assert r["current"] == 0
+        assert r["best"] == 2      # Mon, Tue
+
+    def test_today_at_most_exceeded_resets(self):
+        # Value already over an at-most target TODAY can only grow — reset (F9).
+        target = json.dumps([{"effectiveFrom": GENESIS, "target": {"max": 2}}])
+        entries = {MON: 1, TUE: 1, WED: 1}
+        r = compute_streaks(None, "positive", entries, {MON: 1, TUE: 2, WED: 5},
+                            target, None, first_date=MON, today=WED)
+        assert r["current"] == 0
+        assert r["best"] == 2
+
+    def test_today_below_min_still_pending(self):
+        # Under an at-least target the day is still repairable — no reset.
+        target = json.dumps([{"effectiveFrom": GENESIS, "target": {"min": 150}}])
+        entries = {MON: 1, TUE: 1, WED: 1}
+        r = compute_streaks(None, "positive", entries,
+                            {MON: 160, TUE: 155, WED: 40},
+                            target, None, first_date=MON, today=WED)
+        assert r["current"] == 2   # Mon, Tue met; Wed pending
 
     def test_no_first_date(self):
         assert compute_streaks(None, "positive", {}, {}, None, None,

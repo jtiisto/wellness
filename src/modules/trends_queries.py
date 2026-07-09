@@ -193,12 +193,15 @@ def _best_of(rows, unit):
         w = convert_weight(r["weight"], _norm_unit(r["unit"]), unit)
         e = epley_e1rm(w, r["reps"])
         assist = r["assistance"] if "assistance" in r.keys() else None
-        if best_w is None or (w, r["reps"]) > (best_w["weight"], best_w["reps"]):
-            best_w = {"weight": round(w, 1), "reps": r["reps"], "date": r["date"],
-                      "assistance": assist}
+        # Compare on the UNROUNDED weight — rounding the incumbent broke the
+        # reps tie-break for unit-converted rows (review F4).
+        if best_w is None or (w, r["reps"]) > (best_w["_w"], best_w["reps"]):
+            best_w = {"_w": w, "weight": round(w, 1), "reps": r["reps"],
+                      "date": r["date"], "assistance": assist}
         if best_e is None or e > best_e["_e"]:
             best_e = {"_e": e, "value": round(e, 1), "weight": round(w, 1),
                       "reps": r["reps"], "date": r["date"], "assistance": assist}
+    best_w.pop("_w")
     best_e.pop("_e")
     return {"best_weight": best_w, "best_e1rm": best_e}
 
@@ -389,9 +392,14 @@ def journal_tracker_detail(journal_db, *, tracker_id, start=None, end, today):
     if eff_start <= end:
         for monday, sunday in week_buckets(date.fromisoformat(eff_start),
                                            date.fromisoformat(end)):
+            # The floored Monday is only the bucket LABEL: the first bucket's
+            # window clamps to eff_start so pre-tracking / pre-range days are
+            # gaps, never scheduled misses (review F14) — and weekly_usage
+            # below counts over the same clamped windows (F5).
             m = compute_adherence(
                 t["schedule_json"], t["polarity"], t["type"], entries,
-                monday.isoformat(), min(sunday, date.fromisoformat(end)).isoformat(),
+                max(monday.isoformat(), eff_start),
+                min(sunday, date.fromisoformat(end)).isoformat(),
                 target_json=t["target_json"], values=values,
                 meta_json=t["meta_json"],
             )
@@ -574,7 +582,8 @@ def overview(coach_db, journal_db, garmin_db, *, today):
         with read_transaction(conn) as cursor:
             trackers = cursor.execute("""
                 SELECT t.id, t.name, t.polarity, t.type, t.meta_json,
-                       t.schedule_json, t.target_json, MAX(e.date) AS last_entry
+                       t.schedule_json, t.target_json, MAX(e.date) AS last_entry,
+                       MIN(e.date) AS first_entry
                 FROM trackers t
                 JOIN entries e ON e.tracker_id = t.id
                 WHERE t.deleted = 0 AND t.polarity IN ('positive', 'negative')
@@ -595,9 +604,13 @@ def overview(coach_db, journal_db, garmin_db, *, today):
         rows = tracker_entries[t["id"]]
         entries = {r["date"]: r["completed"] for r in rows}
         values = {r["date"]: r["value"] for r in rows}
+        # Clamp the window to the tracker's first entry: pre-creation days
+        # are gaps, not misses — a brand-new tracker must not top the
+        # weakest-adherence list on days it didn't exist (review F10).
+        t_start = max(window_start, t["first_entry"])
         m = compute_adherence(
             t["schedule_json"], t["polarity"], t["type"], entries,
-            window_start, end, target_json=t["target_json"], values=values,
+            t_start, end, target_json=t["target_json"], values=values,
             meta_json=t["meta_json"],
         )
         rate = m.get(f"{m['metric_kind']}_rate")
@@ -606,9 +619,11 @@ def overview(coach_db, journal_db, garmin_db, *, today):
         ribbon = []
         d = date.fromisoformat(window_start)
         while d <= today:
-            ribbon.append({"date": d.isoformat(), "status": day_status(
-                t["schedule_json"], t["polarity"], entries, values,
-                t["target_json"], t["meta_json"], d.isoformat())})
+            ds = d.isoformat()
+            ribbon.append({"date": ds, "status": "off" if ds < t_start
+                           else day_status(
+                               t["schedule_json"], t["polarity"], entries, values,
+                               t["target_json"], t["meta_json"], ds)})
             d += timedelta(days=1)
         focus.append({
             "tracker_id": t["id"], "name": t["name"],
@@ -617,8 +632,9 @@ def overview(coach_db, journal_db, garmin_db, *, today):
     focus.sort(key=lambda f: f["rate"])
     focus = focus[:OVERVIEW_FOCUS_COUNT]
 
-    # PRs in the last 30 days.
-    pr_cutoff = (today - timedelta(days=PR_WINDOW_DAYS)).isoformat()
+    # PRs in the last 30 days — inclusive window like the focus window
+    # (days=30 spanned exactly 31 calendar days, review F17).
+    pr_cutoff = (today - timedelta(days=PR_WINDOW_DAYS - 1)).isoformat()
     all_prs = detect_prs(_per_session_e1rms(coach_db, garmin_db))
     recent = [p for p in all_prs if p["date"] >= pr_cutoff]
 

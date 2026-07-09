@@ -11,7 +11,7 @@ import htm from 'htm';
 
 import { fetchCached, range } from '../store.js';
 import {
-    dayIndex, linearScale, seriesToPoints, linePath,
+    coerceNumeric, dayIndex, linearScale, seriesToPoints, linePath,
     steppedBandRects, rollingMean, ribbonCells,
 } from '../chart-logic.js';
 import { RangeSelector, StaleBadge, rangeStart, spread, YAxis, XAxis } from './primitives.js';
@@ -56,6 +56,7 @@ export function JournalScreen() {
     useEffect(() => {
         if (!selected) return;
         let cancelled = false;
+        setError(null);  // a prior failure must not outlive its fetch (F3)
         localStorage.setItem('trends_tracker', selected);
         fetchCached(`journal/${selected}:${range.value}`,
                     `/journal/tracker/${encodeURIComponent(selected)}${q}`)
@@ -102,7 +103,11 @@ export function JournalScreen() {
 }
 
 function ValueTargetCard({ detail }) {
-    const values = detail.values.filter(v => v.value != null);
+    // Coerce before filtering: note-era free-text values must drop out, not
+    // NaN-poison the scales/mean/path (F1 — the journal layers' twin rule).
+    const values = detail.values
+        .map(v => ({ ...v, value: coerceNumeric(v.value) }))
+        .filter(v => v.value != null);
     if (!values.length) {
         return html`<section class="trends-card">
             <h3 class="trends-card-title">${detail.tracker.name}</h3>
@@ -139,7 +144,11 @@ function ValueTargetCard({ detail }) {
     const yMax = Math.max(...ys, ...bandYs);
     const pad = (yMax - yMin) * 0.1 || yMax * 0.05 || 1;
 
-    const xScale = linearScale(Math.min(...xs), Math.max(...xs), M.left, W - M.right);
+    // Domain extends one day past the last dot so a segment effective ON the
+    // last plotted day keeps nonzero width — clipping at the dot's own index
+    // dropped it and today rendered against the old band (F15).
+    const xMin = Math.min(...xs), xMax = Math.max(...xs);
+    const xScale = linearScale(xMin, xMax + 1, M.left, W - M.right);
     const yScale = linearScale(yMin - pad, yMax + pad, H - M.bottom, M.top);
 
     // Inclusive [start,end] segments → x0..x1+1 so the band covers end's day.
@@ -148,7 +157,7 @@ function ValueTargetCard({ detail }) {
         min: s.min, max: s.max,
     }));
     const rects = steppedBandRects(
-        bandSegs, Math.min(...xs), Math.max(...xs), xScale, yScale, M.top, H - M.bottom);
+        bandSegs, xMin, xMax + 1, xScale, yScale, M.top, H - M.bottom);
 
     const dots = seriesToPoints(values, v => dayIndex(v.date, origin), v => v.value, xScale, yScale);
     const mean = rollingMean(values.map(v => ({ date: v.date, value: v.value })), 7);

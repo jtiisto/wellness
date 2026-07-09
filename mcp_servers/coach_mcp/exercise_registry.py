@@ -72,8 +72,9 @@ def _infer_equipment(ex: Dict[str, Any]) -> Optional[str]:
     # Assisted before anything else: "Assisted Pull-Up" must classify as
     # 'assisted' (the logged weight is machine ASSISTANCE — Trends scores it
     # as body weight minus that), never as an unweighted bodyweight move or
-    # as 'machine'.
-    if "assisted" in name:
+    # as 'machine'. Word-boundary match: "Unassisted Dips" is NOT assisted
+    # (review F16).
+    if re.search(r"\bassisted\b", name):
         return "assisted"
 
     # Check bodyweight keywords first

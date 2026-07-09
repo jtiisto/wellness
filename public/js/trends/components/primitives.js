@@ -58,17 +58,25 @@ export function StaleBadge({ cacheKeys }) {
     </span>`;
 }
 
-/** Horizontal grid lines + right-aligned y tick labels for a plot area. */
+/** Horizontal grid lines + right-aligned y tick labels for a plot area.
+ *  Ticks whose FORMATTED label repeats the previous one drop the label (an
+ *  integer format over a small range yielded "0, 1, 1" — review F6). */
 export function YAxis({ yMin, yMax, yScale, x0, x1, targetCount = 4, format }) {
     const fmt = format || ((v) => String(v));
+    let prevLabel = null;
     return html`
         <g class="trends-axis">
-            ${niceTicks(yMin, yMax, targetCount).map(t => html`
-                <g key=${t}>
-                    <line x1=${x0} y1=${yScale(t)} x2=${x1} y2=${yScale(t)} class="trends-gridline"/>
-                    <text x=${x0 - 4} y=${yScale(t) + 3} text-anchor="end" class="trends-tick">${fmt(t)}</text>
-                </g>
-            `)}
+            ${niceTicks(yMin, yMax, targetCount).map(t => {
+                const label = String(fmt(t));
+                const dup = label === prevLabel;
+                prevLabel = label;
+                return html`
+                    <g key=${t}>
+                        <line x1=${x0} y1=${yScale(t)} x2=${x1} y2=${yScale(t)} class="trends-gridline"/>
+                        ${!dup && html`<text x=${x0 - 4} y=${yScale(t) + 3} text-anchor="end" class="trends-tick">${label}</text>`}
+                    </g>
+                `;
+            })}
         </g>
     `;
 }

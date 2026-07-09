@@ -27,6 +27,23 @@ export function linearScale(d0, d1, r0, r1) {
 }
 
 /**
+ * A record's value as a finite number, or null when absent/non-numeric.
+ * Twin of the journal layers' _coerce_numeric/coerceNumericValue: a tracker
+ * converted from type 'note' keeps free-text entry values (the column is
+ * REAL-affinity, text survives), and one string in a series must not
+ * NaN-poison every scale/mean/path it touches (review F1). Booleans are
+ * explicitly not values.
+ */
+export function coerceNumeric(value) {
+    if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+    if (typeof value === 'string' && value.trim() !== '') {
+        const n = Number(value);
+        return Number.isFinite(n) ? n : null;
+    }
+    return null;
+}
+
+/**
  * Day offset of a local YYYY-MM-DD from an origin date string. Pure string →
  * integer math via Date.UTC on the parsed parts (no timezone involvement —
  * both dates go through the same UTC projection, so the difference is exact

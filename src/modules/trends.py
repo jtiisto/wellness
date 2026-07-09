@@ -39,8 +39,18 @@ _DATE_PATTERN = r"^\d{4}-\d{2}-\d{2}$"
 
 def _date_params(start: Optional[str], end: Optional[str]):
     """Normalize range params: end defaults to local today (the client always
-    sends it; the default keeps curl/exploratory use sane)."""
-    return start, end or date.today().isoformat()
+    sends it; the default keeps curl/exploratory use sane). The regex only
+    checks shape — calendar-invalid dates (2026-02-30) must 422 here, not
+    500 in an aggregate or masquerade as a tracker 404 (review F2)."""
+    end = end or date.today().isoformat()
+    for label, value in (("start", start), ("end", end)):
+        if value is not None:
+            try:
+                date.fromisoformat(value)
+            except ValueError:
+                raise HTTPException(
+                    status_code=422, detail=f"Invalid {label} date: {value}")
+    return start, end
 
 
 def _source_db_guard(fn):

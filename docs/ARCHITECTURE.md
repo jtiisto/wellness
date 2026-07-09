@@ -470,7 +470,9 @@ journal MCP which now re-exports); NEUTRAL (non-actionable) trackers get
 `weekly_usage` entries-per-week buckets instead of an adherence ribbon —
 for episodic observations (an as-needed med) the trend is frequency, not
 the often-constant value; streaks count scheduled days only (pause
-windows transparent; an unmet TODAY doesn't break the current streak); PRs =
+windows transparent; an unmet TODAY doesn't break the current streak unless
+the miss is already irreversible — a negative-polarity lapse entry or an
+at-most target exceeded); PRs =
 session e1RM strictly above the slug's prior all-time max (first session is
 baseline). Overview thresholds are config-free constants in
 `trends_queries.py`.

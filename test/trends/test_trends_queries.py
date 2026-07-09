@@ -73,3 +73,20 @@ class TestBwKgFor:
 
     def test_before_first_falls_back_to_earliest(self):
         assert _bw_kg_for(self.SAMPLES, "2026-01-01") == 90.0
+
+
+@pytest.mark.unit
+class TestBestOfTieBreak:
+    def test_unrounded_incumbent_wins_over_rounded_equal(self):
+        # 90.04 lbs x5 rounds to 90.0 for display but must stay the best
+        # weight over 90.0 x8 — comparing against the ROUNDED incumbent let
+        # the later row steal the record via the reps tie-break (F4).
+        from modules.trends_queries import _best_of
+        rows = [
+            {"weight": 90.04, "reps": 5, "date": "2026-07-01", "unit": "lbs"},
+            {"weight": 90.0, "reps": 8, "date": "2026-07-02", "unit": "lbs"},
+        ]
+        best = _best_of(rows, "lbs")
+        assert best["best_weight"]["date"] == "2026-07-01"
+        assert best["best_weight"]["reps"] == 5
+        assert "_w" not in best["best_weight"]

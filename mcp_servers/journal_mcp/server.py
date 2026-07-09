@@ -568,10 +568,16 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
         surface. Deleted trackers are excluded.
 
         Polarity picks the headline metric (`metric_kind`): `positive` →
-        `adherence_rate` (done/scheduled); `negative` → `avoidance_rate`
-        ((scheduled−logged)/scheduled); `neutral`/unspecified → `coverage_rate`
-        only. `coverage_rate` (logged/scheduled) is always included. `done` is
-        `completed == 1`; `logged` (any entry) is reported separately.
+        `adherence_rate`; `negative` → `avoidance_rate`; `neutral`/unspecified
+        → `coverage_rate` only. `coverage_rate` (logged/scheduled) is always
+        included. WITHOUT a target: the positive numerator is `done_days`
+        (`completed == 1`) and the negative numerator is scheduled−logged.
+        WITH a `targetHistory`: a targeted day is "done" when its VALUE meets
+        the in-effect target, and the rate numerator is `blended_met_days` —
+        on days before the target took effect it falls back to the untargeted
+        criterion (positive/neutral → checkbox, negative → no-entry avoided);
+        the result then also carries `target`, `target_met_days`, and
+        `target_partial_days` (targeted-day-only counts).
         Off-schedule entries are excluded from the denominator and surfaced as
         `off_schedule_entries`. Every rate is null when `scheduled_days` is 0.
 

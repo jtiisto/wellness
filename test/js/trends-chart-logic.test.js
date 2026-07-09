@@ -3,6 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+    coerceNumeric,
     linearScale,
     dayIndex,
     niceTicks,
@@ -184,4 +185,31 @@ test('dotSizeScale: sqrt-area scaling between minR and maxR', () => {
     assert.ok(mid > 2 && mid < 8);
     // Constant values → midpoint radius.
     assert.equal(dotSizeScale(2, 8, [5, 5])(5), 5);
+});
+
+test('coerceNumeric: numbers pass, numeric strings parse, text/booleans/null drop (F1)', () => {
+    assert.equal(coerceNumeric(5), 5);
+    assert.equal(coerceNumeric(0), 0);
+    assert.equal(coerceNumeric('160'), 160);
+    assert.equal(coerceNumeric(' 7.5 '), 7.5);
+    assert.equal(coerceNumeric('felt tired'), null);
+    assert.equal(coerceNumeric(''), null);
+    assert.equal(coerceNumeric('   '), null);
+    assert.equal(coerceNumeric(null), null);
+    assert.equal(coerceNumeric(undefined), null);
+    assert.equal(coerceNumeric(true), null);
+    assert.equal(coerceNumeric(NaN), null);
+    assert.equal(coerceNumeric(Infinity), null);
+});
+
+test('coerceNumeric keeps a mixed note-era series chartable (F1 regression)', () => {
+    // One free-text value must not NaN-poison the scale of the numeric rest.
+    const values = [{ value: 'felt tired' }, { value: 5 }, { value: 7 }]
+        .map(v => ({ ...v, value: coerceNumeric(v.value) }))
+        .filter(v => v.value != null);
+    assert.deepEqual(values.map(v => v.value), [5, 7]);
+    const ys = values.map(v => v.value);
+    const yScale = linearScale(Math.min(...ys), Math.max(...ys), 100, 10);
+    assert.equal(Number.isFinite(yScale(5)), true);
+    assert.equal(Number.isFinite(yScale(7)), true);
 });

@@ -111,3 +111,23 @@ class TestOverviewAssistedPRs:
         assert data["prs"]["count_30d"] >= 1
         assert data["prs"]["latest"]["slug"] == "assisted_pull_up"
         assert data["prs"]["latest"]["date"] == assisted_history["d2"].isoformat()
+
+
+@pytest.mark.integration
+class TestFocusWindowClamp:
+    def test_new_tracker_days_before_first_entry_are_off(self, client, journal_history):
+        # t-alcohol's first entry is 12 days ago; the 14-day focus window must
+        # clamp to it — pre-creation days are 'off' in the ribbon and excluded
+        # from the rate denominator (F10).
+        today = journal_history["today"]
+        data = client.get("/api/trends/overview").json()
+        alcohol = next((f for f in data["adherence_focus"]
+                        if f["name"] == "Alcohol"), None)
+        if alcohol is None:
+            pytest.skip("alcohol not among the 3 weakest — fixture drift")
+        first_entry = (today - timedelta(days=12)).isoformat()
+        for r in alcohol["ribbon"]:
+            if r["date"] < first_entry:
+                assert r["status"] == "off"
+        # Rate over the clamped window: 13 scheduled days, 2 lapses.
+        assert alcohol["rate"] == round(11 / 13, 3)

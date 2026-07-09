@@ -151,6 +151,13 @@ class TestInferEquipment:
         assert _infer_equipment({"name": "Push-ups"}) == "bodyweight"
         assert _infer_equipment({"name": "KB Swings"}) == "kettlebell"
 
+    def test_unassisted_is_not_assisted(self):
+        # Word-boundary match: 'unassisted' contains the substring but is the
+        # opposite semantics (review F16).
+        from coach_mcp.exercise_registry import _infer_equipment
+        assert _infer_equipment({"name": "Unassisted Dips"}) != "assisted"
+        assert _infer_equipment({"name": "Band-Assisted Pull-Up"}) == "assisted"
+
 
 @pytest.mark.unit
 class TestTransformBlockToExercises:

@@ -83,10 +83,15 @@ class TestJournalTrackerDetail:
 
         assert all(w["metric_kind"] == "adherence" for w in weeks)
         assert weeks[-1]["partial"] is True
+        # First entry: n=20 is an every-5th-day gap, so tracking starts at
+        # n=19 — the clamped first-bucket window begins there.
+        eff_start = today - timedelta(days=19)
         for w in weeks:
             monday = date.fromisoformat(w["week_start"])
+            # The first bucket's window clamps to eff_start: pre-tracking
+            # days are gaps, never scheduled misses (F14).
             days = [monday + timedelta(days=k) for k in range(7)
-                    if monday + timedelta(days=k) <= today]
+                    if eff_start <= monday + timedelta(days=k) <= today]
             statuses = [expected_status(d) for d in days]
             assert w["scheduled_days"] == len(days)
             assert w["met"] == statuses.count("met")
@@ -106,9 +111,19 @@ class TestJournalTrackerDetail:
         ).json()
         weeks = data["weekly_adherence"]
         assert all(w["metric_kind"] == "avoidance" for w in weeks)
-        # Days with entries count against avoidance: met = scheduled - logged.
+        # Exact reconstruction, not a tautology (F8): entries exist on
+        # today-4 and today-12; met = avoided days, missed = lapse days,
+        # windows clamped to first entry (today-12).
+        entry_days = {today - timedelta(days=4), today - timedelta(days=12)}
+        eff_start = today - timedelta(days=12)
         for w in weeks:
-            assert w["met"] + w["missed"] == w["scheduled_days"]
+            monday = date.fromisoformat(w["week_start"])
+            days = [monday + timedelta(days=k) for k in range(7)
+                    if eff_start <= monday + timedelta(days=k) <= today]
+            lapses = sum(1 for d in days if d in entry_days)
+            assert w["scheduled_days"] == len(days)
+            assert w["missed"] == lapses
+            assert w["met"] == len(days) - lapses
 
     def test_paused_tracker_weeks_muted_not_missed(self, client, journal_history):
         today = journal_history["today"]
@@ -161,3 +176,16 @@ class TestJournalTrackerDetail:
         assert client.get("/api/trends/journal/tracker/nope").status_code == 404
         assert client.get("/api/trends/journal/tracker/t-old").status_code == 404
         assert client.get("/api/trends/journal/tracker/t-never").status_code == 404
+
+    def test_calendar_invalid_dates_422(self, client, journal_history):
+        # Shape-valid but calendar-invalid dates must 422 at validation —
+        # they used to 500 on aggregates and masquerade as tracker 404s (F2).
+        assert client.get(
+            "/api/trends/journal/tracker/t-protein?start=2026-02-30"
+        ).status_code == 422
+        assert client.get(
+            "/api/trends/journal/tracker/t-protein?end=2026-13-05"
+        ).status_code == 422
+        assert client.get("/api/trends/cardio?start=2026-02-30").status_code == 422
+        assert client.get(
+            "/api/trends/strength/volume?end=2026-02-30").status_code == 422

@@ -220,7 +220,8 @@ def compute_adherence(schedule_json, polarity, tracker_type, entries,
     / scheduled). On days before a target took effect, the rate falls back to that
     day's untargeted criterion (positive → completed; negative → no entry
     avoided), so `blended_met == target_met_days` for a fully-targeted window. All
-    rates are None when `scheduled_days == 0`.
+    rates are None when `scheduled_days == 0`. The pre-target fallback treats
+    neutral like positive (checkbox) — the same lumping day_status applies.
     """
     schedule = _load_json_list(schedule_json)
     target_history = _load_json_list(target_json)
@@ -263,9 +264,13 @@ def compute_adherence(schedule_json, polarity, tracker_type, entries,
                 if day_completed:
                     done_days += 1
                 if has_target:
-                    if polarity == "positive" and day_completed:
-                        rate_met_days += 1
-                    elif polarity == "negative" and not has_entry:
+                    if polarity == "negative":
+                        if not has_entry:
+                            rate_met_days += 1
+                    elif day_completed:
+                        # positive AND neutral: the checkbox criterion —
+                        # matching day_status, which lumps neutral with
+                        # positive on untargeted days (review F12).
                         rate_met_days += 1
         elif has_entry:
             off_schedule_entries += 1
@@ -343,7 +348,9 @@ def compute_streaks(schedule_json, polarity, entries, values, target_json,
     [first_date, today], counting SCHEDULED days only: 'off' days (including
     pause windows) are transparent — skipped, never breaking a run. A
     scheduled 'partial'/'missed' day resets. TODAY, if scheduled but not (yet)
-    met, does NOT break the current streak — the day isn't over."""
+    met, does NOT break the current streak — the day isn't over — UNLESS the
+    miss is already irreversible for the day (a negative-polarity lapse
+    entry, or an at-most target already exceeded): those reset (review F9)."""
     if not first_date:
         return {"current": 0, "best": 0}
     schedule = _load_json_list(schedule_json)
@@ -354,6 +361,21 @@ def compute_streaks(schedule_json, polarity, entries, values, target_json,
         return _day_status_parsed(
             schedule, legacy_days, polarity, entries, values,
             target_history, date_str)
+
+    def definitively_missed_today(date_str):
+        """A 'missed' TODAY that no further logging can repair: a negative
+        tracker with an entry (the lapse already happened), or a targeted day
+        whose value already exceeds the max bound (values only accumulate
+        upward within a day)."""
+        if date_str not in entries:
+            return False  # no entry yet: still repairable today
+        if polarity == "negative":
+            return True
+        target = _target_for_date(target_history, date_str)
+        if target is None or target.get("max") is None:
+            return False
+        value = _coerce_numeric(values.get(date_str) if values else None)
+        return value is not None and value > target["max"]
 
     best = run = 0
     day = date.fromisoformat(first_date)
@@ -366,8 +388,10 @@ def compute_streaks(schedule_json, polarity, entries, values, target_json,
         elif s != "off" and not (day == end):
             run = 0
         elif s != "off" and day == end:
-            # Today, scheduled, not met yet: neither counts nor breaks.
-            pass
+            # Today, scheduled, not met yet: neither counts nor breaks —
+            # unless the miss can no longer be repaired today.
+            if s == "missed" and definitively_missed_today(day.isoformat()):
+                run = 0
         day += timedelta(days=1)
 
     # `run` now holds the streak ending at the last decided scheduled day.

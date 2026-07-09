@@ -43,6 +43,7 @@ export function OverviewScreen() {
 
     useEffect(() => {
         let cancelled = false;
+        setError(null);  // a prior failure must not outlive its fetch (F21)
         fetchCached(`weight:${range.value}`, `/weight${q}`)
             .then(d => !cancelled && setWeight(d))
             .catch(err => !cancelled && setError(err.message));
