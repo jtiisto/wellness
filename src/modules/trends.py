@@ -27,7 +27,8 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
 
-from config import get_module_db_path, get_garmin_db_path, get_bodyspec_db_path
+from config import (get_module_db_path, get_garmin_db_path,
+                    get_bodyspec_db_path, get_questy_db_path)
 from modules import trends_queries
 from modules.db import DbAccessor
 
@@ -81,6 +82,11 @@ def create_router() -> APIRouter:
         logger.info(
             "BodySpec DB not found at %s — composition cards disabled",
             bodyspec_db.path,
+        )
+    questy_db = DbAccessor(get_questy_db_path(), read_only=True)
+    if not Path(questy_db.path).exists():
+        logger.info(
+            "Questy DB not found at %s — labs cards disabled", questy_db.path
         )
 
     router = APIRouter()
@@ -191,5 +197,14 @@ def create_router() -> APIRouter:
         # full; the weight-overlay filters client-side). Degrades like /weight.
         _, end = _date_params(None, end)
         return trends_queries.composition_series(bodyspec_db, end=end)
+
+    @router.get("/health/labs")
+    def health_labs(
+        end: Optional[str] = Query(None, pattern=_DATE_PATTERN),
+    ):
+        # All reports up to `end` (months apart, like scans). Degrades like
+        # /weight.
+        _, end = _date_params(None, end)
+        return trends_queries.labs_series(questy_db, end=end)
 
     return router

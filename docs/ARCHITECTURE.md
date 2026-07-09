@@ -499,6 +499,16 @@ client-side). The Health tab renders total-mass scan RINGS on the body-weight
 chart (the scale-vs-DEXA sanity check — lean/fat deliberately do NOT share
 that axis, which would flatten the weight trend) plus composition
 small-multiples (lean/fat/bf%/VAT/A-G) and a per-scan whole-body BMD table.
+**Phase 3 — labs:** `/api/trends/health/labs` reads the Quest DB
+(`QUESTY_DB_PATH`, default `~/.questy/questy.db`, same contract) and returns
+all reports grouped panel → test → observations. The UI is a panel picker
+(PillSelect) over per-test mini charts for tests with ≥2 numeric
+observations — the reference range renders as a band (one-sided ranges clamp
+to the plot edge), dot coloring uses the LAB's own H/L flag (never a
+recomputed range), detection-limit prefixes (`<0.5`) chart at their numeric
+value but display with the prefix, and sub-2-observation or qualitative
+results fall back to a latest-value table. Labs stay local: read-only
+accessor, rendered only in the PWA.
 Design record: `plans/trends-v2-design-2026-07-09.md` (local).
 
 **Frontend** (`public/js/trends/`): hand-rolled SVG charts — all

@@ -788,6 +788,58 @@ def composition_series(bodyspec_db, *, end):
     }
 
 
+def labs_series(questy_db, *, end):
+    """Quest lab results grouped panel → test → date-ascending observations,
+    all reports up to `end` (reports are months apart — the range selector
+    doesn't apply, like DEXA scans). Values ship as stored plus the lab's own
+    interpretation aids: `prefix` ('<'/'>' detection-limit values — the client
+    charts the numeric value but displays the prefix), `flag` (the LAB's H/L
+    call — the UI colors by it, never recomputes), and the reference range
+    (one-sided ranges have a null bound; the band clamps to the plot edge).
+    Same external-source degradation contract as the other readers."""
+    if not Path(questy_db.path).exists():
+        return {"available": False, "panels": []}
+    try:
+        with questy_db.get_db() as conn:
+            rows = conn.execute(
+                "SELECT report_date AS date, panel_name, test_name, value, "
+                "value_text, value_prefix, unit, flag, ref_range_low, "
+                "ref_range_high, ref_range_text "
+                "FROM results WHERE report_date <= ? "
+                "ORDER BY panel_name, test_name, report_date",
+                (end,),
+            ).fetchall()
+    except sqlite3.Error:
+        return {"available": False, "panels": []}
+
+    panels = {}
+    for r in rows:
+        panel = panels.setdefault(r["panel_name"], {})
+        test = panel.setdefault(r["test_name"], {"unit": None, "observations": []})
+        if r["unit"]:
+            test["unit"] = r["unit"]
+        test["observations"].append({
+            "date": str(r["date"]),
+            "value": r["value"],
+            "text": r["value_text"],
+            "prefix": r["value_prefix"],
+            "flag": r["flag"],
+            "ref_low": r["ref_range_low"],
+            "ref_high": r["ref_range_high"],
+            "ref_text": r["ref_range_text"],
+        })
+    return {
+        "available": True,
+        "panels": [
+            {"name": pname,
+             "tests": [{"name": tname, "unit": t["unit"],
+                        "observations": t["observations"]}
+                       for tname, t in tests.items()]}
+            for pname, tests in panels.items()
+        ],
+    }
+
+
 # ==================== Cardio ====================
 
 # All cardio-relevant log rows. Zone 2 identification is TYPE-based

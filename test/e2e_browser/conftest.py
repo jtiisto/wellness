@@ -73,6 +73,7 @@ def app_server(tmp_path_factory):
         # ~/.garmy or ~/.bodyspecy DBs.
         "GARMIN_DB_PATH": str(db_dir / "garmin_health.db"),
         "BODYSPEC_DB_PATH": str(db_dir / "bodyspec.db"),
+        "QUESTY_DB_PATH": str(db_dir / "questy.db"),
     }
 
     for k, v in env_vars.items():

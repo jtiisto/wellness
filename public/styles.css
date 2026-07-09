@@ -3186,6 +3186,13 @@ textarea:focus-visible,
 .trends .trends-mini-metric:last-of-type { border-bottom: none; }
 .trends .trends-bone-table { margin-top: var(--spacing-sm); }
 
+/* Labs: per-test mini rows + the lab's own H/L flag tone. */
+.trends .trends-lab-name {
+    color: var(--text-secondary); font-size: var(--font-size-sm);
+    margin-top: var(--spacing-xs);
+}
+.trends .trends-lab-flag { color: var(--accent-warning); font-weight: 600; }
+
 .trends .trends-ribbon-cell { stroke: none; }
 .trends .trends-ribbon--met { fill: var(--accent-success); }
 .trends .trends-ribbon--partial { fill: var(--accent-warning); }

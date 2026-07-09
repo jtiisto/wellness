@@ -12,10 +12,11 @@ import htm from 'htm';
 
 import { fetchCached, range } from '../store.js';
 import {
-    dayIndex, linearScale, seriesToPoints, linePath, rollingMean,
-    steppedBandRects, dailyBandSegments, stackedBarLayout,
+    coerceNumeric, dayIndex, linearScale, seriesToPoints, linePath,
+    rollingMean, steppedBandRects, dailyBandSegments, stackedBarLayout,
 } from '../chart-logic.js';
 import { BarChartStacked } from './BarChartStacked.js';
+import { PillSelect } from './PillSelect.js';
 import { RangeSelector, StaleBadge, rangeStart, spread, YAxis, XAxis } from './primitives.js';
 import { getToday } from '../../shared/utils.js';
 
@@ -27,6 +28,7 @@ export function HealthScreen() {
     const [recovery, setRecovery] = useState(null);
     const [weight, setWeight] = useState(null);
     const [composition, setComposition] = useState(null);
+    const [labs, setLabs] = useState(null);
     const [volume, setVolume] = useState(null);
     const [cardio, setCardio] = useState(null);
     const [error, setError] = useState(null);
@@ -54,6 +56,9 @@ export function HealthScreen() {
             .catch(() => {});
         fetchCached('health/composition', `/health/composition?end=${today}`)
             .then(d => !cancelled && setComposition(d))
+            .catch(() => {});
+        fetchCached('health/labs', `/health/labs?end=${today}`)
+            .then(d => !cancelled && setLabs(d))
             .catch(() => {});
         // Load context reuses the strength/cardio caches (same keys as their
         // own screens, so offline serves whichever screen filled them).
@@ -88,6 +93,9 @@ export function HealthScreen() {
                 <${BodyCard} series=${weight.series} scans=${scans}/>
             `}
             ${scans.length > 0 && html`<${CompositionCard} scans=${scans}/>`}
+            ${labs && labs.available && labs.panels.length > 0 && html`
+                <${LabsSection} panels=${labs.panels}/>
+            `}
             ${volume && html`<${LoadStrip} title="Weekly tonnage" unit="kg"
                 weeks=${volume} valueOf=${w => w.tonnage_kg}
                 yFormat=${(v) => v >= 1000 ? `${Math.round(v / 100) / 10}t` : v}/>`}
@@ -399,6 +407,111 @@ function MiniMetric({ scans, metric, origin, xScale }) {
                 `)}
                 <text x=${W - 40} y=${H / 2 + 3} class="trends-tick">
                     ${latest}${metric.unit}</text>
+            </svg>
+        </div>
+    `;
+}
+
+function LabsSection({ panels }) {
+    // Labs: panel picker (the Journal-screen pattern) → per-test mini charts
+    // for tests with ≥2 numeric observations, a latest-value table for the
+    // rest. Coloring uses the LAB's own H/L flag, never a recomputed range.
+    const [panel, setPanel] = useState(
+        localStorage.getItem('trends_lab_panel') || panels[0].name);
+    const current = panels.find(p => p.name === panel) || panels[0];
+    useEffect(() => { localStorage.setItem('trends_lab_panel', current.name); },
+              [current.name]);
+
+    const numericObs = (t) => t.observations
+        .map(o => ({ ...o, num: coerceNumeric(o.value) }))
+        .filter(o => o.num != null);
+    const chartable = current.tests
+        .map(t => ({ ...t, obs: numericObs(t) }))
+        .filter(t => t.obs.length >= 2);
+    const tabular = current.tests.filter(
+        t => numericObs(t).length < 2);
+
+    const allDates = current.tests.flatMap(t => t.observations.map(o => o.date));
+    const origin = allDates.slice().sort()[0];
+
+    return html`
+        <section class="trends-card">
+            <div class="trends-card-head">
+                <h3 class="trends-card-title">Labs
+                    <span class="trends-unit">Quest · all reports</span></h3>
+            </div>
+            <${PillSelect} title="Panel" value=${current.name}
+                onChange=${setPanel}
+                options=${panels.map(p => ({ value: p.name, label: p.name }))}/>
+            ${chartable.map(t => html`
+                <${MiniLab} key=${t.name} test=${t} origin=${origin}/>
+            `)}
+            ${tabular.length > 0 && html`
+                <div class="trends-bone-table">
+                    ${tabular.map(t => {
+                        const last = t.observations[t.observations.length - 1];
+                        return html`
+                            <div class="trends-pr-row" key=${t.name}>
+                                <div class="trends-pr-name">${t.name}
+                                    <span class="trends-pr-slug">${last.date}${last.ref_text ? ` · ref ${last.ref_text}` : ''}</span></div>
+                                <div class="trends-pr-vals">
+                                    <span class=${last.flag ? 'trends-lab-flag' : ''}>
+                                        ${last.text != null ? last.text
+                                            : `${last.prefix || ''}${last.value ?? '—'}`}${t.unit ? ` ${t.unit}` : ''}
+                                    </span>
+                                </div>
+                            </div>
+                        `;
+                    })}
+                </div>
+            `}
+        </section>
+    `;
+}
+
+function MiniLab({ test, origin }) {
+    const H = 64, M = { left: 8, right: 52 }, top = 10, bottom = 14;
+    const obs = test.obs;
+    const latest = obs[obs.length - 1];
+    const xMax = Math.max(...obs.map(o => dayIndex(o.date, origin)), 1);
+    const xScale = linearScale(0, xMax, M.left, W - M.right);
+    const band = { low: latest.ref_low, high: latest.ref_high };
+    const bandYs = [band.low, band.high].filter(v => v != null);
+    const ys = obs.map(o => o.num);
+    const yMin = Math.min(...ys, ...bandYs);
+    const yMax = Math.max(...ys, ...bandYs);
+    const pad = (yMax - yMin) * 0.2 || yMax * 0.1 || 1;
+    const yScale = linearScale(yMin - pad, yMax + pad, H - bottom, top);
+
+    // One constant band from the LATEST range (ranges rarely move; per-dot
+    // correctness comes from the lab's flag, not the band).
+    const rects = (band.low != null || band.high != null)
+        ? steppedBandRects([{ x0: 0, x1: xMax + 1, min: band.low, max: band.high }],
+                           0, xMax + 1, xScale, yScale, top, H - bottom)
+        : [];
+    const dots = obs.map(o => ({
+        x: xScale(dayIndex(o.date, origin)), y: yScale(o.num), flag: o.flag,
+    }));
+    const ticks = spread(obs.map(o => ({
+        x: xScale(dayIndex(o.date, origin)), label: o.date.slice(2, 7),
+    })), 3);
+
+    return html`
+        <div class="trends-mini-metric">
+            <div class="trends-lab-name">${test.name}</div>
+            <svg viewBox="0 0 ${W} ${H}" class="trends-chart" role="img">
+                ${rects.map((r, i) => html`
+                    <rect key=${i} x=${r.x} y=${r.yTop} width=${r.w}
+                          height=${r.yBot - r.yTop} class="trends-band"/>
+                `)}
+                ${dots.length > 1 && html`<path d=${linePath(dots)} class="trends-line trends-line--scan"/>`}
+                ${dots.map((p, i) => html`
+                    <circle key=${i} cx=${p.x} cy=${p.y} r="2.5"
+                            class="trends-dot ${p.flag ? 'trends-dot--warn' : 'trends-dot--value'}"/>
+                `)}
+                <text x=${W - M.right + 6} y=${H / 2 + 3} class="trends-tick">
+                    ${latest.prefix || ''}${latest.num}${test.unit ? ` ${test.unit}` : ''}</text>
+                <${XAxis} ticks=${ticks} y=${H - 3}/>
             </svg>
         </div>
     `;

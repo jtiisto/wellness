@@ -105,6 +105,7 @@ def test_app(tmp_path, tmp_journal_db, tmp_coach_db, tmp_analysis_db, monkeypatc
     # default under test. Tests that want data override with fixture DBs.
     monkeypatch.setenv("GARMIN_DB_PATH", str(tmp_path / "garmin_health.db"))
     monkeypatch.setenv("BODYSPEC_DB_PATH", str(tmp_path / "bodyspec.db"))
+    monkeypatch.setenv("QUESTY_DB_PATH", str(tmp_path / "questy.db"))
 
     # Patch PUBLIC_DIR before building the app (the static handlers read the
     # server module-global, which we patch below).

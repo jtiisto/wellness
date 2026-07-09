@@ -197,3 +197,95 @@ class TestCompositionEndpoint:
             assert c.get(
                 "/wellness/api/trends/health/composition?end=2026-02-30"
             ).status_code == 422
+
+
+@pytest.fixture
+def tmp_questy_db(tmp_path):
+    """A minimal Quest labs DB: a 3-observation chartable test (one lab-flagged
+    H, one-sided range), a single-observation test, a qualitative (value NULL)
+    result, a '<' detection-limit prefix, and a future report for end-clipping."""
+    db_path = tmp_path / "questy_fixture.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute("""
+        CREATE TABLE results (
+            report_date DATE, panel_name TEXT, test_name TEXT, value REAL,
+            value_text TEXT, value_prefix TEXT, unit TEXT, flag TEXT,
+            is_calculated INTEGER, ref_range_low REAL, ref_range_high REAL,
+            ref_range_text TEXT
+        )
+    """)
+    conn.executemany(
+        "INSERT INTO results VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", [
+            ("2025-04-18", "LIPID PANEL", "LDL-CHOLESTEROL", 152.0, "152 H",
+             None, "mg/dL", "H", 0, None, 100.0, "<100"),
+            ("2025-11-14", "LIPID PANEL", "LDL-CHOLESTEROL", 120.0, "120 H",
+             None, "mg/dL", "H", 0, None, 100.0, "<100"),
+            ("2026-03-27", "LIPID PANEL", "LDL-CHOLESTEROL", 95.0, "95",
+             None, "mg/dL", None, 0, None, 100.0, "<100"),
+            ("2026-03-27", "LIPID PANEL", "HDL CHOLESTEROL", 54.0, "54",
+             None, "mg/dL", None, 0, 40.0, None, "> OR = 40"),
+            ("2026-03-27", "HS CRP", "HS CRP", 0.5, "<0.5",
+             "<", "mg/L", None, 0, None, 1.0, "<1.0"),
+            ("2026-03-27", "CULTURE", "GROWTH", None, "NOT DETECTED",
+             None, None, None, 0, None, None, "NOT DETECTED"),
+            ("2099-01-01", "LIPID PANEL", "LDL-CHOLESTEROL", 90.0, "90",
+             None, "mg/dL", None, 0, None, 100.0, "<100"),  # future: clipped
+        ])
+    conn.commit()
+    conn.close()
+    return db_path
+
+
+def _questy_client(questy_path, monkeypatch):
+    monkeypatch.setenv("QUESTY_DB_PATH", str(questy_path))
+    import server as server_mod
+    from fastapi.testclient import TestClient
+    return TestClient(server_mod.create_app())
+
+
+@pytest.mark.integration
+class TestLabsEndpoint:
+    def test_unavailable_when_db_missing(self, client):
+        resp = client.get("/api/trends/health/labs")
+        assert resp.status_code == 200
+        assert resp.json() == {"available": False, "panels": []}
+
+    def test_unavailable_when_table_missing(self, client, tmp_path, monkeypatch):
+        db_path = tmp_path / "questy_no_table.db"
+        sqlite3.connect(db_path).close()
+        with _questy_client(db_path, monkeypatch) as c:
+            data = c.get("/wellness/api/trends/health/labs").json()
+        assert data == {"available": False, "panels": []}
+
+    def test_grouping_flags_prefix_and_end_clip(self, tmp_questy_db, client, monkeypatch):
+        with _questy_client(tmp_questy_db, monkeypatch) as c:
+            data = c.get(
+                "/wellness/api/trends/health/labs?end=2026-07-09").json()
+
+        assert data["available"] is True
+        panels = {p["name"]: p for p in data["panels"]}
+        assert set(panels) == {"LIPID PANEL", "HS CRP", "CULTURE"}
+
+        lipid = {t["name"]: t for t in panels["LIPID PANEL"]["tests"]}
+        ldl = lipid["LDL-CHOLESTEROL"]
+        assert ldl["unit"] == "mg/dL"
+        dates = [o["date"] for o in ldl["observations"]]
+        assert dates == ["2025-04-18", "2025-11-14", "2026-03-27"]  # future clipped
+        assert ldl["observations"][0]["flag"] == "H"       # the LAB's call
+        assert ldl["observations"][0]["ref_high"] == 100.0
+        assert ldl["observations"][0]["ref_low"] is None   # one-sided range
+
+        # Detection-limit prefix ships alongside the numeric value.
+        crp = panels["HS CRP"]["tests"][0]["observations"][0]
+        assert crp["value"] == 0.5 and crp["prefix"] == "<"
+
+        # Qualitative result: value null, text carries the answer.
+        growth = panels["CULTURE"]["tests"][0]["observations"][0]
+        assert growth["value"] is None
+        assert growth["text"] == "NOT DETECTED"
+
+    def test_calendar_invalid_end_422(self, tmp_questy_db, client, monkeypatch):
+        with _questy_client(tmp_questy_db, monkeypatch) as c:
+            assert c.get(
+                "/wellness/api/trends/health/labs?end=2026-13-05"
+            ).status_code == 422

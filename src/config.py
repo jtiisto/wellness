@@ -80,6 +80,7 @@ def get_module_db_path(module_id):
 # chart hides gracefully when the file is absent (dev machines without sync).
 GARMIN_DB_DEFAULT = Path.home() / ".garmy" / "health.db"
 BODYSPEC_DB_DEFAULT = Path.home() / ".bodyspecy" / "bodyspec.db"
+QUESTY_DB_DEFAULT = Path.home() / ".questy" / "questy.db"
 
 
 def get_garmin_db_path():
@@ -94,6 +95,14 @@ def get_bodyspec_db_path():
     degrades gracefully when absent — same contract as the Garmin DB."""
     env = os.environ.get("BODYSPEC_DB_PATH")
     return Path(env) if env else BODYSPEC_DB_DEFAULT
+
+
+def get_questy_db_path():
+    """Resolve the Quest labs DB path: QUESTY_DB_PATH env var > default.
+    External read-only source (written by the questy sync tool); Trends
+    degrades gracefully when absent — same contract as the Garmin DB."""
+    env = os.environ.get("QUESTY_DB_PATH")
+    return Path(env) if env else QUESTY_DB_DEFAULT
 
 
 def get_hook_path(hook_type):
