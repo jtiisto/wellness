@@ -88,16 +88,14 @@ def test_trends_tab_renders(trends_page):
 
 
 def test_health_tab_degrades_without_garmin(trends_page):
-    """Health (v2): with no Garmin DB the recovery cards degrade to the
-    unavailable placeholder while the load-context strips still render from
-    coach data — and nothing errors."""
+    """Health (v2): with no external-source DBs every card degrades to the
+    unavailable placeholder and nothing errors. (Load strips were removed —
+    they duplicated the Strength/Cardio tabs.)"""
     page = trends_page
     page.locator(".trends-tab", has_text="Health").click()
     page.wait_for_selector(".trends-chart-empty", timeout=10000)
     assert "Garmin data unavailable" in page.locator(
         ".trends-chart-empty").first.text_content()
-    # Seeded strength history → the tonnage load strip renders bars.
-    page.wait_for_selector(".trends-card svg.trends-chart", timeout=10000)
     assert page.locator(".trends-error").count() == 0
 
 

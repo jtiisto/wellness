@@ -1,9 +1,9 @@
 /**
- * Health screen (v2 Phase 1): non-training body signals — recovery cards
- * (HRV vs Garmin's own baseline band, resting HR with rolling means, sleep
- * hours + score) over a weekly training-load context strip sharing the same
- * range. Deterministic display only: aligned axes, no computed correlations.
- * Degrades card-by-card when Garmin data is unavailable.
+ * Health screen (v2): non-training body signals — recovery cards (HRV vs
+ * Garmin's own baseline band, resting HR with rolling means, sleep hours +
+ * score), DEXA composition, and labs. Deterministic display only; degrades
+ * card-by-card when a source is unavailable. Training-load strips were
+ * removed after live feedback: they duplicated the Strength/Cardio tabs.
  */
 import { h } from 'preact';
 import { useEffect, useState } from 'preact/hooks';
@@ -15,7 +15,6 @@ import {
     coerceNumeric, dayIndex, linearScale, seriesToPoints, linePath,
     rollingMean, steppedBandRects, dailyBandSegments, stackedBarLayout,
 } from '../chart-logic.js';
-import { BarChartStacked } from './BarChartStacked.js';
 import { PillSelect } from './PillSelect.js';
 import { RangeSelector, StaleBadge, rangeStart, spread, YAxis, XAxis } from './primitives.js';
 import { getToday } from '../../shared/utils.js';
@@ -29,8 +28,6 @@ export function HealthScreen() {
     const [weight, setWeight] = useState(null);
     const [composition, setComposition] = useState(null);
     const [labs, setLabs] = useState(null);
-    const [volume, setVolume] = useState(null);
-    const [cardio, setCardio] = useState(null);
     const [error, setError] = useState(null);
     const [, forceRender] = useState(0);
 
@@ -60,14 +57,6 @@ export function HealthScreen() {
         fetchCached('health/labs', `/health/labs?end=${today}`)
             .then(d => !cancelled && setLabs(d))
             .catch(() => {});
-        // Load context reuses the strength/cardio caches (same keys as their
-        // own screens, so offline serves whichever screen filled them).
-        fetchCached(`volume:${range.value}`, `/strength/volume${q}`)
-            .then(d => !cancelled && setVolume(d.weeks))
-            .catch(() => {});
-        fetchCached(`cardio:${range.value}`, `/cardio${q}`)
-            .then(d => !cancelled && setCardio(d.weeks))
-            .catch(() => {});
         return () => { cancelled = true; };
     }, [q]);
 
@@ -96,11 +85,6 @@ export function HealthScreen() {
             ${labs && labs.available && labs.panels.length > 0 && html`
                 <${LabsSection} panels=${labs.panels}/>
             `}
-            ${volume && html`<${LoadStrip} title="Weekly tonnage" unit="kg"
-                weeks=${volume} valueOf=${w => w.tonnage_kg}
-                yFormat=${(v) => v >= 1000 ? `${Math.round(v / 100) / 10}t` : v}/>`}
-            ${cardio && html`<${LoadStrip} title="Weekly Zone 2" unit="min"
-                weeks=${cardio} valueOf=${w => w.zone2_planned_min + w.zone2_extra_min}/>`}
         </div>
     `;
 }
@@ -517,17 +501,3 @@ function MiniLab({ test, origin }) {
     `;
 }
 
-function LoadStrip({ title, unit, weeks, valueOf, yFormat }) {
-    const stackWeeks = weeks.map(w => ({
-        week_start: w.week_start, partial: w.partial, values: { v: valueOf(w) },
-    }));
-    return html`
-        <section class="trends-card">
-            <h3 class="trends-card-title">${title}
-                <span class="trends-unit">${unit} · training-load context</span></h3>
-            <${BarChartStacked} weeks=${stackWeeks} height=${100}
-                                keys=${[{ key: 'v', cssClass: 'trends-stack-0' }]}
-                                yFormat=${yFormat}/>
-        </section>
-    `;
-}

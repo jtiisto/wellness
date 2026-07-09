@@ -490,9 +490,10 @@ warning tone) charted against **Garmin's own baseline band**
 (`hrv_baseline_balanced_low/upper`, rendered via the stepped-band primitive
 grouped by `dailyBandSegments` — no invented thresholds), resting HR with
 7d/28d rolling means, sleep hours with the score on a fixed right-hand scale
-and an 8h guide, and compact weekly tonnage / Zone 2 strips for
-training-load context (deliberately NO computed correlations — aligned axes
-only). One endpoint, `/api/trends/health/recovery`, reads
+and an 8h guide (deliberately NO computed correlations; the original
+training-load context strips were removed after live feedback — they
+duplicated the Strength/Cardio tabs' own charts). One endpoint,
+`/api/trends/health/recovery`, reads
 `daily_health_metrics` through the existing Garmin accessor with the same
 degradation contract as `/weight` (absent DB / missing table →
 `{"available": false}`, never a 500); per-field nulls pass through with no
