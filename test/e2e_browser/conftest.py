@@ -68,9 +68,11 @@ def app_server(tmp_path_factory):
         "JOURNAL_DB_PATH": str(db_dir / "journal.db"),
         "COACH_DB_PATH": str(db_dir / "coach.db"),
         "ANALYSIS_DB_PATH": str(db_dir / "analysis.db"),
-        # Nonexistent by default: trends' weight chart exercises its
-        # available:false path and no e2e run touches the real ~/.garmy DB.
+        # Nonexistent by default: trends' external-source cards exercise
+        # their available:false paths and no e2e run touches the real
+        # ~/.garmy or ~/.bodyspecy DBs.
         "GARMIN_DB_PATH": str(db_dir / "garmin_health.db"),
+        "BODYSPEC_DB_PATH": str(db_dir / "bodyspec.db"),
     }
 
     for k, v in env_vars.items():

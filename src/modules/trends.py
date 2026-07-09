@@ -27,7 +27,7 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
 
-from config import get_module_db_path, get_garmin_db_path
+from config import get_module_db_path, get_garmin_db_path, get_bodyspec_db_path
 from modules import trends_queries
 from modules.db import DbAccessor
 
@@ -71,10 +71,16 @@ def create_router() -> APIRouter:
     coach_db = DbAccessor(get_module_db_path("coach"), read_only=True)
     journal_db = DbAccessor(get_module_db_path("journal"), read_only=True)
     garmin_db = DbAccessor(get_garmin_db_path(), read_only=True)
+    bodyspec_db = DbAccessor(get_bodyspec_db_path(), read_only=True)
 
     if not Path(garmin_db.path).exists():
         logger.info(
             "Garmin DB not found at %s — weight chart disabled", garmin_db.path
+        )
+    if not Path(bodyspec_db.path).exists():
+        logger.info(
+            "BodySpec DB not found at %s — composition cards disabled",
+            bodyspec_db.path,
         )
 
     router = APIRouter()
@@ -176,5 +182,14 @@ def create_router() -> APIRouter:
         # supported state ({"available": false}), never an error.
         start, end = _date_params(start, end)
         return trends_queries.recovery_series(garmin_db, start=start, end=end)
+
+    @router.get("/health/composition")
+    def health_composition(
+        end: Optional[str] = Query(None, pattern=_DATE_PATTERN),
+    ):
+        # All scans up to `end` (no start: months-apart scans are shown in
+        # full; the weight-overlay filters client-side). Degrades like /weight.
+        _, end = _date_params(None, end)
+        return trends_queries.composition_series(bodyspec_db, end=end)
 
     return router

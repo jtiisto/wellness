@@ -25,6 +25,8 @@ const W = 360;
 
 export function HealthScreen() {
     const [recovery, setRecovery] = useState(null);
+    const [weight, setWeight] = useState(null);
+    const [composition, setComposition] = useState(null);
     const [volume, setVolume] = useState(null);
     const [cardio, setCardio] = useState(null);
     const [error, setError] = useState(null);
@@ -45,6 +47,14 @@ export function HealthScreen() {
         fetchCached(`health/recovery:${range.value}`, `/health/recovery${q}`)
             .then(d => !cancelled && setRecovery(d))
             .catch(err => !cancelled && setError(err.message));
+        // Weight reuses the Overview cache key; composition is
+        // range-independent (scans are months apart — always show all).
+        fetchCached(`weight:${range.value}`, `/weight${q}`)
+            .then(d => !cancelled && setWeight(d))
+            .catch(() => {});
+        fetchCached('health/composition', `/health/composition?end=${today}`)
+            .then(d => !cancelled && setComposition(d))
+            .catch(() => {});
         // Load context reuses the strength/cardio caches (same keys as their
         // own screens, so offline serves whichever screen filled them).
         fetchCached(`volume:${range.value}`, `/strength/volume${q}`)
@@ -55,6 +65,8 @@ export function HealthScreen() {
             .catch(() => {});
         return () => { cancelled = true; };
     }, [q]);
+
+    const scans = composition && composition.available ? composition.scans : [];
 
     return html`
         <div class="trends-screen">
@@ -72,6 +84,10 @@ export function HealthScreen() {
                 <${RhrCard} days=${recovery.days}/>
                 <${SleepCard} days=${recovery.days}/>
             `}
+            ${weight && weight.available && weight.series.length > 0 && html`
+                <${BodyCard} series=${weight.series} scans=${scans}/>
+            `}
+            ${scans.length > 0 && html`<${CompositionCard} scans=${scans}/>`}
             ${volume && html`<${LoadStrip} title="Weekly tonnage" unit="kg"
                 weeks=${volume} valueOf=${w => w.tonnage_kg}
                 yFormat=${(v) => v >= 1000 ? `${Math.round(v / 100) / 10}t` : v}/>`}
@@ -253,6 +269,138 @@ function SleepCard({ days }) {
                 <span class="trends-legend-item trends-legend--muted">— 8h</span>
             </div>
         </section>
+    `;
+}
+
+function BodyCard({ series, scans }) {
+    // Body weight (Garmin scale) with DEXA total-mass scan rings — the
+    // scale-vs-DEXA sanity check on one honest axis. Lean/fat live in the
+    // composition card: ~58/~25 kg on this axis would flatten the trend.
+    const H = 200, M = { top: 10, right: 10, bottom: 22, left: 40 };
+    const origin = series[0].date;
+    const last = series[series.length - 1].date;
+    const inRange = scans.filter(s => s.date >= origin && s.date <= last
+        && s.total_kg != null);
+    const ys = [...series.map(s => s.kg), ...inRange.map(s => s.total_kg)];
+    const xs = series.map(s => dayIndex(s.date, origin));
+    const pad = (Math.max(...ys) - Math.min(...ys)) * 0.12 || 0.5;
+
+    const xScale = linearScale(Math.min(...xs), Math.max(...xs), M.left, W - M.right);
+    const yScale = linearScale(Math.min(...ys) - pad, Math.max(...ys) + pad,
+                               H - M.bottom, M.top);
+
+    const dots = seriesToPoints(series, s => dayIndex(s.date, origin), s => s.kg, xScale, yScale);
+    const mean7 = rollingMean(series.map(s => ({ date: s.date, value: s.kg })), 7)
+        .filter(m => m.value != null);
+    const pts7 = seriesToPoints(mean7, m => dayIndex(m.date, origin), m => m.value, xScale, yScale);
+    const scanPts = inRange.map(s => ({
+        x: xScale(dayIndex(s.date, origin)), y: yScale(s.total_kg),
+    }));
+
+    return html`
+        <section class="trends-card">
+            <h3 class="trends-card-title">Body weight + DEXA
+                <span class="trends-unit">kg · 7d mean · scan total mass</span></h3>
+            <svg viewBox="0 0 ${W} ${H}" class="trends-chart" role="img">
+                <${YAxis} yMin=${Math.min(...ys) - pad} yMax=${Math.max(...ys) + pad}
+                          yScale=${yScale} x0=${M.left} x1=${W - M.right}
+                          format=${(v) => v.toFixed ? v.toFixed(1) : v}/>
+                ${pts7.length > 1 && html`<path d=${linePath(pts7)} class="trends-line"/>`}
+                ${dots.map((p, i) => html`
+                    <circle key=${i} cx=${p.x} cy=${p.y} r="2" class="trends-dot trends-dot--value"/>
+                `)}
+                ${scanPts.length > 1 && html`
+                    <path d=${linePath(scanPts)} class="trends-line trends-line--scan"/>
+                `}
+                ${scanPts.map((p, i) => html`
+                    <circle key=${'s' + i} cx=${p.x} cy=${p.y} r="4" class="trends-marker--scan"/>
+                `)}
+                <${XAxis} ticks=${dateTicks(series, origin, xScale)} y=${H - 6}/>
+            </svg>
+            <div class="trends-legend">
+                <span class="trends-legend-item trends-legend--primary">7d mean</span>
+                <span class="trends-legend-item trends-legend--secondary">DEXA total</span>
+                ${inRange.length === 0 && html`
+                    <span class="trends-legend-item trends-legend--muted">
+                        no scans in range — see composition below</span>`}
+            </div>
+        </section>
+    `;
+}
+
+const COMPOSITION_METRICS = [
+    { key: 'lean_kg', label: 'Lean mass', unit: 'kg' },
+    { key: 'fat_kg', label: 'Fat mass', unit: 'kg' },
+    { key: 'body_fat_pct', label: 'Body fat', unit: '%' },
+    { key: 'vat_kg', label: 'VAT', unit: 'kg' },
+    { key: 'ag_ratio', label: 'A/G ratio', unit: '' },
+];
+
+function CompositionCard({ scans }) {
+    // All scans regardless of range — months apart, a 12w window would show
+    // at most one. Small multiples share the x domain; bone is a table.
+    const origin = scans[0].date;
+    const xMax = Math.max(...scans.map(s => dayIndex(s.date, origin)), 1);
+    const M = { left: 64, right: 44 };
+    const xScale = linearScale(0, xMax, M.left, W - M.right);
+    const ticks = spread(scans.map(s => ({
+        x: xScale(dayIndex(s.date, origin)), label: s.date.slice(2, 7),
+    })), 4);
+    const boneRows = scans.filter(s => s.bmd_total != null);
+
+    return html`
+        <section class="trends-card">
+            <h3 class="trends-card-title">Composition
+                <span class="trends-unit">DEXA · all scans</span></h3>
+            ${COMPOSITION_METRICS.map(m => html`
+                <${MiniMetric} key=${m.key} scans=${scans} metric=${m}
+                               origin=${origin} xScale=${xScale}/>
+            `)}
+            <svg viewBox="0 0 ${W} 16" class="trends-chart" role="img">
+                <${XAxis} ticks=${ticks} y=${11}/>
+            </svg>
+            ${boneRows.length > 0 && html`
+                <div class="trends-bone-table">
+                    ${boneRows.map(s => html`
+                        <div class="trends-pr-row" key=${s.date}>
+                            <div class="trends-pr-name">Bone (total) <span class="trends-pr-slug">${s.date}</span></div>
+                            <div class="trends-pr-vals">
+                                <span>${s.bmd_total} g/cm²</span>
+                                <span class="trends-pr-detail">t-score ${s.t_score_total}</span>
+                            </div>
+                        </div>
+                    `)}
+                </div>
+            `}
+        </section>
+    `;
+}
+
+function MiniMetric({ scans, metric, origin, xScale }) {
+    const pts = scans.filter(s => s[metric.key] != null);
+    if (!pts.length) return null;
+    const H = 56, top = 8, bottom = 8;
+    const ys = pts.map(s => s[metric.key]);
+    const yMin = Math.min(...ys), yMax = Math.max(...ys);
+    const pad = (yMax - yMin) * 0.15 || 0.1;
+    const yScale = linearScale(yMin - pad, yMax + pad, H - bottom, top);
+    const dots = pts.map(s => ({
+        x: xScale(dayIndex(s.date, origin)), y: yScale(s[metric.key]),
+    }));
+    const latest = pts[pts.length - 1][metric.key];
+
+    return html`
+        <div class="trends-mini-metric">
+            <svg viewBox="0 0 ${W} ${H}" class="trends-chart" role="img">
+                <text x="4" y=${H / 2 + 3} class="trends-tick">${metric.label}</text>
+                ${dots.length > 1 && html`<path d=${linePath(dots)} class="trends-line trends-line--scan"/>`}
+                ${dots.map((p, i) => html`
+                    <circle key=${i} cx=${p.x} cy=${p.y} r="2.5" class="trends-marker--scan"/>
+                `)}
+                <text x=${W - 40} y=${H / 2 + 3} class="trends-tick">
+                    ${latest}${metric.unit}</text>
+            </svg>
+        </div>
     `;
 }
 

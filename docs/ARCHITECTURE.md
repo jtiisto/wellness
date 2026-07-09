@@ -489,7 +489,17 @@ only). One endpoint, `/api/trends/health/recovery`, reads
 `daily_health_metrics` through the existing Garmin accessor with the same
 degradation contract as `/weight` (absent DB / missing table →
 `{"available": false}`, never a 500); per-field nulls pass through with no
-imputation. Design record: `plans/trends-v2-design-2026-07-09.md` (local).
+imputation. **Phase 2 — body composition:** `/api/trends/health/composition`
+reads the BodySpec DEXA DB (`BODYSPEC_DB_PATH`, default
+`~/.bodyspecy/bodyspec.db` — a second external read-only source with the
+same degradation contract, tolerant of the sync tool rewriting the file
+mid-read). It returns ALL scans up to `end` (scans are months apart; the
+range selector doesn't apply — the weight-chart overlay filters
+client-side). The Health tab renders total-mass scan RINGS on the body-weight
+chart (the scale-vs-DEXA sanity check — lean/fat deliberately do NOT share
+that axis, which would flatten the weight trend) plus composition
+small-multiples (lean/fat/bf%/VAT/A-G) and a per-scan whole-body BMD table.
+Design record: `plans/trends-v2-design-2026-07-09.md` (local).
 
 **Frontend** (`public/js/trends/`): hand-rolled SVG charts — all
 data→geometry math is PURE in `chart-logic.js` (node:test target, the

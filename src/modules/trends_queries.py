@@ -740,6 +740,54 @@ def recovery_series(garmin_db, *, start=None, end):
     return {"available": True, "days": days}
 
 
+def composition_series(bodyspec_db, *, end):
+    """DEXA scans from the BodySpec DB for the Health tab: lean/fat/total
+    mass (kg), body-fat %, VAT, A/G ratio, plus the whole-body BMD row.
+    Returns ALL scans up to `end` — scans are months apart, so the UI shows
+    the full history regardless of the range selector (the weight-chart
+    overlay filters client-side). Same external-source degradation contract
+    as the Garmin readers: absent DB / missing table → {"available": False},
+    never a 500. The .bak files beside the DB show the sync tool rewrites it;
+    a mid-read replacement surfaces as sqlite3.Error → degrade."""
+    if not Path(bodyspec_db.path).exists():
+        return {"available": False, "scans": []}
+    try:
+        with bodyspec_db.get_db() as conn:
+            rows = conn.execute(
+                "SELECT s.scan_date AS date, s.lean_mass_kg, s.fat_mass_kg, "
+                "s.total_mass_kg, s.total_body_fat_pct, s.vat_mass_kg, "
+                "s.ag_ratio, b.bmd_g_cm2, b.t_score "
+                "FROM scans s "
+                "LEFT JOIN scan_bone_density b "
+                "  ON b.scan_date = s.scan_date AND b.region = 'total' "
+                "WHERE s.scan_date <= ? ORDER BY s.scan_date",
+                (end,),
+            ).fetchall()
+    except sqlite3.Error:
+        return {"available": False, "scans": []}
+
+    def _r(v, nd=2):
+        return round(v, nd) if v is not None else None
+
+    return {
+        "available": True,
+        "scans": [
+            {
+                "date": str(r["date"]),
+                "lean_kg": _r(r["lean_mass_kg"]),
+                "fat_kg": _r(r["fat_mass_kg"]),
+                "total_kg": _r(r["total_mass_kg"]),
+                "body_fat_pct": _r(r["total_body_fat_pct"], 1),
+                "vat_kg": _r(r["vat_mass_kg"]),
+                "ag_ratio": _r(r["ag_ratio"]),
+                "bmd_total": _r(r["bmd_g_cm2"], 3),
+                "t_score_total": _r(r["t_score"], 1),
+            }
+            for r in rows
+        ],
+    }
+
+
 # ==================== Cardio ====================
 
 # All cardio-relevant log rows. Zone 2 identification is TYPE-based

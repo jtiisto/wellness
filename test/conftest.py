@@ -99,11 +99,12 @@ def test_app(tmp_path, tmp_journal_db, tmp_coach_db, tmp_analysis_db, monkeypatc
     monkeypatch.setenv("JOURNAL_DB_PATH", str(tmp_journal_db))
     monkeypatch.setenv("COACH_DB_PATH", str(tmp_coach_db))
     monkeypatch.setenv("ANALYSIS_DB_PATH", str(tmp_analysis_db))
-    # Point trends' Garmin source at a NONEXISTENT tmp path so no test can
-    # ever read the developer's real ~/.garmy/health.db; the weight endpoint's
-    # available:false path is the default under test. Tests that want weight
-    # data override this with a real fixture DB.
+    # Point trends' external sources at NONEXISTENT tmp paths so no test can
+    # ever read the developer's real ~/.garmy/health.db or
+    # ~/.bodyspecy/bodyspec.db; the endpoints' available:false paths are the
+    # default under test. Tests that want data override with fixture DBs.
     monkeypatch.setenv("GARMIN_DB_PATH", str(tmp_path / "garmin_health.db"))
+    monkeypatch.setenv("BODYSPEC_DB_PATH", str(tmp_path / "bodyspec.db"))
 
     # Patch PUBLIC_DIR before building the app (the static handlers read the
     # server module-global, which we patch below).

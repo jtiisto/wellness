@@ -3173,6 +3173,19 @@ textarea:focus-visible,
     stroke-dasharray: 5 3; opacity: 0.9;
 }
 
+/* DEXA scan markers: rings + dashed connectors — 7 points across two years
+   must read as scans, not a daily series. */
+.trends .trends-marker--scan {
+    fill: none; stroke: var(--accent-warning); stroke-width: 1.5;
+}
+.trends .trends-line--scan {
+    fill: none; stroke: var(--accent-warning); stroke-width: 1;
+    stroke-dasharray: 3 3; opacity: 0.6;
+}
+.trends .trends-mini-metric { border-bottom: 1px solid var(--border-color); }
+.trends .trends-mini-metric:last-of-type { border-bottom: none; }
+.trends .trends-bone-table { margin-top: var(--spacing-sm); }
+
 .trends .trends-ribbon-cell { stroke: none; }
 .trends .trends-ribbon--met { fill: var(--accent-success); }
 .trends .trends-ribbon--partial { fill: var(--accent-warning); }

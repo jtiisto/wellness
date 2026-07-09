@@ -113,3 +113,87 @@ class TestRecoveryEndpoint:
             assert c.get(
                 "/wellness/api/trends/health/recovery?start=2026-02-30"
             ).status_code == 422
+
+
+@pytest.fixture
+def tmp_bodyspec_db(tmp_path):
+    """A minimal BodySpec DB: three scans (one future-dated for end-clipping),
+    whole-body + regional bone rows (only 'total' must surface), and one scan
+    with no bone rows at all."""
+    db_path = tmp_path / "bodyspec_fixture.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute("""
+        CREATE TABLE scans (
+            scan_date DATE PRIMARY KEY, lean_mass_kg FLOAT, fat_mass_kg FLOAT,
+            total_mass_kg FLOAT, total_body_fat_pct FLOAT, vat_mass_kg FLOAT,
+            ag_ratio FLOAT
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE scan_bone_density (
+            scan_date DATE, region TEXT, bmd_g_cm2 FLOAT, t_score FLOAT
+        )
+    """)
+    conn.executemany("INSERT INTO scans VALUES (?,?,?,?,?,?,?)", [
+        ("2026-01-23", 57.424794, 27.079464, 87.634046, 30.9, 1.678292, 1.31),
+        ("2026-04-24", 60.781378, 21.500278, 85.411443, 25.2, 1.165732, 1.33),
+        ("2099-01-01", 60.0, 20.0, 83.0, 24.0, 1.0, 1.30),  # future: clipped
+    ])
+    conn.executemany("INSERT INTO scan_bone_density VALUES (?,?,?,?)", [
+        ("2026-01-23", "spine", 1.10, 0.5),
+        ("2026-01-23", "total", 1.234567, 1.24),
+        # 2026-04-24 has no bone rows → nulls, not a dropped scan.
+    ])
+    conn.commit()
+    conn.close()
+    return db_path
+
+
+def _bodyspec_client(bodyspec_path, monkeypatch):
+    monkeypatch.setenv("BODYSPEC_DB_PATH", str(bodyspec_path))
+    import server as server_mod
+    from fastapi.testclient import TestClient
+    return TestClient(server_mod.create_app())
+
+
+@pytest.mark.integration
+class TestCompositionEndpoint:
+    def test_unavailable_when_db_missing(self, client):
+        # Conftest pins BODYSPEC_DB_PATH to a nonexistent file by default.
+        resp = client.get("/api/trends/health/composition")
+        assert resp.status_code == 200
+        assert resp.json() == {"available": False, "scans": []}
+
+    def test_unavailable_when_table_missing(self, client, tmp_path, monkeypatch):
+        db_path = tmp_path / "bodyspec_no_table.db"
+        sqlite3.connect(db_path).close()
+        with _bodyspec_client(db_path, monkeypatch) as c:
+            data = c.get("/wellness/api/trends/health/composition").json()
+        assert data == {"available": False, "scans": []}
+
+    def test_scans_shape_bone_join_and_end_clip(self, tmp_bodyspec_db, client, monkeypatch):
+        with _bodyspec_client(tmp_bodyspec_db, monkeypatch) as c:
+            data = c.get(
+                "/wellness/api/trends/health/composition?end=2026-07-09").json()
+
+        assert data["available"] is True
+        dates = [s["date"] for s in data["scans"]]
+        assert dates == ["2026-01-23", "2026-04-24"]   # future scan clipped
+
+        jan = data["scans"][0]
+        assert jan["lean_kg"] == 57.42
+        assert jan["body_fat_pct"] == 30.9
+        assert jan["vat_kg"] == 1.68
+        # Bone: the whole-body row only — regional rows must not multiply scans.
+        assert jan["bmd_total"] == 1.235
+        assert jan["t_score_total"] == 1.2
+
+        apr = data["scans"][1]
+        assert apr["bmd_total"] is None    # no bone rows → nulls, scan kept
+        assert apr["ag_ratio"] == 1.33
+
+    def test_calendar_invalid_end_422(self, tmp_bodyspec_db, client, monkeypatch):
+        with _bodyspec_client(tmp_bodyspec_db, monkeypatch) as c:
+            assert c.get(
+                "/wellness/api/trends/health/composition?end=2026-02-30"
+            ).status_code == 422

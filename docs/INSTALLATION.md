@@ -301,6 +301,7 @@ health DB for the body-weight chart:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `GARMIN_DB_PATH` | `~/.garmy/health.db` | Garmin health SQLite DB (written by the external sync job). Read-only; the weight chart and the Health tab's recovery cards (HRV/RHR/sleep) hide gracefully when the file is absent. |
+| `BODYSPEC_DB_PATH` | `~/.bodyspecy/bodyspec.db` | BodySpec DEXA SQLite DB (written by its sync tool). Read-only; the Health tab's composition cards and weight-chart scan markers hide gracefully when the file is absent. |
 
 ### Disabling modules (optional)
 

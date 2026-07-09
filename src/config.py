@@ -79,12 +79,21 @@ def get_module_db_path(module_id):
 # repo); trends reads it read-only for the body-weight series. The weight
 # chart hides gracefully when the file is absent (dev machines without sync).
 GARMIN_DB_DEFAULT = Path.home() / ".garmy" / "health.db"
+BODYSPEC_DB_DEFAULT = Path.home() / ".bodyspecy" / "bodyspec.db"
 
 
 def get_garmin_db_path():
     """Resolve the Garmin health DB path: GARMIN_DB_PATH env var > default."""
     env = os.environ.get("GARMIN_DB_PATH")
     return Path(env) if env else GARMIN_DB_DEFAULT
+
+
+def get_bodyspec_db_path():
+    """Resolve the BodySpec DEXA DB path: BODYSPEC_DB_PATH env var > default.
+    External read-only source (written by the bodyspec sync tool); Trends
+    degrades gracefully when absent — same contract as the Garmin DB."""
+    env = os.environ.get("BODYSPEC_DB_PATH")
+    return Path(env) if env else BODYSPEC_DB_DEFAULT
 
 
 def get_hook_path(hook_type):
