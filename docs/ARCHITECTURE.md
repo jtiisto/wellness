@@ -477,6 +477,20 @@ session e1RM strictly above the slug's prior all-time max (first session is
 baseline). Overview thresholds are config-free constants in
 `trends_queries.py`.
 
+**Health tab (v2 Phase 1).** Non-training body signals over the same range
+selector: HRV (last-night avg, dots below Garmin's low-zone ceiling in the
+warning tone) charted against **Garmin's own baseline band**
+(`hrv_baseline_balanced_low/upper`, rendered via the stepped-band primitive
+grouped by `dailyBandSegments` — no invented thresholds), resting HR with
+7d/28d rolling means, sleep hours with the score on a fixed right-hand scale
+and an 8h guide, and compact weekly tonnage / Zone 2 strips for
+training-load context (deliberately NO computed correlations — aligned axes
+only). One endpoint, `/api/trends/health/recovery`, reads
+`daily_health_metrics` through the existing Garmin accessor with the same
+degradation contract as `/weight` (absent DB / missing table →
+`{"available": false}`, never a 500); per-field nulls pass through with no
+imputation. Design record: `plans/trends-v2-design-2026-07-09.md` (local).
+
 **Frontend** (`public/js/trends/`): hand-rolled SVG charts — all
 data→geometry math is PURE in `chart-logic.js` (node:test target, the
 sync-logic purity pattern); components are thin htm/preact consumers styled

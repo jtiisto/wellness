@@ -16,6 +16,7 @@ import { StrengthScreen } from './components/StrengthScreen.js';
 import { CardioScreen } from './components/CardioScreen.js';
 import { JournalScreen } from './components/JournalScreen.js';
 import { OverviewScreen } from './components/OverviewScreen.js';
+import { HealthScreen } from './components/HealthScreen.js';
 
 const html = htm.bind(h);
 
@@ -24,6 +25,7 @@ const SCREENS = [
     { id: 'strength', label: 'Strength' },
     { id: 'cardio', label: 'Cardio' },
     { id: 'journal', label: 'Journal' },
+    { id: 'health', label: 'Health' },
 ];
 
 // Screens land phase by phase; unshipped ones render the stub.
@@ -32,6 +34,7 @@ const SCREEN_COMPONENTS = {
     strength: StrengthScreen,
     cardio: CardioScreen,
     journal: JournalScreen,
+    health: HealthScreen,
 };
 
 function StubScreen({ label }) {

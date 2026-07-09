@@ -692,6 +692,54 @@ def weight_series(garmin_db, *, start=None, end):
     }
 
 
+def recovery_series(garmin_db, *, start=None, end):
+    """Daily recovery signals for the Health tab: resting HR, last-night HRV
+    with GARMIN'S OWN baseline band (no invented thresholds — balanced range
+    plus the low-zone ceiling), sleep hours and score. Reads
+    daily_health_metrics via the same external-source contract as
+    weight_series: absent DB / missing table / schema drift degrade to
+    {"available": False} — never a 500. Per-field nulls pass through (the
+    charts skip them); no imputation."""
+    if not Path(garmin_db.path).exists():
+        return {"available": False, "days": []}
+    try:
+        with garmin_db.get_db() as conn:
+            params = [end]
+            sql = (
+                "SELECT metric_date AS date, resting_heart_rate, "
+                "hrv_last_night_avg, hrv_baseline_balanced_low, "
+                "hrv_baseline_balanced_upper, hrv_baseline_low_upper, "
+                "sleep_duration_hours, sleep_score "
+                "FROM daily_health_metrics WHERE metric_date <= ?"
+            )
+            if start:
+                sql += " AND metric_date >= ?"
+                params.append(start)
+            sql += " ORDER BY metric_date"
+            rows = conn.execute(sql, params).fetchall()
+    except sqlite3.Error:
+        return {"available": False, "days": []}
+
+    days = []
+    for r in rows:
+        band = None
+        if (r["hrv_baseline_balanced_low"] is not None
+                and r["hrv_baseline_balanced_upper"] is not None):
+            band = {"low": r["hrv_baseline_balanced_low"],
+                    "high": r["hrv_baseline_balanced_upper"],
+                    "low_floor": r["hrv_baseline_low_upper"]}
+        days.append({
+            "date": str(r["date"]),
+            "rhr": r["resting_heart_rate"],
+            "hrv": r["hrv_last_night_avg"],
+            "hrv_band": band,
+            "sleep_hours": (round(r["sleep_duration_hours"], 2)
+                            if r["sleep_duration_hours"] is not None else None),
+            "sleep_score": r["sleep_score"],
+        })
+    return {"available": True, "days": days}
+
+
 # ==================== Cardio ====================
 
 # All cardio-relevant log rows. Zone 2 identification is TYPE-based

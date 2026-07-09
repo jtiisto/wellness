@@ -171,6 +171,34 @@ export function ribbonCells(weeks, xScale, cellWidth) {
     });
 }
 
+/**
+ * Group a date-ascending daily series into stepped-band segments: consecutive
+ * items whose [low, high] band is identical merge into one
+ * {x0, x1, min, max} (x1 exclusive = last day + 1, steppedBandRects
+ * convention). Items with a null band are gaps that close the current
+ * segment. Built for the HRV card, where Garmin's baseline moves slowly and
+ * per-day rects would be hundreds of slivers.
+ */
+export function dailyBandSegments(items, xOf, bandOf) {
+    const segments = [];
+    let current = null;
+    for (const item of items) {
+        const band = bandOf(item);
+        if (band == null || band.low == null || band.high == null) {
+            current = null;
+            continue;
+        }
+        const x = xOf(item);
+        if (current && current.min === band.low && current.max === band.high) {
+            current.x1 = x + 1;
+        } else {
+            current = { x0: x, x1: x + 1, min: band.low, max: band.high };
+            segments.push(current);
+        }
+    }
+    return segments;
+}
+
 /** Polyline `points` attribute string for a sparkline of raw values in a
  *  w×h box (padding handled by the caller); '' for <2 values. Nulls skipped. */
 export function sparklinePoints(values, w, h) {

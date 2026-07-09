@@ -3156,6 +3156,15 @@ textarea:focus-visible,
 .trends .trends-band { fill: var(--app-accent); opacity: 0.12; }
 .trends .trends-dot--value { fill: var(--text-secondary); }
 
+/* Health screen (v2): warning dots below Garmin's low HRV zone, faint
+   right-scale score dots, dashed guide line (8h sleep). */
+.trends .trends-dot--warn { fill: var(--accent-warning); }
+.trends .trends-dot--secondary { fill: var(--accent-warning); opacity: 0.45; }
+.trends .trends-guide {
+    stroke: var(--text-muted); stroke-width: 1;
+    stroke-dasharray: 4 3; opacity: 0.6;
+}
+
 .trends .trends-ribbon-cell { stroke: none; }
 .trends .trends-ribbon--met { fill: var(--accent-success); }
 .trends .trends-ribbon--partial { fill: var(--accent-warning); }

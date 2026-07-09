@@ -300,7 +300,7 @@ health DB for the body-weight chart:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `GARMIN_DB_PATH` | `~/.garmy/health.db` | Garmin health SQLite DB (written by the external sync job). Read-only; the weight chart hides gracefully when the file is absent. |
+| `GARMIN_DB_PATH` | `~/.garmy/health.db` | Garmin health SQLite DB (written by the external sync job). Read-only; the weight chart and the Health tab's recovery cards (HRV/RHR/sleep) hide gracefully when the file is absent. |
 
 ### Disabling modules (optional)
 

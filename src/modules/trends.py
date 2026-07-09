@@ -167,4 +167,14 @@ def create_router() -> APIRouter:
         start, end = _date_params(start, end)
         return trends_queries.weight_series(garmin_db, start=start, end=end)
 
+    @router.get("/health/recovery")
+    def health_recovery(
+        start: Optional[str] = Query(None, pattern=_DATE_PATTERN),
+        end: Optional[str] = Query(None, pattern=_DATE_PATTERN),
+    ):
+        # Same degradation contract as /weight: absent Garmin data is a
+        # supported state ({"available": false}), never an error.
+        start, end = _date_params(start, end)
+        return trends_queries.recovery_series(garmin_db, start=start, end=end)
+
     return router

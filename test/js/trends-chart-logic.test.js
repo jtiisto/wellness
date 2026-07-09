@@ -4,6 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
     coerceNumeric,
+    dailyBandSegments,
     linearScale,
     dayIndex,
     niceTicks,
@@ -212,4 +213,39 @@ test('coerceNumeric keeps a mixed note-era series chartable (F1 regression)', ()
     const yScale = linearScale(Math.min(...ys), Math.max(...ys), 100, 10);
     assert.equal(Number.isFinite(yScale(5)), true);
     assert.equal(Number.isFinite(yScale(7)), true);
+});
+
+test('dailyBandSegments: merges equal consecutive bands, splits on change (v2 HRV)', () => {
+    const items = [
+        { x: 0, band: { low: 25, high: 31 } },
+        { x: 1, band: { low: 25, high: 31 } },
+        { x: 2, band: { low: 26, high: 32 } },  // baseline moved
+        { x: 3, band: { low: 26, high: 32 } },
+    ];
+    const segs = dailyBandSegments(items, i => i.x, i => i.band);
+    assert.deepEqual(segs, [
+        { x0: 0, x1: 2, min: 25, max: 31 },
+        { x0: 2, x1: 4, min: 26, max: 32 },
+    ]);
+});
+
+test('dailyBandSegments: null bands are gaps; date gaps with equal bands still merge', () => {
+    const items = [
+        { x: 0, band: { low: 25, high: 31 } },
+        { x: 1, band: null },                    // watch off — gap
+        { x: 2, band: { low: 25, high: 31 } },
+        { x: 5, band: { low: 25, high: 31 } },   // missing days, same baseline
+    ];
+    const segs = dailyBandSegments(items, i => i.x, i => i.band);
+    assert.deepEqual(segs, [
+        { x0: 0, x1: 1, min: 25, max: 31 },
+        { x0: 2, x1: 6, min: 25, max: 31 },
+    ]);
+});
+
+test('dailyBandSegments: empty and single-item inputs', () => {
+    assert.deepEqual(dailyBandSegments([], i => i.x, i => i.band), []);
+    const one = dailyBandSegments(
+        [{ x: 4, band: { low: 20, high: 30 } }], i => i.x, i => i.band);
+    assert.deepEqual(one, [{ x0: 4, x1: 5, min: 20, max: 30 }]);
 });

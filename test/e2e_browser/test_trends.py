@@ -80,10 +80,24 @@ def test_trends_tab_renders(trends_page):
     """The tab mounts with its sub-tab bar; Overview (default) renders tiles
     or empty states without erroring."""
     page = trends_page
-    assert page.locator(".trends-tabs .trends-tab").count() == 4
+    assert page.locator(".trends-tabs .trends-tab").count() == 5
     page.wait_for_selector(".trends-main", timeout=5000)
     # Overview fetch settles into tiles (seeded strength → tonnage tile).
     page.wait_for_selector(".trends-tile", timeout=10000)
+    assert page.locator(".trends-error").count() == 0
+
+
+def test_health_tab_degrades_without_garmin(trends_page):
+    """Health (v2): with no Garmin DB the recovery cards degrade to the
+    unavailable placeholder while the load-context strips still render from
+    coach data — and nothing errors."""
+    page = trends_page
+    page.locator(".trends-tab", has_text="Health").click()
+    page.wait_for_selector(".trends-chart-empty", timeout=10000)
+    assert "Garmin data unavailable" in page.locator(
+        ".trends-chart-empty").first.text_content()
+    # Seeded strength history → the tonnage load strip renders bars.
+    page.wait_for_selector(".trends-card svg.trends-chart", timeout=10000)
     assert page.locator(".trends-error").count() == 0
 
 
