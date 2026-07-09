@@ -3193,6 +3193,19 @@ textarea:focus-visible,
 }
 .trends .trends-lab-flag { color: var(--accent-warning); font-weight: 600; }
 
+/* Deterministic callouts (v2 Phase 4): rule-based chips, no prose. */
+.trends .trends-plateau-chip,
+.trends .trends-drop-badge {
+    display: inline-block;
+    margin-left: var(--spacing-xs);
+    padding: 0 var(--spacing-xs);
+    border: 1px solid var(--accent-warning);
+    border-radius: var(--radius-full);
+    color: var(--accent-warning);
+    font-size: 0.7rem;
+    vertical-align: middle;
+}
+
 .trends .trends-ribbon-cell { stroke: none; }
 .trends .trends-ribbon--met { fill: var(--accent-success); }
 .trends .trends-ribbon--partial { fill: var(--accent-warning); }

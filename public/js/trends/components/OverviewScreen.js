@@ -131,6 +131,8 @@ function FocusCard({ focus }) {
                 <div class="trends-focus-row" key=${f.tracker_id}>
                     <div class="trends-focus-name">${f.name}
                         <span class="trends-focus-rate">${Math.round(f.rate * 100)}% ${f.metric_kind}</span>
+                        ${f.dropping && html`<span class="trends-drop-badge"
+                            title="≥15 points below the preceding 14 days">↓ dropping</span>`}
                     </div>
                     <div class="trends-focus-dots">
                         ${f.ribbon.map(r => html`

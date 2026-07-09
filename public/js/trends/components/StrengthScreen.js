@@ -208,6 +208,8 @@ function PRBoard({ exercises }) {
                 ${exercises.map(e => html`
                     <div class="trends-pr-row" key=${e.slug}>
                         <div class="trends-pr-name">${e.name}
+                            ${e.plateau && html`<span class="trends-plateau-chip"
+                                title="4-week max e1RM flat (±2%) at unchanged-or-higher RPE">plateau</span>`}
                             <span class="trends-pr-slug">${e.slug}</span></div>
                         <div class="trends-pr-vals">
                             <span title="best e1RM">${e.all_time.best_e1rm.value} ${e.unit}</span>

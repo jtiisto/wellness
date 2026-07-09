@@ -131,3 +131,63 @@ class TestFocusWindowClamp:
                 assert r["status"] == "off"
         # Rate over the clamped window: 13 scheduled days, 2 lapses.
         assert alcohol["rate"] == round(11 / 13, 3)
+
+
+@pytest.mark.integration
+class TestFocusDropBadge:
+    """Adherence-drop badge (v2 Phase 4): current 14d rate ≥0.15 below the
+    PRECEDING 14d window → dropping; a tracker born inside the current
+    window has no prior rate and never badges."""
+
+    def test_drop_stable_and_new_tracker(self, client, tmp_journal_db, tmp_coach_db, tmp_path):
+        import sqlite3
+        from datetime import date, timedelta
+
+        from modules.db import DbAccessor
+        from modules.trends_queries import overview
+
+        today = date.today()
+        NOW = "2026-01-01T00:00:00Z"
+        conn = sqlite3.connect(tmp_journal_db)
+        cur = conn.cursor()
+
+        def tracker(tid, name):
+            cur.execute(
+                "INSERT INTO trackers (id, name, category, type, meta_json, "
+                "schedule_json, polarity, target_json, last_modified_at, deleted) "
+                "VALUES (?, ?, 'health', 'simple', '{}', NULL, 'positive', NULL, ?, 0)",
+                (tid, name, NOW))
+
+        def entry(tid, days_ago):
+            cur.execute(
+                "INSERT INTO entries (date, tracker_id, value, completed, last_modified_at) "
+                "VALUES (?, ?, NULL, 1, ?)",
+                ((today - timedelta(days=days_ago)).isoformat(), tid, NOW))
+
+        # Collapsed: perfect prior window (days 14-27), 5/14 current.
+        tracker("t-drop", "Collapsed")
+        for n in range(14, 28):
+            entry("t-drop", n)
+        for n in (0, 3, 6, 9, 12):
+            entry("t-drop", n)
+        # Stable: daily everywhere.
+        tracker("t-stable", "Stable")
+        for n in range(0, 28):
+            entry("t-stable", n)
+        # New: born 3 days ago, perfect since — no prior window, no badge.
+        tracker("t-new", "Newborn")
+        for n in range(0, 4):
+            entry("t-new", n)
+        conn.commit()
+        conn.close()
+
+        data = overview(
+            DbAccessor(tmp_coach_db, read_only=True),
+            DbAccessor(tmp_journal_db, read_only=True),
+            DbAccessor(tmp_path / "no_garmin.db", read_only=True),
+            today=today,
+        )
+        focus = {f["name"]: f for f in data["adherence_focus"]}
+        assert focus["Collapsed"]["dropping"] is True
+        assert focus["Stable"]["dropping"] is False
+        assert focus["Newborn"]["dropping"] is False

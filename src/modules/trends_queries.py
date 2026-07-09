@@ -206,6 +206,63 @@ def _best_of(rows, unit):
     return {"best_weight": best_w, "best_e1rm": best_e}
 
 
+# Plateau callout (v2 Phase 4, config-free like the overview constants):
+# the last 4 weeks ground at the same top e1RM as the 4 weeks before, at
+# unchanged-or-higher effort. Rule-based, no prose, no extrapolation.
+PLATEAU_WINDOW_DAYS = 28
+PLATEAU_MIN_SESSIONS = 3       # per window — fewer is noise, not signal
+PLATEAU_TOLERANCE = 0.02       # |Δ 4-week max e1RM| within ±2% = "flat"
+
+
+def _session_tops(slug_rows, unit):
+    """Per-date top set for one slug: [{date, e1rm, rpe}] date-ascending.
+    Top = max (e1RM, weight); rpe = mean of non-null RPEs among tied tops
+    (the strength_exercise_series convention)."""
+    by_date = defaultdict(list)
+    for r in slug_rows:
+        by_date[r["date"]].append(r)
+    tops = []
+    for d in sorted(by_date):
+        scored = []
+        for r in by_date[d]:
+            w = convert_weight(r["weight"], _norm_unit(r["unit"]), unit)
+            scored.append({"w": w, "e": epley_e1rm(w, r["reps"]), "rpe": r["rpe"]})
+        top_key = max((s["e"], s["w"]) for s in scored)
+        tied = [s for s in scored if (s["e"], s["w"]) == top_key]
+        rpes = [s["rpe"] for s in tied if s["rpe"] is not None]
+        tops.append({"date": d, "e1rm": top_key[0],
+                     "rpe": sum(rpes) / len(rpes) if rpes else None})
+    return tops
+
+
+def _plateau_flag(slug_rows, unit, end):
+    """True when BOTH: the recent 4-week max e1RM is within ±2% of the prior
+    4-week max, AND mean top-set RPE didn't drop (effort unchanged or higher
+    for the same output). Each window needs ≥3 sessions and ≥1 RPE'd session,
+    else there is no signal and no chip."""
+    end_d = date.fromisoformat(end)
+    recent_start = (end_d - timedelta(days=PLATEAU_WINDOW_DAYS - 1)).isoformat()
+    prior_start = (end_d - timedelta(days=2 * PLATEAU_WINDOW_DAYS - 1)).isoformat()
+
+    tops = _session_tops(slug_rows, unit)
+    recent = [t for t in tops if recent_start <= t["date"] <= end]
+    prior = [t for t in tops if prior_start <= t["date"] < recent_start]
+    if len(recent) < PLATEAU_MIN_SESSIONS or len(prior) < PLATEAU_MIN_SESSIONS:
+        return False
+    recent_rpes = [t["rpe"] for t in recent if t["rpe"] is not None]
+    prior_rpes = [t["rpe"] for t in prior if t["rpe"] is not None]
+    if not recent_rpes or not prior_rpes:
+        return False
+    recent_max = max(t["e1rm"] for t in recent)
+    prior_max = max(t["e1rm"] for t in prior)
+    # Epsilon: an exactly-on-the-boundary ±2% must count as flat — float
+    # rounding in the e1RM products must not flip the chip.
+    if abs(recent_max - prior_max) > PLATEAU_TOLERANCE * prior_max + 1e-9:
+        return False
+    return (sum(recent_rpes) / len(recent_rpes)
+            >= sum(prior_rpes) / len(prior_rpes))
+
+
 def strength_exercises(coach_db, garmin_db, *, start=None, end):
     """Picker + PR board: every canonical slug with ≥1 qualifying set, ordered
     `last_used DESC, name ASC` (recent-usage first; alphabetical secondary so
@@ -236,6 +293,7 @@ def strength_exercises(coach_db, garmin_db, *, start=None, end):
             "unit": unit,
             "all_time": _best_of(slug_rows, unit),
             "in_range": _best_of(in_range_rows, unit) if start else None,
+            "plateau": _plateau_flag(slug_rows, unit, end),
         })
 
     # last_used DESC with name ASC as secondary: stable sort by name first,
@@ -473,6 +531,7 @@ OVERVIEW_SPARKLINE_WEEKS = 8
 OVERVIEW_FOCUS_WINDOW_DAYS = 14      # rolling adherence window for focus rows
 OVERVIEW_FOCUS_ACTIVE_DAYS = 28      # tracker must have an entry this recently
 OVERVIEW_FOCUS_COUNT = 3
+OVERVIEW_FOCUS_DROP = 0.15           # rate fall vs the PRECEDING window → ↓ badge
 PR_WINDOW_DAYS = 30
 
 
@@ -575,9 +634,15 @@ def overview(coach_db, journal_db, garmin_db, *, today):
         for w in volume["weeks"]
     ]
 
-    # Adherence focus: weakest actionable trackers over a rolling 14d window.
+    # Adherence focus: weakest actionable trackers over a rolling 14d window,
+    # with a drop badge vs the PRECEDING 14d window (entries fetched one
+    # window earlier to make the comparison).
     focus_cutoff = (today - timedelta(days=OVERVIEW_FOCUS_ACTIVE_DAYS)).isoformat()
     window_start = (today - timedelta(days=OVERVIEW_FOCUS_WINDOW_DAYS - 1)).isoformat()
+    prev_window_start = (
+        today - timedelta(days=2 * OVERVIEW_FOCUS_WINDOW_DAYS - 1)).isoformat()
+    prev_window_end = (
+        today - timedelta(days=OVERVIEW_FOCUS_WINDOW_DAYS)).isoformat()
     with journal_db.get_db() as conn:
         with read_transaction(conn) as cursor:
             trackers = cursor.execute("""
@@ -595,7 +660,7 @@ def overview(coach_db, journal_db, garmin_db, *, today):
                 rows = cursor.execute(
                     "SELECT date, value, completed FROM entries "
                     "WHERE tracker_id = ? AND date >= ?",
-                    (t["id"], window_start),
+                    (t["id"], prev_window_start),
                 ).fetchall()
                 tracker_entries[t["id"]] = rows
 
@@ -616,6 +681,20 @@ def overview(coach_db, journal_db, garmin_db, *, today):
         rate = m.get(f"{m['metric_kind']}_rate")
         if rate is None:
             continue  # paused / nothing scheduled — not a focus candidate
+        # Drop badge: compare against the PRECEDING window, same clamping.
+        # A tracker born inside the current window has no prior rate → no
+        # badge (never a false alarm on a new habit).
+        prev_rate = None
+        if t["first_entry"] <= prev_window_end:
+            pm = compute_adherence(
+                t["schedule_json"], t["polarity"], t["type"], entries,
+                max(prev_window_start, t["first_entry"]), prev_window_end,
+                target_json=t["target_json"], values=values,
+                meta_json=t["meta_json"],
+            )
+            prev_rate = pm.get(f"{pm['metric_kind']}_rate")
+        dropping = (prev_rate is not None
+                    and prev_rate - rate >= OVERVIEW_FOCUS_DROP)
         ribbon = []
         d = date.fromisoformat(window_start)
         while d <= today:
@@ -627,7 +706,8 @@ def overview(coach_db, journal_db, garmin_db, *, today):
             d += timedelta(days=1)
         focus.append({
             "tracker_id": t["id"], "name": t["name"],
-            "metric_kind": m["metric_kind"], "rate": rate, "ribbon": ribbon,
+            "metric_kind": m["metric_kind"], "rate": rate,
+            "dropping": dropping, "ribbon": ribbon,
         })
     focus.sort(key=lambda f: f["rate"])
     focus = focus[:OVERVIEW_FOCUS_COUNT]

@@ -475,7 +475,14 @@ the miss is already irreversible — a negative-polarity lapse entry or an
 at-most target exceeded); PRs =
 session e1RM strictly above the slug's prior all-time max (first session is
 baseline). Overview thresholds are config-free constants in
-`trends_queries.py`.
+`trends_queries.py`. **Deterministic callouts** (v2 Phase 4 — rule-based
+chips, no prose, no extrapolation): a strength exercise's Records row gets a
+"plateau" chip when the recent 4-week max e1RM is within ±2% of the prior
+4-week max at unchanged-or-higher mean top-set RPE (≥3 sessions and ≥1 RPE'd
+session per window, else no signal); an Overview focus row gets a "↓
+dropping" badge when its 14-day rate is ≥0.15 below the preceding 14-day
+window (both windows clamped to first-entry — a tracker born inside the
+current window never badges).
 
 **Health tab (v2 Phase 1).** Non-training body signals over the same range
 selector: HRV (last-night avg, dots below Garmin's low-zone ceiling in the
