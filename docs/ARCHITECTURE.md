@@ -554,6 +554,19 @@ The `public/js/shared/` directory contains cross-module utilities:
 
 **FastAPI** serves as the unified web framework. Each module contributes an `APIRouter` via a factory function (`create_router(db_path)`) that initializes its database and returns the router. The factory builds a `DbAccessor` (Journal/Coach) or captures the db_path (Analysis) and binds the route handlers to it as closures — the module holds **no mutable global DB path**, so two routers for the same module can target different databases in one process (proven by `test/test_module_isolation.py`). `server.create_app(db_path_overrides=None)` builds the inner ASGI app and mounts every enabled module's router at `/api/journal`, `/api/coach`, and `/api/analysis`; production builds it once at the server entrypoint (`python src/server.py`), while tests call it per-test with temp-path overrides to get fully isolated app+DB instances without poking module state. Importing the `server` module is **side-effect-free** — no app is constructed at import time, so the module migrations and the analysis stale-report recovery run only on an actual server start, never as a side effect of a test or tool importing `server`.
 
+**Network posture.** There is no per-route auth — Tailscale is the auth
+layer — but the server binds `0.0.0.0`, which also exposes the port on any
+LAN the host joins. `ClientGuardMiddleware` therefore 403s any HTTP request
+whose socket source is outside the trusted ranges (loopback — which also
+covers `tailscale serve`'s proxying and the test suite's synthetic client —
+plus the Tailscale CGNAT `100.64.0.0/10` and ULA `fd7a:115c:a1e0::/48`
+ranges; `WELLNESS_TRUSTED_CLIENTS` overrides, `*` disables). CORS is
+deny-by-default: the PWA is same-origin and the native client sends no
+Origin header, so the CORS middleware is only mounted when
+`WELLNESS_CORS_ORIGINS` allowlists origins (the old wildcard let any page in
+a browser on a reachable device read and write the API). Both are pinned by
+`test/test_client_guard.py`.
+
 **Path-based routing.** The app runs under a `/wellness` URL prefix (`BASE_PATH` in `server.py`). All frontend paths are prefixed (e.g., `/wellness/api/journal/sync`), while backend routes stay at root (`/api/journal/sync`). A `StripPrefixMiddleware` ASGI wrapper strips the prefix from incoming requests, enabling the app to work both behind Tailscale `serve --set-path /wellness` (which also strips the prefix) and via direct access at `localhost:9000/wellness/`. The server injects `$BASE_PATH$` into `sw.js` at serve time for service worker path matching.
 
 **SQLite** is used directly (no ORM) with one database file per module. This keeps modules fully isolated at the data layer and simplifies deployment (no database server required). Foreign key constraints are enforced via `PRAGMA foreign_keys = ON` in the Coach module where relational integrity matters (the Coach `DbAccessor` is constructed with `foreign_keys=True`). Both the shared `db.get_db` (used directly and through each module's `DbAccessor`) and Coach MCP configure `PRAGMA busy_timeout = 5000` (5 seconds) to handle concurrent database access gracefully instead of immediately throwing `SQLITE_BUSY`.

@@ -303,6 +303,8 @@ health DB for the body-weight chart:
 | `GARMIN_DB_PATH` | `~/.garmy/health.db` | Garmin health SQLite DB (written by the external sync job). Read-only; the weight chart and the Health tab's recovery cards (HRV/RHR/sleep) hide gracefully when the file is absent. |
 | `BODYSPEC_DB_PATH` | `~/.bodyspecy/bodyspec.db` | BodySpec DEXA SQLite DB (written by its sync tool). Read-only; the Health tab's composition cards and weight-chart scan markers hide gracefully when the file is absent. |
 | `QUESTY_DB_PATH` | `~/.questy/questy.db` | Quest labs SQLite DB (written by its sync tool). Read-only; the Health tab's labs cards hide gracefully when the file is absent. |
+| `WELLNESS_TRUSTED_CLIENTS` | loopback + Tailscale ranges | Comma-separated CIDRs of allowed client sources (the app 403s everything else — the server binds 0.0.0.0 and Tailscale is the auth layer, so LAN strays must be refused in-app). Setting the variable REPLACES the default set (`127.0.0.0/8, ::1/128, 100.64.0.0/10, fd7a:115c:a1e0::/48`); the single value `*` disables the guard. |
+| `WELLNESS_CORS_ORIGINS` | *(empty — CORS off)* | Comma-separated origins granted cross-origin API access. The PWA is same-origin and the native app sends no Origin header, so leave unset unless a browser client on another origin genuinely needs access. |
 
 ### Disabling modules (optional)
 

@@ -150,16 +150,19 @@ class TestServeServiceWorker:
 
 
 class TestCORS:
-    def test_cors_headers_on_api_response(self, client):
-        """API responses should include CORS headers when Origin is present."""
+    """CORS is DENY-by-default (codex review 2026-07-09 P1): the PWA is
+    same-origin and the native client sends no Origin header, so no foreign
+    origin gets a grant unless WELLNESS_CORS_ORIGINS allowlists it (see
+    test_client_guard.py for the allowlist path)."""
+
+    def test_no_cors_grant_for_foreign_origin(self, client):
         resp = client.get(
             "/api/modules",
             headers={"Origin": "http://example.com"}
         )
-        assert resp.headers.get("access-control-allow-origin") == "*"
+        assert "access-control-allow-origin" not in resp.headers
 
-    def test_cors_preflight_request(self, client):
-        """OPTIONS preflight requests should return CORS headers."""
+    def test_preflight_not_granted(self, client):
         resp = client.options(
             "/api/modules",
             headers={
@@ -167,8 +170,10 @@ class TestCORS:
                 "Access-Control-Request-Method": "GET",
             }
         )
-        assert resp.status_code == 200
-        assert "access-control-allow-origin" in resp.headers
+        # Without CORS middleware the preflight is just an unsupported
+        # method — and carries no grant either way.
+        assert "access-control-allow-origin" not in resp.headers
+        assert resp.status_code == 405
 
     def test_no_credentials_header(self, client):
         """Wildcard origins must not advertise credentials (an invalid combo)."""
