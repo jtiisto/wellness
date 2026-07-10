@@ -1,6 +1,20 @@
-import { marked } from 'marked';
+// Relative vendor path (not the bare 'marked' importmap alias) so node:test
+// can import this module and pin the raw-HTML escaping below.
+import { marked } from '../vendor/marked.js';
 
 marked.setOptions({ gfm: true, breaks: false });
+
+// Model-produced markdown is rendered with dangerouslySetInnerHTML
+// (ReportView), so RAW HTML in it must never pass through: a stored report
+// carrying an event handler would execute under the app origin on every
+// open (codex review 2026-07-09 P1). Escaping the html tokens (block AND
+// inline — both routes call renderer.html in marked's token API) keeps the
+// markdown features while neutering embedded HTML; no sanitizer dependency.
+function escapeHtml(s) {
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+marked.use({ renderer: { html({ text }) { return escapeHtml(text); } } });
 
 export function formatTimestamp(isoStr) {
     if (!isoStr) return '';

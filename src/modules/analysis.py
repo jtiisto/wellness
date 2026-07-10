@@ -222,6 +222,17 @@ def create_router(db_path: Path) -> APIRouter:
 
     @router.delete("/reports/{report_id}")
     def api_delete_report(report_id: int):
+        # An active report's subprocess is NOT cancellable here — deleting
+        # its row would orphan the paid CLI run and break the single-job
+        # invariant (the idle guard would see no active row and start a
+        # second one). Reject instead; the row becomes deletable once
+        # terminal (codex review 2026-07-09 P1).
+        report = get_report(db_path_str, report_id)
+        if report and report["status"] in ("pending", "running"):
+            raise HTTPException(
+                status_code=409,
+                detail="Report is still running — wait for it to finish "
+                       "(or time out) before deleting.")
         if not delete_report(db_path_str, report_id):
             raise HTTPException(status_code=404, detail="Report not found")
         return JSONResponse(content={"deleted": True})

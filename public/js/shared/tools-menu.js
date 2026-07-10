@@ -53,7 +53,9 @@ export function ToolsMenu({ isOpen, onClose }) {
 
             const parts = [];
             if (results.coach?.success) {
-                parts.push(`Coach: ${results.coach.uploaded} uploaded, ${results.coach.accepted} accepted`);
+                // Coach's server-arbitrated force sync (fe7ce75) reports only
+                // an uploaded count — there is no per-record accepted tally.
+                parts.push(`Coach: ${results.coach.uploaded} uploaded`);
             } else if (results.coach) {
                 parts.push(`Coach: failed`);
             }

@@ -166,6 +166,14 @@ function startPolling(reportId) {
             if (report.status === 'completed' || report.status === 'failed') {
                 stopPolling();
                 currentView.value = 'report';
+                // Cache the terminal report NOW — a report viewed only via
+                // this first display was never written to LocalForage and
+                // vanished offline until reopened through History (codex
+                // review 2026-07-09 P2). History refresh keeps its cached
+                // list in step.
+                await cache.setItem(CACHE_REPORT_PREFIX + reportId, report)
+                    .catch(() => {});
+                loadHistory().catch(() => {});
             }
         } catch (err) {
             // Ignore polling errors silently

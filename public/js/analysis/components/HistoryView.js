@@ -58,11 +58,13 @@ export function HistoryView() {
                         <div class="history-item-date">${formatTimestamp(r.created_at)}</div>
                     </div>
                     <span class="history-item-status ${r.status}">${r.status}</span>
-                    <button
-                        class="history-item-delete"
-                        onClick=${(e) => handleDelete(e, r.id)}
-                        aria-label="Delete report"
-                    >✕</button>
+                    ${!(r.status === 'pending' || r.status === 'running') && html`
+                        <button
+                            class="history-item-delete"
+                            onClick=${(e) => handleDelete(e, r.id)}
+                            aria-label="Delete report"
+                        >✕</button>
+                    `}
                 </div>
             `)}
         </div>

@@ -8,6 +8,24 @@
 const CACHE_VERSION = '$SERVER_VERSION$';
 const B = '$BASE_PATH$';
 
+// Cache Storage is ORIGIN-global, and this origin also hosts the Share app
+// (/share/). Names are therefore app-prefixed, and activation must never
+// touch a sibling's caches — the old delete-everything-but-mine cleanup
+// wiped Share's offline cache on every Wellness deploy (and vice versa;
+// codex review 2026-07-09 P2).
+const CACHE_NAME = `wellness-${CACHE_VERSION}`;
+const FOREIGN_PREFIXES = ['share-'];  // sibling apps' cache namespaces
+
+// Delete stale own-prefix caches AND legacy bare-version names from the
+// pre-prefix era; preserve anything in a known foreign namespace. (Until the
+// sibling's own prefixed SW deploys, its legacy bare-named cache is
+// indistinguishable from ours and gets cleaned once — it re-fills on the
+// next visit; after both apps are prefixed this never fires on live data.)
+function shouldDeleteCache(name) {
+  if (name === CACHE_NAME) return false;
+  return !FOREIGN_PREFIXES.some((p) => name.startsWith(p));
+}
+
 // App shell assets to precache on install. The server injects this list by
 // walking public/ at serve time (see _app_shell_urls in src/server.py), so every
 // JS module — newly added components and the vendored libs under js/vendor/
@@ -21,7 +39,7 @@ const APP_SHELL_URLS = $APP_SHELL_URLS$;
 // ---------------------------------------------------------------------------
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_VERSION)
+    caches.open(CACHE_NAME)
       .then((cache) => cache.addAll(APP_SHELL_URLS))
       .then(() => self.skipWaiting())
   );
@@ -31,13 +49,11 @@ self.addEventListener('install', (event) => {
 // Activate: clean up old caches that no longer match current versions
 // ---------------------------------------------------------------------------
 self.addEventListener('activate', (event) => {
-  const keepCaches = new Set([CACHE_VERSION]);
-
   event.waitUntil(
     caches.keys().then((cacheNames) =>
       Promise.all(
         cacheNames
-          .filter((name) => !keepCaches.has(name))
+          .filter(shouldDeleteCache)
           .map((name) => caches.delete(name))
       )
     ).then(() => self.clients.claim())
@@ -66,7 +82,7 @@ self.addEventListener('fetch', (event) => {
 // Strategy: network-first for app shell assets
 // ---------------------------------------------------------------------------
 async function networkFirstAppShell(request) {
-  const cache = await caches.open(CACHE_VERSION);
+  const cache = await caches.open(CACHE_NAME);
 
   try {
     const response = await fetch(request);

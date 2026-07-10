@@ -117,8 +117,9 @@ class TestApiListReports:
 # ==================== Delete report ====================
 
 class TestApiDeleteReport:
-    def test_delete_existing(self, client, analysis_initialized_db):
+    def test_delete_terminal_report(self, client, analysis_initialized_db):
         report_id = create_report(analysis_initialized_db, "test", "Test", "prompt")
+        update_report_completed(analysis_initialized_db, report_id, "# done")
         resp = client.delete(f"/api/analysis/reports/{report_id}")
         assert resp.status_code == 200
         assert resp.json()["deleted"] is True
@@ -129,9 +130,26 @@ class TestApiDeleteReport:
 
     def test_report_gone_after_delete(self, client, analysis_initialized_db):
         report_id = create_report(analysis_initialized_db, "test", "Test", "prompt")
+        update_report_failed(analysis_initialized_db, report_id, "boom")
         client.delete(f"/api/analysis/reports/{report_id}")
         resp = client.get(f"/api/analysis/reports/{report_id}")
         assert resp.status_code == 404
+
+    def test_delete_pending_report_409(self, client, analysis_initialized_db):
+        # An active report's subprocess can't be cancelled: deleting the row
+        # would orphan the paid CLI run and let the idle guard start a second
+        # one (codex review 2026-07-09 P1). The row must survive.
+        report_id = create_report(analysis_initialized_db, "test", "Test", "prompt")
+        resp = client.delete(f"/api/analysis/reports/{report_id}")
+        assert resp.status_code == 409
+        assert get_report(analysis_initialized_db, report_id) is not None
+
+    def test_delete_running_report_409(self, client, analysis_initialized_db):
+        report_id = create_report(analysis_initialized_db, "test", "Test", "prompt")
+        update_report_running(analysis_initialized_db, report_id)
+        resp = client.delete(f"/api/analysis/reports/{report_id}")
+        assert resp.status_code == 409
+        assert get_report(analysis_initialized_db, report_id)["status"] == "running"
 
 
 # ==================== Pending reports ====================
