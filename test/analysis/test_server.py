@@ -1,9 +1,37 @@
 """Tests for analysis API endpoints in the unified wellness app."""
+import asyncio
+import threading
+
 import pytest
 from modules.analysis_db import (
     create_report, update_report_running, update_report_completed,
     update_report_failed, get_report, list_reports, has_active_report
 )
+
+
+def _run_async(coro):
+    """Run a coroutine on a dedicated thread with its own event loop.
+
+    async-def tests in this suite survive only by collection order
+    (`analysis/` sorts before `e2e_browser/`) — once pytest-playwright has
+    run, pytest-asyncio's Runner dies with "cannot be called from a running
+    event loop" (2026-07-10 push-gate failure; the test_static_files._raw_get
+    pattern). A directory rename must not be able to break these tests.
+    """
+    result = {}
+
+    def _runner():
+        try:
+            result["value"] = asyncio.run(coro)
+        except BaseException as exc:  # surface the failure in the caller
+            result["exc"] = exc
+
+    thread = threading.Thread(target=_runner)
+    thread.start()
+    thread.join()
+    if "exc" in result:
+        raise result["exc"]
+    return result.get("value")
 
 
 # ==================== Query endpoints ====================
@@ -182,7 +210,7 @@ class TestRunReportLifecycle:
     failure (including marking it running) lands it in 'failed', so the
     single-active-report 409 guard cannot get stuck."""
 
-    async def test_failure_in_running_mark_lands_in_failed(
+    def test_failure_in_running_mark_lands_in_failed(
         self, analysis_initialized_db, monkeypatch, tmp_path
     ):
         import modules.analysis as analysis
@@ -194,27 +222,29 @@ class TestRunReportLifecycle:
             raise RuntimeError("db hiccup while marking running")
 
         monkeypatch.setattr(analysis, "update_report_running", _boom)
-        await analysis.run_report(report_id, "prompt", None, None,
-                                  analysis_initialized_db, tmp_path)
+        _run_async(analysis.run_report(report_id, "prompt", None, None,
+                                       analysis_initialized_db, tmp_path))
 
         report = get_report(analysis_initialized_db, report_id)
         assert report["status"] == "failed"
 
-    async def test_spawn_holds_strong_reference_until_done(self):
-        import asyncio
+    def test_spawn_holds_strong_reference_until_done(self):
         from modules import background
 
-        release = asyncio.Event()
+        async def scenario():
+            release = asyncio.Event()
 
-        async def work():
-            await release.wait()
+            async def work():
+                await release.wait()
 
-        task = background.spawn(work())
-        assert task in background._tasks  # strong ref held while running
-        release.set()
-        await task
-        await asyncio.sleep(0)  # let the done-callback run
-        assert task not in background._tasks  # discarded on completion
+            task = background.spawn(work())
+            assert task in background._tasks  # strong ref held while running
+            release.set()
+            await task
+            await asyncio.sleep(0)  # let the done-callback run
+            assert task not in background._tasks  # discarded on completion
+
+        _run_async(scenario())
 
 
 @pytest.mark.integration
