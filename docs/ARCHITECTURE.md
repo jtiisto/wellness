@@ -679,6 +679,43 @@ Custom queries appear in the Analysis UI alongside built-in queries. The server 
 - **E2E browser tests** (`test/e2e_browser/`) — Playwright tests that run against a real server with seeded databases, covering navigation, sync, offline behavior, and responsive layout
 - **JS unit tests** (`test/js/`) — `node:test` suites for the pure client sync-logic modules; run with `node --test test/js/*.test.js`
 
+### Personal-Data Guard (provenance, not voice)
+
+This repo is **public**, and the app reads several private databases
+(`~/.bodyspecy`, `~/.questy`, `~/.garmy`, plus `data/`). The failure mode is not
+someone writing a diary entry into the source — it is a **fixture built by
+pasting real rows**, which looks like ordinary test data. That happened
+(c18008e / 50e98c2: two real DEXA scans verbatim, real lab draw dates), and a
+voice-based review waved it through twice.
+
+`bin/scan_personal_data.py` therefore checks *provenance*: it reads the real
+databases at runtime, derives tokens too distinctive to be coincidence, and
+fails if any appear in the repo.
+
+| Class | Source | Rationale |
+|-------|--------|-----------|
+| Float ≥3 decimals | DEXA scans, Garmin daily metrics | A literal like `12.345678` cannot collide; matches both rounded **and truncated** spellings, since the real leak pasted a truncation |
+| Event date | DEXA scan dates, lab report dates | Small, strongly identifying sets |
+| Identity | Quest patient/specimen fields, tracker names | Direct identifiers |
+| Free text ≥24 chars | Coach notes, lab notes | Long verbatim strings don't collide |
+
+Contracts worth preserving:
+- **Findings never print the matched value** — hook output and CI logs are not
+  private. A finding carries class, source column, and a hash.
+- **The allowlist stores hashes, not values** (`bin/scan_personal_data.allow`) —
+  an allowlist of raw personal strings would be the leak itself. It is for
+  generic words that happen to be tracker names ("Migraine" is also a coach
+  feature), never for measured values.
+- **Absent databases degrade to a skip**, so a fresh clone or another machine
+  is not blocked; the gate test is then vacuous by design, not broken.
+- Deliberate gaps: values under 3 decimals (they collide with everything), the
+  445k-row `timeseries` table (skipped for speed), and re-worded text.
+
+Runs in two places: `githooks/pre-commit` scans the staged diff (~0.3s, first
+so it fails fast), and `test/test_personal_data_scan.py` re-scans **all** tracked
+files in the pre-push gate, so committed content is re-checked and not just
+whatever a diff touched. `--rev <sha>` scans any historical tree.
+
 Key testing patterns:
 - Each test gets isolated temporary databases via fixtures
 - `test_app` fixture creates a FastAPI app with temp DB paths

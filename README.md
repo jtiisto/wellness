@@ -64,6 +64,8 @@ wellness/
 │   ├── e2e_browser/        # Playwright E2E browser tests (pages/ objects)
 │   └── js/                 # node:test suites for client sync logic
 ├── bin/                    # Server control, deployment, and hook scripts
+│   ├── deploy.manifest     # Single source of truth for what ships to prod
+│   └── scan_personal_data.py  # Personal-data guard (this repo is public)
 ├── githooks/               # Shared git hooks (enable: git config core.hooksPath githooks)
 ├── data/                   # SQLite databases (runtime)
 └── requirements.txt

@@ -54,3 +54,7 @@ exclude-bin  quick-deploy.sh
 exclude-bin  git-commit-push.sh
 exclude-bin  backup-gitignored.sh
 exclude-bin  weight_trend_chart.py
+# Personal-data guard: a dev/commit-time check. Prod has no git and no need
+# for it, and its allowlist is repo metadata, not runtime config.
+exclude-bin  scan_personal_data.py
+exclude-bin  scan_personal_data.allow

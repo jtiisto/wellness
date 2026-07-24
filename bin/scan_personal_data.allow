@@ -1,0 +1,31 @@
+# Allowlist for bin/scan_personal_data.py — tokens judged safe to appear here.
+#
+# Entries are HASHES, never values: an allowlist of raw personal strings would
+# itself be the leak this guard exists to prevent. The scanner prints the hash
+# of every finding, so add the one it shows you, with a justification.
+#
+# Format: <16-hex hash>  # why this is safe
+#
+# What belongs here: generic English/product words that happen to also be a
+# tracker name. The word is not the personal data — the logged ENTRIES are, and
+# those live in gitignored data/.
+#
+# What does NOT belong here: measured values, dates of real events, branded or
+# distinctive product names, or anything you'd hesitate to say in public. If a
+# finding is real, change the content — do not silence it. Silencing a real
+# finding here is indistinguishable from the July 2026 leak that motivated the
+# whole guard.
+#
+# Justifications deliberately describe the token instead of quoting it. Spelled
+# out, this file would assemble a list of the owner's actual tracker names —
+# an inference the repo does not otherwise offer. To see what a hash refers to,
+# run the scanner: it reports the file and line, and the word is visible there.
+
+253d19b8d168c280  # common beverage/behaviour word — journal fixtures + registry category
+47320255aceb776a  # generic mineral supplement name — e2e journal fixture
+81c6df64b31c9af8  # generic symptom word — journal UI copy + JS fixtures
+89d3c95b7b2e4783  # generic vitamin name — e2e fixture + MCP docstring example
+c19df0c7bc510763  # generic mineral name — MCP docstring example
+d28d5dd75b88e3d9  # generic sports-supplement name — CSS comment
+dd8db322cac13ff8  # a shipped coach FEATURE name (protocol banner + toggle), not a log
+f833d11cef924479  # generic habit word — journal UI copy + sync fixtures

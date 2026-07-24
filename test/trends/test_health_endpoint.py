@@ -14,7 +14,8 @@ def _iso(d):
 def tmp_recovery_db(tmp_path, monkeypatch):
     """A minimal Garmin health DB with only the daily_health_metrics columns
     recovery_series reads, covering: full rows, per-field nulls, a band-less
-    day, and an out-of-range old row."""
+    day, and an out-of-range old row. Values are INVENTED — never paste rows
+    from the real ~/.garmy DB here; this repo is public."""
     db_path = tmp_path / "garmin_recovery.db"
     today = date.today()
     conn = sqlite3.connect(db_path)
@@ -33,7 +34,7 @@ def tmp_recovery_db(tmp_path, monkeypatch):
     rows = [
         # Full row.
         (_iso(today - timedelta(days=2)), 60, 30.0, 23.0, 25.0, 31.0,
-         8.233333333, 82),
+         7.616666667, 82),
         # HRV null (watch not worn), sleep present.
         (_iso(today - timedelta(days=1)), 61, None, 23.0, 25.0, 31.0, 5.75, 67),
         # Band columns null → hrv_band omitted, hrv value still emitted.
@@ -92,7 +93,7 @@ class TestRecoveryEndpoint:
         assert full["rhr"] == 60
         assert full["hrv"] == 30.0
         assert full["hrv_band"] == {"low": 25.0, "high": 31.0, "low_floor": 23.0}
-        assert full["sleep_hours"] == 8.23   # rounded to 2dp
+        assert full["sleep_hours"] == 7.62   # rounded to 2dp
         assert full["sleep_score"] == 82
 
         # Per-field nulls pass through — no imputation.

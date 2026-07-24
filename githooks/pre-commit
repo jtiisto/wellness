@@ -2,6 +2,12 @@
 # Pre-commit hook: run fast unit tests, then stamp version file
 set -e
 
+echo "Running personal-data scan..."
+# Provenance guard (~0.3s): fails if staged content was copied out of the real
+# personal databases. This repo is PUBLIC and history is not retractable, so
+# this runs FIRST — before the slow suites — to fail fast.
+python3 bin/scan_personal_data.py --staged
+
 echo "Running unit tests..."
 python3 -m pytest test/ -m "unit or not (integration or e2e)" --ignore=test/integration --cov=src --cov=mcp_servers --cov-report=term-missing 2>&1
 
