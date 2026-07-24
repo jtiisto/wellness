@@ -119,7 +119,8 @@ class TestRecoveryEndpoint:
 def tmp_bodyspec_db(tmp_path):
     """A minimal BodySpec DB: three scans (one future-dated for end-clipping),
     whole-body + regional bone rows (only 'total' must surface), and one scan
-    with no bone rows at all."""
+    with no bone rows at all. Values are INVENTED — never paste rows from the
+    real ~/.bodyspecy DB here; this repo is public."""
     db_path = tmp_path / "bodyspec_fixture.db"
     conn = sqlite3.connect(db_path)
     conn.execute("""
@@ -135,14 +136,16 @@ def tmp_bodyspec_db(tmp_path):
         )
     """)
     conn.executemany("INSERT INTO scans VALUES (?,?,?,?,?,?,?)", [
-        ("2026-01-23", 57.424794, 27.079464, 87.634046, 30.9, 1.678292, 1.31),
-        ("2026-04-24", 60.781378, 21.500278, 85.411443, 25.2, 1.165732, 1.33),
+        # Full float precision: the reader rounds (2dp mass, 1dp pct/t-score,
+        # 3dp BMD), so the fixture must arrive unrounded to prove it.
+        ("2026-02-10", 55.123456, 25.987654, 81.111110, 32.44, 1.454321, 1.216),
+        ("2026-05-18", 58.246802, 22.135791, 80.382593, 27.53, 1.098765, 1.191),
         ("2099-01-01", 60.0, 20.0, 83.0, 24.0, 1.0, 1.30),  # future: clipped
     ])
     conn.executemany("INSERT INTO scan_bone_density VALUES (?,?,?,?)", [
-        ("2026-01-23", "spine", 1.10, 0.5),
-        ("2026-01-23", "total", 1.234567, 1.24),
-        # 2026-04-24 has no bone rows → nulls, not a dropped scan.
+        ("2026-02-10", "spine", 1.10, 0.5),
+        ("2026-02-10", "total", 1.234567, 1.24),
+        # 2026-05-18 has no bone rows → nulls, not a dropped scan.
     ])
     conn.commit()
     conn.close()
@@ -178,19 +181,19 @@ class TestCompositionEndpoint:
 
         assert data["available"] is True
         dates = [s["date"] for s in data["scans"]]
-        assert dates == ["2026-01-23", "2026-04-24"]   # future scan clipped
+        assert dates == ["2026-02-10", "2026-05-18"]   # future scan clipped
 
-        jan = data["scans"][0]
-        assert jan["lean_kg"] == 57.42
-        assert jan["body_fat_pct"] == 30.9
-        assert jan["vat_kg"] == 1.68
+        first = data["scans"][0]
+        assert first["lean_kg"] == 55.12
+        assert first["body_fat_pct"] == 32.4
+        assert first["vat_kg"] == 1.45
         # Bone: the whole-body row only — regional rows must not multiply scans.
-        assert jan["bmd_total"] == 1.235
-        assert jan["t_score_total"] == 1.2
+        assert first["bmd_total"] == 1.235
+        assert first["t_score_total"] == 1.2
 
-        apr = data["scans"][1]
-        assert apr["bmd_total"] is None    # no bone rows → nulls, scan kept
-        assert apr["ag_ratio"] == 1.33
+        second = data["scans"][1]
+        assert second["bmd_total"] is None    # no bone rows → nulls, scan kept
+        assert second["ag_ratio"] == 1.19
 
     def test_calendar_invalid_end_422(self, tmp_bodyspec_db, client, monkeypatch):
         with _bodyspec_client(tmp_bodyspec_db, monkeypatch) as c:
@@ -203,7 +206,9 @@ class TestCompositionEndpoint:
 def tmp_questy_db(tmp_path):
     """A minimal Quest labs DB: a 3-observation chartable test (one lab-flagged
     H, one-sided range), a single-observation test, a qualitative (value NULL)
-    result, a '<' detection-limit prefix, and a future report for end-clipping."""
+    result, a '<' detection-limit prefix, and a future report for end-clipping.
+    Dates and values are INVENTED — never paste rows (or draw dates) from the
+    real ~/.questy DB here; this repo is public."""
     db_path = tmp_path / "questy_fixture.db"
     conn = sqlite3.connect(db_path)
     conn.execute("""
@@ -216,17 +221,17 @@ def tmp_questy_db(tmp_path):
     """)
     conn.executemany(
         "INSERT INTO results VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", [
-            ("2025-04-18", "LIPID PANEL", "LDL-CHOLESTEROL", 152.0, "152 H",
+            ("2025-06-12", "LIPID PANEL", "LDL-CHOLESTEROL", 138.0, "138 H",
              None, "mg/dL", "H", 0, None, 100.0, "<100"),
-            ("2025-11-14", "LIPID PANEL", "LDL-CHOLESTEROL", 120.0, "120 H",
+            ("2025-12-03", "LIPID PANEL", "LDL-CHOLESTEROL", 118.0, "118 H",
              None, "mg/dL", "H", 0, None, 100.0, "<100"),
-            ("2026-03-27", "LIPID PANEL", "LDL-CHOLESTEROL", 95.0, "95",
+            ("2026-02-19", "LIPID PANEL", "LDL-CHOLESTEROL", 96.0, "96",
              None, "mg/dL", None, 0, None, 100.0, "<100"),
-            ("2026-03-27", "LIPID PANEL", "HDL CHOLESTEROL", 54.0, "54",
+            ("2026-02-19", "LIPID PANEL", "HDL CHOLESTEROL", 58.0, "58",
              None, "mg/dL", None, 0, 40.0, None, "> OR = 40"),
-            ("2026-03-27", "HS CRP", "HS CRP", 0.5, "<0.5",
+            ("2026-02-19", "HS CRP", "HS CRP", 0.3, "<0.3",
              "<", "mg/L", None, 0, None, 1.0, "<1.0"),
-            ("2026-03-27", "CULTURE", "GROWTH", None, "NOT DETECTED",
+            ("2026-02-19", "CULTURE", "GROWTH", None, "NOT DETECTED",
              None, None, None, 0, None, None, "NOT DETECTED"),
             ("2099-01-01", "LIPID PANEL", "LDL-CHOLESTEROL", 90.0, "90",
              None, "mg/dL", None, 0, None, 100.0, "<100"),  # future: clipped
@@ -270,14 +275,14 @@ class TestLabsEndpoint:
         ldl = lipid["LDL-CHOLESTEROL"]
         assert ldl["unit"] == "mg/dL"
         dates = [o["date"] for o in ldl["observations"]]
-        assert dates == ["2025-04-18", "2025-11-14", "2026-03-27"]  # future clipped
+        assert dates == ["2025-06-12", "2025-12-03", "2026-02-19"]  # future clipped
         assert ldl["observations"][0]["flag"] == "H"       # the LAB's call
         assert ldl["observations"][0]["ref_high"] == 100.0
         assert ldl["observations"][0]["ref_low"] is None   # one-sided range
 
         # Detection-limit prefix ships alongside the numeric value.
         crp = panels["HS CRP"]["tests"][0]["observations"][0]
-        assert crp["value"] == 0.5 and crp["prefix"] == "<"
+        assert crp["value"] == 0.3 and crp["prefix"] == "<"
 
         # Qualitative result: value null, text carries the answer.
         growth = panels["CULTURE"]["tests"][0]["observations"][0]
