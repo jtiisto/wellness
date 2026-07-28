@@ -1,6 +1,8 @@
 // Unit tests for the pure "previous performance" lookup (coach/last-performance.js).
 // Matching is by canonical_slug across ANY past workout, returning the most
-// recent prior session that was actually logged with set data.
+// recent prior session that was actually logged with set data. An optional
+// exposure narrows the chain to one recurring exposure of that movement, read
+// from each date's historical plan.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
@@ -9,8 +11,11 @@ import {
     formatShortDate,
 } from '../../public/js/coach/last-performance.js';
 
-// Helpers to build plan/log fixtures keyed by date.
-const planWith = (exId, slug) => ({ blocks: [{ exercises: [{ id: exId, canonical_slug: slug }] }] });
+// Helpers to build plan/log fixtures keyed by date. `exposure` is omitted from
+// the exercise entirely when not given — the wire shape for the common case.
+const planWith = (exId, slug, exposure) => ({
+    blocks: [{ exercises: [{ id: exId, canonical_slug: slug, ...(exposure ? { exposure } : {}) }] }],
+});
 const logWith = (exId, sets) => ({ [exId]: { sets } });
 
 test('setHasData: true only when a real metric is present', () => {
@@ -102,6 +107,99 @@ test('slug present in plan but no log at all -> skipped', () => {
     const plans = { '2026-06-01': planWith('ex_1', 'squat') };
     const r = findLastPerformance('squat', '2026-06-07', plans, {});
     assert.equal(r, null);
+});
+
+// ---- exposure-aware lookup -------------------------------------------------
+
+test('no exposure requested -> most recent match regardless of exposures', () => {
+    const plans = {
+        '2026-06-02': planWith('ex_1', 'squat', 'HEAVY'),
+        '2026-06-05': planWith('ex_2', 'squat', 'LIGHT'),
+    };
+    const logs = {
+        '2026-06-02': logWith('ex_1', [{ set_num: 1, weight: 92.5, reps: 4 }]),
+        '2026-06-05': logWith('ex_2', [{ set_num: 1, weight: 61, reps: 10 }]),
+    };
+    const r = findLastPerformance('squat', '2026-06-09', plans, logs);
+    assert.equal(r.date, '2026-06-05');
+    assert.equal(r.sets[0].weight, 61);
+});
+
+test('same-exposure match wins over a NEWER other-exposure one', () => {
+    const plans = {
+        '2026-06-02': planWith('ex_1', 'squat', 'HEAVY'),
+        '2026-06-05': planWith('ex_2', 'squat', 'LIGHT'),  // newer, wrong exposure
+    };
+    const logs = {
+        '2026-06-02': logWith('ex_1', [{ set_num: 1, weight: 92.5, reps: 4 }]),
+        '2026-06-05': logWith('ex_2', [{ set_num: 1, weight: 61, reps: 10 }]),
+    };
+    const r = findLastPerformance('squat', '2026-06-09', plans, logs, 'HEAVY');
+    assert.equal(r.date, '2026-06-02');
+    assert.equal(r.sets[0].weight, 92.5);
+});
+
+test('older same-exposure sessions -> the most recent of that chain', () => {
+    const plans = {
+        '2026-05-19': planWith('ex_1', 'squat', 'HEAVY'),
+        '2026-05-26': planWith('ex_2', 'squat', 'HEAVY'),
+        '2026-06-05': planWith('ex_3', 'squat', 'LIGHT'),
+    };
+    const logs = {
+        '2026-05-19': logWith('ex_1', [{ set_num: 1, weight: 85, reps: 5 }]),
+        '2026-05-26': logWith('ex_2', [{ set_num: 1, weight: 87.5, reps: 5 }]),
+        '2026-06-05': logWith('ex_3', [{ set_num: 1, weight: 61, reps: 10 }]),
+    };
+    const r = findLastPerformance('squat', '2026-06-09', plans, logs, 'HEAVY');
+    assert.equal(r.date, '2026-05-26');
+});
+
+test('no same-exposure history -> falls back to the newest any-exposure match', () => {
+    // First cycle of a new exposure key: only the LIGHT chain exists.
+    const plans = {
+        '2026-05-29': planWith('ex_1', 'squat', 'LIGHT'),
+        '2026-06-05': planWith('ex_2', 'squat', 'LIGHT'),
+    };
+    const logs = {
+        '2026-05-29': logWith('ex_1', [{ set_num: 1, weight: 57.5, reps: 12 }]),
+        '2026-06-05': logWith('ex_2', [{ set_num: 1, weight: 61, reps: 10 }]),
+    };
+    const r = findLastPerformance('squat', '2026-06-09', plans, logs, 'HEAVY');
+    assert.equal(r.date, '2026-06-05');
+    assert.equal(r.sets[0].weight, 61);
+});
+
+test('a plan exercise with NO exposure never matches a requested one (but is fallback-eligible)', () => {
+    // Pre-epoch history carries no exposure at all.
+    const plans = { '2026-06-05': planWith('ex_1', 'squat') };
+    const logs = { '2026-06-05': logWith('ex_1', [{ set_num: 1, weight: 80, reps: 6 }]) };
+    const r = findLastPerformance('squat', '2026-06-09', plans, logs, 'HEAVY');
+    assert.equal(r.date, '2026-06-05');   // fallback, not a match
+
+    // With a real HEAVY session present, the fallback loses to it even when older.
+    plans['2026-05-22'] = planWith('ex_0', 'squat', 'HEAVY');
+    logs['2026-05-22'] = logWith('ex_0', [{ set_num: 1, weight: 90, reps: 5 }]);
+    const r2 = findLastPerformance('squat', '2026-06-09', plans, logs, 'HEAVY');
+    assert.equal(r2.date, '2026-05-22');
+});
+
+test('an unlogged same-exposure session is skipped, not counted as the match', () => {
+    const plans = {
+        '2026-05-22': planWith('ex_1', 'squat', 'HEAVY'),
+        '2026-06-01': planWith('ex_2', 'squat', 'HEAVY'),  // planned, empty sets
+        '2026-06-05': planWith('ex_3', 'squat', 'LIGHT'),
+    };
+    const logs = {
+        '2026-05-22': logWith('ex_1', [{ set_num: 1, weight: 90, reps: 5 }]),
+        '2026-06-01': logWith('ex_2', [{ set_num: 1 }, { set_num: 2 }]),
+        '2026-06-05': logWith('ex_3', [{ set_num: 1, weight: 61, reps: 10 }]),
+    };
+    const r = findLastPerformance('squat', '2026-06-09', plans, logs, 'HEAVY');
+    assert.equal(r.date, '2026-05-22');
+});
+
+test('exposure requested but no history at all -> null', () => {
+    assert.equal(findLastPerformance('squat', '2026-06-09', {}, {}, 'HEAVY'), null);
 });
 
 test('formatShortDate: YYYY-MM-DD -> "Mon D" without TZ shift', () => {

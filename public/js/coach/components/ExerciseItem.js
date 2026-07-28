@@ -62,11 +62,13 @@ export function ExerciseItem({ date, exercise, logData, block, isEditable = true
     };
 
     const renderInputs = () => {
-        // Previous time this exact exercise (by slug) was performed — surfaced as
-        // faint placeholders + a date hint in the set grid. Computed lazily (only
-        // when expanded, since renderInputs only runs then).
+        // Previous time this exact exercise (by slug, and by exposure when the
+        // plan gives one) was performed — surfaced as faint placeholders + a date
+        // hint in the set grid. Computed lazily (only when expanded, since
+        // renderInputs only runs then).
         const lastPerformance = exercise.canonical_slug
-            ? findLastPerformance(exercise.canonical_slug, date, workoutPlans.value, workoutLogs.value)
+            ? findLastPerformance(exercise.canonical_slug, date, workoutPlans.value, workoutLogs.value,
+                                  exercise.exposure ?? null)
             : null;
         switch (exercise.type) {
             case 'checklist':
@@ -144,6 +146,9 @@ export function ExerciseItem({ date, exercise, logData, block, isEditable = true
                 ${parsed.pills.map(p => html`
                     <span class="exercise-pill">${p}</span>
                 `)}
+                ${exercise.exposure && html`
+                    <span class="exercise-pill exercise-pill--exposure">${exercise.exposure}</span>
+                `}
                 <span class="exercise-target">${target}</span>
                 ${progress && html`
                     <span

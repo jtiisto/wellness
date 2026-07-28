@@ -1910,6 +1910,20 @@ textarea:focus-visible,
     white-space: nowrap;
 }
 
+/* Exposure key (HEAVY / LIGHT / …) — an identity label for one recurring
+   exposure of a movement, not part of its name, so it takes the module accent
+   to read apart from the neutral paren pills next to it. Absent on most
+   exercises; nothing renders then. */
+.coach .exercise-pill--exposure {
+    color: var(--app-accent);
+    background-color: var(--app-accent-soft);
+    border-color: color-mix(in srgb, var(--app-accent) 45%, transparent);
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
 .coach .exercise-target {
     color: var(--text-secondary);
     font-size: var(--font-size-sm);
