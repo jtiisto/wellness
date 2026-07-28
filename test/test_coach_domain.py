@@ -232,6 +232,125 @@ def test_store_plan_round_trips_intensity_fields(test_app, tmp_coach_db):
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize("raw,expected", [
+    ("HEAVY", "HEAVY"),                    # already canonical → unchanged
+    ("  heavy  ", "HEAVY"),                # trimmed + case-folded UP
+    ("light   day", "LIGHT DAY"),          # internal whitespace collapsed
+    ("Technique\tWork", "TECHNIQUE WORK"),  # tabs/newlines are whitespace too
+    (None, None),                          # absence stays absence
+    ("", None),                            # empty means "no exposure"
+    ("   ", None),                         # whitespace-only likewise
+    ("E" * 32, "E" * 32),                  # exactly at the cap is accepted
+])
+def test_normalize_exposure(raw, expected):
+    """The single normalization authority: `"  heavy "` and `"HEAVY"` must be the
+    same identity key on every write path, and blank input must read as absent."""
+    from modules.coach_plans import normalize_exposure
+
+    assert normalize_exposure(raw) == expected
+
+
+@pytest.mark.unit
+def test_normalize_exposure_rejects_bad_values():
+    """Non-strings and over-length keys raise. Over-length is REJECTED, never
+    truncated — truncating would silently merge two distinct exposure keys."""
+    from modules.coach_plans import EXPOSURE_MAX_LENGTH, normalize_exposure
+
+    with pytest.raises(ValueError, match="must be a string"):
+        normalize_exposure(3)
+    with pytest.raises(ValueError, match="must be a string"):
+        normalize_exposure(["HEAVY"])
+    with pytest.raises(ValueError, match="maximum"):
+        normalize_exposure("E" * (EXPOSURE_MAX_LENGTH + 1))
+
+
+@pytest.mark.unit
+def test_store_plan_round_trips_exposure_on_a_subset(test_app, tmp_coach_db):
+    """Acceptance sketch: a plan with exposures on 3 of 8 exercises reads back
+    with the (normalized) key on exactly those 3 — the other 5 omit it entirely,
+    because absence is meaningful and must stay cheap."""
+    exposures = {"ex_2": " heavy ", "ex_5": "light", "ex_7": "Technique  Work"}
+    plan = {
+        "day_name": "Full Body", "total_duration_min": 55,
+        "blocks": [{
+            "block_type": "strength", "title": "Main",
+            "exercises": [
+                dict(
+                    {"id": f"ex_{n}", "name": f"Movement {n}", "type": "strength",
+                     "target_sets": 3, "target_reps": "8"},
+                    **({"exposure": exposures[f"ex_{n}"]} if f"ex_{n}" in exposures else {}),
+                )
+                for n in range(1, 9)
+            ],
+        }],
+    }
+    conn = sqlite3.connect(tmp_coach_db)
+    conn.row_factory = sqlite3.Row
+    sid = store_plan(conn.cursor(), "2026-06-04", plan, modified_by="test")
+    conn.commit()
+    row = conn.execute("SELECT * FROM workout_sessions WHERE id=?", (sid,)).fetchone()
+    got = assemble_plan(conn.cursor(), row)
+    conn.close()
+
+    exs = {e["id"]: e for e in got["blocks"][0]["exercises"]}
+    assert len(exs) == 8
+    assert {k: v["exposure"] for k, v in exs.items() if "exposure" in v} == {
+        "ex_2": "HEAVY", "ex_5": "LIGHT", "ex_7": "TECHNIQUE WORK",
+    }
+
+
+@pytest.mark.unit
+def test_store_plan_rejects_invalid_exposure(test_app, tmp_coach_db):
+    """validate_plan runs inside store_plan, so a bad exposure is rejected with
+    the exercise index before any row is written."""
+    from modules.coach_plans import EXPOSURE_MAX_LENGTH
+
+    plan = {
+        "day_name": "Legs", "total_duration_min": 40,
+        "blocks": [{
+            "block_type": "strength", "title": "Main",
+            "exercises": [
+                {"id": "sq", "name": "Squat", "type": "strength"},
+                {"id": "dl", "name": "Deadlift", "type": "strength",
+                 "exposure": "E" * (EXPOSURE_MAX_LENGTH + 1)},
+            ],
+        }],
+    }
+    conn = sqlite3.connect(tmp_coach_db)
+    conn.row_factory = sqlite3.Row
+    with pytest.raises(ValueError, match="Exercise 1"):
+        store_plan(conn.cursor(), "2026-06-05", plan, modified_by="test")
+    conn.rollback()
+    written = conn.execute(
+        "SELECT COUNT(*) FROM workout_sessions WHERE date='2026-06-05'"
+    ).fetchone()[0]
+    conn.close()
+    assert written == 0
+
+
+@pytest.mark.unit
+def test_transform_passes_exposure_through():
+    """`exposure` is a canonical plan-JSON key, not a raw alias: the raw->formed
+    transform copies it verbatim (normalization is insert_block's job) and never
+    pops it, and an exercise without one gains nothing."""
+    from modules.coach_plans import transform_block_plan
+
+    raw = {
+        "theme": "Lower", "blocks": [{
+            "block_type": "strength", "title": "Main",
+            "exercises": [
+                {"name": "Back Squat", "sets": 3, "reps": "5", "exposure": "heavy"},
+                {"name": "Split Squat", "sets": 3, "reps": "8"},
+            ],
+        }],
+    }
+    exs = transform_block_plan(raw)["blocks"][0]["exercises"]
+
+    assert exs[0]["exposure"] == "heavy"
+    assert "exposure" not in exs[1]
+
+
+@pytest.mark.unit
 def test_log_lean_vs_rich_shapes(coach_seeded_database, tmp_coach_db):
     """§3.15 for logs: both transports share the raw per-exercise core, but the
     sync path stays LEAN (no derived completion/stats — the PWA derives it) while
@@ -263,6 +382,55 @@ def test_log_lean_vs_rich_shapes(coach_seeded_database, tmp_coach_db):
     # The shared raw core is identical across transports.
     assert lean["ex_1"].get("sets") == rich["ex_1"].get("sets")
     assert lean["session_feedback"] == rich["session_feedback"]
+
+
+@pytest.mark.unit
+def test_log_exposure_is_rich_shape_only(test_app, tmp_coach_db):
+    """The exposure frozen on a log row is emitted by the RICH (MCP) shape only.
+    The lean sync shape stays wire-invariant for the PWA, which reads exposure
+    off the plan object — so the sync payload must not grow the key."""
+    from modules.coach_logs import assemble_log
+
+    conn = sqlite3.connect(tmp_coach_db)
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO workout_sessions (date, day_name, last_modified, modified_by) "
+        "VALUES ('2026-06-06', 'Lower', '2026-06-06T00:00:00Z', 'test')"
+    )
+    sid = cur.lastrowid
+    cur.execute(
+        "INSERT INTO session_blocks (session_id, position, block_type, title) "
+        "VALUES (?, 0, 'strength', 'Main')", (sid,)
+    )
+    bid = cur.lastrowid
+    cur.execute(
+        "INSERT INTO planned_exercises (session_id, block_id, exercise_key, position, "
+        "name, exercise_type, target_sets, exposure) "
+        "VALUES (?, ?, 'squat', 0, 'Back Squat', 'strength', 3, 'HEAVY')", (sid, bid)
+    )
+    peid = cur.lastrowid
+    cur.execute(
+        "INSERT INTO workout_session_logs (session_id, date, last_modified, modified_by) "
+        "VALUES (?, '2026-06-06', '2026-06-06T12:00:00Z', 'test')", (sid,)
+    )
+    slid = cur.lastrowid
+    cur.execute(
+        "INSERT INTO exercise_logs (session_log_id, exercise_id, exercise_key, "
+        "exposure, last_modified) VALUES (?, ?, 'squat', 'HEAVY', '2026-06-06T12:00:00Z')",
+        (slid, peid),
+    )
+    conn.commit()
+
+    log_row = conn.execute(
+        "SELECT * FROM workout_session_logs WHERE id=?", (slid,)
+    ).fetchone()
+    lean = assemble_log(conn.cursor(), log_row)
+    rich = assemble_log(conn.cursor(), log_row, session_id=sid, derive_completion=True)
+    conn.close()
+
+    assert rich["squat"]["exposure"] == "HEAVY"
+    assert "exposure" not in lean["squat"]
 
 
 @pytest.mark.unit

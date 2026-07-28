@@ -95,6 +95,24 @@ def test_planned_exercises_has_prescription_fields(test_app, tmp_coach_db):
 
 
 @pytest.mark.unit
+def test_exposure_columns_created(test_app, tmp_coach_db):
+    """The `exposure` identity key exists on the planned exercise, its log, and
+    the log archive (migration 7). The archive is included so it stays lossless."""
+    conn = sqlite3.connect(tmp_coach_db)
+    cursor = conn.cursor()
+
+    columns = {}
+    for table in ("planned_exercises", "exercise_logs", "exercise_logs_archive"):
+        cursor.execute(f"PRAGMA table_info({table})")
+        columns[table] = {row[1]: row[2] for row in cursor.fetchall()}
+
+    conn.close()
+
+    for table, cols in columns.items():
+        assert cols.get("exposure") == "TEXT", f"{table} is missing exposure"
+
+
+@pytest.mark.unit
 def test_canonical_slug_columns_in_create_table(test_app, tmp_coach_db):
     """canonical_slug exists on both tables from CREATE TABLE (no ALTER needed)."""
     conn = sqlite3.connect(tmp_coach_db)
@@ -249,6 +267,42 @@ def test_fresh_db_has_deleted_exercise_logs(test_app, tmp_coach_db):
     tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     conn.close()
     assert "deleted_exercise_logs" in tables
+
+
+@pytest.mark.unit
+def test_migration_7_adds_exposure_on_upgrade(tmp_path):
+    """A DB stamped at v6 (pre-exposure) gains `exposure` on all three tables at
+    the next init — guarded migration 7 is the only place they're added (baseline
+    CREATE untouched, mirroring migrations 2-5). Re-running init is a no-op, so
+    an already-migrated production DB is never re-ALTERed."""
+    import modules.coach as coach_mod
+    from modules.db import enable_wal, run_migrations
+
+    db_path = tmp_path / "coach.db"
+    tables = ("planned_exercises", "exercise_logs", "exercise_logs_archive")
+
+    # Build the schema only through migration 6 — the column must be absent.
+    conn = sqlite3.connect(db_path)
+    enable_wal(conn)
+    run_migrations(conn, coach_mod.MIGRATIONS[:6], label="coach test")
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 6
+    for table in tables:
+        cols_before = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+        assert "exposure" not in cols_before, table
+    conn.close()
+
+    # Re-init runs the full registry → migration 7 adds the column everywhere.
+    # A second init exercises the column_exists guard (idempotent).
+    coach_mod.init_database(DbAccessor(db_path, foreign_keys=True))
+    coach_mod.init_database(DbAccessor(db_path, foreign_keys=True))
+
+    conn = sqlite3.connect(db_path)
+    ver = conn.execute("PRAGMA user_version").fetchone()[0]
+    for table in tables:
+        cols_after = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+        assert "exposure" in cols_after, table
+    conn.close()
+    assert ver == len(coach_mod.MIGRATIONS)
 
 
 @pytest.mark.unit

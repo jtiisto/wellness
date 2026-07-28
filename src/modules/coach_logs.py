@@ -177,6 +177,12 @@ def assemble_log(cursor, log_row, *, session_id=None, derive_completion=False):
             entry["completed_items"] = [r["item_text"] for r in items]
 
         if derive_completion:
+            if el["exposure"]:
+                # The exposure frozen onto this row at logging time — the key
+                # history is partitioned by. Rich shape only; the lean sync
+                # shape stays wire-invariant for the PWA, which reads exposure
+                # off the plan object instead.
+                entry["exposure"] = el["exposure"]
             completion = derive_exercise_completion(
                 el["pe_exercise_type"],
                 sets=sets,

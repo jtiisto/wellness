@@ -362,6 +362,26 @@ def _migration_6_deleted_exercise_logs(cursor):
     _create_deleted_exercise_logs(cursor)
 
 
+def _migration_7_exposure(cursor):
+    """Add the optional `exposure` identity key (free-form short text, e.g.
+    "HEAVY" / "LIGHT") to planned exercises, their logs, and the log archive
+    (which stays lossless).
+
+    It labels WHICH recurring exposure of a movement a row is — several
+    exposures of one movement deliberately share a canonical_slug, so history
+    could previously only be partitioned by parsing the session day_name, which
+    a mid-plan rename silently breaks. The server attaches no semantics to the
+    value; consumers key their own config on (canonical_slug, exposure).
+
+    Guarded; existing rows backfill to NULL, which means "the slug's single /
+    default exposure". Deliberately no value backfill: log rows written before
+    this ships carry no exposure at all (the data epoch — see the plan guide).
+    """
+    for table in ("planned_exercises", "exercise_logs", "exercise_logs_archive"):
+        if not column_exists(cursor, table, "exposure"):
+            cursor.execute(f"ALTER TABLE {table} ADD COLUMN exposure TEXT")
+
+
 MIGRATIONS = [
     (1, _migration_1_baseline),
     (2, _migration_2_block_interval_cols),
@@ -369,6 +389,7 @@ MIGRATIONS = [
     (4, _migration_4_planned_exercise_tempo),
     (5, _migration_5_prescription_fields),
     (6, _migration_6_deleted_exercise_logs),
+    (7, _migration_7_exposure),
 ]
 
 
@@ -481,11 +502,11 @@ def _archive_existing_log(cursor, date_str, superseded_by, now):
         cursor.execute("""
             INSERT INTO exercise_logs_archive
             (original_id, session_log_id, exercise_key, user_note,
-             duration_min, avg_hr, max_hr, canonical_slug)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             duration_min, avg_hr, max_hr, canonical_slug, exposure)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (ex["id"], ex["session_log_id"], ex["exercise_key"],
               ex["user_note"], ex["duration_min"], ex["avg_hr"], ex["max_hr"],
-              ex["canonical_slug"]))
+              ex["canonical_slug"], ex["exposure"]))
 
         sets = cursor.execute(
             "SELECT * FROM set_logs WHERE exercise_log_id = ?", (ex["id"],)
@@ -634,34 +655,43 @@ def _store_log(conn, date_str, log_data, client_id, now):
 
         exercise_id = None
         canonical_slug = None
+        exposure = None
         if session_id:
             pe = cursor.execute(
-                "SELECT id, canonical_slug FROM planned_exercises "
+                "SELECT id, canonical_slug, exposure FROM planned_exercises "
                 "WHERE session_id = ? AND exercise_key = ?",
                 (session_id, exercise_key),
             ).fetchone()
             if pe:
                 exercise_id = pe["id"]
                 canonical_slug = pe["canonical_slug"]
+                exposure = pe["exposure"]
         if exercise_id is None:
-            # Off-plan entry: no planned_exercises row to take the slug from.
+            # Off-plan entry: no planned_exercises row to take the slug from
+            # (and no exposure either — it stays NULL).
             canonical_slug = _adhoc_canonical_slug(cursor, exercise_key, now)
 
         if existing_ex is None:
             cursor.execute("""
                 INSERT INTO exercise_logs
                 (session_log_id, exercise_id, exercise_key, user_note,
-                 duration_min, avg_hr, max_hr, canonical_slug, last_modified)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 duration_min, avg_hr, max_hr, canonical_slug, exposure, last_modified)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 session_log_id, exercise_id, exercise_key,
                 exercise_data.get("user_note"), exercise_data.get("duration_min"),
                 exercise_data.get("avg_hr"), exercise_data.get("max_hr"),
-                canonical_slug, now,
+                canonical_slug, exposure, now,
             ))
             exercise_log_id = cursor.lastrowid
         else:
             exercise_log_id = existing_ex["id"]
+            # `exposure` is deliberately absent from this UPDATE — asymmetric
+            # with canonical_slug, which re-resolves from the plan on every
+            # write. Exposure is FROZEN at the row's first insert ("logging
+            # time"): re-resolving it would let a later plan edit leak into an
+            # already-logged row the next time the user edits that log, which is
+            # exactly the history-repartitioning day_name could never prevent.
             cursor.execute("""
                 UPDATE exercise_logs
                 SET exercise_id = ?, user_note = ?, duration_min = ?, avg_hr = ?,

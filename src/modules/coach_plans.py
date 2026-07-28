@@ -18,6 +18,42 @@ VALID_EXERCISE_TYPES = ["strength", "duration", "checklist", "weighted_time", "i
 # leaking into canonical_slug.
 LEGACY_PAIR_SUFFIX_RE = re.compile(r"\((?:Pair|Superset|Triplet)\b[^)]*\)", re.IGNORECASE)
 
+# Longest accepted `exposure` key after normalization. It is a short identity
+# label (joined to consumer-side config), never prose, so anything longer is a
+# misuse — rejected rather than truncated, since truncation would silently
+# collapse two distinct keys into one.
+EXPOSURE_MAX_LENGTH = 32
+
+
+def normalize_exposure(value):
+    """Canonicalize an `exposure` identity key, or None when there isn't one.
+
+    The single normalization authority for the field: plan ingest
+    (`insert_block`), the MCP editors (`add_exercise` / `update_exercise`) and
+    the `get_exercise_history` filter all go through it, so `"  heavy  "` and
+    `"HEAVY"` are the same key on every path. Collapses surrounding and internal
+    whitespace and upper-cases; an empty (or whitespace-only) value means "no
+    exposure" and yields None — absence is meaningful and must stay cheap.
+
+    Raises ValueError for a non-string, or for a value still longer than
+    EXPOSURE_MAX_LENGTH after normalization.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(
+            f"exposure must be a string, got {type(value).__name__}"
+        )
+    normalized = " ".join(value.split()).upper()
+    if not normalized:
+        return None
+    if len(normalized) > EXPOSURE_MAX_LENGTH:
+        raise ValueError(
+            f"exposure '{normalized}' is {len(normalized)} characters; "
+            f"the maximum is {EXPOSURE_MAX_LENGTH}"
+        )
+    return normalized
+
 
 def reject_legacy_pair_suffix(name, context=""):
     """Raise ValueError if name still uses the deprecated `(Pair X)` suffix."""
@@ -77,6 +113,15 @@ def validate_plan(plan):
                     f"Must be one of: {VALID_EXERCISE_TYPES}"
                 )
             reject_legacy_pair_suffix(exercise["name"], f"Exercise {i}")
+            if "exposure" in exercise:
+                # normalize_exposure owns the type + length rules; validating
+                # here (rather than only at insert time) means every write path
+                # inherits them through store_plan, and a bad key is rejected
+                # before any row is written.
+                try:
+                    normalize_exposure(exercise["exposure"])
+                except ValueError as e:
+                    raise ValueError(f"Exercise {i}: {e}") from e
 
 
 def assemble_plan(cursor, session_row):
@@ -136,6 +181,8 @@ def assemble_plan(cursor, session_row):
                 exercise["show_time"] = True
             if er["superset_group"]:
                 exercise["superset_group"] = er["superset_group"]
+            if er["exposure"]:
+                exercise["exposure"] = er["exposure"]
             if er["tempo"]:
                 exercise["tempo"] = er["tempo"]
             if er["target_rpe"]:
@@ -433,8 +480,8 @@ def insert_block(cursor, session_id, position, block):
              target_sets, target_reps, target_duration_min, target_duration_sec,
              rounds, work_duration_sec, rest_duration_sec,
              guidance_note, hide_weight, show_time, superset_group, tempo,
-             target_rpe, target_load, extra, canonical_slug)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             target_rpe, target_load, exposure, extra, canonical_slug)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, [
             session_id, block_id, exercise_key, j,
             ex.get("name", "Unknown"),
@@ -453,6 +500,7 @@ def insert_block(cursor, session_id, position, block):
             str(ex["tempo"]).strip() if ex.get("tempo") else None,
             str(ex["target_rpe"]).strip() if ex.get("target_rpe") else None,
             str(ex["target_load"]).strip() if ex.get("target_load") else None,
+            normalize_exposure(ex.get("exposure")),
             json.dumps(ex["extra"]) if ex.get("extra") else None,
             ex.get("canonical_slug"),
         ])
