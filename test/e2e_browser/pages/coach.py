@@ -66,6 +66,14 @@ class CoachPage:
         rx = item.locator(".exercise-prescription")
         return rx.text_content() if rx.count() else None
 
+    def get_exercise_exposure(self, name):
+        """Return the exposure chip text in the named exercise's header, or
+        None when the exercise carries no exposure key (the common case — the
+        chip is not rendered at all, not rendered empty)."""
+        chip = self.page.locator(".exercise-item").filter(
+            has_text=name).locator(".exercise-pill--exposure")
+        return chip.text_content() if chip.count() else None
+
     def is_exercise_marked_complete(self, name):
         """True when the exercise-item has the .completed class."""
         item = self.page.locator(".exercise-item").filter(has_text=name)

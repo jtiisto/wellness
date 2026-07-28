@@ -62,6 +62,26 @@ def test_prescription_absent_and_legacy_note_still_shows(coach_page, app_page):
     expect(note).to_have_text("Tempo 3-1-1")
 
 
+def test_exposure_chip_displays(coach_page):
+    """Exercises carrying an `exposure` identity key show it as a header chip.
+
+    End-to-end proof that the key survives seed → plan sync → render: the
+    values arrive in the plan payload from `assemble_plan` and are drawn by
+    ExerciseItem's `.exercise-pill--exposure`. Both a strength and a duration
+    exercise carry one, since the field is exercise-level, not type-specific.
+    """
+    assert coach_page.get_exercise_exposure("KB Goblet Squat") == "HEAVY"
+    assert coach_page.get_exercise_exposure("Zone 2 Bike") == "STEADY"
+
+
+def test_exposure_chip_absent_when_no_exposure(coach_page):
+    """No exposure key → no chip. Absence is the common case and must render
+    nothing at all (not an empty chip), across every exercise type."""
+    for name in ("Front Squat", "Bent Row", "Stability Start", "Bike Intervals"):
+        assert coach_page.get_exercise_exposure(name) is None, (
+            f"{name} carries no exposure and must show no chip")
+
+
 def test_log_workout_set(coach_page, app_page):
     """Filling weight and reps in a set row saves the values."""
     coach_page.start_workout()

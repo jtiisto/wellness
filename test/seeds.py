@@ -10,12 +10,22 @@ from datetime import datetime, timezone
 
 
 def seed_coach_plan(conn, *, today, yesterday=None, supersets=False,
-                    intervals=False, prescription=False, now=None):
+                    intervals=False, prescription=False, exposures=False,
+                    now=None):
     """Insert the canonical test plan(s) into an open coach DB connection.
 
     today/yesterday are local-calendar YYYY-MM-DD strings (the browser and the
     MCP summary windows use local dates). The caller owns the connection:
     commit/close (and any reset) stay with the fixture.
+
+    `exposures=True` attaches `exposure` identity keys to a MINORITY of the
+    exercises (KB Goblet Squat, Zone 2 Bike); every other exercise keeps NULL,
+    because absence is the common case the feature must stay cheap for. Values
+    are written already-normalized (UPPER, trimmed) — this seed goes straight to
+    SQL, bypassing the ingest path that owns normalization, so an un-normalized
+    spelling here would only prove that SQLite stores what it is given.
+
+    All seeded content is INVENTED (this repo is public).
 
     Returns {"session_id": <today's session id>}.
     """
@@ -58,9 +68,9 @@ def seed_coach_plan(conn, *, today, yesterday=None, supersets=False,
     cursor.execute("""
         INSERT INTO planned_exercises
         (session_id, block_id, exercise_key, position, name, exercise_type,
-         target_sets, target_reps, guidance_note)
-        VALUES (?, ?, 'ex_1', 0, 'KB Goblet Squat', 'strength', 3, '10', 'Tempo 3-1-1')
-    """, (s1, b2))
+         target_sets, target_reps, guidance_note, exposure)
+        VALUES (?, ?, 'ex_1', 0, 'KB Goblet Squat', 'strength', 3, '10', 'Tempo 3-1-1', ?)
+    """, (s1, b2, "HEAVY" if exposures else None))
     if supersets:
         cursor.execute("""
             INSERT INTO planned_exercises
@@ -97,9 +107,9 @@ def seed_coach_plan(conn, *, today, yesterday=None, supersets=False,
     cursor.execute("""
         INSERT INTO planned_exercises
         (session_id, block_id, exercise_key, position, name, exercise_type,
-         target_duration_min, guidance_note)
-        VALUES (?, ?, 'cardio_1', 0, 'Zone 2 Bike', 'duration', 15, 'HR 135-148')
-    """, (s1, b3))
+         target_duration_min, guidance_note, exposure)
+        VALUES (?, ?, 'cardio_1', 0, 'Zone 2 Bike', 'duration', 15, 'HR 135-148', ?)
+    """, (s1, b3, "STEADY" if exposures else None))
     if intervals:
         cursor.execute("""
             INSERT INTO planned_exercises
