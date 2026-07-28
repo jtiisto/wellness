@@ -143,7 +143,7 @@ bands, caps, or progression rules) — consumers key their own config on
  "target_sets": 3, "target_reps": "10", "exposure": "LIGHT"}
 ```
 
-Epoch: (filled at deploy) — log rows written before that date carry no
+Epoch: **2026-07-28** — log rows written before this date carry no
 `exposure` at all; there is no backfill.
 
 ## Example: Block-Based Plan
