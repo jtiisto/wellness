@@ -110,6 +110,42 @@ together in the UI. The label is free-form: `"A"`, `"B"`, `"Triplet A"`, etc.
 Names like that are rejected by the server because the suffix would leak into
 the canonical slug and break cross-session comparison.
 
+## Exposure (recurring-exposure identity key)
+
+`exposure` is an optional short label naming **which recurring exposure of a
+movement** a planned exercise is — e.g. a HEAVY and a LIGHT exposure of the same
+lift in one week. Those intentionally share a `canonical_slug` so history stays
+unified, and this key is what tells the two chains apart. It is an **identity
+key, not semantics**: the server attaches no meaning to the value (no effort
+bands, caps, or progression rules) — consumers key their own config on
+(`canonical_slug`, `exposure`).
+
+- **Normalized** on the way in: trimmed, internal whitespace collapsed,
+  UPPER-cased, max 32 characters (longer is rejected, not truncated). So
+  `"  heavy "` and `"HEAVY"` are the same key everywhere.
+- **Absence is normal and meaningful**: no `exposure` = the slug's single /
+  default exposure. Most exercises never carry one; nothing warns on absence.
+- **Logs inherit and freeze it**: a log row takes the planned exercise's
+  exposure when it is first logged and keeps it. Later plan edits, a cleared
+  exposure, or a `day_name` rename never rewrite logged history — the reason
+  this exists as its own field rather than being parsed out of `day_name`.
+- It does **not** affect `canonical_slug` derivation — the slug still comes from
+  the exercise name alone.
+- Filter history by it: `get_exercise_history("back_squat", exposure="HEAVY")`
+  returns only that chain; without the filter every entry carries its own
+  `exposure` (or none).
+- Settable in the plan JSON and via `update_exercise` (pass `null` to clear).
+
+```json
+{"id": "ex_1", "name": "Back Squat", "type": "strength",
+ "target_sets": 5, "target_reps": "3", "exposure": "HEAVY"},
+{"id": "ex_9", "name": "Back Squat", "type": "strength",
+ "target_sets": 3, "target_reps": "10", "exposure": "LIGHT"}
+```
+
+Epoch: (filled at deploy) — log rows written before that date carry no
+`exposure` at all; there is no backfill.
+
 ## Example: Block-Based Plan
 
 ```json

@@ -11,6 +11,7 @@ from difflib import SequenceMatcher
 
 from modules.coach_completion import derive_exercise_completion
 from modules.coach_logs import AD_HOC_LOG_SLUGS, assemble_log, is_off_plan_entry
+from modules.coach_plans import normalize_exposure
 
 
 def workout_summary(db, *, days, today):
@@ -190,10 +191,13 @@ def search_exercises(db, *, query, equipment=None, category=None, limit=20):
     return results
 
 
-def exercise_history(db, *, exercise_slug, limit=30):
+def exercise_history(db, *, exercise_slug, limit=30, exposure=None):
     """Logged history for a canonical exercise (set data grouped by date, with
     derived completion). Self-contained — no plan join needed beyond targets.
-    Raises ValueError if the slug is unknown."""
+    `exposure` narrows the result to one exposure chain of the slug (several
+    exposures of a movement deliberately share a canonical_slug); it is
+    normalized, so `" heavy "` and `"HEAVY"` are the same filter. Raises
+    ValueError if the slug is unknown."""
     exercise_info = db.execute_query(
         "SELECT * FROM exercises WHERE slug = ?", [exercise_slug]
     )
@@ -201,10 +205,20 @@ def exercise_history(db, *, exercise_slug, limit=30):
         raise ValueError(f"Exercise not found: {exercise_slug}")
     info = exercise_info[0]
 
+    # Filter on the log's own FROZEN exposure, never the plan's current one:
+    # that freeze is the whole point of the field — a later plan edit or session
+    # rename must not repartition history that is already logged.
+    exposure_filter = normalize_exposure(exposure)
+    exposure_clause = "AND el.exposure = ?" if exposure_filter else ""
+    params = [exercise_slug]
+    if exposure_filter:
+        params.append(exposure_filter)
+    params.append(limit)
+
     # All logged sessions for this exercise. Completion is derived from logged
     # data (see coach_completion), so pull the planned target and item counts
     # rather than the legacy `completed` flag.
-    sessions = db.execute_query("""
+    sessions = db.execute_query(f"""
         SELECT
             wsl.date,
             wsl.session_id as session_id,
@@ -212,6 +226,7 @@ def exercise_history(db, *, exercise_slug, limit=30):
             el.duration_min,
             el.avg_hr,
             el.max_hr,
+            el.exposure as exposure,
             el.id as exercise_log_id,
             el.exercise_id as exercise_id,
             el.exercise_key as exercise_key,
@@ -225,10 +240,10 @@ def exercise_history(db, *, exercise_slug, limit=30):
         FROM exercise_logs el
         JOIN workout_session_logs wsl ON el.session_log_id = wsl.id
         LEFT JOIN planned_exercises pe ON pe.id = el.exercise_id
-        WHERE el.canonical_slug = ?
+        WHERE el.canonical_slug = ? {exposure_clause}
         ORDER BY wsl.date DESC
         LIMIT ?
-    """, [exercise_slug, limit])
+    """, params)
 
     history = []
     for session in sessions:
@@ -260,6 +275,11 @@ def exercise_history(db, *, exercise_slug, limit=30):
             # A genuine extra session (rest-day or ad-hoc-keyed) — orphaned
             # logs of removed planned exercises are NOT labeled off-plan.
             entry["off_plan"] = True
+        if session["exposure"]:
+            # Which exposure chain this entry belongs to; absent when the row
+            # carries none (pre-epoch rows, off-plan entries, and the common
+            # case of a slug with a single default exposure).
+            entry["exposure"] = session["exposure"]
         if session["user_note"]:
             entry["user_note"] = session["user_note"]
         if session["duration_min"] is not None:

@@ -950,6 +950,7 @@ class TestWriteTools:
     @pytest.fixture(autouse=True)
     def setup_mcp(self, test_app, coach_seeded_database, tmp_coach_db):
         self.seed = coach_seeded_database
+        self.db_path = tmp_coach_db
         config = MCPConfig(db_path=tmp_coach_db)
         mcp = create_mcp_server(config)
         self.tools = _extract_tools(mcp)
@@ -1772,6 +1773,124 @@ class TestWriteTools:
         assert result["updated_exercise"]["target_rpe"] == "8-9"
         assert result["updated_exercise"]["target_load"] == "RPE-based"
 
+    # --- exposure support ---
+
+    def _exposure_plan(self, exposure=" heavy "):
+        """Two exposures of the SAME movement in one plan. They deliberately
+        share a canonical slug, which is exactly what the key exists to tell
+        apart; the second entry carries none (absence must stay cheap)."""
+        return {
+            "day_name": "Press Day", "location": "Gym", "phase": "Foundation",
+            "blocks": [{
+                "block_type": "strength", "title": "Main",
+                "exercises": [
+                    {"id": "op_heavy", "name": "Overhead Press", "type": "strength",
+                     "target_sets": 5, "target_reps": "3", "exposure": exposure},
+                    {"id": "op_plain", "name": "Overhead Press", "type": "strength",
+                     "target_sets": 2, "target_reps": "12"},
+                ],
+            }],
+        }
+
+    def _planned_exposure(self, date, exercise_key):
+        """The raw stored column — the only way to tell "cleared" (NULL) from
+        "emitted as absent" in a read."""
+        conn = sqlite3.connect(self.db_path)
+        row = conn.execute(
+            "SELECT pe.exposure FROM planned_exercises pe "
+            "JOIN workout_sessions ws ON pe.session_id = ws.id "
+            "WHERE ws.date = ? AND pe.exercise_key = ?",
+            (date, exercise_key),
+        ).fetchone()
+        conn.close()
+        return row[0]
+
+    def _first_exercise(self, date):
+        plan = self.tools["get_workout_plan"](start_date=date, end_date=date)[0]["plan"]
+        return plan["blocks"][0]["exercises"][0]
+
+    def test_set_workout_plan_persists_normalized_exposure(self):
+        self.tools["set_workout_plan"](date="2099-09-08", plan=self._exposure_plan())
+        plan = self.tools["get_workout_plan"](
+            start_date="2099-09-08", end_date="2099-09-08"
+        )[0]["plan"]
+        by_id = {ex["id"]: ex for ex in plan["blocks"][0]["exercises"]}
+        assert by_id["op_heavy"]["exposure"] == "HEAVY"
+        assert "exposure" not in by_id["op_plain"]
+
+    def test_add_exercise_normalizes_exposure(self):
+        self.tools["set_workout_plan"](date="2099-09-09", plan=self._make_plan())
+        new_ex = {
+            "id": "added", "name": "Front Squat", "type": "strength",
+            "target_sets": 3, "target_reps": "8", "exposure": " moderate ",
+        }
+        self.tools["add_exercise"](date="2099-09-09", exercise=new_ex, block_position=0)
+        plan = self.tools["get_workout_plan"](
+            start_date="2099-09-09", end_date="2099-09-09"
+        )[0]["plan"]
+        added = next(ex for ex in plan["blocks"][0]["exercises"] if ex["id"] == "added")
+        assert added["exposure"] == "MODERATE"
+
+    def test_update_exercise_adds_changes_and_clears_exposure(self):
+        """The plan-side key is fully mutable: an exercise that started without
+        one gains it, changes it, and loses it again. Clearing writes NULL, so
+        reads go back to omitting the key entirely."""
+        self.tools["set_workout_plan"](date="2099-09-10", plan=self._make_plan())
+        assert "exposure" not in self._first_exercise("2099-09-10")
+
+        added = self.tools["update_exercise"](
+            date="2099-09-10", exercise_id="test_ex_1", updates={"exposure": "heavy"},
+        )
+        assert added["updated_exercise"]["exposure"] == "HEAVY"
+
+        changed = self.tools["update_exercise"](
+            date="2099-09-10", exercise_id="test_ex_1", updates={"exposure": "LIGHT"},
+        )
+        assert changed["updated_exercise"]["exposure"] == "LIGHT"
+
+        cleared = self.tools["update_exercise"](
+            date="2099-09-10", exercise_id="test_ex_1", updates={"exposure": None},
+        )
+        assert "exposure" not in cleared["updated_exercise"]
+        assert self._planned_exposure("2099-09-10", "test_ex_1") is None
+        assert "exposure" not in self._first_exercise("2099-09-10")
+
+    def test_update_exercise_normalizes_exposure(self):
+        """`"  heavy "` must edit the same key that `"HEAVY"` created elsewhere —
+        one normalization authority across every write path."""
+        self.tools["set_workout_plan"](date="2099-09-11", plan=self._make_plan())
+        result = self.tools["update_exercise"](
+            date="2099-09-11", exercise_id="test_ex_1", updates={"exposure": "  heavy "},
+        )
+        assert result["updated_exercise"]["exposure"] == "HEAVY"
+        assert self._planned_exposure("2099-09-11", "test_ex_1") == "HEAVY"
+
+    def test_update_exercise_blank_exposure_clears_it(self):
+        """An empty string means "no exposure", not the key `""`."""
+        self.tools["set_workout_plan"](date="2099-09-12", plan=self._make_plan())
+        self.tools["update_exercise"](
+            date="2099-09-12", exercise_id="test_ex_1", updates={"exposure": "TECHNIQUE"},
+        )
+        self.tools["update_exercise"](
+            date="2099-09-12", exercise_id="test_ex_1", updates={"exposure": "   "},
+        )
+        assert self._planned_exposure("2099-09-12", "test_ex_1") is None
+
+    @pytest.mark.parametrize("bad,match", [
+        (7, "must be a string"),
+        (["HEAVY"], "must be a string"),
+        ("E" * 33, "maximum is 32"),
+    ])
+    def test_update_exercise_rejects_invalid_exposure(self, bad, match):
+        """Over-long keys are rejected rather than truncated — truncating would
+        silently merge two distinct exposures into one chain."""
+        self.tools["set_workout_plan"](date="2099-09-13", plan=self._make_plan())
+        with pytest.raises(ValueError, match=match):
+            self.tools["update_exercise"](
+                date="2099-09-13", exercise_id="test_ex_1", updates={"exposure": bad},
+            )
+        assert self._planned_exposure("2099-09-13", "test_ex_1") is None
+
 
 # ==================== Unit 4: Exercise Registry + DB Classes ====================
 
@@ -1913,6 +2032,94 @@ class TestGetExerciseHistory:
         assert entry["attempted"] is True
         assert entry["completed"] is True
         assert entry["progress"] == {"done": 3, "target": 3}
+
+
+@pytest.mark.integration
+class TestExerciseHistoryExposure:
+    """get_exercise_history partitioned by the exposure FROZEN on each log row."""
+
+    HEAVY_DATE = "2099-04-10"
+    LIGHT_DATE = "2099-04-11"
+    SLUG = "overhead_press"
+
+    @pytest.fixture(autouse=True)
+    def setup_mcp(self, test_app, coach_seeded_database, tmp_coach_db, client):
+        self.seed = coach_seeded_database
+        self.client = client
+        config = MCPConfig(db_path=tmp_coach_db)
+        mcp = create_mcp_server(config)
+        self.tools = _extract_tools(mcp)
+
+        # One movement, two exposures across the week (they share a canonical
+        # slug on purpose) plus an entry carrying none — the three shapes a
+        # consumer has to tell apart.
+        self.tools["set_workout_plan"](date=self.HEAVY_DATE, plan={
+            "day_name": "Press A", "location": "Gym", "phase": "Foundation",
+            "blocks": [{"block_type": "strength", "title": "Main", "exercises": [
+                {"id": "op_heavy", "name": "Overhead Press", "type": "strength",
+                 "target_sets": 5, "target_reps": "3", "exposure": "HEAVY"},
+                {"id": "op_plain", "name": "Overhead Press", "type": "strength",
+                 "target_sets": 2, "target_reps": "12"},
+            ]}],
+        })
+        self.tools["set_workout_plan"](date=self.LIGHT_DATE, plan={
+            "day_name": "Press B", "location": "Gym", "phase": "Foundation",
+            "blocks": [{"block_type": "strength", "title": "Main", "exercises": [
+                {"id": "op_light", "name": "Overhead Press", "type": "strength",
+                 "target_sets": 3, "target_reps": "10", "exposure": "LIGHT"},
+            ]}],
+        })
+
+        self._log(self.HEAVY_DATE, {
+            "op_heavy": {"sets": [{"set_num": 1, "weight": 45, "reps": 3}]},
+            "op_plain": {"sets": [{"set_num": 1, "weight": 20, "reps": 12}]},
+        })
+        self._log(self.LIGHT_DATE, {
+            "op_light": {"sets": [{"set_num": 1, "weight": 25, "reps": 10}]},
+        })
+
+    def _log(self, date, entries):
+        resp = self.client.post("/api/coach/sync", json={
+            "clientId": self.seed["client_id"],
+            "logs": {date: {"_lastModifiedAt": f"{date}T10:00:00Z", **entries}},
+        })
+        assert resp.status_code == 200
+
+    def test_filter_returns_only_that_chain(self):
+        result = self.tools["get_exercise_history"](
+            exercise_slug=self.SLUG, exposure="HEAVY"
+        )
+        assert result["total_sessions"] == 1
+        assert [e["date"] for e in result["history"]] == [self.HEAVY_DATE]
+        assert result["history"][0]["exposure"] == "HEAVY"
+
+    def test_filter_input_is_normalized(self):
+        """`" heavy "` and `"HEAVY"` are the same key on the read path too."""
+        loose = self.tools["get_exercise_history"](
+            exercise_slug=self.SLUG, exposure=" heavy "
+        )
+        exact = self.tools["get_exercise_history"](
+            exercise_slug=self.SLUG, exposure="HEAVY"
+        )
+        assert loose["history"] == exact["history"]
+
+    def test_unfiltered_history_labels_every_entry(self):
+        """No filter = the whole slug, each entry carrying its own exposure —
+        and the entry logged without one simply omits the key."""
+        result = self.tools["get_exercise_history"](exercise_slug=self.SLUG)
+        assert result["total_sessions"] == 3
+        assert {e.get("exposure") for e in result["history"]} == {"HEAVY", "LIGHT", None}
+        assert sum("exposure" not in e for e in result["history"]) == 1
+
+    def test_filtering_by_an_unused_exposure_is_empty(self):
+        """A key with no logged entries yet (a new chain's first cycle) returns
+        an empty history, not an error."""
+        result = self.tools["get_exercise_history"](
+            exercise_slug=self.SLUG, exposure="TECHNIQUE"
+        )
+        assert result["exercise"]["slug"] == self.SLUG
+        assert result["history"] == []
+        assert result["total_sessions"] == 0
 
 
 @pytest.mark.integration

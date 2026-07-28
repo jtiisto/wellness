@@ -10,6 +10,7 @@ rebinding the captured `db_manager`/`registry`/`config` to `self.*`.
 from typing import Any, Dict, List, Optional
 
 from modules import coach_queries
+from modules.coach_plans import normalize_exposure
 
 from ._helpers import _assemble_plan_from_db, _reject_legacy_pair_suffix
 from .database import get_utc_now
@@ -38,7 +39,11 @@ class ExerciseTools:
             updates: Dictionary of fields to update. Can include:
                      name, type, target_sets, target_reps, target_duration_min,
                      guidance_note, items, hide_weight, show_time, tempo,
-                     target_rpe, target_load
+                     target_rpe, target_load, exposure
+                     (`exposure` is the identity key naming which recurring
+                     exposure of the movement this is; normalized to UPPER, and
+                     None/"" clears it. Already-logged rows are never rewritten —
+                     they keep the exposure they were logged with.)
 
         Returns:
             Updated exercise and confirmation
@@ -61,6 +66,7 @@ class ExerciseTools:
             "tempo": "tempo",
             "target_rpe": "target_rpe",
             "target_load": "target_load",
+            "exposure": "exposure",
         }
 
         if "name" in updates:
@@ -92,6 +98,12 @@ class ExerciseTools:
                     if col:
                         if key in ("hide_weight", "show_time"):
                             value = 1 if value else 0
+                        elif key == "exposure":
+                            # The one normalization authority, shared with plan
+                            # ingest and add_exercise, so "  heavy " edits the
+                            # same key "HEAVY" created elsewhere. None (or a
+                            # blank) normalizes to None and clears the column.
+                            value = normalize_exposure(value)
                         set_clauses.append(f"{col} = ?")
                         params.append(value)
 
@@ -236,8 +248,8 @@ class ExerciseTools:
                      target_sets, target_reps, target_duration_min, target_duration_sec,
                      rounds, work_duration_sec, rest_duration_sec,
                      guidance_note, hide_weight, show_time, superset_group, tempo,
-                     target_rpe, target_load, canonical_slug)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     target_rpe, target_load, canonical_slug, exposure)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, [
                     session_id, block_id, exercise["id"], position,
                     exercise["name"], exercise["type"],
@@ -256,6 +268,7 @@ class ExerciseTools:
                     str(exercise["target_rpe"]).strip() if exercise.get("target_rpe") else None,
                     str(exercise["target_load"]).strip() if exercise.get("target_load") else None,
                     slug,
+                    normalize_exposure(exercise.get("exposure")),
                 ])
                 exercise_id = cursor.lastrowid
 
@@ -391,7 +404,8 @@ class ExerciseTools:
     def get_exercise_history(
         self,
         exercise_slug: str,
-        limit: int = 30
+        limit: int = 30,
+        exposure: Optional[str] = None
     ) -> Dict[str, Any]:
         """WHEN TO USE: When you want to see all logged sessions for a specific exercise across all dates.
 
@@ -401,13 +415,20 @@ class ExerciseTools:
         Args:
             exercise_slug: Canonical exercise slug (e.g., "kb_goblet_squat")
             limit: Max sessions to return (default 30)
+            exposure: Optional exposure key (e.g., "HEAVY"). Several exposures
+                      of one movement share a canonical slug on purpose, so a
+                      filter returns only that exposure's chain. Input is
+                      normalized (`" heavy "` matches `"HEAVY"`). Omit it to get
+                      every entry, each carrying its own `exposure` — or none,
+                      for rows logged without one.
 
         Returns:
             Exercise info and list of logged sessions with set data
         """
         try:
             return coach_queries.exercise_history(
-                self.db_manager, exercise_slug=exercise_slug, limit=limit
+                self.db_manager, exercise_slug=exercise_slug, limit=limit,
+                exposure=exposure,
             )
         except Exception as e:
             raise ValueError(f"Failed to get exercise history: {str(e)}")
