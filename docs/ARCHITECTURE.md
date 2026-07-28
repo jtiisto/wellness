@@ -159,7 +159,7 @@ session_blocks     (id, session_id, position, block_type, title, duration_min,
                     rest_guidance, rounds, work_duration_sec, rest_duration_sec)
 planned_exercises  (id, session_id, block_id, exercise_key, name, exercise_type,
                     targets..., superset_group, tempo, target_rpe, target_load,
-                    canonical_slug)
+                    exposure, canonical_slug)
 checklist_items    (id, exercise_id, position, item_text)
 deleted_plans      (date, deleted_at)  -- tombstones for incremental sync
 ```
@@ -194,6 +194,56 @@ are intentionally free-form (not numerically modelled). The mandatory targets
 "prescription line" in the expanded body (`buildPrescription` → RPE · load ·
 tempo, omitting absent tokens). Per-set nuance ("last set RPE 9", drop sets)
 stays in `guidance_note`.
+
+`exposure` is the optional per-exercise **identity key** naming *which recurring
+exposure of a movement* a row is — a HEAVY and a LIGHT exposure of the same lift
+in one week. Those deliberately share one `canonical_slug` so history stays
+unified, which is exactly why the chains need a dedicated key to tell them
+apart: the only prior handle was parsing the session `day_name`, and a mid-plan
+rename silently repartitioned it. It is identity, **not semantics** — the server
+attaches no meaning to the value (no effort bands, caps, progression rules);
+consumers key their own config on (`canonical_slug`, `exposure`), so a new
+vocabulary never costs a deploy. `normalize_exposure` (`coach_plans.py`) is the
+single normalization authority — trim, collapse internal whitespace, UPPER, and
+**reject** past 32 characters rather than truncate (truncation would silently
+collapse two distinct keys into one) — shared by `validate_plan`, plan ingest
+(`insert_block`), the MCP editors (`add_exercise` / `update_exercise`, where
+`None`/`""` clears) and the `get_exercise_history` filter, so `"  heavy "` is
+the same key as `"HEAVY"` on every path. Absence is meaningful and cheap: no
+exposure = the slug's single/default exposure, nothing warns, and most exercises
+never carry one. It does not affect `canonical_slug` derivation. Added by
+migration 7 — guarded `ALTER TABLE`s on `planned_exercises`, `exercise_logs`,
+and `exercise_logs_archive` (the archive stays lossless).
+
+**A log row inherits the exposure at its first insert and then freezes it.**
+`_store_log` reads it off the planned exercise alongside the canonical slug and
+stores it on the exercise-log INSERT; the UPDATE path deliberately omits the
+column — an asymmetry with `canonical_slug`, which re-resolves from the plan on
+every write. Re-resolving exposure would let a later plan edit (or a cleared
+value, or a `day_name` rename) leak into an already-logged row on the user's
+next edit of that day, repartitioning history after the fact — precisely the
+failure mode `day_name` could never prevent. "Logging time" is therefore the
+row's first insert; off-plan/ad-hoc entries have no planned row and stay NULL,
+and `_archive_existing_log` copies the column through.
+`get_exercise_history(slug, exposure=…)` filters on that **frozen log value**
+(`AND el.exposure = ?`), which is the point of freezing it; unfiltered, every
+entry emits its own. Emission is asymmetric too: `assemble_plan` emits it
+wherever plans appear (sync GET and the MCP read tools alike), but
+`assemble_log` only in the **rich** shape (`derive_completion=True`, i.e.
+`get_workout_logs`) — the lean sync log shape stays wire-invariant, since the
+PWA reads exposure off the plan object it already has. There is **no backfill**:
+rows logged before the deploy carry no exposure at all (the data epoch, recorded
+in `coach_plan_guide.md`).
+
+In the PWA, `ExerciseItem` renders the value as a small chip
+(`.exercise-pill--exposure`, distinct from the name-derived pills) when present
+and nothing when absent, and passes it to `findLastPerformance`, which prefers
+the most recent **same-exposure** session even over a newer one of a different
+exposure (progression chains run per exposure) and falls back to the newest
+any-exposure match so a brand-new key — and pre-epoch history, which carries
+none — still shows something, with the date hint for context. Matching walks the
+historical *plans* in the synced window (which carry the field), not the logs,
+which is what lets the lean log wire stay unchanged.
 
 **Ingest & transform pipeline:**
 
@@ -279,7 +329,7 @@ entry leaves that entry without a matching plan exercise.
 **Data model (logs):**
 ```
 workout_session_logs  (id, session_id, date, pain_discomfort, general_notes)
-exercise_logs         (id, session_log_id, exercise_id, exercise_key, user_note, duration_min, avg_hr, max_hr)
+exercise_logs         (id, session_log_id, exercise_id, exercise_key, user_note, duration_min, avg_hr, max_hr, canonical_slug, exposure)
 set_logs              (id, exercise_log_id, set_num, weight, reps, rpe, unit, duration_sec, completed)
 checklist_log_items   (id, exercise_log_id, item_text)
 deleted_exercise_logs (date, exercise_key, deleted_at)  -- log-entry tombstones (migration 6)
