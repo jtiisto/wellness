@@ -1,1 +1,8 @@
-<manifest />
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Declared here, not only in :app: ConnectivityMonitor and the Ktor client
+     live in this module, so the requirement travels with the code that needs
+     it and merges into any consumer. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+</manifest>

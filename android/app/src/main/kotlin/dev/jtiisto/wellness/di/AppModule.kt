@@ -1,7 +1,10 @@
 package dev.jtiisto.wellness.di
 
+import dev.jtiisto.wellness.ui.tools.ToolsViewModel
+import org.koin.core.module.dsl.viewModelOf
 import org.koin.dsl.module
 
-// Populated in Phase 1 (network, database, sync orchestrator).
+/** UI-layer wiring. Everything headless lives in `coreDataModule`. */
 val appModule = module {
+    viewModelOf(::ToolsViewModel)
 }

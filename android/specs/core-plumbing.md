@@ -75,11 +75,11 @@ data class DebugLogEntity(@PrimaryKey(autoGenerate = true) val id: Long = 0,
 ```kotlin
 class DebugLog(dao: DebugLogDao, scope: CoroutineScope /* SupervisorJob + Dispatchers.IO */) {
     fun log(tag: String, message: String, data: JsonElement? = null)  // fire-and-forget, never throws
-    fun entries(): Flow<List<DebugLogEntity>>  // newest first, TTL-filtered in the query
+    fun entries(): Flow<List<DebugLogEntity>>  // newest first, TTL re-applied per DB change + 30 s tick
     suspend fun dump(): String                 // deterministic "ts tag message dataJson" lines
 }
 ```
-- Retention: cap **500 rows**, TTL **1 h** (constants from `debug-log.js`). Insert+prune run in **one Room transaction**, serialized by a per-instance mutex, so concurrent fire-and-forget writes can't overshoot the cap. `entries()`/`dump()` filter `ts >= now - 1 h` in SQL, so expired rows never surface even if no later write pruned them.
+- Retention: cap **500 rows**, TTL **1 h** (constants from `debug-log.js`; boundary follows the JS: retained while `ts > now − 1 h`, strict). Insert+prune run in **one Room transaction**, serialized by a per-instance mutex, so concurrent fire-and-forget writes can't overshoot the cap. `dump()` filters with a fresh cutoff per call; `entries()` re-applies the filter on every DB change and every 30 s tick, so an entry expiring while the screen is open disappears within one tick even if no write pruned it. *(v2.1: was "filter in SQL at collection time" — a Room Flow freezes its bind args, so a collection-time cutoff goes stale.)*
 - `data` that fails to serialize is replaced by a `"<unserializable>"` marker; the log call still succeeds. A failed DB write is swallowed (supervisor scope — never cancels sibling work).
 - **Privacy**: HTTP logging records method + URL + status only — never request/response bodies or headers (journal/coach payloads are personal data). This policy is load-bearing for all later phases.
 
@@ -193,7 +193,7 @@ MVI ViewModel + screen replacing the "Tools" stub:
 
 ## Dependencies
 
-- Uses (already in catalog): Ktor client stack, Room, Koin, kotlinx.serialization/coroutines, lifecycle-process (add to `:core:data`). WorkManager stays unused until Phase 2.
+- Uses (already in catalog): Ktor client stack, Room, Koin, kotlinx.serialization/coroutines, lifecycle-process (add to `:core:data`). WorkManager is deliberately **not declared as a dependency** until Phase 2 — merely declaring it runs its `Initializer` at app startup. *(v2.1 precision.)*
 - Depended on by: every later phase. Phase 2 consumes `SyncScheduler`, `DirtySetLogic`, `DebugLog`, `JournalApi`, the DB.
 
 ## Tests (JVM unit tests; virtual time via `kotlinx-coroutines-test`)
@@ -204,7 +204,9 @@ MVI ViewModel + screen replacing the "Tools" stub:
 | `SyncSchedulerLogicTest` | `sync-scheduler-logic.test.js` transcribed 1:1 + OTHER→RETRY + outcome precedence (success+error → RESET; CONFLICTS+error → RESET) + saturating delay at huge attempts |
 | `SyncSchedulerTest` | debounce coalescing; poll cadence (sequential, no overlap, slow pollCheck > 30 s); backoff 5→10→20→…→120 cap; pendingSync: busy-path skips finally, running flight's finally re-arms; dual timers after ERROR + dirty; retry fires during flight → pendingSync; requestSync/onOffline cancel retry timer but NOT attempt counter; RESET zeroes both; SKIP touches neither; in-flight sync survives scheduleUpload/requestSync/onOffline/stop; CancellationException never classified; two concurrent triggers → one flight; pollCheck throw → no onServerError, no retry; stop() idempotent, post-stop calls no-op |
 | `SyncOrchestratorTest` | polling == foreground && online; online-while-backgrounded → requestSync only; late register gets current state; repeated identical events idempotent; flapping connectivity |
-| `DebugLogLogicTest` | 500-cap boundary, 1 h TTL boundary, prune-in-transaction predicate, unserializable data marker |
+| `DebugLogLogicTest` | 500-cap boundary, 1 h TTL boundary, prune predicate, unserializable data marker |
+| `DebugLogTest` | live-view TTL: expired entry drops on a tick with no write; fresh entries survive ticks |
+| `DebugLogDaoTest` *(instrumented, emulator sessions only)* | the SQL twins of the retention rules: TTL boundary, cap keeps newest, concurrent insertAndPrune ≤ cap |
 | `JournalApiTest` | exact URL `…/wellness/api/journal/sync/status` (with/without trailing slash on base); status decode; unknown fields ignored; non-2xx and malformed JSON surface as errors |
 
 Verification: `./gradlew build` green (hooks enforce on commit); APK to `gdrive:Wellness/APKs`; manual check on the tailnet — Tools ping returns `lastModified`, debug log shows the request line.
