@@ -376,15 +376,39 @@ class JournalSyncStoreTest {
     }
 
     @Test
-    @DisplayName("a response with no serverTime falls back to the client clock rather than losing the watermark")
-    fun missingServerTimeFallsBackToTheClock() = runTest {
+    @DisplayName("a delta with no serverTime fails the cycle rather than inventing a watermark")
+    fun missingServerTimeFailsTheCycle() = runTest {
         val world = World()
-        // Malformed-response recovery only: the server always stamps one.
+        // A device clock running ahead of the server would advance the
+        // watermark past changes the server has not delivered yet, and the next
+        // delta's `since` would skip them for good. Failing costs one retry;
+        // the watermark stays exactly where it was.
         world.delta = """{"config":[],"days":{},"deletedTrackers":[]}"""
 
-        world.store().triggerSync()
+        val result = world.store().triggerSync()
 
-        assertEquals("client-clock", world.dao.meta[JournalDao.KEY_LAST_SERVER_SYNC_TIME])
+        assertFalse(result.success)
+        assertTrue(result.error != null)
+        assertNull(world.dao.meta[JournalDao.KEY_LAST_SERVER_SYNC_TIME])
+        assertEquals(SyncStatus.RED, world.store().syncStatus.value)
+    }
+
+    @Test
+    @DisplayName("an upload response with no serverTime fails the cycle too, leaving the watermark put")
+    fun missingUpdateServerTimeFailsTheCycle() = runTest {
+        val world = World()
+        world.seedTracker("t1", name = "Water", stamp = "s0", isDirty = true, generation = 1)
+        world.delta = delta(serverTime = "s-delta")
+        world.update = """{"acceptedTrackers":[{"id":"t1","lastModifiedAt":"s5"}],""" +
+            """"acceptedEntries":[],"rejectedTrackers":[],"rejectedEntries":[]}"""
+
+        val result = world.store().triggerSync()
+
+        assertFalse(result.success)
+        // The delta's watermark had already landed in its own transaction; what
+        // must not happen is a fabricated one replacing it.
+        assertEquals("s-delta", world.dao.meta[JournalDao.KEY_LAST_SERVER_SYNC_TIME])
+        assertTrue(world.dao.trackers.getValue("t1").isDirty, "the upload never settled, so it stays dirty")
     }
 
     // ---- upload wire shape -----------------------------------------------
@@ -711,7 +735,6 @@ class JournalSyncStoreTest {
                 // eagerly, and a safe call on a null receiver would skip them.
                 debugLog = debugLog,
                 scheduleUpload = { scheduledUploads++ },
-                clock = { "client-clock" },
                 today = { LocalDate.parse("2026-08-06") },
                 newClientId = { "fixed-client" },
             )

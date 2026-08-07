@@ -87,7 +87,11 @@ All 13 exports with JS names + the module-private `advanceRecordTokens`:
 class CoachSyncStore(dao, api, isOnline, json, debugLog, scheduleUpload, clock, today) {
     val syncStatus: StateFlow<SyncStatus>   // offline→GRAY, dirty→RED, else GREEN (coach has no watermark condition — PWA parity)
     val isSyncing: Boolean; suspend fun hasDirtyData(): Boolean
-    suspend fun pollCheck(): Boolean        // dirty→true; else GET plans-version; changed→record+true; failure→false — but CancellationException is RETHROWN, never swallowed to false
+    suspend fun pollCheck(): Boolean        // dirty→true; else GET plans-version; changed→hold as PENDING + true; failure→false — but CancellationException is RETHROWN, never swallowed to false
+    // v2.1: the probed version is committed to lastKnownPlansVersion ONLY after applyDownload
+    // succeeds (as max(pendingProbe, maxPlanVersion(plans, current)) — the probe sees log writes
+    // and deletions that maxPlanVersion can't). Probe-time recording (PWA behavior) could suppress
+    // a needed sync forever if the cycle fails outside the scheduler's retry coverage.
     fun observePlan(date): Flow<PlanDto?>   // decode-on-read
     fun observeLog(date): Flow<JsonObject?>
     // Mutators (each: transaction + mark date dirty + scheduleUpload):
@@ -110,6 +114,7 @@ class CoachSyncStore(dao, api, isOnline, json, debugLog, scheduleUpload, clock, 
 3. **Upload** (only if dirty dates exist): `selectLogsToUpload`; unsatisfiable dates are cleared (generation-guarded) BEFORE the POST with a debug breadcrumb; if `logsToUpload` is empty skip the POST (deviation 1). Else `POST /sync`; adopt `results` per `adoptUploadResults` with in-transaction current generations (deviation 4) — adoption + `uploadedDates` dirty clear + logs persist happen in ONE transaction (deviation 3). The response `serverTime` is NOT the pull watermark (the download's is).
 4. **Download**: `GET /sync?client_id[&last_sync_time=watermark]`. Apply in one transaction: `deletedPlanDates` removed; plans overwritten/merged unconditionally (no dirty concept for plans); `lastKnownPlansVersion = maxPlanVersion(plans, current)` (in-memory); logs merged per date ONLY where not currently dirty (re-checked in-transaction); `earliestDate` + watermark ← `serverTime` stored; both maps pruned to `>= earliestDate`.
 5. Status update (dirty-aware — not unconditional green); errors → RED + `SyncResult(error)`; CancellationException rethrown; `isSyncing` cleared in finally.
+6. *(v2.1, uniform across modules)* **A sync response missing `serverTime` is malformed: the cycle THROWS** — watermark untouched, scheduler retries, equal-accepts arbitration makes the re-upload harmless. There is NO device-clock fallback anywhere: a clock even slightly ahead of the server would advance the watermark past unconsumed changes (silent data loss). Supersedes journal's earlier "clock fallback as malformed-response recovery".
 
 **Server contract notes the implementation must respect** (from `coach.py`): arbitration accepts `stored <= base` (equality = idempotent retry) and rejects token-less writes to existing rows; the resurrection guard rejects post-delete edits carrying a base token unless `_readd`; delete of an absent row still refreshes the server tombstone; `results[date]` is the merged server day (lean `assemble_log` shape — fields omitted when null/falsy, `completed: false` dropped from sets); day-level `_lastModified` is the FEEDBACK record's token, per-exercise `_lastModified` are separate; `earliestDate` is date-only and compared lexically.
 

@@ -1,6 +1,7 @@
 package dev.jtiisto.wellness
 
 import android.app.Application
+import dev.jtiisto.wellness.core.data.di.CoachScheduler
 import dev.jtiisto.wellness.core.data.di.JournalScheduler
 import dev.jtiisto.wellness.core.data.di.coreDataModule
 import dev.jtiisto.wellness.core.data.sync.ConnectivityMonitor
@@ -27,6 +28,7 @@ class WellnessApplication : Application() {
         koin.get<ConnectivityMonitor>().start()
         val orchestrator = koin.get<SyncOrchestrator>()
         orchestrator.register(koin.get<SyncScheduler>(JournalScheduler))
+        orchestrator.register(koin.get<SyncScheduler>(CoachScheduler))
         orchestrator.start()
     }
 }

@@ -164,7 +164,7 @@ class JournalSyncStore(dao, api, debugLog, json, scope, isOnline: () -> Boolean,
    - config: upsert each server tracker UNLESS locally dirty (dirty rows untouched — server-newer edits lose to local dirt until upload arbitration);
    - `deletedTrackers` → drop trackers + their entries + their dirty state and generations (never wedge red);
    - entries: apply each server entry UNLESS its `date|trackerId` is locally dirty;
-   - watermark ← `serverTime`. (The server always emits `serverTime`; the client-clock fallback exists ONLY as malformed-response recovery, never expected operation.)
+   - watermark ← `serverTime`. *(v3.1, Phase 4 uniform rule: a response missing `serverTime` is malformed — the cycle THROWS, watermark untouched, scheduler retries. The earlier client-clock fallback is removed: an ahead-of-server clock could advance the watermark past unconsumed changes.)*
    Then run `computeNormalizedConfig` over the fresh config; changed trackers are marked dirty. **They upload this same cycle, but their dirty flags clear only NEXT cycle**: normalization runs after the step-2 snapshot, so the resolved-key clear (snapshot-gated) skips them — one harmless re-upload, PWA-identical semantics.
 4. If no dirty rows now → status update, return success (no upload).
 5. **Upload**: rebuild payload from CURRENT rows (post-pull tokens), `syncUpdate(payload)`.

@@ -4,7 +4,7 @@ import androidx.room.Database
 import androidx.room.RoomDatabase
 
 /**
- * The one database for every module. Coach tables arrive in Phase 4 as v3.
+ * The one database for every module.
  *
  * Destructive migration is deliberately never enabled: dirty rows are the only
  * recovery source for edits that have not reached the server yet, so dropping
@@ -17,8 +17,11 @@ import androidx.room.RoomDatabase
         JournalTrackerEntity::class,
         JournalEntryEntity::class,
         JournalMetaEntity::class,
+        CoachPlanEntity::class,
+        CoachLogEntity::class,
+        CoachMetaEntity::class,
     ],
-    version = 2,
+    version = 3,
     exportSchema = true,
 )
 abstract class WellnessDatabase : RoomDatabase() {
@@ -28,6 +31,8 @@ abstract class WellnessDatabase : RoomDatabase() {
     abstract fun payloadCacheDao(): PayloadCacheDao
 
     abstract fun journalDao(): JournalDao
+
+    abstract fun coachDao(): CoachDao
 
     companion object {
         const val NAME = "wellness.db"

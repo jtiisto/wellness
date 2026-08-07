@@ -34,10 +34,12 @@ import androidx.navigation.compose.rememberNavController
 import dev.jtiisto.wellness.core.data.sync.SyncErrorEvents
 import dev.jtiisto.wellness.core.ui.theme.WellnessTheme
 import dev.jtiisto.wellness.feature.journal.JournalTab
+import dev.jtiisto.wellness.ui.coach.CoachDebugScreen
 import dev.jtiisto.wellness.ui.tools.ToolsScreen
 import org.koin.compose.koinInject
 
 private const val JOURNAL_ROUTE = "journal"
+private const val COACH_ROUTE = "coach"
 private const val TOOLS_ROUTE = "tools"
 
 private data class TopLevelDestination(
@@ -48,7 +50,7 @@ private data class TopLevelDestination(
 
 private val topLevelDestinations = listOf(
     TopLevelDestination(JOURNAL_ROUTE, "Journal", Icons.Filled.Checklist),
-    TopLevelDestination("coach", "Coach", Icons.Filled.FitnessCenter),
+    TopLevelDestination(COACH_ROUTE, "Coach", Icons.Filled.FitnessCenter),
     TopLevelDestination("trends", "Trends", Icons.Filled.Insights),
     TopLevelDestination("analysis", "Analysis", Icons.Filled.Analytics),
     TopLevelDestination(TOOLS_ROUTE, "Tools", Icons.Filled.Settings),
@@ -106,6 +108,7 @@ fun WellnessApp() {
                     composable(destination.route) {
                         when (destination.route) {
                             JOURNAL_ROUTE -> JournalTab()
+                            COACH_ROUTE -> CoachDebugScreen()
                             TOOLS_ROUTE -> ToolsScreen()
                             else -> StubScreen(destination.label)
                         }

@@ -37,7 +37,6 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
-import java.time.Instant
 import java.time.LocalDate
 import java.util.UUID
 
@@ -64,9 +63,6 @@ private const val TAG = "journal-sync"
  *    are values and the generation each was uploaded at.
  *
  * @param isOnline gates the whole cycle; offline is a skip, not a failure.
- * @param clock a *fallback* only, for a response missing its `serverTime`.
- *   Normal operation never reads it — the server's watermark is the only
- *   ordering that matters.
  * @param scheduleUpload the scheduler's debounce hook, called after every local
  *   mutation. Supplied as a lambda because the scheduler is built around this
  *   store and the two would otherwise be a construction cycle.
@@ -78,7 +74,6 @@ class JournalSyncStore(
     private val json: Json = WellnessJson,
     private val debugLog: DebugLog? = null,
     private val scheduleUpload: () -> Unit = {},
-    private val clock: () -> SyncStamp = { Instant.now().toString() },
     private val today: () -> LocalDate = LocalDate::now,
     private val newClientId: () -> String = { UUID.randomUUID().toString() },
 ) {
@@ -331,7 +326,7 @@ class JournalSyncStore(
             day.map { (trackerId, entry) -> entryEntity(date, trackerId, entry) }
         }
 
-        dao.applyDelta(trackers, entries, delta.deletedTrackers, watermarkOf(delta.serverTime, "delta"))
+        dao.applyDelta(trackers, entries, delta.deletedTrackers, requireWatermark(delta.serverTime, "delta"))
 
         // Normalize whatever legacy shapes the server just handed us. Changed
         // trackers upload in THIS cycle but only clear next: normalization runs
@@ -480,7 +475,7 @@ class JournalSyncStore(
                     .map { TrackerDirtyClear(it, snapshotTrackerGens.getValue(it)) },
                 entryClears = (snapshotEntryGens.keys - cleared.entries.keys.toSet())
                     .map { EntryDirtyClear(entryKeyDate(it), entryKeyTrackerId(it), snapshotEntryGens.getValue(it)) },
-                watermark = watermarkOf(response.serverTime, "update"),
+                watermark = requireWatermark(response.serverTime, "update"),
             ),
             restampTracker = { current, stamp ->
                 trackerEntity(
@@ -621,16 +616,16 @@ class JournalSyncStore(
     private fun parseObject(text: String): JsonObject = json.parseToJsonElement(text).jsonObject
 
     /**
-     * The server always stamps a `serverTime`; falling back to the device clock
-     * is malformed-response recovery, never the expected path, so it is logged.
+     * The response's watermark, or the cycle fails.
+     *
+     * There is deliberately no device-clock fallback. The watermark is a
+     * *server* instant that the next delta uses as its `since`; a device clock
+     * running ahead would advance it past changes the server has not delivered
+     * yet, and those changes would never be pulled again — silent data loss,
+     * dressed up as a successful sync. Failing instead costs one retry: the
+     * watermark stays put, and the server's equality-accepting arbitration
+     * makes the eventual re-upload a no-op.
      */
-    private fun watermarkOf(serverTime: SyncStamp?, source: String): SyncStamp {
-        if (serverTime != null) return serverTime
-        debugLog?.log(
-            TAG,
-            "response had no serverTime; falling back to the client clock",
-            buildJsonObject { put("source", source) },
-        )
-        return clock()
-    }
+    private fun requireWatermark(serverTime: SyncStamp?, source: String): SyncStamp = serverTime
+        ?: error("journal $source response had no serverTime")
 }

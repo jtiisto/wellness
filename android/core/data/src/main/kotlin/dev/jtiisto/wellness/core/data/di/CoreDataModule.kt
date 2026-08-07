@@ -3,10 +3,12 @@ package dev.jtiisto.wellness.core.data.di
 import androidx.room.Room
 import dev.jtiisto.wellness.core.data.BuildConfig
 import dev.jtiisto.wellness.core.data.WellnessJson
+import dev.jtiisto.wellness.core.data.coach.CoachSyncStore
 import dev.jtiisto.wellness.core.data.db.WELLNESS_MIGRATIONS
 import dev.jtiisto.wellness.core.data.db.WellnessDatabase
 import dev.jtiisto.wellness.core.data.journal.JournalSyncStore
 import dev.jtiisto.wellness.core.data.journal.JournalUiPrefs
+import dev.jtiisto.wellness.core.data.network.CoachApi
 import dev.jtiisto.wellness.core.data.network.JournalApi
 import dev.jtiisto.wellness.core.data.network.ServerConfig
 import dev.jtiisto.wellness.core.data.network.buildHttpClient
@@ -34,6 +36,9 @@ val AppScope = named("appScope")
 /** The journal module's [SyncScheduler]. One scheduler per module, app-lived. */
 val JournalScheduler = named("journalScheduler")
 
+/** The coach module's [SyncScheduler]. */
+val CoachScheduler = named("coachScheduler")
+
 private val DebugLogScope = named("debugLogScope")
 
 val coreDataModule = module {
@@ -51,10 +56,12 @@ val coreDataModule = module {
     single { get<WellnessDatabase>().debugLogDao() }
     single { get<WellnessDatabase>().payloadCacheDao() }
     single { get<WellnessDatabase>().journalDao() }
+    single { get<WellnessDatabase>().coachDao() }
 
     single { DebugLog(dao = get(), scope = get(DebugLogScope), json = get()) }
     single<HttpClient> { buildHttpClient(config = get(), json = get(), debugLog = get()) }
     single { JournalApi(client = get(), config = get()) }
+    single { CoachApi(client = get(), config = get()) }
 
     single { ConnectivityMonitor(androidContext()) }
     single { SyncErrorEvents() }
@@ -89,6 +96,40 @@ val coreDataModule = module {
             isSyncing = { store.isSyncing },
             hasDirtyData = store::hasDirtyData,
             isOnline = { connectivity.isOnline.value },
+            onServerError = errors::postServerError,
+            isNetworkError = ::isNetworkError,
+            debugLog = get(),
+        )
+    }
+
+    single {
+        val connectivity = get<ConnectivityMonitor>()
+        val koinScope = this
+        CoachSyncStore(
+            dao = get(),
+            api = get(),
+            isOnline = { connectivity.isOnline.value },
+            json = get(),
+            debugLog = get(),
+            scheduleUpload = { koinScope.get<SyncScheduler>(CoachScheduler).scheduleUpload() },
+        )
+    }
+
+    single<SyncScheduler>(CoachScheduler) {
+        val connectivity = get<ConnectivityMonitor>()
+        val store = get<CoachSyncStore>()
+        val errors = get<SyncErrorEvents>()
+        SyncScheduler(
+            scope = get(AppScope),
+            name = "coach",
+            syncFn = store::triggerSync,
+            isSyncing = { store.isSyncing },
+            hasDirtyData = store::hasDirtyData,
+            isOnline = { connectivity.isOnline.value },
+            // Unlike the journal, coach has a cheap probe in front of the full
+            // sync: `plans-version` is one timestamp, and a full coach pull is
+            // not (plans are large and the window is 60 days).
+            pollCheckFn = store::pollCheck,
             onServerError = errors::postServerError,
             isNetworkError = ::isNetworkError,
             debugLog = get(),

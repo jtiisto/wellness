@@ -38,5 +38,37 @@ val MIGRATION_1_2 = object : Migration(1, 2) {
     }
 }
 
+/**
+ * v2 → v3: the coach tables (Phase 4).
+ *
+ * Additive in exactly the same way, and for the same reason: an install
+ * carrying unsent journal edits must upgrade with every dirty row and its
+ * generation counter intact.
+ *
+ * Transcribed verbatim from `schemas/…WellnessDatabase/3.json` with
+ * `${TABLE_NAME}` substituted; `Migration2to3Test` re-validates it against the
+ * real schema, and also runs the whole v1 → v3 chain.
+ */
+val MIGRATION_2_3 = object : Migration(2, 3) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `coach_plans` (" +
+                "`date` TEXT NOT NULL, `planJson` TEXT NOT NULL, `lastModified` TEXT, " +
+                "PRIMARY KEY(`date`))",
+        )
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `coach_logs` (" +
+                "`date` TEXT NOT NULL, `logJson` TEXT NOT NULL, `isDirty` INTEGER NOT NULL, " +
+                "`dirtyGeneration` INTEGER NOT NULL, " +
+                "PRIMARY KEY(`date`))",
+        )
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `coach_meta` (" +
+                "`key` TEXT NOT NULL, `value` TEXT NOT NULL, " +
+                "PRIMARY KEY(`key`))",
+        )
+    }
+}
+
 /** Every migration the app ships, in order. Never add destructive fallbacks. */
-val WELLNESS_MIGRATIONS = arrayOf(MIGRATION_1_2)
+val WELLNESS_MIGRATIONS = arrayOf(MIGRATION_1_2, MIGRATION_2_3)
