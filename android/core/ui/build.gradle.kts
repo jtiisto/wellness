@@ -10,6 +10,10 @@ android {
 }
 
 dependencies {
+    // `api`, not `implementation`: shared composables take :core:data types
+    // (SyncStatus today) in their signatures, so callers need them resolvable.
+    api(project(":core:data"))
+
     api(platform(libs.compose.bom))
     api(libs.compose.ui)
     api(libs.compose.ui.graphics)

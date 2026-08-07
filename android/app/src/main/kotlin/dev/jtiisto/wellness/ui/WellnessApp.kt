@@ -27,8 +27,10 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import dev.jtiisto.wellness.core.ui.theme.WellnessTheme
+import dev.jtiisto.wellness.ui.journal.JournalDebugScreen
 import dev.jtiisto.wellness.ui.tools.ToolsScreen
 
+private const val JOURNAL_ROUTE = "journal"
 private const val TOOLS_ROUTE = "tools"
 
 private data class TopLevelDestination(
@@ -38,7 +40,7 @@ private data class TopLevelDestination(
 )
 
 private val topLevelDestinations = listOf(
-    TopLevelDestination("journal", "Journal", Icons.Filled.Checklist),
+    TopLevelDestination(JOURNAL_ROUTE, "Journal", Icons.Filled.Checklist),
     TopLevelDestination("coach", "Coach", Icons.Filled.FitnessCenter),
     TopLevelDestination("trends", "Trends", Icons.Filled.Insights),
     TopLevelDestination("analysis", "Analysis", Icons.Filled.Analytics),
@@ -78,12 +80,13 @@ fun WellnessApp() {
         ) { innerPadding ->
             NavHost(
                 navController = navController,
-                startDestination = "journal",
+                startDestination = JOURNAL_ROUTE,
                 modifier = Modifier.padding(innerPadding),
             ) {
                 topLevelDestinations.forEach { destination ->
                     composable(destination.route) {
                         when (destination.route) {
+                            JOURNAL_ROUTE -> JournalDebugScreen()
                             TOOLS_ROUTE -> ToolsScreen()
                             else -> StubScreen(destination.label)
                         }

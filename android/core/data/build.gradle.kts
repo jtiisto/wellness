@@ -30,6 +30,19 @@ android {
         buildConfigField("String", "WELLNESS_BASE_URL", "\"$wellnessBaseUrl\"")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
+    sourceSets {
+        // Golden server payloads live at the repo root, shared across modules;
+        // putting them on the unit-test classpath is what lets the contract
+        // tests load them as `/golden/<module>/<name>.json`.
+        getByName("test") {
+            resources.directories.add(layout.settingsDirectory.dir("testdata").asFile.path)
+        }
+        // MigrationTestHelper reads the exported schemas from the test APK's
+        // assets — that is what makes runMigrationsAndValidate an assertion.
+        getByName("androidTest") {
+            assets.directories.add(layout.projectDirectory.dir("schemas").asFile.path)
+        }
+    }
 }
 
 dependencies {

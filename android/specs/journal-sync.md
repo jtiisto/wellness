@@ -1,6 +1,12 @@
 # Spec: Journal Data + Sync (Phase 2)
 
-Status: **v2 — Codex-reviewed (8 must-fixes folded in); user pre-authorized Phase 2 ("complete independently, same pipeline"), morning review pending**
+Status: **v3 — spec + code both Codex-reviewed; implemented. User pre-authorized Phase 2 ("complete independently, same pipeline"); morning review pending**
+
+> **v3 protocol clarifications** (from the code-review fix round):
+> - **Stamps always land; adoptions are refused when the row moved on.** Accepted-stamp application touches only the token (in-transaction re-read, content and generation untouched) and is unconditional — refusing it would leave a stale base token and turn the next upload into a rejection that loses the mid-sync edit anyway (the PWA stamps unconditionally for this reason). Rejected-serverRow *adoptions* replace content, so they are generation-guarded and skipped when the row changed after the upload body was built.
+> - **The adoption/settled-delete guard compares against the generation each row had at upload-body build time**, not the step-2 snapshot (a normalized-mid-cycle tracker is dirty at build but absent from the snapshot). The step-2 snapshot still solely governs dirty *clears*.
+> - **Settled local deletes** (accepted, or rejected-with-deleted-serverRow) are cleaned up inside the response transaction; the step-8 standalone prune only ever removes `deleted=1 AND isDirty=0` rows.
+> - **A rejected local delete drops the delete intent** — adoption takes the serverRow whole (`deleted=false`), exactly as the PWA replaces the object outright; preserving the flag would combine with the settled-prune to delete a tracker the server still has.
 
 ## Goal
 
