@@ -1,4 +1,5 @@
 pluginManagement {
+    includeBuild("build-logic")
     repositories {
         google {
             content {
@@ -12,7 +13,6 @@ pluginManagement {
     }
 }
 
-@Suppress("UnstableApiUsage")
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories {
@@ -24,11 +24,9 @@ dependencyResolutionManagement {
 rootProject.name = "wellness"
 
 include(":app")
-include(":core:common")
-include(":core:database")
-include(":core:network")
-include(":core:sync")
+include(":core:data")
 include(":core:ui")
 include(":feature:journal")
 include(":feature:coach")
+include(":feature:trends")
 include(":feature:analysis")

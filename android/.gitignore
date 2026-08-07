@@ -1,16 +1,10 @@
 *.iml
 .gradle
-/local.properties
+.kotlin/
+local.properties
 /.idea
 .DS_Store
-/build
-/app/build
-/core/*/build
-/feature/*/build
+build/
 /captures
 .externalNativeBuild
 .cxx
-local.properties
-
-# Gradle wrapper jar is checked in (standard practice)
-# !gradle/wrapper/gradle-wrapper.jar

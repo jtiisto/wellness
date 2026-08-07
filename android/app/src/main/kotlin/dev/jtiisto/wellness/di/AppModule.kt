@@ -2,7 +2,6 @@ package dev.jtiisto.wellness.di
 
 import org.koin.dsl.module
 
+// Populated in Phase 1 (network, database, sync orchestrator).
 val appModule = module {
-    // Core modules will be included here as they are implemented
-    // includes(networkModule, databaseModule, syncModule)
 }

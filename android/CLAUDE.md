@@ -1,15 +1,29 @@
 # Wellness Native Android App
 
 ## Overview
-Native Android client for the Wellness system (Journal, Coach, Analysis), working against the same FastAPI server APIs as the PWA.
+Native Android client for the Wellness system (Journal, Coach, Trends, Analysis), working against the same FastAPI server APIs as the PWA at `~/dev/health/wellness`. Android client only — no server changes in this repo.
 
 ## Tech Stack
 - Kotlin + Jetpack Compose, Material 3
 - minSdk 35 (Pixel 10+)
 - Ktor (HTTP), Koin (DI), kotlinx.serialization
-- Single Room database with isDirty flags
+- Single Room database with isDirty + dirtyGeneration flags
 - MVI architecture with StateFlow
 - Package: `dev.jtiisto.wellness`
+
+## Module Structure
+- `build-logic/` — convention plugins (`wellness.android.application|library|feature`); module config lives here, not copy-pasted
+- `app/` — MainActivity, nav shell, Koin bootstrap, WorkManager init
+- `core/data/` — Room, Ktor, DTOs, repositories, sync engine (headless-testable; no Compose deps)
+- `core/ui/` — M3 theme + shared composables
+- `feature/{journal,coach,trends,analysis}/` — ViewModels + screens only; features depend on `core/*`, never on each other; UI never touches DAOs
+
+## Protocol Conventions (non-negotiable)
+- Server timestamps are **opaque strings** compared lexically — never `Instant.parse` in sync code.
+- Calendar dates are local `YYYY-MM-DD` strings; weekdays 0=Sun…6=Sat.
+- Optional wire fields are **omitted, never null**; shared `Json { ignoreUnknownKeys; explicitNulls=false; encodeDefaults=false }`.
+- Journal tracker unknown fields must round-trip verbatim (meta_json passthrough).
+- Golden fixtures in `testdata/golden/` are **synthetic only** — never copied from live databases.
 
 ## Spec-Driven Development
 
@@ -37,11 +51,15 @@ A spec should include:
 - When a spec and the code disagree, the spec is the source of truth — update the code, or update the spec first if the code is right.
 - Specs do not need to be exhaustive upfront. They grow as understanding grows.
 
-## Project Structure
-See `plan.md` for the full architecture plan, module structure, and implementation phases.
+## Build & Quality Harness
+- Git hooks are tracked in `githooks/` (activate per-clone: `git config core.hooksPath githooks`). Pre-commit: change-scoped `./gradlew testDebugUnitTest`. Pre-push: full suite + `koverVerifyAggregated`; docs-only pushes skip; override with `WELLNESS_FULL_PUSH=1`.
+- Commits/pushes go through `bin/git-commit-push.sh` (detached; see `~/dev/CLAUDE.md`).
+- Room schemas are exported and committed under `core/data/schemas/`.
+- Instrumented tests run only in emulator sessions (see ADB skills in `~/dev/native/CLAUDE.md`), never in hooks.
 
 ## Key Docs
-- `plan.md` — Architecture plan and implementation phases
-- `docs/dev-environment-setup.md` — Linux + Windows dev environment setup
-- `docs/figma-design-workflow.md` — Figma + Google Stitch UI design guide
+- `plan.md` — Architecture plan and implementation phases (Phases 0–8)
+- `~/dev/health/wellness/docs/ARCHITECTURE.md` — server/PWA sync protocols and data models (the porting bible)
+- `~/dev/health/wellness/test/js/` — behavioral spec for all ported pure logic
+- `docs/dev-environment-setup.md` — Linux build machine + Windows emulator setup
 - `specs/` — Living spec documents (spec-driven development)

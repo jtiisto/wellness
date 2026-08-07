@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Pre-commit hook: run the tests relevant to what is staged.
+#
+#   * Android/build files staged -> ./gradlew testDebugUnitTest (Gradle skips
+#                                   up-to-date modules, so this stays fast)
+#   * testdata/golden/ staged    -> same (contract fixtures back unit tests)
+#   * docs-only commit           -> skip tests
+#
+# Tracked in githooks/ and activated per-clone with
+#   git config core.hooksPath githooks
+set -uo pipefail
+
+cd "$(git rev-parse --show-toplevel)" || exit 1
+
+staged="$(git diff --cached --name-only --diff-filter=ACMR)"
+if [[ -z "$staged" ]]; then
+    echo "pre-commit: nothing staged — nothing to test."
+    exit 0
+fi
+
+if printf '%s\n' "$staged" | grep -qE '^(app|core|feature|build-logic)/|^build\.gradle|^settings\.gradle|^gradle(/|\.properties)|^testdata/golden/'; then
+    echo "pre-commit: Android files staged — running unit tests..."
+    ./gradlew testDebugUnitTest -q || {
+        echo "pre-commit: UNIT TESTS FAILED — commit aborted." >&2
+        exit 1
+    }
+else
+    echo "pre-commit: docs/tooling-only commit — skipping tests."
+    exit 0
+fi
+
+echo "pre-commit: checks passed."
