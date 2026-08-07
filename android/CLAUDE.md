@@ -56,6 +56,7 @@ A spec should include:
 - Commits/pushes go through `bin/git-commit-push.sh` (detached; see `~/dev/CLAUDE.md`).
 - Room schemas are exported and committed under `core/data/schemas/`.
 - Instrumented tests run only in emulator sessions (see ADB skills in `~/dev/native/CLAUDE.md`), never in hooks.
+- When the emulator is unavailable, ship the debug APK for manual testing: `rclone copyto app/build/outputs/apk/debug/app-debug.apk "gdrive:Wellness/APKs/wellness-debug-<yyyymmdd-hhmm>.apk"` (plus a `wellness-debug-latest.apk` copy), then tell the user what to verify.
 
 ## Key Docs
 - `plan.md` — Architecture plan and implementation phases (Phases 0–8)
