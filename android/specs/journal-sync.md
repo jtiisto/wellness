@@ -1,6 +1,6 @@
 # Spec: Journal Data + Sync (Phase 2)
 
-Status: **v3 — spec + code both Codex-reviewed; implemented. User pre-authorized Phase 2 ("complete independently, same pipeline"); morning review pending**
+Status: **v3 — implemented, device-verified 2026-08-07 (user). Sync-dot decision: keep PWA parity — RED on sync failure while the device believes it is online (tailscale off with Wi-Fi up shows RED, not GRAY); GRAY strictly means no validated network. Deliberate, user-confirmed.**
 
 > **v3 protocol clarifications** (from the code-review fix round):
 > - **Stamps always land; adoptions are refused when the row moved on.** Accepted-stamp application touches only the token (in-transaction re-read, content and generation untouched) and is unconditional — refusing it would leave a stale base token and turn the next upload into a rejection that loses the mid-sync edit anyway (the PWA stamps unconditionally for this reason). Rejected-serverRow *adoptions* replace content, so they are generation-guarded and skipped when the row changed after the upload body was built.
