@@ -23,6 +23,8 @@ Porting sources (behavior is theirs):
 7. Emoji glyphs → Material icons, each with a content description (lock badge, chevron, delete, checkbox state, slider value — the emoji carried textual cues we must not lose). Category sort unified to plain `compareTo` at BOTH levels (the PWA's category keys already sort UTF-16 lexicographic via comparator-free `Array.sort()`; only tracker *names* used `localeCompare` — the unification changes name ordering for non-ASCII names; pinned by a test with an accented name).
 8. Accumulator modal keeps the PWA's silent-close on 0/invalid input; IME "Done" submits.
 9. **`valueUpdatedTimes` is pruned** to the local data window on write (the PWA never prunes its map — unbounded growth). Retention matches entries: a stamp is kept while its date `>= localDataWindowStart(7)` = today−7 (same inclusive cutoff as the entry prune, pinned by one shared test).
+10. *(v3, from implementation)* **Untouched tracker save is a true no-op**: `updateTrackerAndMarkDirty` compares the transformed row to the stored one and skips write + dirty when identical. The PWA always writes and dirties, which phantom-locks past dates behind an empty upload. One documented wrinkle: a pre-accumulator-era tracker's first untouched save legitimately writes (the form fills in missing quantifiable keys) — every save after is a no-op.
+11. *(v3, from implementation)* **Blank numeric input clears the value to ABSENT** (`Set(null)` → SQL NULL), not the PWA's explicit null — re-ticking the checkbox then reseeds the default. Unparseable non-blank input restores the displayed value with no write. Upload serialization is identical either way (`"value": null`).
 
 ## API / Interface
 

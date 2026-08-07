@@ -2,8 +2,24 @@ package dev.jtiisto.wellness.core.data.journal
 
 import dev.jtiisto.wellness.core.data.network.DateString
 import dev.jtiisto.wellness.core.data.network.SyncStamp
+import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.SerializationException
+import kotlinx.serialization.descriptors.SerialDescriptor
+import kotlinx.serialization.descriptors.buildClassSerialDescriptor
+import kotlinx.serialization.encoding.Decoder
+import kotlinx.serialization.encoding.Encoder
+import kotlinx.serialization.json.JsonDecoder
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonEncoder
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.put
 
 /**
  * One tracker's value for one day.
@@ -12,13 +28,63 @@ import kotlinx.serialization.json.JsonElement
  * a number for quantifiable and evaluation trackers, a string for notes, null
  * for a bare checkbox. Coercing it to a typed union here would lose the
  * server's exact literal on the way back out.
+ *
+ * Its **nullability carries meaning**, which is why the decoding is hand-written
+ * (see [EntryDtoSerializer]): a Kotlin null means the server sent no `value`
+ * key at all, while [JsonNull] means it sent one holding null. Storage mirrors
+ * the distinction (`valueJson` SQL NULL versus the literal `"null"`) and the
+ * checkbox depends on it — it seeds a tracker's default only into a genuinely
+ * absent value, never over one the server put there.
  */
-@Serializable
+@Serializable(with = EntryDtoSerializer::class)
 data class EntryDto(
     val value: JsonElement? = null,
     val completed: Boolean? = null,
     val lastModifiedAt: SyncStamp? = null,
 )
+
+/**
+ * Presence-aware [EntryDto] decoding.
+ *
+ * The generated serializer cannot express this: with `explicitNulls = false` it
+ * folds a missing key and an explicit null into the same Kotlin null, and the
+ * pull would then store every server-sent null as *absent*. Reading the object
+ * directly keeps the two apart. Encoding is the inverse — an absent value is
+ * omitted, an explicit one is written as null — so a decode/encode round trip
+ * reproduces the server's object.
+ */
+object EntryDtoSerializer : KSerializer<EntryDto> {
+
+    override val descriptor: SerialDescriptor =
+        buildClassSerialDescriptor("dev.jtiisto.wellness.core.data.journal.EntryDto")
+
+    override fun deserialize(decoder: Decoder): EntryDto {
+        val input = decoder as? JsonDecoder
+            ?: throw SerializationException("journal DTOs decode from JSON only")
+        val obj = input.decodeJsonElement().jsonObject
+        return EntryDto(
+            // Deliberately not filtered for JsonNull: that IS the distinction.
+            value = obj["value"],
+            completed = obj.primitive("completed")?.booleanOrNull,
+            lastModifiedAt = obj.primitive("lastModifiedAt")?.contentOrNull,
+        )
+    }
+
+    override fun serialize(encoder: Encoder, value: EntryDto) {
+        val output = encoder as? JsonEncoder
+            ?: throw SerializationException("journal DTOs encode to JSON only")
+        output.encodeJsonElement(
+            buildJsonObject {
+                value.value?.let { put("value", it) }
+                value.completed?.let { put("completed", JsonPrimitive(it)) }
+                value.lastModifiedAt?.let { put("lastModifiedAt", JsonPrimitive(it)) }
+            },
+        )
+    }
+
+    private fun JsonObject.primitive(key: String): JsonPrimitive? =
+        (this[key] as? JsonPrimitive)?.takeIf { it !is JsonNull }
+}
 
 /**
  * `GET /api/journal/sync/delta`. Every list defaults to empty so a server that

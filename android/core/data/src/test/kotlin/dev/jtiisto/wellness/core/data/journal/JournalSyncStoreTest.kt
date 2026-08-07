@@ -31,6 +31,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -82,6 +83,60 @@ class JournalSyncStoreTest {
         assertEquals(true, world.dao.entries.getValue("2026-08-06|t1").completed)
         assertEquals("s2", world.dao.meta[JournalDao.KEY_LAST_SERVER_SYNC_TIME])
         assertEquals(SyncStatus.GREEN, world.store().syncStatus.value)
+    }
+
+    @Test
+    @DisplayName("a server-sent explicit null value is stored as null, not as absent")
+    fun pullPreservesExplicitNullValues() = runTest {
+        val world = World()
+        world.delta = delta(
+            config = """{"id":"t1","name":"Water","type":"quantifiable","lastModifiedAt":"s1"}""",
+            days = """"2026-08-06":{""" +
+                """"t1":{"value":null,"completed":true,"lastModifiedAt":"s1"},""" +
+                """"t2":{"completed":true,"lastModifiedAt":"s1"}}""",
+        )
+
+        world.store().triggerSync()
+
+        // The two are different states and storage has to keep them apart: the
+        // checkbox seeds a tracker's default value into an ABSENT entry only,
+        // and folding these together would let it overwrite a null the server
+        // deliberately sent.
+        assertEquals("null", world.dao.entries.getValue("2026-08-06|t1").valueJson)
+        assertNull(world.dao.entries.getValue("2026-08-06|t2").valueJson, "no value key at all stays absent")
+
+        val day = world.store().observeDay("2026-08-06").first()
+        assertEquals(JsonNull, day.getValue("t1").value)
+        assertFalse(day["t1"].isValueAbsent(), "an explicit null is a value the checkbox must not replace")
+        assertNull(day.getValue("t2").value)
+        assertTrue(day["t2"].isValueAbsent())
+    }
+
+    @Test
+    @DisplayName("an update that changes nothing writes nothing and dirties nothing")
+    fun unchangedUpdateIsANoOp() = runTest {
+        val world = World()
+        world.seedTracker("t1", name = "Water", stamp = "s0")
+        val before = world.dao.trackers.getValue("t1")
+
+        world.store().updateTracker("t1") { it }
+
+        assertEquals(before, world.dao.trackers.getValue("t1"))
+        assertEquals(0, world.dao.countDirty(), "an untouched save must not dirty the tracker")
+        assertEquals(0, world.scheduledUploads, "nor schedule an upload for it")
+    }
+
+    @Test
+    @DisplayName("a real edit still writes and dirties")
+    fun changedUpdateStillWrites() = runTest {
+        val world = World()
+        world.seedTracker("t1", name = "Water", stamp = "s0")
+
+        world.store().updateTracker("t1") { it.copy(name = "Hydration") }
+
+        assertEquals("Hydration", world.dao.trackers.getValue("t1").name)
+        assertTrue(world.dao.trackers.getValue("t1").isDirty)
+        assertEquals(1, world.scheduledUploads)
     }
 
     @Test
@@ -727,7 +782,7 @@ class JournalSyncStoreTest {
  * composed `@Transaction` methods are inherited, so these tests exercise the
  * real ordering inside them rather than a re-implementation of it.
  */
-internal class FakeJournalDao : JournalDao() {
+internal open class FakeJournalDao : JournalDao() {
 
     val trackers = linkedMapOf<String, JournalTrackerEntity>()
     val entries = linkedMapOf<String, JournalEntryEntity>()
@@ -759,6 +814,8 @@ internal class FakeJournalDao : JournalDao() {
     private fun key(date: DateString, trackerId: String) = "$date|$trackerId"
 
     override suspend fun getMeta(key: String): String? = meta[key]
+
+    override fun observeMeta(key: String): Flow<String?> = revision.map { meta[key] }
 
     override suspend fun upsertMeta(row: JournalMetaEntity) {
         meta[row.key] = row.value
@@ -799,8 +856,14 @@ internal class FakeJournalDao : JournalDao() {
     override fun observeDay(date: DateString): Flow<List<JournalEntryEntity>> =
         revision.map { entries.values.filter { it.date == date } }
 
+    override fun observeAllEntries(): Flow<List<JournalEntryEntity>> = revision.map { entries.values.toList() }
+
     override suspend fun countDirty(): Int =
         trackers.values.count { it.isDirty } + entries.values.count { it.isDirty }
+
+    override suspend fun countDirtyTrackers(): Int = trackers.values.count { it.isDirty }
+
+    override fun observeDirtyTrackerCount(): Flow<Int> = revision.map { trackers.values.count { it.isDirty } }
 
     override suspend fun upsertTracker(row: JournalTrackerEntity) {
         trackers[row.id] = row

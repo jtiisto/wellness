@@ -39,10 +39,11 @@ kover {
         variant("aggregated") {
             verify {
                 rule {
-                    // Parked at 0 until Phase 3 baselines real coverage
-                    // (pulse-bridge pattern: measure, then raise; never lower
-                    // without a deliberate decision).
-                    minBound(0)
+                    // Measured 82.27% aggregated line coverage on 2026-08-07
+                    // (end of Phase 3), gated two points below so ordinary
+                    // churn does not trip it. Measure, then raise; never lower
+                    // without a deliberate decision.
+                    minBound(80)
                 }
             }
         }

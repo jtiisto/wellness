@@ -14,9 +14,14 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -26,9 +31,11 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import dev.jtiisto.wellness.core.data.sync.SyncErrorEvents
 import dev.jtiisto.wellness.core.ui.theme.WellnessTheme
-import dev.jtiisto.wellness.ui.journal.JournalDebugScreen
+import dev.jtiisto.wellness.feature.journal.JournalTab
 import dev.jtiisto.wellness.ui.tools.ToolsScreen
+import org.koin.compose.koinInject
 
 private const val JOURNAL_ROUTE = "journal"
 private const val TOOLS_ROUTE = "tools"
@@ -53,8 +60,20 @@ fun WellnessApp() {
         val navController = rememberNavController()
         val backStackEntry by navController.currentBackStackEntryAsState()
         val currentDestination = backStackEntry?.destination
+        val snackbarHostState = remember { SnackbarHostState() }
+
+        // Server-side sync failures, shown once each. The events arrive on a
+        // channel rather than as state, so a rotation cannot re-raise a
+        // snackbar for a sync that failed minutes ago.
+        val syncErrors = koinInject<SyncErrorEvents>()
+        LaunchedEffect(syncErrors) {
+            syncErrors.messages.collect { message ->
+                snackbarHostState.showSnackbar(message = message, duration = SnackbarDuration.Long)
+            }
+        }
 
         Scaffold(
+            snackbarHost = { SnackbarHost(snackbarHostState) },
             bottomBar = {
                 NavigationBar {
                     topLevelDestinations.forEach { destination ->
@@ -86,7 +105,7 @@ fun WellnessApp() {
                 topLevelDestinations.forEach { destination ->
                     composable(destination.route) {
                         when (destination.route) {
-                            JOURNAL_ROUTE -> JournalDebugScreen()
+                            JOURNAL_ROUTE -> JournalTab()
                             TOOLS_ROUTE -> ToolsScreen()
                             else -> StubScreen(destination.label)
                         }

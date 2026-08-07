@@ -6,6 +6,7 @@ import dev.jtiisto.wellness.core.data.WellnessJson
 import dev.jtiisto.wellness.core.data.db.WELLNESS_MIGRATIONS
 import dev.jtiisto.wellness.core.data.db.WellnessDatabase
 import dev.jtiisto.wellness.core.data.journal.JournalSyncStore
+import dev.jtiisto.wellness.core.data.journal.JournalUiPrefs
 import dev.jtiisto.wellness.core.data.network.JournalApi
 import dev.jtiisto.wellness.core.data.network.ServerConfig
 import dev.jtiisto.wellness.core.data.network.buildHttpClient
@@ -13,6 +14,7 @@ import dev.jtiisto.wellness.core.data.network.isNetworkError
 import dev.jtiisto.wellness.core.data.sync.ConnectivityMonitor
 import dev.jtiisto.wellness.core.data.sync.DebugLog
 import dev.jtiisto.wellness.core.data.sync.SyncOrchestrator
+import dev.jtiisto.wellness.core.data.sync.SyncErrorEvents
 import dev.jtiisto.wellness.core.data.sync.SyncScheduler
 import io.ktor.client.HttpClient
 import kotlinx.coroutines.CoroutineScope
@@ -55,6 +57,8 @@ val coreDataModule = module {
     single { JournalApi(client = get(), config = get()) }
 
     single { ConnectivityMonitor(androidContext()) }
+    single { SyncErrorEvents() }
+    single { JournalUiPrefs(dao = get(), json = get()) }
 
     single {
         val connectivity = get<ConnectivityMonitor>()
@@ -77,6 +81,7 @@ val coreDataModule = module {
         // No pollCheckFn: the journal full-syncs on every poll tick, as the PWA
         // does. The delta with a `since` watermark is cheap enough not to need
         // a cheaper probe in front of it.
+        val errors = get<SyncErrorEvents>()
         SyncScheduler(
             scope = get(AppScope),
             name = "journal",
@@ -84,6 +89,7 @@ val coreDataModule = module {
             isSyncing = { store.isSyncing },
             hasDirtyData = store::hasDirtyData,
             isOnline = { connectivity.isOnline.value },
+            onServerError = errors::postServerError,
             isNetworkError = ::isNetworkError,
             debugLog = get(),
         )

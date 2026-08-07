@@ -1,0 +1,35 @@
+package dev.jtiisto.wellness.core.data.sync
+
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.receiveAsFlow
+
+/**
+ * The bridge from a scheduler's server-classified failure to the app's snackbar.
+ *
+ * A [Channel] rather than a `StateFlow`: a failure is an **event**, and each one
+ * must produce exactly one snackbar. Held as state it would re-show itself on
+ * every recomposition and every rotation, long after the sync that failed.
+ * Network errors never arrive here — the status indicator already says
+ * "offline", and a toast per dropped connection is noise.
+ */
+class SyncErrorEvents {
+
+    private val channel = Channel<String>(
+        capacity = Channel.BUFFERED,
+        // A burst of failures with nothing listening (the app is backgrounded)
+        // must not suspend the scheduler; the newest message is the useful one.
+        onBufferOverflow = BufferOverflow.DROP_OLDEST,
+    )
+
+    /** Consumed once. A second collector will not see an already-shown message. */
+    val messages: Flow<String> = channel.receiveAsFlow()
+
+    fun postServerError(error: Throwable) {
+        val detail = error.message?.takeIf { it.isNotBlank() }
+            ?: error::class.simpleName
+            ?: "unknown error"
+        channel.trySend("Sync Failed: $detail")
+    }
+}

@@ -67,8 +67,12 @@ class JournalGoldenFixtureTest {
         assertEquals("negative", eval.polarity)
 
         // The polymorphic entry value: null, number and string all in one pull.
+        // The server really does send `"value": null` here, and that decodes to
+        // JsonNull, not to absence — folding the two together would make the
+        // day view treat a server-set null as "never logged" and let the
+        // checkbox overwrite it with the tracker's default.
         val fifth = response.days.getValue("2026-08-05")
-        assertEquals(null, fifth.getValue("fixture-simple").value)
+        assertEquals(JsonNull, fifth.getValue("fixture-simple").value)
         assertEquals(true, fifth.getValue("fixture-simple").completed)
         assertEquals(750.0, fifth.getValue("fixture-quant").value?.jsonPrimitive?.content?.toDouble())
         val sixth = response.days.getValue("2026-08-06")

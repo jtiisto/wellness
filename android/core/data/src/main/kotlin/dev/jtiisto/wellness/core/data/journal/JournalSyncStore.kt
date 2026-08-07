@@ -115,8 +115,28 @@ class JournalSyncStore(
     fun observeDay(date: DateString): Flow<Map<String, EntryDto>> =
         dao.observeDay(date).map { rows -> rows.associate { it.trackerId to it.toDto() } }
 
+    /**
+     * Every stored day, keyed by date then tracker id — the shape the pure
+     * logic takes. One flow rather than one per date: the day view needs the
+     * selected day *and* a week of history behind every row's dot strip.
+     */
+    fun observeEntriesByDate(): Flow<Map<DateString, Map<String, EntryDto>>> =
+        dao.observeAllEntries().map(::groupByDate)
+
+    /** How many trackers have unsent edits — what locks the date strip. */
+    fun observeDirtyTrackerCount(): Flow<Int> = dao.observeDirtyTrackerCount()
+
     /** The scheduler's dirty hook. */
     suspend fun hasDirtyData(): Boolean = dao.countDirty() > 0
+
+    /**
+     * Today is always editable. Any other day is editable only while no tracker
+     * is dirty — a pending config change (a delete included) could change what
+     * that older day even means once the server arbitrates it. Dirty *entries*
+     * never lock anything.
+     */
+    suspend fun isDayEditable(date: DateString): Boolean =
+        isDayEditable(date, today().toString(), dao.countDirtyTrackers())
 
     /**
      * The client identity, minted once and cached for the process. The mutex
@@ -143,6 +163,9 @@ class JournalSyncStore(
      * the Kotlin stand-in for the JS partial-merge object — and must return the
      * full next value. It runs inside the write transaction, so it always sees
      * the row as stored rather than a copy that may already be stale.
+     *
+     * A transform that produces an identical row writes nothing and schedules
+     * nothing: saving the config form without edits must not dirty a tracker.
      */
     suspend fun updateTracker(id: String, transform: (TrackerDto) -> TrackerDto) {
         val updated = dao.updateTrackerAndMarkDirty(id) { existing ->
@@ -159,6 +182,32 @@ class JournalSyncStore(
 
     suspend fun updateEntry(date: DateString, trackerId: String, value: JsonElement?, completed: Boolean?) {
         dao.upsertEntryAndMarkDirty(date, trackerId, value?.let(::encodeValue), completed)
+        afterLocalChange()
+    }
+
+    /**
+     * The widgets' write path: a **merge**, one field at a time, in a single
+     * transaction.
+     *
+     * [EntryPatch] is presence-aware because the PWA's `{...entry, ...data}`
+     * spread is: a field the widget did not touch keeps whatever is stored, and
+     * that has to be decided against the row as it stands, not against what the
+     * screen last rendered. A patch that sets neither field is a no-op — no
+     * write, nothing marked dirty, no upload scheduled — which is what makes
+     * the numeric field's "blur echoed the same value" case free.
+     */
+    suspend fun mergeEntry(date: DateString, trackerId: String, patch: EntryPatch) {
+        val value = patch.value
+        val completed = patch.completed
+        if (value !is EntryField.Set && completed !is EntryField.Set) return
+        dao.mergeEntryAndMarkDirty(
+            date = date,
+            trackerId = trackerId,
+            setValue = value is EntryField.Set,
+            valueJson = (value as? EntryField.Set)?.value?.let(::encodeValue),
+            setCompleted = completed is EntryField.Set,
+            completed = (completed as? EntryField.Set)?.value,
+        )
         afterLocalChange()
     }
 

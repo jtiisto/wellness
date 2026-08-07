@@ -22,8 +22,6 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
-import kotlin.math.abs
-import kotlin.math.floor
 
 /**
  * Tracker fields the sync protocol owns, mirroring `_TRACKER_RESERVED_KEYS` in
@@ -45,9 +43,9 @@ internal val TRACKER_RESERVED_KEYS: Set<String> = setOf(
 /** A weekday schedule in effect from [effectiveFrom]. 0=Sun…6=Sat; `[]` = paused. */
 @kotlinx.serialization.Serializable
 data class ScheduleSegmentDto(
-    val effectiveFrom: DateString,
+    override val effectiveFrom: DateString,
     val days: List<Int>,
-)
+) : EffectiveDated
 
 /**
  * A quantifiable tracker's goal range. Both bounds optional (min-only, max-only
@@ -66,9 +64,9 @@ data class TargetDto(
  */
 @kotlinx.serialization.Serializable(with = TargetSegmentDtoSerializer::class)
 data class TargetSegmentDto(
-    val effectiveFrom: DateString,
+    override val effectiveFrom: DateString,
     val target: TargetDto? = null,
-)
+) : EffectiveDated
 
 /**
  * One journal tracker in its server-facing shape.
@@ -182,8 +180,8 @@ object TargetDtoSerializer : KSerializer<TargetDto> {
     override fun serialize(encoder: Encoder, value: TargetDto) {
         encoder.asJsonEncoder().encodeJsonElement(
             buildJsonObject {
-                value.min?.let { put("min", jsonNumber(it)) }
-                value.max?.let { put("max", jsonNumber(it)) }
+                value.min?.let { put("min", journalNumberJson(it)) }
+                value.max?.let { put("max", journalNumberJson(it)) }
             },
         )
     }
@@ -221,20 +219,6 @@ object TargetSegmentDtoSerializer : KSerializer<TargetSegmentDto> {
         )
     }
 }
-
-/**
- * The 1e15 bound is where `Double` stops being able to name every integer
- * (2^53 ≈ 9.0e15): past it, `toLong()` would print a precise-looking value the
- * source number never held. Targets are body-weight and millilitre magnitudes,
- * so nothing real approaches it — anything that does keeps its decimal form
- * rather than gaining false precision.
- */
-private fun jsonNumber(value: Double): JsonPrimitive =
-    if (value.isFinite() && value == floor(value) && abs(value) < 1e15) {
-        JsonPrimitive(value.toLong())
-    } else {
-        JsonPrimitive(value)
-    }
 
 private fun Decoder.asJsonDecoder(): JsonDecoder =
     this as? JsonDecoder ?: throw SerializationException("journal DTOs decode from JSON only")

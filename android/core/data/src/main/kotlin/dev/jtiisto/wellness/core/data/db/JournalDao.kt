@@ -84,6 +84,10 @@ abstract class JournalDao {
     @Query("SELECT value FROM journal_meta WHERE key = :key")
     abstract suspend fun getMeta(key: String): String?
 
+    /** The UI's own preferences live here too, under `ui.`-namespaced keys. */
+    @Query("SELECT value FROM journal_meta WHERE key = :key")
+    abstract fun observeMeta(key: String): Flow<String?>
+
     @Upsert
     abstract suspend fun upsertMeta(row: JournalMetaEntity)
 
@@ -146,11 +150,29 @@ abstract class JournalDao {
     @Query("SELECT * FROM journal_entries WHERE date = :date")
     abstract fun observeDay(date: DateString): Flow<List<JournalEntryEntity>>
 
+    /**
+     * Every stored entry. The 7-day prune keeps this to a couple of hundred
+     * rows, and the day view needs a whole window at once anyway: each row's
+     * dot strip reaches seven days back from whichever date is selected.
+     */
+    @Query("SELECT * FROM journal_entries")
+    abstract fun observeAllEntries(): Flow<List<JournalEntryEntity>>
+
     @Query(
         "SELECT (SELECT COUNT(*) FROM journal_trackers WHERE isDirty = 1) + " +
             "(SELECT COUNT(*) FROM journal_entries WHERE isDirty = 1)",
     )
     abstract suspend fun countDirty(): Int
+
+    /**
+     * Dirty *trackers* only — what the date strip's lock keys off. A pending
+     * delete counts (it is a dirty tracker row); a dirty entry never does.
+     */
+    @Query("SELECT COUNT(*) FROM journal_trackers WHERE isDirty = 1")
+    abstract suspend fun countDirtyTrackers(): Int
+
+    @Query("SELECT COUNT(*) FROM journal_trackers WHERE isDirty = 1")
+    abstract fun observeDirtyTrackerCount(): Flow<Int>
 
     // ---- primitive writes ------------------------------------------------
 
@@ -229,7 +251,17 @@ abstract class JournalDao {
     /**
      * Edit a tracker in place. [transform] runs *inside* the transaction on the
      * row as it stands, so a concurrent write cannot be read-modify-written
-     * away. Returns false when the tracker is gone.
+     * away.
+     *
+     * A transform that changes nothing is not a write. Comparing the whole row
+     * — `dataJson`, the projections and the delete flag, with the dirty fields
+     * held equal so they cannot skew it — is what stops opening the config
+     * form and saving without edits from marking the tracker dirty. That would
+     * cost an empty upload and, worse, lock every past day in the date strip
+     * until it landed.
+     *
+     * Returns false when there was nothing to do: the tracker is gone, or the
+     * edit was a no-op. Either way the caller must not treat it as a change.
      */
     @Transaction
     open suspend fun updateTrackerAndMarkDirty(
@@ -237,12 +269,12 @@ abstract class JournalDao {
         transform: (JournalTrackerEntity) -> JournalTrackerEntity,
     ): Boolean {
         val existing = getTracker(id) ?: return false
-        upsertTracker(
-            transform(existing).copy(
-                isDirty = existing.isDirty,
-                dirtyGeneration = existing.dirtyGeneration,
-            ),
+        val next = transform(existing).copy(
+            isDirty = existing.isDirty,
+            dirtyGeneration = existing.dirtyGeneration,
         )
+        if (next == existing) return false
+        upsertTracker(next)
         markTrackerDirty(id)
         return true
     }
@@ -280,6 +312,46 @@ abstract class JournalDao {
                 trackerId = trackerId,
                 valueJson = valueJson,
                 completed = completed,
+                lastModifiedAt = existing?.lastModifiedAt,
+                isDirty = existing?.isDirty ?: false,
+                dirtyGeneration = existing?.dirtyGeneration ?: 0L,
+            ),
+        )
+        markEntryDirty(date, trackerId)
+    }
+
+    /**
+     * A **presence-aware** entry edit: the single write path behind every
+     * widget. Each field is written only when its `set` flag says so, and the
+     * other keeps whatever the stored row holds — read inside this transaction,
+     * because what the screen last rendered may already be a pull behind.
+     *
+     * The two nullabilities are different things and both are meaningful:
+     * `setValue = false` leaves the column alone, while `setValue = true` with
+     * a null [valueJson] clears it back to *absent* (SQL NULL). An explicitly
+     * null entry value is the string `"null"` and arrives here as such. The
+     * checkbox's "write the default" rule depends on telling those apart.
+     *
+     * Marks the **entry** dirty, never the tracker: entry edits must not lock
+     * the date strip.
+     */
+    @Transaction
+    open suspend fun mergeEntryAndMarkDirty(
+        date: DateString,
+        trackerId: String,
+        setValue: Boolean,
+        valueJson: String?,
+        setCompleted: Boolean,
+        completed: Boolean?,
+    ) {
+        if (!setValue && !setCompleted) return
+        val existing = getEntry(date, trackerId)
+        upsertEntry(
+            JournalEntryEntity(
+                date = date,
+                trackerId = trackerId,
+                valueJson = if (setValue) valueJson else existing?.valueJson,
+                completed = if (setCompleted) completed else existing?.completed,
                 lastModifiedAt = existing?.lastModifiedAt,
                 isDirty = existing?.isDirty ?: false,
                 dirtyGeneration = existing?.dirtyGeneration ?: 0L,
