@@ -56,6 +56,7 @@ A spec should include:
 - Commits/pushes go through `bin/git-commit-push.sh` (detached; see `~/dev/CLAUDE.md`).
 - Room schemas are exported and committed under `core/data/schemas/`.
 - Instrumented tests run only in emulator sessions (see ADB skills in `~/dev/native/CLAUDE.md`), never in hooks.
+- **Kover gotcha**: a filtered `--tests "*Foo*"` run poisons that module's kover execution data, and the stale artifact can make `koverVerifyAggregated` report wildly wrong numbers (or fail) on later runs even when up-to-date. Trust the gate only after a FULL unfiltered test run; recover with `./gradlew --rerun-tasks testDebugUnitTest` (or any full test execution, e.g. the pre-commit hook).
 - When the emulator is unavailable, ship the debug APK for manual testing: `rclone copyto app/build/outputs/apk/debug/app-debug.apk "gdrive:Wellness/APKs/wellness-debug-<yyyymmdd-hhmm>.apk"` (plus a `wellness-debug-latest.apk` copy), then tell the user what to verify.
 
 ## Key Docs
