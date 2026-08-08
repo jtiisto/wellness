@@ -397,9 +397,11 @@ private fun WorkoutHeader(day: WorkoutDayState.Planned, actions: CoachActions) {
         }
 
         AnimatedVisibility(visible = expanded && hasControls) {
-            Row(
+            // One full-width row per hook: sharing a single Row pushed the End
+            // button's Undo off-screen once labels grew ("(locked)", "Working…").
+            Column(
                 modifier = Modifier.padding(top = 8.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 day.controls?.start?.let { HookButton(model = it, actions = actions) }
                 day.controls?.end?.let { HookButton(model = it, actions = actions) }
@@ -429,8 +431,13 @@ private fun MetaItem(icon: androidx.compose.ui.graphics.vector.ImageVector, text
  */
 @Composable
 private fun HookButton(model: HookButtonModel, actions: CoachActions) {
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
         Button(
+            modifier = Modifier.weight(1f),
             onClick = { if (model.canFire) actions.onFireHook(model.action) },
             enabled = model.enabled,
             colors = when (model.state) {
