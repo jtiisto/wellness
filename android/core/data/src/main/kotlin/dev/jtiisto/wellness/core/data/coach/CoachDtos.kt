@@ -80,6 +80,44 @@ data class PlanBlockDto(
  * [targetReps], [targetRpe] and [targetLoad] are **strings**: the server stores
  * free-form coaching text there (`"8-10"`, `"6-7"`, `"70%"`), not numbers.
  */
+/** Which workout hook a call targets. The path segment is the wire name. */
+enum class HookAction(val path: String) { START("start"), END("end") }
+
+/**
+ * `GET /api/coach/workout/{id}/status`.
+ *
+ * [actionsAvailable] is the ONLY availability source the client uses: it says
+ * whether each hook script is configured and present on the server, which makes
+ * the separate `GET /workout/config` call redundant. A response that omits it
+ * means "nothing is configured" rather than a decode failure.
+ */
+@Serializable
+data class WorkoutStatusDto(
+    @SerialName("start") val start: HookResultDto? = null,
+    @SerialName("end") val end: HookResultDto? = null,
+    @SerialName("actions_available") val actionsAvailable: HookAvailabilityDto = HookAvailabilityDto(),
+)
+
+@Serializable
+data class HookAvailabilityDto(
+    @SerialName("start") val start: Boolean = false,
+    @SerialName("end") val end: Boolean = false,
+)
+
+/**
+ * One hook phase's recorded run.
+ *
+ * A null [exitCode] is not "unknown" — it is the server's marker for a hook
+ * still running, written the moment the fire endpoint accepts the request. The
+ * hook is killed at 120 s, so the null resolves one way or the other.
+ */
+@Serializable
+data class HookResultDto(
+    @SerialName("fired_at") val firedAt: String? = null,
+    @SerialName("exit_code") val exitCode: Int? = null,
+    @SerialName("data") val data: JsonObject? = null,
+)
+
 @Serializable
 data class PlanExerciseDto(
     @SerialName("id") val id: String,

@@ -94,6 +94,14 @@ abstract class CoachDao {
     @Query("SELECT * FROM coach_plans ORDER BY date")
     abstract suspend fun listAllPlans(): List<CoachPlanEntity>
 
+    /**
+     * Every plan in the window. The calendar's status dots and the
+     * last-performance lookup both need the whole window, not one day, and the
+     * window is bounded at 60 days by the prune.
+     */
+    @Query("SELECT * FROM coach_plans ORDER BY date")
+    abstract fun observeAllPlans(): Flow<List<CoachPlanEntity>>
+
     @Upsert
     abstract suspend fun upsertPlan(row: CoachPlanEntity)
 
@@ -110,6 +118,10 @@ abstract class CoachDao {
 
     @Query("SELECT * FROM coach_logs ORDER BY date")
     abstract suspend fun listAllLogs(): List<CoachLogEntity>
+
+    /** Every stored day. See [observeAllPlans] — the same two readers need both. */
+    @Query("SELECT * FROM coach_logs ORDER BY date")
+    abstract fun observeAllLogs(): Flow<List<CoachLogEntity>>
 
     @Query("SELECT * FROM coach_logs WHERE isDirty = 1 ORDER BY date")
     abstract suspend fun listDirtyLogs(): List<CoachLogEntity>

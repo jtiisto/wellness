@@ -33,10 +33,13 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -617,6 +620,73 @@ class CoachSyncStoreTest {
     }
 
     @Test
+    @DisplayName("transformLogEntry reads the entry as stored, so back-to-back edits compose")
+    fun transformLogEntrySeesTheStoredEntry() = runTest {
+        val world = World()
+        world.seedLog(today, """{"session_feedback":{},"ex_1":{"sets":[{"set_num":1,"weight":60}]}}""")
+        val store = world.store()
+
+        // Two edits with nothing read in between. The array is rebuilt from what
+        // the transaction finds, not from a snapshot either caller was handed, so
+        // the second cannot discard the first.
+        store.transformLogEntry(today, "ex_1") { entry ->
+            val sets = entry?.getValue("sets")?.jsonArray.orEmpty()
+            buildJsonObject { put("sets", JsonArray(sets + world.obj("""{"set_num":2,"weight":65}"""))) }
+        }
+        store.transformLogEntry(today, "ex_1") { entry ->
+            val sets = entry?.getValue("sets")?.jsonArray.orEmpty()
+            buildJsonObject { put("sets", JsonArray(sets + world.obj("""{"set_num":3,"weight":70}"""))) }
+        }
+
+        val sets = world.storedLog(today).getValue("ex_1").jsonObject.getValue("sets").jsonArray
+        assertEquals(3, sets.size, "an edit was lost: $sets")
+        assertEquals(
+            listOf("60", "65", "70"),
+            sets.map { it.jsonObject.getValue("weight").jsonPrimitive.content },
+        )
+        assertEquals(2L, world.dao.logs.getValue(today).dirtyGeneration)
+    }
+
+    @Test
+    @DisplayName("transformLogEntry returning null writes nothing at all")
+    fun transformLogEntryNoOp() = runTest {
+        val world = World()
+        world.seedLog(today, """{"session_feedback":{},"ex_1":{"sets":[]}}""")
+        val before = world.dao.logs.getValue(today)
+
+        world.store().transformLogEntry(today, "ex_1") { null }
+
+        assertEquals(before, world.dao.logs.getValue(today))
+        assertEquals(0, world.scheduledUploads, "a no-op must not wake the uploader")
+    }
+
+    @Test
+    @DisplayName("transformLogEntry hides a tombstone from the transform and records a re-add")
+    fun transformLogEntryOverATombstone() = runTest {
+        val world = World()
+        world.seedLog(
+            today,
+            """{"session_feedback":{},"extra_zone2":{"_deleted":true,"_lastModified":"srv-1"}}""",
+        )
+
+        var sawEntry: JsonObject? = world.obj("{}")
+        world.store().transformLogEntry(today, "extra_zone2") { entry ->
+            // The screen renders a tombstone as absent; the transform is shown
+            // the same thing, so an edit starts from nothing rather than from
+            // the deleted session's leftovers.
+            sawEntry = entry
+            buildJsonObject { put("duration_min", 45) }
+        }
+
+        assertNull(sawEntry)
+        val entry = world.storedLog(today).getValue("extra_zone2").jsonObject
+        assertEquals(JsonPrimitive(45), entry["duration_min"])
+        assertNull(entry["_deleted"], "the tombstone must not survive a re-add")
+        assertEquals(JsonPrimitive(true), entry["_readd"])
+        assertEquals(JsonPrimitive("srv-1"), entry["_lastModified"], "the base token is what lets the re-add win")
+    }
+
+    @Test
     @DisplayName("updateSessionFeedback merges and stamps BOTH advisory fields")
     fun sessionFeedbackStampsBothFields() = runTest {
         val world = World()
@@ -1030,6 +1100,9 @@ internal open class FakeCoachDao : CoachDao() {
 
     override suspend fun listAllPlans(): List<CoachPlanEntity> = plans.values.sortedBy { it.date }
 
+    override fun observeAllPlans(): Flow<List<CoachPlanEntity>> =
+        revision.map { plans.values.sortedBy { row -> row.date } }
+
     override suspend fun upsertPlan(row: CoachPlanEntity) {
         plans[row.date] = row
         touch()
@@ -1045,6 +1118,9 @@ internal open class FakeCoachDao : CoachDao() {
     override fun observeLog(date: DateString): Flow<CoachLogEntity?> = revision.map { logs[date] }
 
     override suspend fun listAllLogs(): List<CoachLogEntity> = logs.values.sortedBy { it.date }
+
+    override fun observeAllLogs(): Flow<List<CoachLogEntity>> =
+        revision.map { logs.values.sortedBy { row -> row.date } }
 
     override suspend fun listDirtyLogs(): List<CoachLogEntity> =
         logs.values.filter { it.isDirty }.sortedBy { it.date }

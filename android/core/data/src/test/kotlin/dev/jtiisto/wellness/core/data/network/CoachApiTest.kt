@@ -1,6 +1,7 @@
 package dev.jtiisto.wellness.core.data.network
 
 import dev.jtiisto.wellness.core.data.WellnessJson
+import dev.jtiisto.wellness.core.data.coach.HookAction
 import dev.jtiisto.wellness.core.data.sync.DebugLog
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.MockRequestHandleScope
@@ -227,6 +228,78 @@ class CoachApiTest {
         assertNull(api { json("{}") }.plansVersion().version)
     }
 
+    // ---- workout hooks -----------------------------------------------------
+
+    @Test
+    @DisplayName("the hook endpoints address one session by method and path")
+    fun hookEndpoints() = runTest {
+        api { json(EMPTY_STATUS) }.workoutStatus(42)
+        api { respond(content = "", status = HttpStatusCode.OK) }.fireWorkoutHook(42, HookAction.START)
+        api { respond(content = "", status = HttpStatusCode.OK) }.undoWorkoutHook(42, HookAction.END)
+
+        assertEquals("$LOCAL_BASE/api/coach/workout/42/status", requestedUrls[0])
+        assertEquals(HttpMethod.Get, requests[0].method)
+        assertEquals("$LOCAL_BASE/api/coach/workout/42/start", requestedUrls[1])
+        assertEquals(HttpMethod.Post, requests[1].method)
+        assertEquals("$LOCAL_BASE/api/coach/workout/42/end", requestedUrls[2])
+        assertEquals(HttpMethod.Delete, requests[2].method)
+    }
+
+    @Test
+    @DisplayName("the status read asks for no caching — a cached status hides a finished hook")
+    fun statusIsUncached() = runTest {
+        api { json(EMPTY_STATUS) }.workoutStatus(42)
+
+        assertEquals("no-store", requests.single().headers[HttpHeaders.CacheControl])
+        assertEquals("no-cache", requests.single().headers[HttpHeaders.Pragma])
+    }
+
+    @Test
+    @DisplayName("a status payload decodes both phases, availability included")
+    fun statusDecodes() = runTest {
+        val status = api {
+            json(
+                """{"start":{"fired_at":"2026-08-08T10:00:00Z","exit_code":0,"data":{"hr":"52"}},""" +
+                    """"end":{"fired_at":"2026-08-08T11:00:00Z","exit_code":null},""" +
+                    """"actions_available":{"start":true,"end":false}}""",
+            )
+        }.workoutStatus(42)
+
+        assertEquals(0, status.start?.exitCode)
+        assertEquals("2026-08-08T10:00:00Z", status.start?.firedAt)
+        assertEquals("52", status.start?.data?.get("hr")?.jsonPrimitive?.content)
+        assertNull(status.end?.exitCode)
+        assertTrue(status.actionsAvailable.start)
+        assertFalse(status.actionsAvailable.end)
+    }
+
+    @Test
+    @DisplayName("a status with neither phase recorded decodes to defaults, not a failure")
+    fun emptyStatusDecodes() = runTest {
+        val status = api { json("""{"start":null,"end":null,"actions_available":{}}""") }.workoutStatus(42)
+
+        assertNull(status.start)
+        assertNull(status.end)
+        assertFalse(status.actionsAvailable.start)
+        assertFalse(status.actionsAvailable.end)
+    }
+
+    @Test
+    @DisplayName("a hook the server has not configured (400) surfaces as an exception")
+    fun unconfiguredHookThrows() = runTest {
+        val api = api { respondError(HttpStatusCode.BadRequest) }
+
+        assertThrows<Exception> { api.fireWorkoutHook(42, HookAction.START) }
+    }
+
+    @Test
+    @DisplayName("an undo with nothing to undo (404) surfaces as an exception")
+    fun undoWithNothingToUndoThrows() = runTest {
+        val api = api { respondError(HttpStatusCode.NotFound) }
+
+        assertThrows<Exception> { api.undoWorkoutHook(42, HookAction.START) }
+    }
+
     @Test
     @DisplayName("a non-2xx response surfaces as an exception")
     fun nonSuccessThrows() = runTest {
@@ -266,5 +339,6 @@ class CoachApiTest {
         const val TAILNET_BASE = "https://pop-os.tailexample.ts.net:9443/wellness"
         const val LOCAL_BASE = "http://localhost:9001/wellness"
         const val EMPTY_SYNC = """{"plans":{},"logs":{},"serverTime":"s1","deletedPlanDates":[]}"""
+        const val EMPTY_STATUS = """{"actions_available":{"start":true,"end":true}}"""
     }
 }

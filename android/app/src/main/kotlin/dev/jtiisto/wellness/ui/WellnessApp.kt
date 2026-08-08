@@ -33,8 +33,8 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import dev.jtiisto.wellness.core.data.sync.SyncErrorEvents
 import dev.jtiisto.wellness.core.ui.theme.WellnessTheme
+import dev.jtiisto.wellness.feature.coach.CoachScreen
 import dev.jtiisto.wellness.feature.journal.JournalTab
-import dev.jtiisto.wellness.ui.coach.CoachDebugScreen
 import dev.jtiisto.wellness.ui.tools.ToolsScreen
 import org.koin.compose.koinInject
 
@@ -108,7 +108,7 @@ fun WellnessApp() {
                     composable(destination.route) {
                         when (destination.route) {
                             JOURNAL_ROUTE -> JournalTab()
-                            COACH_ROUTE -> CoachDebugScreen()
+                            COACH_ROUTE -> CoachScreen()
                             TOOLS_ROUTE -> ToolsScreen()
                             else -> StubScreen(destination.label)
                         }

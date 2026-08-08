@@ -46,6 +46,9 @@ private const val TAG = "coach-sync"
  */
 const val EXTRA_SESSION_KEY: String = "extra_zone2"
 
+/** The heading the ad-hoc session's card carries. */
+const val EXTRA_SESSION_TITLE: String = "Zone 2 — extra session"
+
 /**
  * Coach sync orchestration — a port of the `coach/store.js` sync surface onto
  * Room.
@@ -95,10 +98,18 @@ class CoachSyncStore(
      */
     val syncStatus: StateFlow<SyncStatus> = _syncStatus.asStateFlow()
 
+    private val _isSyncing = MutableStateFlow(false)
+
     /** The scheduler's busy hook. Set for the whole of [triggerSync]. */
-    @Volatile
-    var isSyncing: Boolean = false
-        private set
+    val isSyncing: Boolean get() = _isSyncing.value
+
+    /**
+     * The same flag as [isSyncing], observable.
+     *
+     * The scheduler polls the boolean; the header's indicator needs to be told,
+     * so both read one source rather than two that can disagree.
+     */
+    val isSyncingFlow: StateFlow<Boolean> = _isSyncing.asStateFlow()
 
     /**
      * Single-flight, independent of who is calling. Two overlapping cycles
@@ -150,6 +161,34 @@ class CoachSyncStore(
     /** The day's log, exactly as stored — arbitrary keys and all. */
     fun observeLog(date: DateString): Flow<JsonObject?> =
         dao.observeLog(date).map { row -> row?.let { parseObject(it.logJson) } }
+
+    /**
+     * Every plan in the window, keyed by date.
+     *
+     * The calendar and the last-performance lookup are both whole-window
+     * readers, so they take the window rather than subscribing per day.
+     *
+     * A blob that will not decode stays in the map as a **null value**, which is
+     * not the same as being absent: the day genuinely has a plan, and dropping
+     * the key would present a reshaped payload as a rest day — offering an
+     * ad-hoc session on a day that already has a workout on it.
+     */
+    fun observeAllPlans(): Flow<Map<DateString, PlanDto?>> = dao.observeAllPlans().map { rows ->
+        rows.associate { row -> row.date to decodePlan(row.planJson, row.date) }
+    }
+
+    /** Every stored day, keyed by date. See [observeAllPlans]. */
+    fun observeAllLogs(): Flow<Map<DateString, JsonObject>> = dao.observeAllLogs().map { rows ->
+        rows.associate { row -> row.date to parseObject(row.logJson) }
+    }
+
+    /**
+     * The server's window start, or null before the first pull.
+     *
+     * The calendar refuses selection below it: there is no data down there and
+     * the server would not accept a write for it either.
+     */
+    fun observeEarliestDate(): Flow<DateString?> = dao.observeMeta(CoachDao.KEY_EARLIEST_DATE)
 
     /** The scheduler's dirty hook. */
     suspend fun hasDirtyData(): Boolean = dao.countDirty() > 0
@@ -205,6 +244,34 @@ class CoachSyncStore(
      */
     suspend fun updateLog(date: DateString, exerciseKey: String, data: JsonObject) {
         mutateDay(date) { current -> withEntryUpdated(current, exerciseKey, data) }
+    }
+
+    /**
+     * Read-modify-write one exercise entry, **inside the write transaction**.
+     *
+     * [updateLog] is only safe for writes that do not depend on what is already
+     * there, because its content replaces whole keys. Anything that edits a
+     * collection — one cell of the `sets` array, one item of `completed_items` —
+     * has to read the current value first, and reading it from an observed
+     * snapshot loses the race: two edits committed before Room re-emits both
+     * build their replacement from the same stale array, and the second one
+     * silently discards the first.
+     *
+     * [transform] therefore receives the entry **as stored at this instant** and
+     * returns the content to merge, or null to write nothing at all. A pending
+     * delete is presented as absent, matching what the screen shows for one; the
+     * merge itself is still tombstone-aware and records the write as a re-add.
+     */
+    suspend fun transformLogEntry(
+        date: DateString,
+        exerciseKey: String,
+        transform: (JsonObject?) -> JsonObject?,
+    ) {
+        mutateDay(date) { current ->
+            val existing = (current[exerciseKey] as? JsonObject)?.takeUnless(::isDeletedEntry)
+            val data = transform(existing) ?: return@mutateDay current
+            withEntryUpdated(current, exerciseKey, data)
+        }
     }
 
     /**
@@ -290,7 +357,7 @@ class CoachSyncStore(
             return SyncResult(success = false, reason = SyncSkipReason.OFFLINE)
         }
 
-        isSyncing = true
+        _isSyncing.value = true
         try {
             val clientId = clientId()
             val watermark = dao.getMeta(CoachDao.KEY_LAST_SERVER_SYNC_TIME)
@@ -321,7 +388,7 @@ class CoachSyncStore(
             _syncStatus.value = SyncStatus.RED
             return SyncResult(success = false, error = error)
         } finally {
-            isSyncing = false
+            _isSyncing.value = false
         }
     }
 
