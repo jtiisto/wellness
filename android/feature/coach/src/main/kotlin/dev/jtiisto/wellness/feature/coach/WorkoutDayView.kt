@@ -463,7 +463,10 @@ private fun HookButton(model: HookButtonModel, actions: CoachActions) {
 @Composable
 private fun BlockCard(block: BlockState, editable: Boolean, actions: CoachActions) {
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        // Stacked like the PWA's .block-header (a column): title, timing badge,
+        // rest guidance — each full-width. Sharing a Row squeezed a long
+        // guidance sentence into the leftover width beside a long title.
+        Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(text = block.title, style = MaterialTheme.typography.titleMedium)
             if (block.timing.isNotEmpty()) {
                 Text(
