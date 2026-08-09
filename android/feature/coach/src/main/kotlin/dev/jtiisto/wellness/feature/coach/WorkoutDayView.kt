@@ -47,7 +47,6 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -83,13 +82,16 @@ import dev.jtiisto.wellness.core.data.coach.RxKind
 import dev.jtiisto.wellness.core.data.coach.RxToken
 import dev.jtiisto.wellness.core.ui.motion.WellnessMotion
 import dev.jtiisto.wellness.core.ui.theme.AccentColors
-import dev.jtiisto.wellness.core.ui.theme.GHOST_ALPHA
+import dev.jtiisto.wellness.core.ui.theme.DenseFieldHint
+import dev.jtiisto.wellness.core.ui.theme.DenseFieldSkin
 import dev.jtiisto.wellness.core.ui.theme.ModuleAccent
 import dev.jtiisto.wellness.core.ui.theme.WellnessDefaults
+import dev.jtiisto.wellness.core.ui.theme.WellnessDenseField
 import dev.jtiisto.wellness.core.ui.theme.WellnessShape
 import dev.jtiisto.wellness.core.ui.theme.WellnessSpace
 import dev.jtiisto.wellness.core.ui.theme.WellnessTheme
 import dev.jtiisto.wellness.core.ui.theme.colors
+import dev.jtiisto.wellness.core.ui.theme.columnHeaderStyle
 
 /**
  * The selected day's workout.
@@ -978,11 +980,18 @@ private fun SetGrid(
     actions: CoachActions,
 ) {
     val palette = WellnessTheme.palette
-    Column(verticalArrangement = Arrangement.spacedBy(WellnessSpace.xs)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
+    val headerStyle = columnHeaderStyle()
+    // No spacing between rows: each one already reserves 48dp around a 40dp
+    // box, so the touch targets themselves leave an 8dp gutter. Adding more
+    // would open the grid back up, which is the thing this pass closed.
+    Column {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(bottom = WellnessSpace.xs),
+        ) {
             Text(
                 text = "#",
-                style = WellnessTheme.type.micro,
+                style = headerStyle,
                 color = palette.textSecondary,
                 textAlign = TextAlign.Center,
                 modifier = Modifier.width(SET_NUMBER_COLUMN),
@@ -990,7 +999,7 @@ private fun SetGrid(
             for (column in entry.columns) {
                 Text(
                     text = columnLabel(column.label, column.unit, palette.textFaint),
-                    style = WellnessTheme.type.micro,
+                    style = headerStyle,
                     color = palette.textSecondary,
                     textAlign = TextAlign.Center,
                     modifier = Modifier.weight(1f),
@@ -998,7 +1007,7 @@ private fun SetGrid(
             }
             Text(
                 text = "✓",
-                style = WellnessTheme.type.micro,
+                style = headerStyle,
                 color = palette.textSecondary,
                 textAlign = TextAlign.Center,
                 modifier = Modifier
@@ -1006,6 +1015,10 @@ private fun SetGrid(
                     .semantics { contentDescription = "Done" },
             )
         }
+        // The rule the PWA draws under its column heads. With it there the
+        // heads no longer have to carry the separation themselves, which is
+        // what let them drop back to a quiet micro.
+        HorizontalDivider(color = palette.line)
 
         for (row in entry.rows) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1047,6 +1060,7 @@ private fun SetGrid(
                 text = it,
                 style = WellnessTheme.type.label,
                 color = palette.textFaint,
+                modifier = Modifier.padding(top = WellnessSpace.xs),
             )
         }
     }
@@ -1188,25 +1202,18 @@ private fun NumericField(
         text = value
     }
 
-    OutlinedTextField(
+    WellnessDenseField(
         value = text,
         onValueChange = { text = it },
         enabled = enabled,
-        singleLine = true,
-        shape = WellnessShape.input,
-        colors = WellnessDefaults.textFieldColors(),
-        placeholder = placeholder?.let {
-            {
-                // A ghost is last session's number, not this one's: italic and
-                // half-there until you make it yours.
-                Text(
-                    text = it,
-                    style = WellnessTheme.type.body.copy(fontStyle = FontStyle.Italic),
-                    color = WellnessTheme.palette.textSecondary.copy(alpha = GHOST_ALPHA),
-                )
-            }
-        },
-        textStyle = WellnessTheme.type.body,
+        // A grid of outlines is what made the old grid heavy; the columns
+        // already say these are boxes.
+        skin = DenseFieldSkin.FILLED,
+        numeric = true,
+        placeholder = placeholder,
+        // A ghost is last session's number, not this one's: italic and
+        // half-there until you make it yours.
+        hint = DenseFieldHint.GHOST,
         modifier = modifier
             .onFocusChanged { focusState ->
                 if (focused && !focusState.isFocused) commit()
@@ -1241,29 +1248,18 @@ private fun NoteField(
         if (!focused) text = value
     }
 
-    OutlinedTextField(
+    WellnessDenseField(
         value = text,
         onValueChange = {
             text = it
             onChange(it)
         },
         enabled = enabled,
-        shape = WellnessShape.input,
-        colors = WellnessDefaults.textFieldColors(),
-        textStyle = WellnessTheme.type.body,
-        label = if (showLabel) {
-            { Text(label) }
-        } else {
-            null
-        },
-        placeholder = {
-            Text(
-                text = placeholder,
-                style = WellnessTheme.type.body.copy(fontStyle = FontStyle.Italic),
-                color = WellnessTheme.palette.textFaint,
-            )
-        },
-        minLines = 2,
+        skin = DenseFieldSkin.FILLED,
+        multiLine = true,
+        label = label.takeIf { showLabel },
+        placeholder = placeholder,
+        hint = DenseFieldHint.PROMPT,
         modifier = Modifier
             .fillMaxWidth()
             .onFocusChanged { focused = it.isFocused }

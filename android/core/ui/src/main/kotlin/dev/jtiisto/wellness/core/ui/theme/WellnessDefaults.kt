@@ -9,11 +9,9 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.IconButtonColors
 import androidx.compose.material3.IconButtonDefaults
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.SelectableChipColors
 import androidx.compose.material3.SliderColors
 import androidx.compose.material3.SliderDefaults
-import androidx.compose.material3.TextFieldColors
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
@@ -28,35 +26,9 @@ import androidx.compose.ui.unit.dp
  */
 object WellnessDefaults {
 
-    /** Text fields sit on `input` behind a hairline; focus is the accent's job. */
-    @Composable
-    fun textFieldColors(): TextFieldColors {
-        val palette = WellnessTheme.palette
-        val accent = WellnessTheme.accent
-        return OutlinedTextFieldDefaults.colors(
-            focusedTextColor = palette.textPrimary,
-            unfocusedTextColor = palette.textPrimary,
-            disabledTextColor = palette.textFaint,
-            focusedContainerColor = palette.input,
-            unfocusedContainerColor = palette.input,
-            disabledContainerColor = palette.input,
-            errorContainerColor = palette.input,
-            cursorColor = accent.text,
-            focusedBorderColor = accent.text,
-            unfocusedBorderColor = palette.line,
-            disabledBorderColor = palette.line,
-            focusedLabelColor = accent.text,
-            unfocusedLabelColor = palette.textSecondary,
-            disabledLabelColor = palette.textFaint,
-            focusedPlaceholderColor = palette.textFaint,
-            unfocusedPlaceholderColor = palette.textFaint,
-            disabledPlaceholderColor = palette.textFaint,
-            focusedSupportingTextColor = palette.textSecondary,
-            unfocusedSupportingTextColor = palette.textSecondary,
-            focusedTrailingIconColor = palette.textSecondary,
-            unfocusedTrailingIconColor = palette.textSecondary,
-        )
-    }
+    // Text fields are not here: [WellnessDenseField] owns that role table
+    // entry, and it reads the palette directly rather than through an M3
+    // `TextFieldColors` its BasicTextField decoration could not consume.
 
     @Composable
     fun checkboxColors(): CheckboxColors {

@@ -39,7 +39,6 @@ import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -66,7 +65,6 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -84,9 +82,11 @@ import dev.jtiisto.wellness.core.data.journal.TrackerType
 import dev.jtiisto.wellness.core.ui.SyncStatusDot
 import dev.jtiisto.wellness.core.ui.motion.WellnessMotion
 import dev.jtiisto.wellness.core.ui.motion.rememberDotReveal
+import dev.jtiisto.wellness.core.ui.theme.DenseFieldHint
 import dev.jtiisto.wellness.core.ui.theme.GHOST_ALPHA
 import dev.jtiisto.wellness.core.ui.theme.WeldPosition
 import dev.jtiisto.wellness.core.ui.theme.WellnessDefaults
+import dev.jtiisto.wellness.core.ui.theme.WellnessDenseField
 import dev.jtiisto.wellness.core.ui.theme.WellnessShape
 import dev.jtiisto.wellness.core.ui.theme.WellnessSpace
 import dev.jtiisto.wellness.core.ui.theme.WellnessTheme
@@ -512,17 +512,13 @@ private fun NumericField(
     }
 
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-        OutlinedTextField(
+        WellnessDenseField(
             value = text,
             onValueChange = { text = it },
             enabled = row.editable,
-            singleLine = true,
-            shape = WellnessShape.input,
-            colors = WellnessDefaults.textFieldColors(),
+            numeric = true,
             // Italic while the value is only a default: not yet yours.
-            textStyle = WellnessTheme.type.body.copy(
-                fontStyle = if (row.committed) FontStyle.Normal else FontStyle.Italic,
-            ),
+            italic = !row.committed,
             modifier = Modifier
                 .width(96.dp)
                 .onFocusChanged { focusState ->
@@ -616,24 +612,16 @@ private fun NoteField(row: TrackerRowState, onNote: (String, String) -> Unit, mo
         if (!focused) text = row.valueText
     }
 
-    OutlinedTextField(
+    WellnessDenseField(
         value = text,
         onValueChange = {
             text = it
             onNote(row.id, it)
         },
         enabled = row.editable,
-        placeholder = {
-            Text(
-                text = "Add note…",
-                style = WellnessTheme.type.body.copy(fontStyle = FontStyle.Italic),
-                color = WellnessTheme.palette.textFaint,
-            )
-        },
-        minLines = 2,
-        shape = WellnessShape.input,
-        colors = WellnessDefaults.textFieldColors(),
-        textStyle = WellnessTheme.type.body,
+        multiLine = true,
+        placeholder = "Add note…",
+        hint = DenseFieldHint.PROMPT,
         modifier = modifier
             .fillMaxWidth()
             .padding(top = WellnessSpace.xs)
@@ -758,15 +746,12 @@ private fun AccumulatorSheet(row: TrackerRowState, onDismiss: () -> Unit, onAdd:
                 color = palette.textPrimary,
             )
             Spacer(Modifier.height(WellnessSpace.md))
-            OutlinedTextField(
+            WellnessDenseField(
                 value = input,
                 onValueChange = { input = it },
-                label = { Text(if (row.unit != null) "Amount (${row.unit})" else "Amount") },
-                placeholder = { Text("e.g. 25") },
-                singleLine = true,
-                shape = WellnessShape.input,
-                colors = WellnessDefaults.textFieldColors(),
-                textStyle = WellnessTheme.type.body,
+                label = if (row.unit != null) "Amount (${row.unit})" else "Amount",
+                placeholder = "e.g. 25",
+                numeric = true,
                 keyboardOptions = KeyboardOptions(
                     keyboardType = KeyboardType.Decimal,
                     imeAction = ImeAction.Done,

@@ -33,12 +33,10 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuAnchorType
-import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -64,6 +62,7 @@ import dev.jtiisto.wellness.core.data.journal.TrackerType
 import dev.jtiisto.wellness.core.data.journal.formatScheduleSummary
 import dev.jtiisto.wellness.core.data.journal.formatTarget
 import dev.jtiisto.wellness.core.ui.theme.WellnessDefaults
+import dev.jtiisto.wellness.core.ui.theme.WellnessDenseField
 import dev.jtiisto.wellness.core.ui.theme.WellnessShape
 import dev.jtiisto.wellness.core.ui.theme.WellnessSpace
 import dev.jtiisto.wellness.core.ui.theme.WellnessTheme
@@ -312,17 +311,13 @@ private fun TrackerFormSheet(
                 color = palette.textPrimary,
             )
 
-            OutlinedTextField(
+            WellnessDenseField(
                 value = form.name,
                 onValueChange = { next -> onChange { it.copy(name = next) } },
-                label = { Text("Name") },
-                shape = WellnessShape.input,
-                colors = WellnessDefaults.textFieldColors(),
-                textStyle = WellnessTheme.type.body,
-                placeholder = { Text("e.g. Meditation") },
-                singleLine = true,
+                label = "Name",
+                placeholder = "e.g. Meditation",
                 isError = showErrors && errors.name != null,
-                supportingText = errors.name?.takeIf { showErrors }?.let { { Text(it) } },
+                supportingText = errors.name?.takeIf { showErrors },
                 modifier = Modifier.fillMaxWidth(),
             )
 
@@ -362,18 +357,15 @@ private fun CategoryField(
         if (categories.isNotEmpty() && !form.useNewCategory) {
             var expanded by remember { mutableStateOf(false) }
             ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }) {
-                OutlinedTextField(
+                WellnessDenseField(
                     value = form.category,
                     onValueChange = {},
                     readOnly = true,
-                    label = { Text("Category") },
-                    shape = WellnessShape.input,
-                    colors = WellnessDefaults.textFieldColors(),
-                    textStyle = WellnessTheme.type.body,
-                    placeholder = { Text("Select category…") },
-                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+                    label = "Category",
+                    placeholder = "Select category…",
+                    dropdownExpanded = expanded,
                     isError = error != null,
-                    supportingText = error?.let { { Text(it) } },
+                    supportingText = error,
                     modifier = Modifier
                         .fillMaxWidth()
                         .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable),
@@ -397,17 +389,13 @@ private fun CategoryField(
                 Text("+ New Category")
             }
         } else {
-            OutlinedTextField(
+            WellnessDenseField(
                 value = form.newCategory,
                 onValueChange = { next -> onChange { it.copy(newCategory = next) } },
-                label = { Text("Category") },
-                shape = WellnessShape.input,
-                colors = WellnessDefaults.textFieldColors(),
-                textStyle = WellnessTheme.type.body,
-                placeholder = { Text("e.g. Supplements") },
-                singleLine = true,
+                label = "Category",
+                placeholder = "e.g. Supplements",
                 isError = error != null,
-                supportingText = error?.let { { Text(it) } },
+                supportingText = error,
                 modifier = Modifier.fillMaxWidth(),
             )
             if (categories.isNotEmpty()) {
@@ -427,15 +415,12 @@ private fun CategoryField(
 private fun TypeField(type: TrackerType, onSelect: (TrackerType) -> Unit) {
     var expanded by remember { mutableStateOf(false) }
     ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }) {
-        OutlinedTextField(
+        WellnessDenseField(
             value = TYPE_OPTIONS.first { it.first == type }.second,
             onValueChange = {},
             readOnly = true,
-            label = { Text("Type") },
-            shape = WellnessShape.input,
-            colors = WellnessDefaults.textFieldColors(),
-            textStyle = WellnessTheme.type.body,
-            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            label = "Type",
+            dropdownExpanded = expanded,
             modifier = Modifier
                 .fillMaxWidth()
                 .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable),
@@ -460,29 +445,22 @@ private fun QuantifiableFieldsSection(
     onChange: ((TrackerFormState) -> TrackerFormState) -> Unit,
 ) {
     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        OutlinedTextField(
+        WellnessDenseField(
             value = form.unit,
             onValueChange = { next -> onChange { it.copy(unit = next) } },
-            label = { Text("Unit Label") },
-            shape = WellnessShape.input,
-            colors = WellnessDefaults.textFieldColors(),
-            textStyle = WellnessTheme.type.body,
-            placeholder = { Text("e.g. mg, min") },
-            singleLine = true,
+            label = "Unit Label",
+            placeholder = "e.g. mg, min",
             modifier = Modifier.weight(1f),
         )
         val defaultValueError = form.defaultValueError
-        OutlinedTextField(
+        WellnessDenseField(
             value = form.defaultValue,
             onValueChange = { next -> onChange { it.copy(defaultValue = next) } },
-            label = { Text("Default Value") },
-            shape = WellnessShape.input,
-            colors = WellnessDefaults.textFieldColors(),
-            textStyle = WellnessTheme.type.body,
-            placeholder = { Text("e.g. 30") },
-            singleLine = true,
+            label = "Default Value",
+            placeholder = "e.g. 30",
+            numeric = true,
             isError = defaultValueError != null,
-            supportingText = defaultValueError?.let { { Text(it) } },
+            supportingText = defaultValueError,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Next),
             modifier = Modifier.weight(1f),
         )
@@ -497,25 +475,16 @@ private fun QuantifiableFieldsSection(
     // The error shows while typing (the PWA's inline path); the preview shows
     // how the entered text will actually be read under the current polarity.
     val liveError = form.targetError
-    OutlinedTextField(
+    val parsedTarget = form.targetParse.target
+    WellnessDenseField(
         value = form.targetInput,
         onValueChange = { next -> onChange { it.copy(targetInput = next) } },
-        label = { Text("Target") },
-        shape = WellnessShape.input,
-        colors = WellnessDefaults.textFieldColors(),
-        textStyle = WellnessTheme.type.body,
-        placeholder = { Text("e.g. 150 or 150-170") },
-        singleLine = true,
+        label = "Target",
+        placeholder = "e.g. 150 or 150-170",
         isError = liveError != null,
         supportingText = when {
-            liveError != null -> {
-                { Text(liveError) }
-            }
-
-            form.targetParse.target != null -> {
-                { Text("Target: ${formatTarget(form.targetParse.target, form.unit)}") }
-            }
-
+            liveError != null -> liveError
+            parsedTarget != null -> "Target: ${formatTarget(parsedTarget, form.unit)}"
             else -> null
         },
         modifier = Modifier
@@ -593,15 +562,12 @@ private fun ScheduleSection(
 private fun PolarityField(polarity: String, onSelect: (String) -> Unit) {
     var expanded by remember { mutableStateOf(false) }
     ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }) {
-        OutlinedTextField(
+        WellnessDenseField(
             value = POLARITY_OPTIONS.first { it.first == polarity }.second,
             onValueChange = {},
             readOnly = true,
-            label = { Text("Polarity") },
-            shape = WellnessShape.input,
-            colors = WellnessDefaults.textFieldColors(),
-            textStyle = WellnessTheme.type.body,
-            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            label = "Polarity",
+            dropdownExpanded = expanded,
             modifier = Modifier
                 .fillMaxWidth()
                 .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable)
