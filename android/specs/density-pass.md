@@ -1,6 +1,6 @@
 # Spec: Compact Density Pass (Phase 6.5)
 
-Status: **approved 2026-08-09** (user-selected "now, as a 6.5 mini-round" at the in-session gate, scope as described there; motivated by device feedback — entry fields large, fonts blocky vs the PWA's compact layout; reference screenshot `Screenshot_20260809-081928` of the Coach set grid)
+Status: **shipped & device-accepted 2026-08-09** (commit `ccada51`; user: "looks better" — possible further tightening deliberately deferred to Phase 8 polish). Originally approved 2026-08-09 (user-selected "now, as a 6.5 mini-round" at the in-session gate; motivated by device feedback — entry fields large, fonts blocky vs the PWA's compact layout; reference screenshot `Screenshot_20260809-081928` of the Coach set grid)
 
 ## Goal
 
