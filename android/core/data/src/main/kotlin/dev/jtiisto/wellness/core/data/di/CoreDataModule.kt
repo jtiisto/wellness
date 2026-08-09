@@ -11,6 +11,7 @@ import dev.jtiisto.wellness.core.data.journal.JournalUiPrefs
 import dev.jtiisto.wellness.core.data.network.CoachApi
 import dev.jtiisto.wellness.core.data.network.JournalApi
 import dev.jtiisto.wellness.core.data.network.ServerConfig
+import dev.jtiisto.wellness.core.data.network.TrendsApi
 import dev.jtiisto.wellness.core.data.network.buildHttpClient
 import dev.jtiisto.wellness.core.data.network.isNetworkError
 import dev.jtiisto.wellness.core.data.sync.ConnectivityMonitor
@@ -18,6 +19,8 @@ import dev.jtiisto.wellness.core.data.sync.DebugLog
 import dev.jtiisto.wellness.core.data.sync.SyncOrchestrator
 import dev.jtiisto.wellness.core.data.sync.SyncErrorEvents
 import dev.jtiisto.wellness.core.data.sync.SyncScheduler
+import dev.jtiisto.wellness.core.data.trends.TrendsPrefs
+import dev.jtiisto.wellness.core.data.trends.TrendsRepository
 import io.ktor.client.HttpClient
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -57,15 +60,19 @@ val coreDataModule = module {
     single { get<WellnessDatabase>().payloadCacheDao() }
     single { get<WellnessDatabase>().journalDao() }
     single { get<WellnessDatabase>().coachDao() }
+    single { get<WellnessDatabase>().trendsMetaDao() }
 
     single { DebugLog(dao = get(), scope = get(DebugLogScope), json = get()) }
     single<HttpClient> { buildHttpClient(config = get(), json = get(), debugLog = get()) }
     single { JournalApi(client = get(), config = get()) }
     single { CoachApi(client = get(), config = get()) }
+    single { TrendsApi(client = get(), config = get()) }
 
     single { ConnectivityMonitor(androidContext()) }
     single { SyncErrorEvents() }
     single { JournalUiPrefs(dao = get(), json = get()) }
+    single { TrendsPrefs(dao = get()) }
+    single { TrendsRepository(api = get(), cacheDao = get(), debugLog = get(), json = get()) }
 
     single {
         val connectivity = get<ConnectivityMonitor>()

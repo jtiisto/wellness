@@ -10,6 +10,7 @@ import dev.jtiisto.wellness.core.data.sync.SyncScheduler
 import dev.jtiisto.wellness.di.appModule
 import dev.jtiisto.wellness.feature.coach.di.coachModule
 import dev.jtiisto.wellness.feature.journal.di.journalModule
+import dev.jtiisto.wellness.feature.trends.di.trendsModule
 import org.koin.android.ext.koin.androidContext
 import org.koin.android.ext.koin.androidLogger
 import org.koin.core.context.startKoin
@@ -20,7 +21,7 @@ class WellnessApplication : Application() {
         val koin = startKoin {
             androidLogger()
             androidContext(this@WellnessApplication)
-            modules(coreDataModule, appModule, journalModule, coachModule)
+            modules(coreDataModule, appModule, journalModule, coachModule, trendsModule)
         }.koin
 
         // Process-lifetime sync plumbing: connectivity first, so the

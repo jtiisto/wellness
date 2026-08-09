@@ -1,0 +1,19 @@
+{
+  "zone2": {
+    "this_week_min": 0,
+    "last_week_min": null,
+    "four_week_avg_min": null,
+    "sparkline": []
+  },
+  "tonnage": {
+    "this_week_kg": 0,
+    "last_week_kg": null,
+    "four_week_avg_kg": null,
+    "sparkline": []
+  },
+  "adherence_focus": [],
+  "prs": {
+    "count_30d": 0,
+    "latest": null
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "available": true,
+  "days": [
+    {
+      "date": "2026-07-20",
+      "rhr": 48,
+      "hrv": 34.5,
+      "hrv_band": {
+        "low": 28,
+        "high": 42,
+        "low_floor": 26
+      },
+      "sleep_hours": 7.4,
+      "sleep_score": 81
+    },
+    {
+      "date": "2026-07-21",
+      "rhr": 49.5,
+      "hrv": 25,
+      "hrv_band": {
+        "low": 28,
+        "high": 42,
+        "low_floor": 26
+      },
+      "sleep_hours": 6,
+      "sleep_score": 64.5
+    },
+    {
+      "date": "2026-07-22",
+      "rhr": null,
+      "hrv": null,
+      "hrv_band": null,
+      "sleep_hours": null,
+      "sleep_score": null
+    },
+    {
+      "date": "2026-07-23",
+      "rhr": 47,
+      "hrv": 38,
+      "hrv_band": {
+        "low": 29,
+        "high": 43,
+        "low_floor": null
+      },
+      "sleep_hours": 8.1,
+      "sleep_score": 90
+    }
+  ]
+}

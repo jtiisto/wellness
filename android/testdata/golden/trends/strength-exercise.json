@@ -1,0 +1,47 @@
+{
+  "exercise": {
+    "slug": "fixture-press",
+    "name": "Fixture Press",
+    "equipment": "barbell",
+    "category": "fixture-upper"
+  },
+  "unit": "kg",
+  "sessions": [
+    {
+      "date": "2026-07-02",
+      "top_set": {
+        "weight": 60,
+        "reps": 5,
+        "assistance": null
+      },
+      "e1rm": 67.5,
+      "top_set_rpe": 8,
+      "set_count": 4,
+      "off_plan": false
+    },
+    {
+      "date": "2026-07-09",
+      "top_set": {
+        "weight": 62.5,
+        "reps": 5,
+        "assistance": null
+      },
+      "e1rm": 70.3,
+      "top_set_rpe": null,
+      "set_count": 4,
+      "off_plan": true
+    },
+    {
+      "date": "2026-07-16",
+      "top_set": {
+        "weight": 65,
+        "reps": 4,
+        "assistance": null
+      },
+      "e1rm": 71.5,
+      "top_set_rpe": 8.5,
+      "set_count": 3,
+      "off_plan": false
+    }
+  ]
+}

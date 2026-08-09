@@ -70,5 +70,28 @@ val MIGRATION_2_3 = object : Migration(2, 3) {
     }
 }
 
+/**
+ * v3 → v4: the trends preferences table (Phase 6).
+ *
+ * Additive again, and the same reasoning holds: an install carrying unsent
+ * journal or coach edits must upgrade with every dirty row and its generation
+ * counter intact. Nothing in `trends_meta` is ever uploaded, so the only cost
+ * of losing it would be a reset range selector — but the tables beside it are
+ * not so forgiving.
+ *
+ * Transcribed verbatim from `schemas/…WellnessDatabase/4.json` with
+ * `${TABLE_NAME}` substituted; `Migration3to4Test` re-validates it against the
+ * real schema, and also runs the whole v1 → v4 chain.
+ */
+val MIGRATION_3_4 = object : Migration(3, 4) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `trends_meta` (" +
+                "`key` TEXT NOT NULL, `value` TEXT NOT NULL, " +
+                "PRIMARY KEY(`key`))",
+        )
+    }
+}
+
 /** Every migration the app ships, in order. Never add destructive fallbacks. */
-val WELLNESS_MIGRATIONS = arrayOf(MIGRATION_1_2, MIGRATION_2_3)
+val WELLNESS_MIGRATIONS = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)

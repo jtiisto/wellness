@@ -1,0 +1,26 @@
+{
+  "trackers": [
+    {
+      "id": "fixture-tracker-alpha",
+      "name": "Fixture Tracker Alpha",
+      "type": "quantifiable",
+      "unit": "ml",
+      "polarity": "positive",
+      "actionable": true,
+      "has_target": true,
+      "first_entry": "2026-05-01",
+      "last_entry": "2026-07-30"
+    },
+    {
+      "id": "fixture-tracker-beta",
+      "name": "Fixture Tracker Beta",
+      "type": "simple",
+      "unit": null,
+      "polarity": "neutral",
+      "actionable": false,
+      "has_target": false,
+      "first_entry": "2026-06-01",
+      "last_entry": "2026-07-29"
+    }
+  ]
+}
