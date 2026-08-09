@@ -6,6 +6,9 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
@@ -14,6 +17,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -23,6 +27,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -32,12 +37,12 @@ import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -45,6 +50,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
@@ -55,6 +63,10 @@ import dev.jtiisto.wellness.core.data.journal.ALL_DAYS
 import dev.jtiisto.wellness.core.data.journal.TrackerType
 import dev.jtiisto.wellness.core.data.journal.formatScheduleSummary
 import dev.jtiisto.wellness.core.data.journal.formatTarget
+import dev.jtiisto.wellness.core.ui.theme.WellnessDefaults
+import dev.jtiisto.wellness.core.ui.theme.WellnessShape
+import dev.jtiisto.wellness.core.ui.theme.WellnessSpace
+import dev.jtiisto.wellness.core.ui.theme.WellnessTheme
 import org.koin.androidx.compose.koinViewModel
 
 /** Weekday toggles, Monday-first for display. The values stay 0=Sun..6=Sat. */
@@ -85,10 +97,17 @@ fun JournalConfigScreen(
     viewModel: TrackerFormViewModel = koinViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val palette = WellnessTheme.palette
 
     Column(modifier = Modifier.fillMaxSize()) {
         TopAppBar(
-            title = { Text("Settings") },
+            title = { Text("Settings", style = WellnessTheme.type.headline) },
+            colors = TopAppBarDefaults.topAppBarColors(
+                containerColor = palette.canvas,
+                titleContentColor = palette.textPrimary,
+                navigationIconContentColor = palette.textSecondary,
+            ),
+            windowInsets = WindowInsets(0),
             navigationIcon = {
                 IconButton(onClick = onBack) {
                     Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back to journal")
@@ -99,14 +118,23 @@ fun JournalConfigScreen(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
+                .padding(horizontal = WellnessSpace.md, vertical = WellnessSpace.sm),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("Trackers", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
-            Button(onClick = viewModel::addTracker) {
+            Text(
+                text = "Trackers",
+                style = WellnessTheme.type.title,
+                color = palette.textPrimary,
+                modifier = Modifier.weight(1f),
+            )
+            Button(
+                onClick = viewModel::addTracker,
+                colors = WellnessDefaults.accentButtonColors(),
+                shape = WellnessShape.card,
+            ) {
                 Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.size(4.dp))
-                Text("Add")
+                Text("Add", style = WellnessTheme.type.label)
             }
         }
 
@@ -114,26 +142,41 @@ fun JournalConfigScreen(
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(32.dp),
+                    .padding(WellnessSpace.xl),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center,
             ) {
-                Text("No trackers configured yet.", style = MaterialTheme.typography.titleMedium)
-                Spacer(Modifier.height(8.dp))
+                Icon(
+                    imageVector = Icons.Filled.Add,
+                    contentDescription = null,
+                    tint = palette.textFaint,
+                    modifier = Modifier.size(40.dp),
+                )
+                Spacer(Modifier.height(WellnessSpace.md))
+                Text(
+                    text = "No trackers configured yet.",
+                    style = WellnessTheme.type.title,
+                    color = palette.textPrimary,
+                )
+                Spacer(Modifier.height(WellnessSpace.sm))
                 Text(
                     text = "Tap \"Add\" to create your first tracker.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = WellnessTheme.type.secondary,
+                    color = palette.textSecondary,
                 )
             }
         } else {
-            LazyColumn(contentPadding = PaddingValues(bottom = 24.dp)) {
+            LazyColumn(contentPadding = PaddingValues(bottom = WellnessSpace.lg)) {
                 for (group in state.groups) {
                     item(key = "config-category-${group.name}") {
                         Text(
                             text = group.name,
-                            style = MaterialTheme.typography.titleSmall,
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                            style = WellnessTheme.type.label,
+                            color = palette.textSecondary,
+                            modifier = Modifier.padding(
+                                horizontal = WellnessSpace.md,
+                                vertical = WellnessSpace.sm,
+                            ),
                         )
                     }
                     items(count = group.trackers.size, key = { group.trackers[it].id }) { index ->
@@ -162,35 +205,64 @@ fun JournalConfigScreen(
     if (state.pendingDeleteId != null) {
         AlertDialog(
             onDismissRequest = viewModel::cancelDelete,
-            title = { Text("Delete tracker?") },
+            // A dialog floats, so it takes the card surface — never the canvas,
+            // which would leave it indistinguishable from the page behind it.
+            containerColor = palette.card,
+            titleContentColor = palette.textPrimary,
+            textContentColor = palette.textSecondary,
+            shape = WellnessShape.floating,
+            title = { Text("Delete tracker?", style = WellnessTheme.type.title) },
             text = { Text("Delete \"${state.pendingDeleteName}\"? This cannot be undone.") },
-            confirmButton = { TextButton(onClick = viewModel::deleteConfirmed) { Text("Delete") } },
-            dismissButton = { TextButton(onClick = viewModel::cancelDelete) { Text("Cancel") } },
+            confirmButton = {
+                TextButton(
+                    onClick = viewModel::deleteConfirmed,
+                    colors = ButtonDefaults.textButtonColors(contentColor = palette.error),
+                ) { Text("Delete") }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = viewModel::cancelDelete,
+                    colors = WellnessDefaults.accentTextButtonColors(),
+                ) { Text("Cancel") }
+            },
         )
     }
 }
 
 @Composable
 private fun TrackerConfigItem(row: TrackerConfigRow, onEdit: () -> Unit, onDelete: () -> Unit) {
+    val palette = WellnessTheme.palette
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 4.dp),
+            .padding(horizontal = WellnessSpace.md, vertical = WellnessSpace.xs)
+            .clip(WellnessShape.card)
+            .background(palette.card)
+            .border(1.dp, palette.line, WellnessShape.card)
+            .padding(start = WellnessSpace.md, top = WellnessSpace.sm, bottom = WellnessSpace.sm),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(modifier = Modifier.weight(1f)) {
-            Text(row.name, style = MaterialTheme.typography.bodyLarge)
+            Text(row.name, style = WellnessTheme.type.body, color = palette.textPrimary)
             Text(
                 text = row.summary,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = WellnessTheme.type.secondary,
+                color = palette.textSecondary,
             )
         }
         IconButton(onClick = onEdit) {
-            Icon(Icons.Filled.Edit, contentDescription = "Edit ${row.name}")
+            Icon(
+                imageVector = Icons.Filled.Edit,
+                contentDescription = "Edit ${row.name}",
+                tint = palette.textSecondary,
+            )
         }
         IconButton(onClick = onDelete) {
-            Icon(Icons.Filled.Delete, contentDescription = "Delete ${row.name}")
+            Icon(
+                imageVector = Icons.Filled.Delete,
+                contentDescription = "Delete ${row.name}",
+                tint = palette.textSecondary,
+            )
         }
     }
 }
@@ -215,7 +287,14 @@ private fun TrackerFormSheet(
     val errors = validateTrackerForm(form)
     val showErrors = form.submitAttempted
 
-    ModalBottomSheet(onDismissRequest = onDismiss) {
+    val palette = WellnessTheme.palette
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        containerColor = palette.card,
+        contentColor = palette.textPrimary,
+        scrimColor = Color.Black.copy(alpha = SCRIM_ALPHA),
+        shape = RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp),
+    ) {
         // Eleven fields and a Save button do not fit a short screen, a landscape
         // one, or a portrait one with the keyboard up — and a Save button you
         // cannot reach is the whole form wasted.
@@ -223,19 +302,23 @@ private fun TrackerFormSheet(
             modifier = Modifier
                 .verticalScroll(rememberScrollState())
                 .imePadding()
-                .padding(horizontal = 24.dp)
-                .padding(bottom = 32.dp),
+                .padding(horizontal = WellnessSpace.lg)
+                .padding(bottom = WellnessSpace.xl),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Text(
                 text = if (isEdit) "Edit Tracker" else "New Tracker",
-                style = MaterialTheme.typography.titleLarge,
+                style = WellnessTheme.type.headline,
+                color = palette.textPrimary,
             )
 
             OutlinedTextField(
                 value = form.name,
                 onValueChange = { next -> onChange { it.copy(name = next) } },
                 label = { Text("Name") },
+                shape = WellnessShape.input,
+                colors = WellnessDefaults.textFieldColors(),
+                textStyle = WellnessTheme.type.body,
                 placeholder = { Text("e.g. Meditation") },
                 singleLine = true,
                 isError = showErrors && errors.name != null,
@@ -255,8 +338,13 @@ private fun TrackerFormSheet(
 
             PolarityField(form.polarity) { next -> onChange { it.copy(polarity = next) } }
 
-            Button(onClick = onSubmit, modifier = Modifier.fillMaxWidth()) {
-                Text(if (isEdit) "Save Changes" else "Add Tracker")
+            Button(
+                onClick = onSubmit,
+                colors = WellnessDefaults.accentButtonColors(),
+                shape = WellnessShape.card,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(if (isEdit) "Save Changes" else "Add Tracker", style = WellnessTheme.type.label)
             }
         }
     }
@@ -279,6 +367,9 @@ private fun CategoryField(
                     onValueChange = {},
                     readOnly = true,
                     label = { Text("Category") },
+                    shape = WellnessShape.input,
+                    colors = WellnessDefaults.textFieldColors(),
+                    textStyle = WellnessTheme.type.body,
                     placeholder = { Text("Select category…") },
                     trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
                     isError = error != null,
@@ -299,7 +390,10 @@ private fun CategoryField(
                     }
                 }
             }
-            TextButton(onClick = { onChange { it.copy(useNewCategory = true) } }) {
+            TextButton(
+                onClick = { onChange { it.copy(useNewCategory = true) } },
+                colors = WellnessDefaults.accentTextButtonColors(),
+            ) {
                 Text("+ New Category")
             }
         } else {
@@ -307,6 +401,9 @@ private fun CategoryField(
                 value = form.newCategory,
                 onValueChange = { next -> onChange { it.copy(newCategory = next) } },
                 label = { Text("Category") },
+                shape = WellnessShape.input,
+                colors = WellnessDefaults.textFieldColors(),
+                textStyle = WellnessTheme.type.body,
                 placeholder = { Text("e.g. Supplements") },
                 singleLine = true,
                 isError = error != null,
@@ -314,7 +411,10 @@ private fun CategoryField(
                 modifier = Modifier.fillMaxWidth(),
             )
             if (categories.isNotEmpty()) {
-                TextButton(onClick = { onChange { it.copy(useNewCategory = false) } }) {
+                TextButton(
+                    onClick = { onChange { it.copy(useNewCategory = false) } },
+                    colors = WellnessDefaults.accentTextButtonColors(),
+                ) {
                     Text("Use Existing")
                 }
             }
@@ -332,6 +432,9 @@ private fun TypeField(type: TrackerType, onSelect: (TrackerType) -> Unit) {
             onValueChange = {},
             readOnly = true,
             label = { Text("Type") },
+            shape = WellnessShape.input,
+            colors = WellnessDefaults.textFieldColors(),
+            textStyle = WellnessTheme.type.body,
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
             modifier = Modifier
                 .fillMaxWidth()
@@ -361,6 +464,9 @@ private fun QuantifiableFieldsSection(
             value = form.unit,
             onValueChange = { next -> onChange { it.copy(unit = next) } },
             label = { Text("Unit Label") },
+            shape = WellnessShape.input,
+            colors = WellnessDefaults.textFieldColors(),
+            textStyle = WellnessTheme.type.body,
             placeholder = { Text("e.g. mg, min") },
             singleLine = true,
             modifier = Modifier.weight(1f),
@@ -370,6 +476,9 @@ private fun QuantifiableFieldsSection(
             value = form.defaultValue,
             onValueChange = { next -> onChange { it.copy(defaultValue = next) } },
             label = { Text("Default Value") },
+            shape = WellnessShape.input,
+            colors = WellnessDefaults.textFieldColors(),
+            textStyle = WellnessTheme.type.body,
             placeholder = { Text("e.g. 30") },
             singleLine = true,
             isError = defaultValueError != null,
@@ -392,6 +501,9 @@ private fun QuantifiableFieldsSection(
         value = form.targetInput,
         onValueChange = { next -> onChange { it.copy(targetInput = next) } },
         label = { Text("Target") },
+        shape = WellnessShape.input,
+        colors = WellnessDefaults.textFieldColors(),
+        textStyle = WellnessTheme.type.body,
         placeholder = { Text("e.g. 150 or 150-170") },
         singleLine = true,
         isError = liveError != null,
@@ -417,7 +529,8 @@ private fun ScheduleSection(
     form: TrackerFormState,
     onChange: ((TrackerFormState) -> TrackerFormState) -> Unit,
 ) {
-    Text("Scheduled days", style = MaterialTheme.typography.labelLarge)
+    val palette = WellnessTheme.palette
+    Text("Scheduled days", style = WellnessTheme.type.label, color = palette.textPrimary)
 
     LabelledCheckbox(
         checked = form.paused,
@@ -426,34 +539,52 @@ private fun ScheduleSection(
     )
     Text(
         text = "Hidden from the daily view; adherence pauses. History is kept.",
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        style = WellnessTheme.type.secondary,
+        color = palette.textSecondary,
     )
 
-    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-        for ((day, label) in WEEKDAY_PICKER) {
-            FilterChip(
-                selected = day in form.days,
+    // Paused dims the picker rather than hiding it: the schedule is still worth
+    // reading, it is simply not in effect.
+    Column(
+        modifier = Modifier.alpha(if (form.paused) PAUSED_ALPHA else 1f),
+        verticalArrangement = Arrangement.spacedBy(WellnessSpace.sm),
+    ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(WellnessSpace.xs)) {
+            for ((day, label) in WEEKDAY_PICKER) {
+                FilterChip(
+                    selected = day in form.days,
+                    enabled = !form.paused,
+                    onClick = { onChange { it.toggleDay(day) } },
+                    label = { Text(label, style = WellnessTheme.type.label) },
+                    shape = WellnessShape.card,
+                    colors = WellnessDefaults.filterChipColors(),
+                    border = WellnessDefaults.filterChipBorder(
+                        enabled = !form.paused,
+                        selected = day in form.days,
+                    ),
+                    modifier = Modifier.semantics { contentDescription = DAY_FULL_NAMES[day] },
+                )
+            }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(WellnessSpace.sm)) {
+            TextButton(
+                onClick = { onChange { it.copy(days = ALL_DAYS) } },
                 enabled = !form.paused,
-                onClick = { onChange { it.toggleDay(day) } },
-                label = { Text(label) },
-                modifier = Modifier.semantics { contentDescription = DAY_FULL_NAMES[day] },
-            )
+                colors = WellnessDefaults.accentTextButtonColors(),
+            ) {
+                Text("Daily")
+            }
+            TextButton(
+                onClick = { onChange { it.copy(days = listOf(1, 2, 3, 4, 5)) } },
+                enabled = !form.paused,
+                colors = WellnessDefaults.accentTextButtonColors(),
+            ) { Text("Weekdays") }
         }
-    }
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        TextButton(onClick = { onChange { it.copy(days = ALL_DAYS) } }, enabled = !form.paused) {
-            Text("Daily")
-        }
-        TextButton(
-            onClick = { onChange { it.copy(days = listOf(1, 2, 3, 4, 5)) } },
-            enabled = !form.paused,
-        ) { Text("Weekdays") }
     }
     Text(
         text = if (form.paused) "Paused" else formatScheduleSummary(form.days.ifEmpty { ALL_DAYS }),
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        style = WellnessTheme.type.secondary,
+        color = if (form.paused) palette.textFaint else palette.textSecondary,
     )
 }
 
@@ -467,6 +598,9 @@ private fun PolarityField(polarity: String, onSelect: (String) -> Unit) {
             onValueChange = {},
             readOnly = true,
             label = { Text("Polarity") },
+            shape = WellnessShape.input,
+            colors = WellnessDefaults.textFieldColors(),
+            textStyle = WellnessTheme.type.body,
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
             modifier = Modifier
                 .fillMaxWidth()
@@ -495,8 +629,15 @@ private fun LabelledCheckbox(checked: Boolean, label: String, onCheckedChange: (
             .toggleable(value = checked, onValueChange = onCheckedChange),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Checkbox(checked = checked, onCheckedChange = null)
-        Spacer(Modifier.size(8.dp))
-        Text(label, style = MaterialTheme.typography.bodyMedium)
+        Checkbox(
+            checked = checked,
+            onCheckedChange = null,
+            colors = WellnessDefaults.checkboxColors(),
+        )
+        Spacer(Modifier.size(WellnessSpace.sm))
+        Text(label, style = WellnessTheme.type.secondary, color = WellnessTheme.palette.textPrimary)
     }
 }
+
+private const val SCRIM_ALPHA = 0.6f
+private const val PAUSED_ALPHA = 0.45f

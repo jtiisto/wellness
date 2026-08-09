@@ -1,4 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.Wellness" parent="android:Theme.Material.Light.NoActionBar" />
+    <!--
+      Only the launch window. Everything after the first Compose frame is
+      WellnessTheme; this exists so the handoff is not a white flash on a dark
+      device. DayNight so the platform picks the right values-night resources.
+    -->
+    <style name="Theme.Wellness" parent="android:Theme.DeviceDefault.DayNight">
+        <item name="android:windowActionBar">false</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowBackground">@color/window_background</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
 </resources>

@@ -10,21 +10,28 @@ import androidx.compose.material.icons.filled.FitnessCenter
 import androidx.compose.material.icons.filled.Insights
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.unit.dp
 import androidx.navigation.NavDestination.Companion.hierarchy
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.compose.NavHost
@@ -32,7 +39,11 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import dev.jtiisto.wellness.core.data.sync.SyncErrorEvents
+import dev.jtiisto.wellness.core.ui.motion.WellnessMotion
+import dev.jtiisto.wellness.core.ui.theme.LocalModuleAccent
+import dev.jtiisto.wellness.core.ui.theme.ModuleAccent
 import dev.jtiisto.wellness.core.ui.theme.WellnessTheme
+import dev.jtiisto.wellness.core.ui.theme.colors
 import dev.jtiisto.wellness.feature.coach.CoachScreen
 import dev.jtiisto.wellness.feature.journal.JournalTab
 import dev.jtiisto.wellness.ui.tools.ToolsScreen
@@ -46,14 +57,15 @@ private data class TopLevelDestination(
     val route: String,
     val label: String,
     val icon: ImageVector,
+    val accent: ModuleAccent,
 )
 
 private val topLevelDestinations = listOf(
-    TopLevelDestination(JOURNAL_ROUTE, "Journal", Icons.Filled.Checklist),
-    TopLevelDestination(COACH_ROUTE, "Coach", Icons.Filled.FitnessCenter),
-    TopLevelDestination("trends", "Trends", Icons.Filled.Insights),
-    TopLevelDestination("analysis", "Analysis", Icons.Filled.Analytics),
-    TopLevelDestination(TOOLS_ROUTE, "Tools", Icons.Filled.Settings),
+    TopLevelDestination(JOURNAL_ROUTE, "Journal", Icons.Filled.Checklist, ModuleAccent.JOURNAL),
+    TopLevelDestination(COACH_ROUTE, "Coach", Icons.Filled.FitnessCenter, ModuleAccent.COACH),
+    TopLevelDestination("trends", "Trends", Icons.Filled.Insights, ModuleAccent.TRENDS),
+    TopLevelDestination("analysis", "Analysis", Icons.Filled.Analytics, ModuleAccent.ANALYSIS),
+    TopLevelDestination(TOOLS_ROUTE, "Tools", Icons.Filled.Settings, ModuleAccent.TOOLS),
 )
 
 @Composable
@@ -63,6 +75,7 @@ fun WellnessApp() {
         val backStackEntry by navController.currentBackStackEntryAsState()
         val currentDestination = backStackEntry?.destination
         val snackbarHostState = remember { SnackbarHostState() }
+        val palette = WellnessTheme.palette
 
         // Server-side sync failures, shown once each. The events arrive on a
         // channel rather than as state, so a rotation cannot re-raise a
@@ -75,12 +88,27 @@ fun WellnessApp() {
         }
 
         Scaffold(
+            // The graphite canvas runs full-bleed behind the translucent system
+            // bars; the insets below keep the content itself clear of them.
+            containerColor = palette.canvas,
+            contentColor = palette.textPrimary,
             snackbarHost = { SnackbarHost(snackbarHostState) },
             bottomBar = {
-                NavigationBar {
+                NavigationBar(
+                    containerColor = palette.chrome,
+                    contentColor = palette.textSecondary,
+                    modifier = Modifier.drawWithContent {
+                        drawContent()
+                        drawRect(
+                            color = palette.line,
+                            size = Size(size.width, 1.dp.toPx()),
+                        )
+                    },
+                ) {
                     topLevelDestinations.forEach { destination ->
                         val selected = currentDestination?.hierarchy
                             ?.any { it.route == destination.route } == true
+                        val accent = destination.accent.colors(palette)
                         NavigationBarItem(
                             selected = selected,
                             onClick = {
@@ -94,6 +122,17 @@ fun WellnessApp() {
                             },
                             icon = { Icon(destination.icon, contentDescription = destination.label) },
                             label = { Text(destination.label) },
+                            colors = NavigationBarItemDefaults.colors(
+                                selectedIconColor = accent.text,
+                                selectedTextColor = accent.text,
+                                unselectedIconColor = palette.textSecondary,
+                                unselectedTextColor = palette.textSecondary,
+                                // The M3 pill would put a fifth surface tone in
+                                // the chrome; the underline below says the same
+                                // thing in the module's own colour.
+                                indicatorColor = Color.Transparent,
+                            ),
+                            modifier = Modifier.selectionUnderline(selected, accent.text),
                         )
                     }
                 }
@@ -103,14 +142,24 @@ fun WellnessApp() {
                 navController = navController,
                 startDestination = JOURNAL_ROUTE,
                 modifier = Modifier.padding(innerPadding),
+                // Fade-through between tabs: they are siblings, so nothing
+                // should slide in from a direction that implies hierarchy.
+                enterTransition = { WellnessMotion.enterFadeThrough },
+                exitTransition = { WellnessMotion.exitFadeThrough },
+                popEnterTransition = { WellnessMotion.enterFadeThrough },
+                popExitTransition = { WellnessMotion.exitFadeThrough },
             ) {
                 topLevelDestinations.forEach { destination ->
                     composable(destination.route) {
-                        when (destination.route) {
-                            JOURNAL_ROUTE -> JournalTab()
-                            COACH_ROUTE -> CoachScreen()
-                            TOOLS_ROUTE -> ToolsScreen()
-                            else -> StubScreen(destination.label)
+                        // One accent per tab, provided at its root: nothing below
+                        // here has to know which module it is drawing.
+                        CompositionLocalProvider(LocalModuleAccent provides destination.accent) {
+                            when (destination.route) {
+                                JOURNAL_ROUTE -> JournalTab()
+                                COACH_ROUTE -> CoachScreen()
+                                TOOLS_ROUTE -> ToolsScreen()
+                                else -> StubScreen(destination.label)
+                            }
                         }
                     }
                 }
@@ -119,12 +168,38 @@ fun WellnessApp() {
     }
 }
 
+/**
+ * The 14×3dp accent bar under the active tab.
+ *
+ * Drawn as an overlay on the stock `NavigationBarItem` rather than as a custom
+ * nav component: the accessibility surface — role, selected state, merged
+ * label — is the one part of the nav bar worth keeping exactly as Material
+ * ships it.
+ */
+private fun Modifier.selectionUnderline(selected: Boolean, color: Color): Modifier =
+    drawWithContent {
+        drawContent()
+        if (!selected) return@drawWithContent
+        val width = 14.dp.toPx()
+        val height = 3.dp.toPx()
+        drawRoundRect(
+            color = color,
+            topLeft = Offset((size.width - width) / 2f, size.height - height),
+            size = Size(width, height),
+            cornerRadius = CornerRadius(height / 2f),
+        )
+    }
+
 @Composable
 private fun StubScreen(name: String) {
     Box(
         modifier = Modifier.fillMaxSize(),
         contentAlignment = Alignment.Center,
     ) {
-        Text(text = name, style = MaterialTheme.typography.headlineMedium)
+        Text(
+            text = name,
+            style = WellnessTheme.type.headline,
+            color = WellnessTheme.palette.textFaint,
+        )
     }
 }

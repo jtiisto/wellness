@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -23,6 +22,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import dev.jtiisto.wellness.core.data.sync.SyncStatus
+import dev.jtiisto.wellness.core.ui.theme.WellnessTheme
 
 /**
  * The per-module sync indicator.
@@ -76,8 +76,8 @@ fun SyncStatusIndicator(
         )
         Text(
             text = label,
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = WellnessTheme.type.secondary,
+            color = WellnessTheme.palette.textSecondary,
         )
     }
 }
@@ -117,15 +117,16 @@ private fun syncStatusLabel(status: SyncStatus, syncing: Boolean): String = when
     else -> "Offline"
 }
 
-private fun dotColor(status: SyncStatus): Color = when (status) {
-    SyncStatus.GREEN -> DotGreen
-    SyncStatus.RED -> DotRed
-    SyncStatus.GRAY -> DotGray
+/** Semantic tokens, so the dot tracks the theme instead of three fixed hues. */
+@Composable
+private fun dotColor(status: SyncStatus): Color {
+    val palette = WellnessTheme.palette
+    return when (status) {
+        SyncStatus.GREEN -> palette.success
+        SyncStatus.RED -> palette.error
+        SyncStatus.GRAY -> palette.syncIdle
+    }
 }
 
 private const val PULSE_MS = 700
 private const val PULSE_MIN_ALPHA = 0.3f
-
-private val DotGreen = Color(0xFF2E7D32)
-private val DotRed = Color(0xFFC62828)
-private val DotGray = Color(0xFF9E9E9E)

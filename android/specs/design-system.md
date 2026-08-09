@@ -148,6 +148,10 @@ Anchors monotonic; empty = no-op + clear; out-of-range snaps to endpoint; midpoi
 
 **F. Nav indicator**: keep `NavigationBar`/`NavigationBarItem` with `selectedIndicatorColor = Transparent`; the 14dp-wide × 3dp-high accent bar draws via a modifier overlay on the item (never a custom nav component — accessibility surface stays stock). Tools tab gets a neutral accent: `slate #94A3B8` / on-light `#475569` (it hosts the chart demo and needs one).
 
+**v2.1 (implementation + code-review round):** (a) **`onSemanticFill` token added** — ink for text on semantic fills: `#0C0D10` in dark, white in light (light-theme semantics are dark greens/ambers where the dark ink fails contrast); used by the fired-hook button and completed progress pill. (b) **Darker on-light accent-text variants adopted** so accent/semantic-as-TEXT clears 4.5:1 on every light surface incl. `band`: journal `#92400E`, coach `#115E59`, success `#166534`, warning `#854D0E` (trends/analysis verified or minimally darkened likewise); fills keep base hues. The palette test holds a uniform 4.5 floor (3:1 only for `textFaint`). (c) Retained accordion exit content renders non-interactively and is dropped when the exit transition idles (hard-rule guard).
+
+**v2.2 (fix round rulings):** (a) **dark `error` is `#F87171`** (red-400) — `#EF4444` fails 4.5:1 on card/band and error is the one semantic that appears as words; ink-on-fill improves too. (b) Soft-fill contrast is asserted on canvas/chrome/card/input only — **no soft fill is ever drawn on `band`** (a design fact, documented in the palette KDoc with the failing number should that ever change). (c) M3 fixed-role trios map band/line/textPrimary/textSecondary from the DARK palette in both themes (that is what "fixed" means).
+
 **G. 5.5a gate**: `:app` has no meaningful JVM coverage, so delivery 1 requires `:app:assembleDebug` + full 660-suite + on-device review before 5.5b starts. Contrast tests composite alpha per sRGB channel BEFORE luminance (never multiply luminance by alpha). Accordion spring (stiffness 200 / damping .85 ≈ 333ms settle, <1% overshoot) confirmed intended.
 
 ## Resolved Questions (user decisions, 2026-08-08)

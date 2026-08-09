@@ -1,14 +1,20 @@
 package dev.jtiisto.wellness.feature.coach
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -24,6 +30,7 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.BarChart
 import androidx.compose.material.icons.filled.Delete
@@ -33,18 +40,14 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.FitnessCenter
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Place
-import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -56,19 +59,37 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import dev.jtiisto.wellness.core.data.coach.EXTRA_SESSION_TITLE
+import dev.jtiisto.wellness.core.data.coach.HookAction
 import dev.jtiisto.wellness.core.data.coach.HookButtonState
 import dev.jtiisto.wellness.core.data.coach.RxKind
 import dev.jtiisto.wellness.core.data.coach.RxToken
+import dev.jtiisto.wellness.core.ui.motion.WellnessMotion
+import dev.jtiisto.wellness.core.ui.theme.AccentColors
+import dev.jtiisto.wellness.core.ui.theme.GHOST_ALPHA
+import dev.jtiisto.wellness.core.ui.theme.ModuleAccent
+import dev.jtiisto.wellness.core.ui.theme.WellnessDefaults
+import dev.jtiisto.wellness.core.ui.theme.WellnessShape
+import dev.jtiisto.wellness.core.ui.theme.WellnessSpace
+import dev.jtiisto.wellness.core.ui.theme.WellnessTheme
+import dev.jtiisto.wellness.core.ui.theme.colors
 
 /**
  * The selected day's workout.
@@ -93,7 +114,7 @@ fun WorkoutDayView(day: WorkoutDayState, actions: CoachActions, modifier: Modifi
             is WorkoutDayState.Rest -> RestDay(day = day, actions = actions)
             is WorkoutDayState.Planned -> PlannedDay(day = day, actions = actions)
         }
-        Spacer(Modifier.height(24.dp))
+        Spacer(Modifier.height(WellnessSpace.lg))
     }
 }
 
@@ -108,12 +129,16 @@ private fun LoadingDay() {
             .padding(vertical = 48.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        CircularProgressIndicator(modifier = Modifier.size(28.dp))
+        CircularProgressIndicator(
+            color = WellnessTheme.accent.fill,
+            trackColor = WellnessTheme.palette.line,
+            modifier = Modifier.size(28.dp),
+        )
         Spacer(Modifier.height(12.dp))
         Text(
             text = "Loading…",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = WellnessTheme.type.secondary,
+            color = WellnessTheme.palette.textSecondary,
         )
     }
 }
@@ -126,27 +151,63 @@ private fun LoadingDay() {
  */
 @Composable
 private fun UnreadablePlanDay(day: WorkoutDayState.PlanUnavailable) {
-    Surface(
-        modifier = Modifier
+    val palette = WellnessTheme.palette
+    SemanticBanner(
+        rail = palette.error,
+        icon = Icons.Filled.ErrorOutline,
+        text = day.message,
+        modifier = Modifier.padding(top = WellnessSpace.lg),
+    )
+}
+
+/**
+ * A band with a semantic rail down its left edge.
+ *
+ * The band carries the message and the rail carries the meaning, which keeps
+ * error out of the surface itself — a whole card tinted red reads as damage
+ * rather than as "this one thing did not load".
+ */
+@Composable
+private fun SemanticBanner(
+    rail: Color,
+    icon: ImageVector,
+    text: String,
+    modifier: Modifier = Modifier,
+) {
+    val palette = WellnessTheme.palette
+    Row(
+        modifier = modifier
             .fillMaxWidth()
-            .padding(top = 24.dp),
-        shape = RoundedCornerShape(12.dp),
-        color = MaterialTheme.colorScheme.errorContainer,
+            // Intrinsic height, because `fillMaxHeight` inside a scrolling
+            // column resolves against unbounded constraints and leaves the rail
+            // a zero-height sliver.
+            .height(IntrinsicSize.Min)
+            .clip(WellnessShape.card)
+            .background(palette.band)
+            .heightIn(min = 40.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
+        Box(
+            modifier = Modifier
+                .width(3.dp)
+                .fillMaxHeight()
+                .background(rail),
+        )
         Row(
-            modifier = Modifier.padding(12.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = WellnessSpace.sm),
+            horizontalArrangement = Arrangement.spacedBy(WellnessSpace.sm),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
             Icon(
-                imageVector = Icons.Filled.ErrorOutline,
+                imageVector = icon,
                 contentDescription = null,
-                modifier = Modifier.size(20.dp),
-                tint = MaterialTheme.colorScheme.onErrorContainer,
+                tint = rail,
+                modifier = Modifier.size(16.dp),
             )
             Text(
-                text = day.message,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onErrorContainer,
+                text = text,
+                style = WellnessTheme.type.secondary,
+                color = palette.textPrimary,
             )
         }
     }
@@ -156,6 +217,7 @@ private fun UnreadablePlanDay(day: WorkoutDayState.PlanUnavailable) {
 
 @Composable
 private fun RestDay(day: WorkoutDayState.Rest, actions: CoachActions) {
+    val palette = WellnessTheme.palette
     if (day.showEmptyState) {
         Column(
             modifier = Modifier
@@ -167,13 +229,13 @@ private fun RestDay(day: WorkoutDayState.Rest, actions: CoachActions) {
                 imageVector = Icons.Filled.EventAvailable,
                 contentDescription = null,
                 modifier = Modifier.size(40.dp),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                tint = palette.textFaint,
             )
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(WellnessSpace.sm))
             Text(
                 text = "No workout scheduled for this day",
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = WellnessTheme.type.body,
+                color = palette.textSecondary,
             )
         }
     }
@@ -193,8 +255,8 @@ private fun ExtraSessionCard(state: ExtraSessionState, actions: CoachActions) {
     var draft by remember { mutableStateOf<ExtraSessionDraft?>(null) }
 
     when (state) {
-        is ExtraSessionState.Saved -> Card(modifier = Modifier.fillMaxWidth()) {
-            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        is ExtraSessionState.Saved -> CardSurface {
+            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(WellnessSpace.sm)) {
                 ExtraSessionHeader()
                 CardioFields(
                     durationPlaceholder = "min",
@@ -207,10 +269,13 @@ private fun ExtraSessionCard(state: ExtraSessionState, actions: CoachActions) {
                 if (state.editable) {
                     TextButton(
                         onClick = actions.onDeleteExtraSession,
+                        colors = ButtonDefaults.textButtonColors(
+                            contentColor = WellnessTheme.palette.error,
+                        ),
                         modifier = Modifier.align(Alignment.End),
                     ) {
                         Icon(Icons.Filled.Delete, contentDescription = null)
-                        Spacer(Modifier.width(4.dp))
+                        Spacer(Modifier.width(WellnessSpace.xs))
                         Text("Delete session")
                     }
                 }
@@ -222,20 +287,23 @@ private fun ExtraSessionCard(state: ExtraSessionState, actions: CoachActions) {
             if (current == null) {
                 OutlinedButton(
                     onClick = { draft = ExtraSessionDraft() },
+                    shape = WellnessShape.card,
+                    colors = WellnessDefaults.accentOutlinedButtonColors(),
+                    border = BorderStroke(1.dp, WellnessTheme.accent.border),
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Icon(Icons.Filled.Add, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text("Add Zone 2 session")
+                    Spacer(Modifier.width(WellnessSpace.sm))
+                    Text("Add Zone 2 session", style = WellnessTheme.type.label)
                 }
             } else {
-                Card(modifier = Modifier.fillMaxWidth()) {
+                CardSurface {
                     Column(
                         modifier = Modifier.padding(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(WellnessSpace.sm),
                     ) {
                         ExtraSessionHeader()
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(WellnessSpace.sm)) {
                             NumericField(
                                 value = current.durationMin,
                                 label = "Duration (min)",
@@ -263,16 +331,23 @@ private fun ExtraSessionCard(state: ExtraSessionState, actions: CoachActions) {
                         }
                         Row(
                             modifier = Modifier.align(Alignment.End),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(WellnessSpace.sm),
                         ) {
-                            TextButton(onClick = { draft = null }) { Text("Delete") }
+                            TextButton(
+                                onClick = { draft = null },
+                                colors = ButtonDefaults.textButtonColors(
+                                    contentColor = WellnessTheme.palette.textSecondary,
+                                ),
+                            ) { Text("Delete") }
                             Button(
                                 onClick = {
                                     actions.onSaveExtraSession(current)
                                     draft = null
                                 },
                                 enabled = draftCanSave(current),
-                            ) { Text("Save") }
+                                shape = WellnessShape.card,
+                                colors = WellnessDefaults.accentButtonColors(),
+                            ) { Text("Save", style = WellnessTheme.type.label) }
                         }
                     }
                 }
@@ -281,20 +356,46 @@ private fun ExtraSessionCard(state: ExtraSessionState, actions: CoachActions) {
     }
 }
 
+/**
+ * The content plane: a card surface behind a hairline, at the default radius.
+ *
+ * `inline`, like the layout primitives it stands in for: a wrapper this thin
+ * should not cost a lambda allocation per card, and keeping the caller's body
+ * in the caller is also what lets Kover see it as the composable it is.
+ */
+@Composable
+private inline fun CardSurface(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
+    val palette = WellnessTheme.palette
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(WellnessShape.card)
+            .background(palette.card)
+            .border(1.dp, palette.line, WellnessShape.card),
+    ) {
+        content()
+    }
+}
+
 @Composable
 private fun ExtraSessionHeader() {
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(text = EXTRA_SESSION_TITLE, style = MaterialTheme.typography.titleMedium)
-        Surface(
-            shape = RoundedCornerShape(8.dp),
-            color = MaterialTheme.colorScheme.secondaryContainer,
-        ) {
-            Text(
-                text = "off-plan",
-                style = MaterialTheme.typography.labelSmall,
-                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-            )
-        }
+    val palette = WellnessTheme.palette
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(WellnessSpace.sm)) {
+        Text(
+            text = EXTRA_SESSION_TITLE,
+            style = WellnessTheme.type.title,
+            color = palette.textPrimary,
+        )
+        // Off-plan is a fact, not a warning: band and secondary, no amber.
+        Text(
+            text = "off-plan".uppercase(),
+            style = WellnessTheme.type.micro,
+            color = palette.textSecondary,
+            modifier = Modifier
+                .clip(WellnessShape.card)
+                .background(palette.band)
+                .padding(horizontal = 6.dp, vertical = 2.dp),
+        )
     }
 }
 
@@ -315,27 +416,15 @@ private fun PlannedDay(day: WorkoutDayState.Planned, actions: CoachActions) {
 
 @Composable
 private fun ReadOnlyBannerRow(banner: ReadOnlyBanner) {
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(8.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant,
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Icon(
-                imageVector = when (banner.kind) {
-                    ReadOnlyBanner.Kind.PAST -> Icons.Filled.Lock
-                    ReadOnlyBanner.Kind.FUTURE -> Icons.Filled.EventAvailable
-                },
-                contentDescription = null,
-                modifier = Modifier.size(16.dp),
-            )
-            Text(text = banner.text, style = MaterialTheme.typography.bodySmall)
-        }
-    }
+    SemanticBanner(
+        // Past and future are both "not now", and neither is a failure.
+        rail = WellnessTheme.palette.textFaint,
+        icon = when (banner.kind) {
+            ReadOnlyBanner.Kind.PAST -> Icons.Filled.Lock
+            ReadOnlyBanner.Kind.FUTURE -> Icons.Filled.EventAvailable
+        },
+        text = banner.text,
+    )
 }
 
 /**
@@ -350,6 +439,7 @@ private fun WorkoutHeader(day: WorkoutDayState.Planned, actions: CoachActions) {
     var expanded by remember(day.sessionId) { mutableStateOf(false) }
     var hasAutoExpanded by remember(day.sessionId) { mutableStateOf(false) }
     val hasControls = day.controls != null
+    val palette = WellnessTheme.palette
 
     LaunchedEffect(hasControls, day.gateSatisfied, hasAutoExpanded) {
         if (!hasAutoExpanded && hasControls && !day.gateSatisfied) {
@@ -360,7 +450,13 @@ private fun WorkoutHeader(day: WorkoutDayState.Planned, actions: CoachActions) {
 
     val rotation by animateFloatAsState(if (expanded) 0f else -90f, label = "controls-chevron")
 
-    Column(modifier = Modifier.fillMaxWidth()) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(WellnessShape.card)
+            .background(palette.band)
+            .padding(horizontal = 12.dp, vertical = WellnessSpace.sm),
+    ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -374,19 +470,23 @@ private fun WorkoutHeader(day: WorkoutDayState.Planned, actions: CoachActions) {
                         Modifier
                     },
                 )
-                .padding(vertical = 8.dp),
+                .padding(vertical = WellnessSpace.sm),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
                 text = day.dayName,
-                style = MaterialTheme.typography.headlineSmall,
+                style = WellnessTheme.type.headline,
+                color = palette.textPrimary,
                 modifier = Modifier.weight(1f),
             )
             if (hasControls) {
                 Icon(
                     imageVector = Icons.Filled.ExpandMore,
                     contentDescription = null,
-                    modifier = Modifier.rotate(rotation),
+                    tint = palette.textSecondary,
+                    modifier = Modifier
+                        .size(14.dp)
+                        .rotate(rotation),
                 )
             }
         }
@@ -400,8 +500,8 @@ private fun WorkoutHeader(day: WorkoutDayState.Planned, actions: CoachActions) {
             // One full-width row per hook: sharing a single Row pushed the End
             // button's Undo off-screen once labels grew ("(locked)", "Working…").
             Column(
-                modifier = Modifier.padding(top = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.padding(top = WellnessSpace.sm),
+                verticalArrangement = Arrangement.spacedBy(WellnessSpace.sm),
             ) {
                 day.controls?.start?.let { HookButton(model = it, actions = actions) }
                 day.controls?.end?.let { HookButton(model = it, actions = actions) }
@@ -411,13 +511,19 @@ private fun WorkoutHeader(day: WorkoutDayState.Planned, actions: CoachActions) {
 }
 
 @Composable
-private fun MetaItem(icon: androidx.compose.ui.graphics.vector.ImageVector, text: String) {
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-        Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(14.dp))
+private fun MetaItem(icon: ImageVector, text: String) {
+    val palette = WellnessTheme.palette
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(WellnessSpace.xs)) {
+        Icon(
+            imageVector = icon,
+            contentDescription = null,
+            tint = palette.textSecondary,
+            modifier = Modifier.size(14.dp),
+        )
         Text(
             text = text,
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = WellnessTheme.type.label,
+            color = palette.textSecondary,
         )
     }
 }
@@ -428,37 +534,53 @@ private fun MetaItem(icon: androidx.compose.ui.graphics.vector.ImageVector, text
  * The button stays enabled while FIRED and simply does nothing — the PWA's
  * behaviour, kept because greying it out next to a live Undo reads as "this
  * workout is finished".
+ *
+ * Start is the day's one filled action; End outlines, so the two never compete
+ * for the same weight.
  */
 @Composable
 private fun HookButton(model: HookButtonModel, actions: CoachActions) {
+    val palette = WellnessTheme.palette
+    val accent = WellnessTheme.accent
+    val settled = model.state == HookButtonState.FIRED || model.state == HookButtonState.LOCKED
+    val failed = model.state == HookButtonState.FAILED
+    val outlined = model.action == HookAction.END && !settled && !failed
+
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        horizontalArrangement = Arrangement.spacedBy(WellnessSpace.xs),
     ) {
-        Button(
-            modifier = Modifier.weight(1f),
-            onClick = { if (model.canFire) actions.onFireHook(model.action) },
-            enabled = model.enabled,
-            colors = when (model.state) {
-                HookButtonState.FIRED, HookButtonState.LOCKED -> ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.tertiary,
-                    contentColor = MaterialTheme.colorScheme.onTertiary,
-                )
-
-                HookButtonState.FAILED -> ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.error,
-                    contentColor = MaterialTheme.colorScheme.onError,
-                )
-
-                else -> ButtonDefaults.buttonColors()
-            },
-        ) { Text(model.label) }
+        if (outlined) {
+            OutlinedButton(
+                modifier = Modifier.weight(1f),
+                onClick = { if (model.canFire) actions.onFireHook(model.action) },
+                enabled = model.enabled,
+                shape = WellnessShape.card,
+                colors = WellnessDefaults.accentOutlinedButtonColors(),
+                border = BorderStroke(1.dp, accent.border),
+            ) { Text(model.label, style = WellnessTheme.type.label) }
+        } else {
+            Button(
+                modifier = Modifier.weight(1f),
+                onClick = { if (model.canFire) actions.onFireHook(model.action) },
+                enabled = model.enabled,
+                shape = WellnessShape.card,
+                colors = when {
+                    settled -> WellnessDefaults.semanticButtonColors(palette.success)
+                    failed -> WellnessDefaults.semanticButtonColors(palette.error)
+                    else -> WellnessDefaults.accentButtonColors()
+                },
+            ) { Text(model.label, style = WellnessTheme.type.label) }
+        }
 
         if (model.canUndo) {
-            TextButton(onClick = { actions.onUndoHook(model.action) }) {
+            TextButton(
+                onClick = { actions.onUndoHook(model.action) },
+                colors = WellnessDefaults.accentTextButtonColors(),
+            ) {
                 Icon(Icons.AutoMirrored.Filled.Undo, contentDescription = null, modifier = Modifier.size(16.dp))
-                Spacer(Modifier.width(4.dp))
+                Spacer(Modifier.width(WellnessSpace.xs))
                 Text("Undo")
             }
         }
@@ -469,24 +591,25 @@ private fun HookButton(model: HookButtonModel, actions: CoachActions) {
 
 @Composable
 private fun BlockCard(block: BlockState, editable: Boolean, actions: CoachActions) {
+    val palette = WellnessTheme.palette
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         // Stacked like the PWA's .block-header (a column): title, timing badge,
         // rest guidance — each full-width. Sharing a Row squeezed a long
         // guidance sentence into the leftover width beside a long title.
         Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(text = block.title, style = MaterialTheme.typography.titleMedium)
+            Text(text = block.title, style = WellnessTheme.type.title, color = palette.textPrimary)
             if (block.timing.isNotEmpty()) {
                 Text(
                     text = block.timing,
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.primary,
+                    style = WellnessTheme.type.label,
+                    color = WellnessTheme.accent.text,
                 )
             }
             if (block.restGuidance.isNotEmpty()) {
                 Text(
                     text = block.restGuidance,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = WellnessTheme.type.label,
+                    color = palette.textFaint,
                 )
             }
         }
@@ -509,18 +632,41 @@ private fun BlockCard(block: BlockState, editable: Boolean, actions: CoachAction
     }
 }
 
+/**
+ * A superset, marked by a rail rather than a box.
+ *
+ * Concurrent groups rotate hue exactly as the PWA does — A stays the module's
+ * own accent, B borrows sky and C violet — so two groups running side by side
+ * are told apart by colour rather than by reading their labels.
+ */
 @Composable
 private fun SupersetGroup(group: BlockItemState.Group, editable: Boolean, actions: CoachActions) {
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant,
+    val accent = supersetAccent(group.label)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(IntrinsicSize.Min)
+            .clip(RoundedCornerShape(topEnd = 8.dp, bottomEnd = 8.dp))
+            .background(accent.wash),
     ) {
-        Column(modifier = Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Box(
+            modifier = Modifier
+                .width(3.dp)
+                .fillMaxHeight()
+                .background(accent.fill),
+        )
+        Column(
+            modifier = Modifier.padding(WellnessSpace.sm),
+            verticalArrangement = Arrangement.spacedBy(WellnessSpace.xs),
+        ) {
             Text(
-                text = group.displayLabel,
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.primary,
+                text = group.displayLabel.uppercase(),
+                style = WellnessTheme.type.micro,
+                color = accent.text,
+                modifier = Modifier
+                    .clip(WellnessShape.card)
+                    .background(accent.chipFill)
+                    .padding(horizontal = 6.dp, vertical = 2.dp),
             )
             for (exercise in group.exercises) {
                 ExerciseAccordion(row = exercise, editable = editable, actions = actions)
@@ -529,148 +675,253 @@ private fun SupersetGroup(group: BlockItemState.Group, editable: Boolean, action
     }
 }
 
+/** A → the module's accent, B → sky, C → violet. Anything else keeps the module's. */
+@Composable
+private fun supersetAccent(label: String): AccentColors {
+    val palette = WellnessTheme.palette
+    return when (label.trim().firstOrNull()?.uppercaseChar()) {
+        'B' -> ModuleAccent.TRENDS.colors(palette)
+        'C' -> ModuleAccent.ANALYSIS.colors(palette)
+        else -> WellnessTheme.accent
+    }
+}
+
+/** What an accordion body should draw, and whether a finger may reach it. */
+internal data class AccordionBody(
+    val entry: EntryWidgetState?,
+    val interactive: Boolean,
+)
+
+/**
+ * Resolve the accordion body against the collapse animation.
+ *
+ * The ViewModel builds `entry` only while a row is expanded, so a collapse
+ * would animate an empty box; the composable keeps a copy to shrink. That copy
+ * is a *picture of the past*, and the rule this function exists to enforce is
+ * that it can never be typed into: during the exit the widgets are rendered
+ * disabled, so a tap landing in the closing gap cannot commit a set against
+ * values the store has already moved on from.
+ *
+ * The retained copy is also only ever used on the way *down*. While a row is
+ * genuinely expanded, a null entry draws nothing — which is what the pre-5.5
+ * code did — rather than leaving a stale grid on screen indefinitely.
+ */
+internal fun accordionBody(
+    expanded: Boolean,
+    liveEntry: EntryWidgetState?,
+    retainedEntry: EntryWidgetState?,
+    editable: Boolean,
+): AccordionBody = if (expanded) {
+    AccordionBody(entry = liveEntry, interactive = editable && liveEntry != null)
+} else {
+    AccordionBody(entry = retainedEntry, interactive = false)
+}
+
 /**
  * One exercise, header plus expandable body.
  *
  * Expanding brings the body into view: the PWA does not scroll, which on a phone
- * means the keyboard covers the set grid the moment it opens.
+ * means the keyboard covers the set grid the moment it opens. The request fires
+ * when the expansion *finishes* — asking mid-spring scrolls to a rectangle that
+ * is still growing, and lands short.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ExerciseAccordion(row: ExerciseRowState, editable: Boolean, actions: CoachActions) {
+    val palette = WellnessTheme.palette
     val bringIntoView = remember { BringIntoViewRequester() }
-    LaunchedEffect(row.expanded) {
-        if (row.expanded) bringIntoView.bringIntoView()
+    val bodyVisible = remember(row.id) { MutableTransitionState(row.expanded) }
+    bodyVisible.targetState = row.expanded
+
+    LaunchedEffect(bodyVisible.currentState, bodyVisible.isIdle) {
+        if (bodyVisible.isIdle && bodyVisible.currentState) bringIntoView.bringIntoView()
     }
 
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .bringIntoViewRequester(bringIntoView),
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickableRow(
-                    label = if (row.expanded) "Collapse ${row.name}" else "Expand ${row.name}",
-                    onClick = { actions.onToggleExercise(row.id) },
-                )
-                .padding(horizontal = 12.dp, vertical = 10.dp)
-                .heightIn(min = MIN_TOUCH_TARGET),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            Text(
-                text = row.name,
-                style = MaterialTheme.typography.bodyLarge,
-                color = if (row.completed) {
-                    MaterialTheme.colorScheme.primary
-                } else {
-                    MaterialTheme.colorScheme.onSurface
-                },
-                modifier = Modifier.weight(1f),
-            )
-            for (pill in row.pills) Pill(text = pill)
-            row.exposure?.let { Pill(text = it, emphasized = true) }
-            if (row.target.isNotEmpty()) {
-                Text(text = row.target, style = MaterialTheme.typography.labelMedium)
-            }
-            row.progress?.let { progress ->
-                Text(
-                    text = progress.display,
-                    style = MaterialTheme.typography.labelMedium,
-                    color = if (progress.complete) {
-                        MaterialTheme.colorScheme.primary
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-                    modifier = Modifier.semantics { contentDescription = "Progress: ${progress.display}" },
-                )
-            }
-            Icon(
-                imageVector = Icons.Filled.ExpandMore,
-                contentDescription = null,
-                modifier = Modifier.rotate(if (row.expanded) 0f else -90f),
-            )
-        }
+    // The entry is only built while the accordion is open, so the collapse would
+    // otherwise animate an empty box. A copy is kept for the way down and
+    // dropped the moment the exit settles — see [accordionBody] for why it is
+    // never touchable.
+    var retainedEntry by remember(row.id) { mutableStateOf(row.entry) }
+    row.entry?.let { retainedEntry = it }
+    LaunchedEffect(bodyVisible.isIdle, bodyVisible.currentState) {
+        if (bodyVisible.isIdle && !bodyVisible.currentState) retainedEntry = null
+    }
+    val body = accordionBody(
+        expanded = row.expanded,
+        liveEntry = row.entry,
+        retainedEntry = retainedEntry,
+        editable = editable,
+    )
 
-        if (row.expanded) {
-            Column(
-                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+    CardSurface(modifier = Modifier.bringIntoViewRequester(bringIntoView)) {
+        Column {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickableRow(
+                        label = if (row.expanded) "Collapse ${row.name}" else "Expand ${row.name}",
+                        onClick = { actions.onToggleExercise(row.id) },
+                    )
+                    .padding(horizontal = 12.dp, vertical = 10.dp)
+                    .heightIn(min = MIN_TOUCH_TARGET),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                row.guidanceNote?.let {
-                    Text(
-                        text = it,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                if (row.prescription.isNotEmpty()) PrescriptionRow(row.prescription)
-
-                when (val entry = row.entry) {
-                    is EntryWidgetState.Sets -> SetGrid(
-                        exerciseId = row.id,
-                        entry = entry,
-                        editable = editable,
-                        actions = actions,
-                    )
-
-                    is EntryWidgetState.Cardio -> CardioFields(
-                        durationPlaceholder = entry.durationPlaceholder,
-                        durationText = entry.durationText,
-                        avgHrText = entry.avgHrText,
-                        maxHrText = entry.maxHrText,
-                        enabled = editable,
-                        onCommit = { field, input -> actions.onCommitCardioField(row.id, field, input) },
-                    )
-
-                    is EntryWidgetState.Checklist -> ChecklistItems(
-                        items = entry.items,
-                        enabled = editable,
-                        onToggle = { actions.onToggleChecklistItem(row.id, it) },
-                    )
-
-                    null -> Unit
-                }
-
-                NoteField(
-                    value = row.note,
-                    label = "${row.name} note",
-                    placeholder = if (editable) "Add notes…" else "No notes",
-                    enabled = editable,
-                    onChange = { actions.onExerciseNote(row.id, it) },
+                Text(
+                    text = row.name,
+                    style = WellnessTheme.type.title,
+                    color = if (row.completed) palette.success else palette.textPrimary,
+                    modifier = Modifier.weight(1f),
                 )
+                for (pill in row.pills) NeutralPill(text = pill)
+                row.exposure?.let { ExposureChip(text = it) }
+                if (row.target.isNotEmpty()) {
+                    Text(
+                        text = row.target,
+                        style = WellnessTheme.type.label,
+                        color = palette.textSecondary,
+                    )
+                }
+                row.progress?.let { ProgressPill(display = it.display, complete = it.complete) }
+                Icon(
+                    imageVector = Icons.Filled.ExpandMore,
+                    contentDescription = null,
+                    tint = palette.textSecondary,
+                    modifier = Modifier
+                        .size(14.dp)
+                        .rotate(if (row.expanded) 0f else -90f),
+                )
+            }
+
+            AnimatedVisibility(
+                visibleState = bodyVisible,
+                enter = WellnessMotion.expandEnter,
+                exit = WellnessMotion.expandExit,
+            ) {
+                Column(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = WellnessSpace.sm),
+                    verticalArrangement = Arrangement.spacedBy(WellnessSpace.sm),
+                ) {
+                    row.guidanceNote?.let { GuidanceNote(it) }
+                    if (row.prescription.isNotEmpty()) PrescriptionRow(row.prescription)
+
+                    when (val entry = body.entry) {
+                        is EntryWidgetState.Sets -> SetGrid(
+                            exerciseId = row.id,
+                            entry = entry,
+                            editable = body.interactive,
+                            actions = actions,
+                        )
+
+                        is EntryWidgetState.Cardio -> CardioFields(
+                            durationPlaceholder = entry.durationPlaceholder,
+                            durationText = entry.durationText,
+                            avgHrText = entry.avgHrText,
+                            maxHrText = entry.maxHrText,
+                            enabled = body.interactive,
+                            onCommit = { field, input -> actions.onCommitCardioField(row.id, field, input) },
+                        )
+
+                        is EntryWidgetState.Checklist -> ChecklistItems(
+                            items = entry.items,
+                            enabled = body.interactive,
+                            onToggle = { actions.onToggleChecklistItem(row.id, it) },
+                        )
+
+                        null -> Unit
+                    }
+
+                    NoteField(
+                        value = row.note,
+                        label = "${row.name} note",
+                        placeholder = if (editable) "Add notes…" else "No notes",
+                        enabled = body.interactive,
+                        onChange = { actions.onExerciseNote(row.id, it) },
+                    )
+                }
             }
         }
     }
 }
 
+/** Coaching advice, railed in warning amber and set in italic — it is a caution, not a value. */
 @Composable
-private fun Pill(text: String, emphasized: Boolean = false) {
-    Surface(
-        shape = RoundedCornerShape(6.dp),
-        color = if (emphasized) {
-            MaterialTheme.colorScheme.tertiaryContainer
-        } else {
-            MaterialTheme.colorScheme.surfaceVariant
-        },
+private fun GuidanceNote(text: String) {
+    val palette = WellnessTheme.palette
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(IntrinsicSize.Min),
+        horizontalArrangement = Arrangement.spacedBy(WellnessSpace.sm),
     ) {
+        Box(
+            modifier = Modifier
+                .width(3.dp)
+                .fillMaxHeight()
+                .clip(WellnessShape.pill)
+                .background(palette.warning),
+        )
         Text(
             text = text,
-            style = MaterialTheme.typography.labelSmall,
-            modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp),
+            style = WellnessTheme.type.secondary.copy(fontStyle = FontStyle.Italic),
+            color = palette.textSecondary,
         )
     }
+}
+
+@Composable
+private fun NeutralPill(text: String) {
+    val palette = WellnessTheme.palette
+    Text(
+        text = text,
+        style = WellnessTheme.type.label,
+        color = palette.textSecondary,
+        modifier = Modifier
+            .clip(RoundedCornerShape(6.dp))
+            .background(palette.band)
+            .padding(horizontal = 5.dp, vertical = 1.dp),
+    )
+}
+
+/** Exposure is taxonomy — the one place the uppercase micro style belongs. */
+@Composable
+private fun ExposureChip(text: String) {
+    val accent = WellnessTheme.accent
+    Text(
+        text = text.uppercase(),
+        style = WellnessTheme.type.micro,
+        color = accent.text,
+        modifier = Modifier
+            .clip(RoundedCornerShape(6.dp))
+            .background(accent.softFill)
+            .padding(horizontal = 5.dp, vertical = 1.dp),
+    )
+}
+
+@Composable
+private fun ProgressPill(display: String, complete: Boolean) {
+    val palette = WellnessTheme.palette
+    Text(
+        text = display,
+        style = WellnessTheme.type.label,
+        color = if (complete) palette.onSemanticFill else palette.textSecondary,
+        modifier = Modifier
+            .clip(RoundedCornerShape(6.dp))
+            .background(if (complete) palette.success else palette.band)
+            .padding(horizontal = 5.dp, vertical = 1.dp)
+            .semantics { contentDescription = "Progress: $display" },
+    )
 }
 
 /** RPE · load · tempo. Load is self-describing, so it gets an icon, not a word. */
 @Composable
 private fun PrescriptionRow(tokens: List<RxToken>) {
+    val palette = WellnessTheme.palette
+    val accent = WellnessTheme.accent
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         tokens.forEachIndexed { index, token ->
             if (index > 0) {
-                Text(text = "·", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(text = "·", color = palette.textFaint)
             }
             when (token.kind) {
                 RxKind.LOAD -> Row(
@@ -682,15 +933,30 @@ private fun PrescriptionRow(tokens: List<RxToken>) {
                         imageVector = Icons.Filled.FitnessCenter,
                         contentDescription = null,
                         modifier = Modifier.size(13.dp),
-                        tint = MaterialTheme.colorScheme.primary,
+                        tint = accent.text,
                     )
-                    Text(text = token.value, style = MaterialTheme.typography.labelMedium)
+                    Text(
+                        text = token.value,
+                        style = WellnessTheme.type.label,
+                        color = palette.textPrimary,
+                    )
                 }
 
-                else -> Text(
-                    text = "${if (token.kind == RxKind.RPE) "RPE" else "Tempo"} ${token.value}",
-                    style = MaterialTheme.typography.labelMedium,
-                )
+                else -> Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(3.dp),
+                ) {
+                    Text(
+                        text = if (token.kind == RxKind.RPE) "RPE" else "TEMPO",
+                        style = WellnessTheme.type.micro,
+                        color = accent.text,
+                    )
+                    Text(
+                        text = token.value,
+                        style = WellnessTheme.type.label,
+                        color = palette.textPrimary,
+                    )
+                }
             }
         }
     }
@@ -711,25 +977,29 @@ private fun SetGrid(
     editable: Boolean,
     actions: CoachActions,
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    val palette = WellnessTheme.palette
+    Column(verticalArrangement = Arrangement.spacedBy(WellnessSpace.xs)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
                 text = "#",
-                style = MaterialTheme.typography.labelSmall,
+                style = WellnessTheme.type.micro,
+                color = palette.textSecondary,
                 textAlign = TextAlign.Center,
                 modifier = Modifier.width(SET_NUMBER_COLUMN),
             )
             for (column in entry.columns) {
                 Text(
-                    text = column.unit?.let { "${column.label} ($it)" } ?: column.label,
-                    style = MaterialTheme.typography.labelSmall,
+                    text = columnLabel(column.label, column.unit, palette.textFaint),
+                    style = WellnessTheme.type.micro,
+                    color = palette.textSecondary,
                     textAlign = TextAlign.Center,
                     modifier = Modifier.weight(1f),
                 )
             }
             Text(
                 text = "✓",
-                style = MaterialTheme.typography.labelSmall,
+                style = WellnessTheme.type.micro,
+                color = palette.textSecondary,
                 textAlign = TextAlign.Center,
                 modifier = Modifier
                     .width(MIN_TOUCH_TARGET)
@@ -741,7 +1011,8 @@ private fun SetGrid(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     text = (row.index + 1).toString(),
-                    style = MaterialTheme.typography.bodyMedium,
+                    style = WellnessTheme.type.secondary,
+                    color = palette.textFaint,
                     textAlign = TextAlign.Center,
                     modifier = Modifier.width(SET_NUMBER_COLUMN),
                 )
@@ -762,6 +1033,7 @@ private fun SetGrid(
                         checked = row.completed,
                         onCheckedChange = { actions.onSetCompleted(exerciseId, row.index, it) },
                         enabled = editable,
+                        colors = WellnessDefaults.checkboxColors(),
                         modifier = Modifier.semantics {
                             contentDescription = "Set ${row.index + 1} done"
                         },
@@ -773,12 +1045,21 @@ private fun SetGrid(
         entry.lastPerformanceHint?.let {
             Text(
                 text = it,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = WellnessTheme.type.label,
+                color = palette.textFaint,
             )
         }
     }
 }
+
+/** "WEIGHT (LBS)" with the unit dropped back to faint — the label is the signal. */
+private fun columnLabel(label: String, unit: String?, unitColor: Color): AnnotatedString =
+    buildAnnotatedString {
+        append(label.uppercase())
+        if (unit != null) {
+            withStyle(SpanStyle(color = unitColor)) { append(" (${unit.uppercase()})") }
+        }
+    }
 
 @Composable
 private fun CardioFields(
@@ -789,7 +1070,7 @@ private fun CardioFields(
     enabled: Boolean,
     onCommit: (String, String) -> Unit,
 ) {
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    Row(horizontalArrangement = Arrangement.spacedBy(WellnessSpace.sm)) {
         NumericField(
             value = durationText,
             label = "Duration (min)",
@@ -819,6 +1100,7 @@ private fun CardioFields(
 
 @Composable
 private fun ChecklistItems(items: List<ChecklistItemState>, enabled: Boolean, onToggle: (String) -> Unit) {
+    val palette = WellnessTheme.palette
     Column {
         for (item in items) {
             Row(
@@ -831,11 +1113,13 @@ private fun ChecklistItems(items: List<ChecklistItemState>, enabled: Boolean, on
                     checked = item.checked,
                     onCheckedChange = { onToggle(item.item) },
                     enabled = enabled,
+                    colors = WellnessDefaults.checkboxColors(),
                     modifier = Modifier.clearAndSetSemantics { },
                 )
                 Text(
                     text = item.item,
-                    style = MaterialTheme.typography.bodyMedium,
+                    style = WellnessTheme.type.secondary,
+                    color = palette.textPrimary,
                     modifier = Modifier
                         .weight(1f)
                         .alpha(if (item.checked) COMPLETED_ALPHA else 1f)
@@ -850,9 +1134,14 @@ private fun ChecklistItems(items: List<ChecklistItemState>, enabled: Boolean, on
 
 @Composable
 private fun SessionFeedbackFields(state: SessionFeedbackState, onFeedback: (String, String) -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        HorizontalDivider()
-        Text(text = "Session Feedback", style = MaterialTheme.typography.titleMedium)
+    val palette = WellnessTheme.palette
+    Column(verticalArrangement = Arrangement.spacedBy(WellnessSpace.sm)) {
+        HorizontalDivider(color = palette.line)
+        Text(
+            text = "Session Feedback",
+            style = WellnessTheme.type.title,
+            color = palette.textPrimary,
+        )
         NoteField(
             value = state.painDiscomfort,
             label = "Pain / Discomfort",
@@ -904,16 +1193,20 @@ private fun NumericField(
         onValueChange = { text = it },
         enabled = enabled,
         singleLine = true,
+        shape = WellnessShape.input,
+        colors = WellnessDefaults.textFieldColors(),
         placeholder = placeholder?.let {
             {
+                // A ghost is last session's number, not this one's: italic and
+                // half-there until you make it yours.
                 Text(
                     text = it,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = GHOST_ALPHA),
+                    style = WellnessTheme.type.body.copy(fontStyle = FontStyle.Italic),
+                    color = WellnessTheme.palette.textSecondary.copy(alpha = GHOST_ALPHA),
                 )
             }
         },
-        textStyle = MaterialTheme.typography.bodyMedium,
+        textStyle = WellnessTheme.type.body,
         modifier = modifier
             .onFocusChanged { focusState ->
                 if (focused && !focusState.isFocused) commit()
@@ -955,12 +1248,21 @@ private fun NoteField(
             onChange(it)
         },
         enabled = enabled,
+        shape = WellnessShape.input,
+        colors = WellnessDefaults.textFieldColors(),
+        textStyle = WellnessTheme.type.body,
         label = if (showLabel) {
             { Text(label) }
         } else {
             null
         },
-        placeholder = { Text(placeholder) },
+        placeholder = {
+            Text(
+                text = placeholder,
+                style = WellnessTheme.type.body.copy(fontStyle = FontStyle.Italic),
+                color = WellnessTheme.palette.textFaint,
+            )
+        },
         minLines = 2,
         modifier = Modifier
             .fillMaxWidth()
@@ -975,7 +1277,6 @@ private fun Modifier.clickableRow(label: String, onClick: () -> Unit): Modifier 
     .semantics { contentDescription = label }
 
 private const val COMPLETED_ALPHA = 0.6f
-private const val GHOST_ALPHA = 0.5f
 
 /** The set-number gutter, narrow enough to leave the value columns usable. */
 private val SET_NUMBER_COLUMN = 28.dp
