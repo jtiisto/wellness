@@ -1,0 +1,12 @@
+{
+  "id": 43,
+  "query_id": "fixture-bare",
+  "query_label": "Fixture Bare Query",
+  "prompt_sent": "Fixture prompt text the client never models.",
+  "status": "failed",
+  "response_markdown": null,
+  "created_at": "2031-03-04T11:30:00.500000Z",
+  "completed_at": "2031-03-04T11:32:05.000000Z",
+  "error_message": "Server restarted during execution",
+  "cli_metadata": null
+}

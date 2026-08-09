@@ -68,6 +68,10 @@ class TrendsRepositoryTest {
             return rows[module to key]
         }
 
+        override suspend fun delete(module: String, key: String) {
+            rows.remove(module to key)
+        }
+
         override suspend fun clearModule(module: String) {
             rows.keys.removeAll { it.first == module }
         }

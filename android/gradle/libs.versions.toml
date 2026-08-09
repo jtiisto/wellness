@@ -20,6 +20,7 @@ ktor = "3.5.1"
 koin = "4.2.1"
 kotlinxSerialization = "1.11.0"
 kotlinxCoroutines = "1.11.0"
+commonmark = "0.24.0"
 
 junit = "6.1.2"
 junit4 = "4.13.2"
@@ -69,6 +70,12 @@ kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-
 kotlinx-coroutines-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-core", version.ref = "kotlinxCoroutines" }
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "kotlinxCoroutines" }
 kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "kotlinxCoroutines" }
+
+# Markdown (Analysis reports only, :feature:analysis). BSD-2-Clause, pure JVM,
+# no renderer used — we walk the AST into a Compose model, so nothing here ever
+# produces HTML. Versions pinned exactly: a parser bump can change the AST.
+commonmark = { group = "org.commonmark", name = "commonmark", version.ref = "commonmark" }
+commonmark-ext-gfm-tables = { group = "org.commonmark", name = "commonmark-ext-gfm-tables", version.ref = "commonmark" }
 
 # Testing (JUnit 6 = unified Platform+Jupiter versioning, Jupiter model;
 # instrumented tests stay on JUnit 4 — the on-device runner requires it)

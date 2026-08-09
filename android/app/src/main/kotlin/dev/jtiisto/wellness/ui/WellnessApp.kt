@@ -44,6 +44,7 @@ import dev.jtiisto.wellness.core.ui.theme.LocalModuleAccent
 import dev.jtiisto.wellness.core.ui.theme.ModuleAccent
 import dev.jtiisto.wellness.core.ui.theme.WellnessTheme
 import dev.jtiisto.wellness.core.ui.theme.colors
+import dev.jtiisto.wellness.feature.analysis.ui.AnalysisScreen
 import dev.jtiisto.wellness.feature.coach.CoachScreen
 import dev.jtiisto.wellness.feature.journal.JournalTab
 import dev.jtiisto.wellness.feature.trends.ui.TrendsScreen
@@ -53,6 +54,7 @@ import org.koin.compose.koinInject
 private const val JOURNAL_ROUTE = "journal"
 private const val COACH_ROUTE = "coach"
 private const val TRENDS_ROUTE = "trends"
+private const val ANALYSIS_ROUTE = "analysis"
 private const val TOOLS_ROUTE = "tools"
 
 private data class TopLevelDestination(
@@ -66,7 +68,7 @@ private val topLevelDestinations = listOf(
     TopLevelDestination(JOURNAL_ROUTE, "Journal", Icons.Filled.Checklist, ModuleAccent.JOURNAL),
     TopLevelDestination(COACH_ROUTE, "Coach", Icons.Filled.FitnessCenter, ModuleAccent.COACH),
     TopLevelDestination(TRENDS_ROUTE, "Trends", Icons.Filled.Insights, ModuleAccent.TRENDS),
-    TopLevelDestination("analysis", "Analysis", Icons.Filled.Analytics, ModuleAccent.ANALYSIS),
+    TopLevelDestination(ANALYSIS_ROUTE, "Analysis", Icons.Filled.Analytics, ModuleAccent.ANALYSIS),
     TopLevelDestination(TOOLS_ROUTE, "Tools", Icons.Filled.Settings, ModuleAccent.TOOLS),
 )
 
@@ -160,6 +162,7 @@ fun WellnessApp() {
                                 JOURNAL_ROUTE -> JournalTab()
                                 COACH_ROUTE -> CoachScreen()
                                 TRENDS_ROUTE -> TrendsScreen()
+                                ANALYSIS_ROUTE -> AnalysisScreen(snackbarHostState)
                                 TOOLS_ROUTE -> ToolsScreen()
                                 else -> StubScreen(destination.label)
                             }

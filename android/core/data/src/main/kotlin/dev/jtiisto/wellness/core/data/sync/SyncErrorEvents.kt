@@ -17,7 +17,11 @@ import kotlinx.coroutines.flow.receiveAsFlow
 class SyncErrorEvents {
 
     private val channel = Channel<String>(
-        capacity = Channel.BUFFERED,
+        // Written out because `Channel.BUFFERED` is not what it looks like here:
+        // paired with a non-suspending overflow policy it resolves to capacity
+        // ONE, so a journal failure and a coach failure raised in the same burst
+        // would show only the second. (Same fix as AnalysisEvents.)
+        capacity = 64,
         // A burst of failures with nothing listening (the app is backgrounded)
         // must not suspend the scheduler; the newest message is the useful one.
         onBufferOverflow = BufferOverflow.DROP_OLDEST,

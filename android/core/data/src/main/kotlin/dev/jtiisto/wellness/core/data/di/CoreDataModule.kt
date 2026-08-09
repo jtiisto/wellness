@@ -3,11 +3,15 @@ package dev.jtiisto.wellness.core.data.di
 import androidx.room.Room
 import dev.jtiisto.wellness.core.data.BuildConfig
 import dev.jtiisto.wellness.core.data.WellnessJson
+import dev.jtiisto.wellness.core.data.analysis.AnalysisEvents
+import dev.jtiisto.wellness.core.data.analysis.AnalysisRepository
+import dev.jtiisto.wellness.core.data.analysis.AnalysisStore
 import dev.jtiisto.wellness.core.data.coach.CoachSyncStore
 import dev.jtiisto.wellness.core.data.db.WELLNESS_MIGRATIONS
 import dev.jtiisto.wellness.core.data.db.WellnessDatabase
 import dev.jtiisto.wellness.core.data.journal.JournalSyncStore
 import dev.jtiisto.wellness.core.data.journal.JournalUiPrefs
+import dev.jtiisto.wellness.core.data.network.AnalysisApi
 import dev.jtiisto.wellness.core.data.network.CoachApi
 import dev.jtiisto.wellness.core.data.network.JournalApi
 import dev.jtiisto.wellness.core.data.network.ServerConfig
@@ -25,10 +29,13 @@ import io.ktor.client.HttpClient
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.serialization.json.Json
 import org.koin.android.ext.koin.androidContext
 import org.koin.core.qualifier.named
 import org.koin.dsl.module
+import java.util.concurrent.Executors
+import kotlin.coroutines.CoroutineContext
 
 /**
  * Scope that outlives every activity: sync work must survive backgrounding and
@@ -44,9 +51,24 @@ val CoachScheduler = named("coachScheduler")
 
 private val DebugLogScope = named("debugLogScope")
 
+/**
+ * The Analysis store's control context: exactly one thread, forever.
+ *
+ * Not a shared dispatcher and not `Dispatchers.Main` — the guarantee the store
+ * needs is that no two of its mutations can interleave, and the only way to have
+ * that without a lock around every write is a dispatcher that cannot run two
+ * things at once.
+ */
+val AnalysisControlContext = named("analysisControlContext")
+
 val coreDataModule = module {
     single<CoroutineScope>(AppScope) { CoroutineScope(SupervisorJob() + Dispatchers.Default) }
     single<CoroutineScope>(DebugLogScope) { CoroutineScope(SupervisorJob() + Dispatchers.IO) }
+    single<CoroutineContext>(AnalysisControlContext) {
+        Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, "analysis-control").apply { isDaemon = true }
+        }.asCoroutineDispatcher()
+    }
 
     single<Json> { WellnessJson }
     single { ServerConfig(BuildConfig.WELLNESS_BASE_URL) }
@@ -67,12 +89,25 @@ val coreDataModule = module {
     single { JournalApi(client = get(), config = get()) }
     single { CoachApi(client = get(), config = get()) }
     single { TrendsApi(client = get(), config = get()) }
+    single { AnalysisApi(client = get(), config = get(), json = get()) }
 
     single { ConnectivityMonitor(androidContext()) }
     single { SyncErrorEvents() }
     single { JournalUiPrefs(dao = get(), json = get()) }
     single { TrendsPrefs(dao = get()) }
     single { TrendsRepository(api = get(), cacheDao = get(), debugLog = get(), json = get()) }
+
+    single { AnalysisEvents() }
+    single { AnalysisRepository(api = get(), cacheDao = get(), debugLog = get(), json = get()) }
+    single {
+        AnalysisStore(
+            repository = get(),
+            events = get(),
+            debugLog = get(),
+            scope = get(AppScope),
+            controlContext = get(AnalysisControlContext),
+        )
+    }
 
     single {
         val connectivity = get<ConnectivityMonitor>()
