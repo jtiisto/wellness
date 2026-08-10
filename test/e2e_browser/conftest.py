@@ -33,9 +33,16 @@ def pytest_collection_modifyitems(items):
     first new module to forget would silently run in the wrong selection
     (e.g. inside the fast pre-commit slice). This hook makes the directory
     itself the marker boundary.
+
+    The path filter is load-bearing: pytest passes EVERY collected item to a
+    conftest's hook, not just this directory's, so an unfiltered loop marks the
+    whole session `e2e` — which once inverted the pre-commit fast slice into
+    "explicitly-marked unit tests only" whenever this directory was collected.
     """
+    e2e_dir = Path(__file__).parent
     for item in items:
-        item.add_marker(pytest.mark.e2e)
+        if e2e_dir in Path(item.fspath).parents:
+            item.add_marker(pytest.mark.e2e)
 
 
 def _find_free_port():
