@@ -39,11 +39,11 @@ kover {
         variant("aggregated") {
             verify {
                 rule {
-                    // Measured 82.27% aggregated line coverage on 2026-08-07
-                    // (end of Phase 3), gated two points below so ordinary
-                    // churn does not trip it. Measure, then raise; never lower
-                    // without a deliberate decision.
-                    minBound(80)
+                    // Raised 80 → 85 at the end of Phase 8, measured in one
+                    // clean full invocation (see CLAUDE.md: filtered or
+                    // module-scoped runs poison the execution data). Measure,
+                    // then raise; never lower without a deliberate decision.
+                    minBound(85)
                 }
             }
         }

@@ -8,6 +8,7 @@ import dev.jtiisto.wellness.core.data.db.PayloadCacheDao
 import dev.jtiisto.wellness.core.data.db.PayloadCacheEntity
 import dev.jtiisto.wellness.core.data.network.AnalysisApi
 import dev.jtiisto.wellness.core.data.sync.DebugLog
+import dev.jtiisto.wellness.core.data.sync.ServerSessionGate
 import io.mockk.coEvery
 import io.mockk.mockk
 import kotlinx.coroutines.CompletableDeferred
@@ -74,6 +75,7 @@ class AnalysisStoreCacheTest {
     /** The store, wired to production collaborators over a faked wire. */
     private fun TestScope.store(): AnalysisStore {
         val repository = AnalysisRepository(
+            session = ServerSessionGate(),
             api = api,
             cacheDao = dao,
             debugLog = debugLog,
