@@ -16,6 +16,9 @@ Read-only progress charts — the deterministic "what happened" counterpart to i
 ### Analysis
 LLM-powered async reports. Submits structured prompts to Claude Code CLI with MCP data access; reports render as markdown with CLI execution metadata tracked per report. Enabled by default like every module; a deployment can switch it off with `WELLNESS_DISABLED_MODULES=analysis` (e.g. where Trends plus interactive Claude sessions cover the same need). The module stays maintained and tested either way.
 
+### HR (headless)
+Heart-rate ingestion from the native Android client: RR intervals off a Garmin chest strap, the set-completion toggles that tie them to a coach workout, and the capture sessions grouping them. Three idempotent batch endpoints, so a retried upload can never double-count, and a whole-request `422` on any bad row — the client's cue to bisect the batch and quarantine the poison rows. Headless means API-only: no PWA tab, no client-side state, nothing synced back. Reading happens out of band, through a read-only CLI (`python -m hr_analysis` — DFA α1, RMSSD, duration-weighted HR and zones, work/rest bouts) and the HR MCP server.
+
 ## Tech Stack
 
 | Layer | Technology |
@@ -24,7 +27,7 @@ LLM-powered async reports. Submits structured prompts to Claude Code CLI with MC
 | Frontend | Preact, Signals, HTM (no build step) |
 | State | Preact Signals + LocalForage (IndexedDB) |
 | AI | Claude Code CLI with MCP tool access |
-| MCP | FastMCP (Journal read-only, Coach read/write) |
+| MCP | FastMCP (Journal read-only, Coach read/write, HR read-only) |
 
 ## Quick Start
 
@@ -45,7 +48,8 @@ wellness/
 ├── src/                    # FastAPI backend
 │   ├── server.py           # Main app, static file serving
 │   ├── config.py           # Module config, DB path resolution
-│   └── modules/            # Journal, Coach, Trends, Analysis routers + shared domain
+│   ├── modules/            # Journal, Coach, Trends, Analysis, HR routers + shared domain
+│   └── hr_analysis/        # Heart-rate analysis CLI (python -m hr_analysis), not part of the app
 ├── public/                 # PWA frontend (no build step)
 │   ├── js/                 # Preact components per module
 │   │   ├── shared/         # Sync scheduler, settings, debug log, data export
@@ -61,6 +65,8 @@ wellness/
 │   ├── test_*.py           # Top-level unit tests
 │   ├── journal/, coach/    # Per-module unit + integration tests
 │   ├── analysis/           # Analysis module tests
+│   ├── trends/             # Trends module tests
+│   ├── hr/                 # HR endpoints, golden payloads, analysis CLI
 │   ├── integration/        # Cross-module integration tests
 │   ├── e2e_browser/        # Playwright E2E browser tests (pages/ objects)
 │   └── js/                 # node:test suites for client sync logic
@@ -103,7 +109,10 @@ Database paths are configurable per module:
 JOURNAL_DB_PATH=/custom/path/journal.db
 COACH_DB_PATH=/custom/path/coach.db
 ANALYSIS_DB_PATH=/custom/path/analysis.db
+HR_DB_PATH=/custom/path/hr.db
 ```
+
+`HR_DB_PATH` repoints the server, the `hr_analysis` CLI, and the HR MCP server together. Trends owns no database of its own, so it has no entry here.
 
 Workout hooks fire shell scripts before/after workouts to capture stats:
 

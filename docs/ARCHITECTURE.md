@@ -2,44 +2,39 @@
 
 ## Overview
 
-Wellness is a modular, self-hosted health application with three independent modules sharing a unified backend and frontend shell. Each module owns its own SQLite database, API router, sync protocol, and frontend state.
+Wellness is a modular, self-hosted health application: four modules with a tab in the PWA, plus one headless (API-only) module, sharing a unified backend and frontend shell. A module owns its own SQLite database, API router, sync protocol, and frontend state — with two deliberate, documented departures: Trends owns no database (it reads the others' through read-only accessors), and HR has no frontend at all (its client is the native Android app).
 
 ```
-┌─────────────────────────────────────────────────┐
-│                  PWA Frontend                    │
-│  ┌──────────┐  ┌──────────┐  ┌──────────────┐  │
-│  │ Journal  │  │  Coach   │  │   Analysis   │  │
-│  │  Module  │  │  Module  │  │    Module     │  │
-│  └────┬─────┘  └────┬─────┘  └──────┬───────┘  │
-│       │              │               │          │
-│  LocalForage    LocalForage     Fetch only      │
-│  (IndexedDB)   (IndexedDB)    (no local state) │
-└───────┼──────────────┼───────────────┼──────────┘
-        │              │               │
-   HTTP Sync      HTTP Sync      HTTP Submit
-        │              │               │
-┌───────┼──────────────┼───────────────┼──────────┐
-│       ▼              ▼               ▼          │
-│  ┌──────────┐  ┌──────────┐  ┌──────────────┐  │
-│  │ /api/    │  │ /api/    │  │ /api/        │  │
-│  │ journal  │  │ coach    │  │ analysis     │  │
-│  └────┬─────┘  └────┬─────┘  └──────┬───────┘  │
-│       │              │               │          │
-│  journal.db     coach.db      analysis.db       │
-│                                      │          │
-│                              Claude Code CLI    │
-│                               ┌──────┴───────┐  │
-│                               │  MCP Tools   │  │
-│                               │ journal coach │  │
-│                               │    garmin     │  │
-│                               └──────────────┘  │
-│              FastAPI + Uvicorn                   │
-└─────────────────────────────────────────────────┘
+        ┌──────────────────────────────┐      ┌──────────────────┐
+        │         PWA Frontend         │      │  Native Android  │
+        │  Journal · Coach · Trends ·  │      │      client      │
+        │           Analysis           │      │   (HR capture)   │
+        │   LocalForage (IndexedDB)    │      └────────┬─────────┘
+        └───────────────┬──────────────┘               │
+                HTTP sync / fetch                HTTP batch POST
+                        │                              │
+┌───────────────────────┼──────────────────────────────┼─────────────┐
+│                       ▼                              ▼             │
+│  ┌─────────┐ ┌───────┐ ┌────────┐ ┌──────────┐ ┌────────────────┐  │
+│  │  /api/  │ │ /api/ │ │ /api/  │ │  /api/   │ │    /api/hr     │  │
+│  │ journal │ │ coach │ │ trends │ │ analysis │ │   (headless)   │  │
+│  └────┬────┘ └───┬───┘ └────┬───┘ └────┬─────┘ └───────┬────────┘  │
+│  journal.db  coach.db    (no DB —  analysis.db      hr.db          │
+│                          read-only     │                           │
+│                          accessors)  Claude Code CLI               │
+│                                        │                           │
+│                             ┌──────────┴─────────┐                 │
+│                             │     MCP Tools      │                 │
+│                             │  journal · coach   │                 │
+│                             │    hr · garmin     │                 │
+│                             └────────────────────┘                 │
+│                        FastAPI + Uvicorn                           │
+└────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Design Principles
 
-**Module isolation.** Each module has its own database, API prefix, frontend state, and sync logic. Modules share only the FastAPI process, static file serving, and frontend shell (tab navigation). A module can be disabled without affecting others via `WELLNESS_DISABLED_MODULES`. Data-layer isolation is **structural, not by-convention**: each router captures its own injected `DbAccessor` (no module-global DB path), so nothing at module scope can leak one module's — or one instance's — database into another's.
+**Module isolation.** Each module has its own database, API prefix, frontend state, and sync logic. Modules share only the FastAPI process, static file serving, and frontend shell (tab navigation). A *headless* module (HR) is the same thing minus the frontend half: it is mounted and isolated identically, but carries no tab and no client state. A module can be disabled without affecting others via `WELLNESS_DISABLED_MODULES`. Data-layer isolation is **structural, not by-convention**: each router captures its own injected `DbAccessor` (no module-global DB path), so nothing at module scope can leak one module's — or one instance's — database into another's.
 
 **Offline-first.** The entire app works offline after at least one online visit. The service worker precaches the app shell — HTML, CSS, and every JS module including the vendored runtime libraries (see Frontend below); the precache list is generated server-side by walking `public/`, so it never drifts from the real asset tree. There is no third-party CDN to be unreachable. Journal and Coach persist all data locally in IndexedDB via LocalForage. The modules list is cached in localStorage so the app shell loads offline. The Analysis module caches report history and individual reports in LocalForage for offline viewing; new queries require server connectivity and show a toast if unreachable. Sync happens automatically when the server is reachable.
 
@@ -586,6 +581,221 @@ assertions; the user reviews visuals directly. Both test harnesses pin
 `GARMIN_DB_PATH` to a nonexistent temp path so no test ever reads the real
 `~/.garmy/health.db`.
 
+### HR: Idempotent Batch Ingestion (Headless)
+
+HR is the server half of heart-rate capture on the native Android client: RR
+intervals streamed off a Garmin chest strap, the set-completion toggles that let
+a beat stream be read against a coach workout, and the capture sessions that
+group them. It is the first **headless** module — it owns `data/hr.db` and
+mounts at `/api/hr` like any other, but has no PWA tab, no client-side state and
+no bidirectional sync. The client pushes; the server stores; nothing flows back
+but counts. Everything that *reads* the data does so out of band, through the
+`hr_analysis` CLI and the HR MCP server (both below).
+
+**This section is the protocol's home.** The contract was drafted cross-repo, in
+the Android client's `~/dev/native/wellness/specs/hr-protocol.md`, while the
+server side was built; that file now defers here, matching how every other
+protocol is documented. The golden fixtures below are what keep the two repos
+honest about it.
+
+**Headless modules.** The `config.MODULES` entry carries `"headless": True` and
+no `name`/`icon`/`color`. `create_app`'s mount loop is untouched — a headless
+module is mounted exactly like the rest — but `GET /api/modules` filters
+headless entries out, which is what keeps `hr` off the tab bar and out of
+`app.js`'s import map. That filter is load-bearing, not cosmetic: the handler's
+projection reads `name`/`icon`/`color` unconditionally, so a *listed* tabless
+module would `KeyError` the one endpoint the app shell needs to boot.
+
+**Wire contract:**
+
+- **camelCase throughout** — request and response, envelope and row alike —
+  from a single `_WireModel` base carrying Pydantic's `to_camel` alias
+  generator, so no field ever spells its own alias. (Coach's snake_case row
+  fields are a preserved PWA-era blob format, not a precedent for new
+  protocols.)
+- **Optional fields are omitted, never null.** The client serializes with
+  explicit nulls off; the server models carry the documented defaults, so an
+  omitted `isGapBefore` stores `0` and an omitted `sensorType` stores
+  `garmin_hrm`.
+- **Epoch-ms integers are data, not watermarks.** There is no server-issued
+  token anywhere in this protocol — the opaque-timestamp rule governing journal
+  and coach sync has nothing to govern here.
+- Unversioned paths and no auth of its own: transport security is
+  `ClientGuardMiddleware`'s Tailscale allowlist, as for every module.
+  `clientId` in each envelope is the same self-asserted diagnostic identifier
+  the coach/journal syncs send — not a credential, and deliberately not stored
+  (`hr.db` has no clients table).
+
+**Endpoints:**
+
+| Method | Path | Request → Response |
+|--------|------|--------------------|
+| `GET` | `/api/hr/status` | → `{status, samplesCount, setEventsCount, sessionsCount}` |
+| `POST` | `/api/hr/samples/batch` | `{clientId, samples[]}` → `{accepted, duplicates, totalReceived}` |
+| `POST` | `/api/hr/set-events/batch` | `{clientId, events[]}` → same shape |
+| `POST` | `/api/hr/sessions/batch` | `{clientId, sessions[]}` → `{upserted, totalReceived}` |
+
+`/status` is the client's reachability probe (three row counts); the three
+batch POSTs are the whole ingestion surface.
+
+**Data model:**
+```
+intervals   (device_id, timestamp_ms, seq, heart_rate_bpm, rr_interval_ms,
+             is_gap_before, session_id, sensor_type, received_at)
+            PRIMARY KEY (device_id, timestamp_ms, seq)
+set_events  (event_id, date, exercise_key, set_num, item_key, action,
+             client_timestamp_ms, session_id, received_at)
+            PRIMARY KEY (event_id)
+sessions    (session_id, device_id, started_at_ms, ended_at_ms,
+             workout_date, workout_session_id, received_at)
+            PRIMARY KEY (session_id)
+```
+
+Columns are snake_case mirrors of the wire fields. There are **no foreign keys
+between the three tables**: batches drain in whatever order the client empties
+its queues, so an interval or a toggle may legitimately name a session whose row
+has not been uploaded yet — and since analysis reads the capture off
+`intervals`, such a session is still fully analysable.
+
+`seq` earns its place in the `intervals` key. The pulse-bridge capture stack
+made timestamps unique by bumping a colliding beat forward a millisecond, which
+corrupted the very inter-beat deltas this data exists to measure; `seq`
+disambiguates beats sharing a receipt millisecond without editing their
+timestamps. That makes `ORDER BY (timestamp_ms, seq)` the **only** ordering
+authority — nothing re-sorts beats in Python downstream.
+
+`set_events` is keyed on the client-generated `event_id`, and an `uncheck` is
+**undo-as-data**: nothing is ever deleted, and a consumer folds the stream in
+`clientTimestampMs` order to derive final state (the coach day-log blob remains
+the display truth). A toggle carries at most one of `set_num` / `item_key`;
+neither present is an exercise-level toggle. `(date, exercise_key)` is the join
+back to coach data.
+
+**Idempotency, per endpoint:**
+
+- **Samples and set-events `INSERT OR IGNORE`** on their natural keys, so a
+  retried flush stores nothing new and the stored row — `received_at` included —
+  is never restamped. `OR IGNORE` reaches wider than the PK (it would swallow a
+  NOT NULL or CHECK violation too), which is safe only because every such
+  constraint is already enforced by the Pydantic models above it, where a
+  violation becomes the 422 the client knows how to act on.
+- **Sessions full-row upsert** on `session_id`: `ON CONFLICT DO UPDATE` over
+  *every* column, so the newest upload replaces the stored row outright instead
+  of merging into it — an optional the client stops sending **clears** its
+  column rather than lingering from an earlier upload, keeping the stored row a
+  faithful copy of the client's rather than the union of every upload ever sent.
+  Not `OR IGNORE`, because a session legitimately changes after its first upload
+  (started → workout-anchored → ended); safe without arbitration because a
+  session has exactly one writer, the capturing device. Sessions are also the
+  one table whose `received_at` is restamped per upload.
+
+**Counts are reconciliation promises.** `accepted` / `duplicates` / `upserted`
+come from the connection's change counter, never `len(rows)`: `INSERT OR IGNORE`
+silently drops rows whose key is already stored, and those are exactly the
+duplicates the client is being told about. `accepted + duplicates ==
+totalReceived` therefore holds by construction, which is what lets a client
+reconcile a flush whose response it never received. `upserted` counts
+**distinct** sessions written — a batch repeating a `sessionId` collapses to
+that id's last occurrence before the write, so the number reports rows changed
+while `totalReceived` reports rows sent.
+
+**422 is the client's bisect cue.** Validation is deliberately shallow —
+Pydantic types, the `action` enum, the date pattern, non-negative integers — and
+deliberately **whole-request**: one poison row 422s the entire batch and nothing
+from that request reaches the tables. This is the contract, not an oversight,
+and it is why **nothing here may be made stricter than the spec**.
+
+| Server response | Client behavior |
+|---|---|
+| 2xx | mark the batch's rows synced / clear the session's needs-upload flag |
+| **422** | **bisect** — recursively split the batch to isolate the poison rows, quarantine only those, resubmit the valid remainder (circuit breakers cap quarantines per run). Only 422 triggers bisection |
+| other 4xx | systemic — no bisect; the sync run fails fast rather than spinning on a batch that will never be accepted |
+| 5xx / network | keep the batch, retry with exponential backoff |
+
+A handler that skipped bad rows and answered 200 would strand them silently; one
+that answered 400 would make the client abandon a run over a single bad beat.
+There are deliberately **no physiological range checks** — 0 and 300 bpm are
+both storable, artifacts *are* data, and the analysis layer owns quality
+judgment. Date validation is **shape only** (`^\d{4}-\d{2}-\d{2}$`): the server
+never parses these into a calendar, so an impossible day like `2030-02-31` is
+accepted by design and the client owns date correctness. Unknown fields are
+ignored rather than rejected, so a client running ahead of the server is not
+bisected fruitlessly over a field this server has not learned yet. Batch sizing
+is a client concern (it caps at 1000 rows per request; live flushes are ~10 s /
+200-row increments and the cap matters only when draining a backlog) — the
+server imposes no limit.
+
+**Explicit nulls are outside the contract, on both sides** — documented
+undefined behaviour rather than a guarantee. Because the wire rule is "omitted,
+never null", the models were never shaped to answer for `null`, and they answer
+inconsistently: a field typed `Optional[...]` accepts `"endedAtMs": null` and
+stores NULL, while a defaulted non-optional such as `"sensorType": null` or
+`"isGapBefore": null` is a 422. Neither behaviour is depended on — a client that
+omits its optionals never meets the difference — and neither should be relied on
+by a new consumer.
+
+**`received_at` is a server stamp for diagnostics only**: one value per request,
+never read by a query or a protocol rule. The ignore-on-conflict tables keep the
+first stamp and the sessions upsert takes the latest, which in each case is the
+honest answer to "when did we last hear this row".
+
+**Golden fixtures.** `test/hr/golden/` holds the protocol's canonical payloads,
+and the Android repo holds the same bytes under `testdata/golden/hr/` (pending
+its own phase-1 work). The server tests POST them raw at the real endpoints and
+compare responses byte-for-byte — key order and separators, not merely parsed
+equality — so the documented examples cannot quietly drift into fiction on this
+side; a protocol change regenerates both repos' fixtures in one change set.
+**Every calendar date in them is far-future (2030+)**, and that is a convention
+to keep: this repo is public and its pre-commit personal-data guard scans staged
+literals against the live health databases, where any plausible *past* date can
+collide with a real lab, scan or workout date (it caught exactly that in this
+spec's first draft).
+
+**Key design choices:**
+- **Fresh start, no import.** History begins with this module (2026-08); the
+  pulse-bridge server's database stays a frozen archive, queryable in place.
+  Because `hr.db` is greenfield, migration 1 uses plain `CREATE TABLE` rather
+  than the defensive `IF NOT EXISTS` of the older modules — there is no
+  pre-registry unversioned database to adopt.
+- **The pulse-bridge server keeps running in parallel** as a fallback until
+  explicitly retired: separate process, separate port, separate database.
+  Nothing here decommissions it.
+- **Garmin-only.** No Polar path, no accelerometer or diagnostics endpoints, no
+  `X-Environment` header. `sensor_type` exists so a future source could be told
+  apart, and defaults to `garmin_hrm`.
+- **No server-side pruning.** The server keeps everything; retention is a
+  client-local concern. Nothing is ever overwritten either, so there is no
+  archive table and no counterpart to the coach/journal 14-day recovery window.
+
+**Analysis CLI (`src/hr_analysis`).** The metrics — DFA α1 over rolling 2-minute
+windows, RMSSD pooled across beat-adjacent runs, duration-weighted HR and zones,
+work/rest bout detection — live in a standalone package run as
+`python -m hr_analysis` (`--list`, `--session ID`, `--latest`). It is **not part
+of the FastAPI app**: nothing under `src/modules/` or `src/server.py` imports it,
+so numpy never becomes a dependency of serving a request. It reads `hr.db`
+through the shared `DbAccessor(..., read_only=True)` (sqlite `mode=ro`),
+resolving the path by the module's own `HR_DB_PATH` > `data/hr.db` rule so
+server, CLI and MCP repoint together. `mode=ro` refusing to *create* a missing
+file is exactly why it is used here — a plain `sqlite3.connect` would conjure an
+empty `hr.db` on a fresh install, which is the wrong answer to every question.
+An absent, unreadable or schema-less database raises `HrDataUnavailable` and
+prints one actionable sentence; an **empty** history is deliberately not that
+error — it prints "No sessions found." and exits 0, because starting empty is
+the design, not a failure. numpy is a requirement; matplotlib is optional and
+unpinned, and without it the CLI writes its JSON report and skips only the
+chart.
+
+`hr_analysis/quality.py` carries a **⚠ PARITY** block: its five signal-quality
+thresholds (20% ectopic deviation, 1.5 omission factor, ≤5% artifact fraction,
+0.95–1.05 coverage) and the 120 s DFA window are mirrored *live on-device* by
+the Kotlin `SignalQualityTracker` behind the capture app's "DFA signal: Good"
+indicator, and no test can prove the two implementations agree across languages.
+`test/hr/analysis/test_parity_constants.py` does the one thing this repo can —
+assert the documented values, plus the behaviour the ectopic threshold implies —
+so a threshold cannot be edited on this side unnoticed. The Kotlin file
+currently sits in the frozen pulse-bridge repo and is migrating to
+wellness-native's `core/ble`; both comments repoint when it lands.
+
 ## Shared Frontend Utilities
 
 The `public/js/shared/` directory contains cross-module utilities:
@@ -602,7 +812,7 @@ The `public/js/shared/` directory contains cross-module utilities:
 
 ### Backend
 
-**FastAPI** serves as the unified web framework. Each module contributes an `APIRouter` via a factory function (`create_router(db_path)`) that initializes its database and returns the router. The factory builds a `DbAccessor` (Journal/Coach) or captures the db_path (Analysis) and binds the route handlers to it as closures — the module holds **no mutable global DB path**, so two routers for the same module can target different databases in one process (proven by `test/test_module_isolation.py`). `server.create_app(db_path_overrides=None)` builds the inner ASGI app and mounts every enabled module's router at `/api/journal`, `/api/coach`, and `/api/analysis`; production builds it once at the server entrypoint (`python src/server.py`), while tests call it per-test with temp-path overrides to get fully isolated app+DB instances without poking module state. Importing the `server` module is **side-effect-free** — no app is constructed at import time, so the module migrations and the analysis stale-report recovery run only on an actual server start, never as a side effect of a test or tool importing `server`.
+**FastAPI** serves as the unified web framework. Each module contributes an `APIRouter` via a factory function (`create_router(db_path)`) that initializes its database and returns the router. The factory builds a `DbAccessor` (Journal/Coach/HR) or captures the db_path (Analysis) and binds the route handlers to it as closures — the module holds **no mutable global DB path**, so two routers for the same module can target different databases in one process (proven by `test/test_module_isolation.py`). `server.create_app(db_path_overrides=None)` builds the inner ASGI app and mounts every enabled module's router at its configured prefix — `/api/journal`, `/api/coach`, `/api/analysis`, `/api/trends`, `/api/hr` (a DB-less module like Trends has its factory called with no argument, and a headless one like HR is mounted identically to the rest, only absent from `/api/modules`); production builds it once at the server entrypoint (`python src/server.py`), while tests call it per-test with temp-path overrides to get fully isolated app+DB instances without poking module state. Importing the `server` module is **side-effect-free** — no app is constructed at import time, so the module migrations and the analysis stale-report recovery run only on an actual server start, never as a side effect of a test or tool importing `server`.
 
 **Network posture.** There is no per-route auth — Tailscale is the auth
 layer — but the server binds `0.0.0.0`, which also exposes the port on any
@@ -643,12 +853,13 @@ Each module follows a consistent pattern:
 
 ### MCP Servers
 
-Two **FastMCP** servers expose wellness data to LLMs:
+Three **FastMCP** servers expose wellness data to LLMs:
 
 - **Journal MCP** - Strictly read-only. Opens SQLite in read-only mode (`?mode=ro`). Validates all queries to ensure only SELECT/WITH statements run. Auto-applies row limits. Exposes `get_schedule_adherence`, which computes schedule adherence server-side (in Python, over the canonical `schedule_json` / `polarity` / `target_json` columns): per tracker over a window it counts scheduled vs. logged/done days and reports a per-polarity metric (`adherence` / `avoidance` / `coverage`). When a tracker has a **target** in effect on a day, "done" for that day is whether the day's *value* meets the effective-dated target (not the `completed` checkbox — this fixes the accumulator undercount, where value logging never sets the checkbox); the result then adds `target` (echoed as of window end), `target_met_days`, `target_partial_days` (both targeted-day-only), and `blended_met_days` — the per-polarity rate's numerator, which on days *before* a target took effect falls back to that day's untargeted criterion (positive → checkbox, negative → no-entry avoided), so a window spanning the target's introduction isn't misread as failed. Weekly Trends buckets display `blended_met_days` for the same reason. **No-entry rule:** a scheduled day with no entry counts as *met* for negative-polarity trackers (absence = avoided) and *missed* for positive/neutral. Non-numeric values (a tracker converted from/to type `note` shares the `entries.value` column) coerce to "no usable value" → *missed*, mirrored in the client twin (`_coerce_numeric` / `coerceNumericValue` — a raw NaN comparison silently read as in-range). An un-normalized legacy weekly tracker (`schedule_json` NULL, `meta_json` `frequency`/`weeklyDay`) is judged weekly via the same fallback the client uses, not daily. The default window is `days` calendar days inclusive of both ends (days=7 → today + 6 prior, matching the PWA dot row); a tracker whose entries all precede the window is still reported (an abandoned habit at 0% is signal), while never-used / first-active-after-window trackers are omitted. `get_journal_summary` is unchanged and stays entries-based — completion and adherence are deliberately separate.
 - **Coach MCP** - Read-only for queries and logs. Write access for workout plan management (creating/updating/deleting plans). Deleting a plan is guarded: plans with workout logs attached cannot be deleted, preserving training history integrity. Uses a mode-switching connection manager. Workout logs include pre/post workout stats (readiness metrics, recovery data) when available.
+- **HR MCP** - Read-only, five tools over captured heart-rate sessions: `list_sessions`, `get_session_report`, `get_latest_session_report`, `get_aligned_timeseries` (compact HR/quality buckets, the fallback when automatic bout detection disagrees with what you expected), and `get_vo2_summary` (a planned interval structure matched against detected bouts). The package contains **no SQL at all** — every read delegates to `hr_analysis.db`, so an MCP report and a `python -m hr_analysis` report of the same session agree by construction, and read-only becomes a *structural* property of the code rather than a promise: the connections are the shared `mode=ro` accessor's, so nothing here can write `hr.db` or create one. Two tests pin that shape — an AST guard asserting no module in the package imports sqlite3 or calls a connection method, and a hash check that the database file is byte-identical after every tool has run. Unlike coach/journal it **starts without its database**: HR history starts empty by design and `hr.db` appears only when the first capture batch is accepted, so absence is reported per call (the same sentence the CLI prints) instead of the server refusing to launch — an existing path that is not a file stays a hard configuration error. `list_sessions`' time window selects whole sessions that **overlap** it rather than filtering individual beats, so a listing describes what a follow-up analysis call would actually analyse; the pulse-bridge original reported a window-cropped beat count next to a session the report tool then read in full. `flags.analysis_window_uncertain` on the report shape is always `false` — a dead field kept for wire compatibility with existing consumers.
 
-Both servers run over stdio transport when invoked by Claude Code CLI. They can also be configured for HTTP/SSE transport.
+All three run over stdio transport when invoked by Claude Code CLI. They can also be configured for HTTP/SSE transport (default ports 8000 journal, 8002 coach, 8004 HR — 8003 is left to the parallel pulse-bridge MCP until it is retired).
 
 ### Analysis Pipeline
 
@@ -773,3 +984,5 @@ Key testing patterns:
 - Analysis tests mock the Claude CLI subprocess
 - E2E tests start a real uvicorn server on a dynamic port with seeded journal and coach data
 - Cross-module integration tests verify module discovery and coexistence
+- **No test run may create a database in the real `data/`.** A session-scoped autouse guard in `test/conftest.py` snapshots `data/*.db` and fails the session if a new file appears (only *new* ones — a live dev server legitimately adds WAL sidecars to existing databases). Every app-construction path must therefore wire every module's DB-path env var, including the two that hand-list them outside the main fixture: `test/e2e_browser/conftest.py` and `test_app_lifecycle`'s subprocess env. Adding HR broke both in one day — each silently resolved the real `data/hr.db` — and the guard exists so the next new module fails loudly instead
+- HR analysis tests live under `test/hr/analysis/`, **not** in a test package named `hr_analysis`: the conftest puts `src/` on `sys.path`, so a same-named test package would shadow the real one
