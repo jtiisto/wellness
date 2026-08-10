@@ -7,6 +7,7 @@ import dev.jtiisto.wellness.core.data.network.AnalysisApi
 import dev.jtiisto.wellness.core.data.network.AnalysisHttpException
 import dev.jtiisto.wellness.core.data.network.isNetworkError
 import dev.jtiisto.wellness.core.data.sync.DebugLog
+import dev.jtiisto.wellness.core.data.sync.ServerSessionGate
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.DeserializationStrategy
 import kotlinx.serialization.builtins.ListSerializer
@@ -40,6 +41,7 @@ class AnalysisRepository(
     private val api: AnalysisApi,
     private val cacheDao: PayloadCacheDao,
     private val debugLog: DebugLog,
+    private val session: ServerSessionGate,
     private val json: Json = WellnessJson,
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
@@ -160,9 +162,16 @@ class AnalysisRepository(
         emptySet()
     }
 
+    /**
+     * The module's single cache-write path, and therefore the single place the
+     * server-switch lease has to sit. A response that left the old server
+     * before the switch would otherwise seed `payload_cache` with its content
+     * moments after the wipe emptied it — and the lease, unlike a check, also
+     * holds the switch back until this write has finished.
+     */
     private suspend fun writeCache(key: String, payload: String) {
         try {
-            cacheDao.upsert(PayloadCacheEntity(MODULE, key, payload, clock()))
+            session.withWriteLease { cacheDao.upsert(PayloadCacheEntity(MODULE, key, payload, clock())) }
         } catch (cancellation: CancellationException) {
             throw cancellation
         } catch (error: Throwable) {

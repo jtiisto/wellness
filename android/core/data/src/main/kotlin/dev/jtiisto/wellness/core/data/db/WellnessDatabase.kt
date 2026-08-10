@@ -21,8 +21,9 @@ import androidx.room.RoomDatabase
         CoachLogEntity::class,
         CoachMetaEntity::class,
         TrendsMetaEntity::class,
+        ServerProfileEntity::class,
     ],
-    version = 4,
+    version = 5,
     exportSchema = true,
 )
 abstract class WellnessDatabase : RoomDatabase() {
@@ -36,6 +37,12 @@ abstract class WellnessDatabase : RoomDatabase() {
     abstract fun coachDao(): CoachDao
 
     abstract fun trendsMetaDao(): TrendsMetaDao
+
+    abstract fun serverProfilesDao(): ServerProfilesDao
+
+    abstract fun serverSwitchDao(): ServerSwitchDao
+
+    abstract fun exportDao(): ExportDao
 
     companion object {
         const val NAME = "wellness.db"

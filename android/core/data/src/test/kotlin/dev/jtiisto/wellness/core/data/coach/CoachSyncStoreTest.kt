@@ -13,6 +13,10 @@ import dev.jtiisto.wellness.core.data.network.DateString
 import dev.jtiisto.wellness.core.data.network.ServerConfig
 import dev.jtiisto.wellness.core.data.network.buildHttpClient
 import dev.jtiisto.wellness.core.data.sync.DebugLog
+import dev.jtiisto.wellness.core.data.sync.ForceSyncCounts
+import dev.jtiisto.wellness.core.data.sync.ForceSyncModuleResult
+import dev.jtiisto.wellness.core.data.sync.ForceSyncSkipReason
+import dev.jtiisto.wellness.core.data.sync.ServerSessionGate
 import dev.jtiisto.wellness.core.data.sync.SyncSkipReason
 import dev.jtiisto.wellness.core.data.sync.SyncStatus
 import io.ktor.client.engine.mock.MockEngine
@@ -589,6 +593,7 @@ class CoachSyncStoreTest {
 
     /** A store over a mocked API, for the failure modes an engine cannot express. */
     private fun storeOver(api: CoachApi): CoachSyncStore = CoachSyncStore(
+        session = ServerSessionGate(),
         dao = FakeCoachDao(),
         api = api,
         isOnline = { true },
@@ -891,6 +896,216 @@ class CoachSyncStoreTest {
         assertEquals(local, adoptUploadResults(local, null, mapOf("d1" to 1L), mapOf("d1" to 1L)))
     }
 
+
+    // ---- force sync ------------------------------------------------------
+
+    @Test
+    @DisplayName("forceSync pulls with no last_sync_time even when a watermark is stored")
+    fun forceSyncIgnoresTheStoredWatermark() = runTest {
+        val world = World()
+        world.dao.meta[CoachDao.KEY_LAST_SERVER_SYNC_TIME] = "s-old"
+
+        val result = world.store().forceSync()
+
+        assertTrue(result is ForceSyncModuleResult.Success)
+        val pull = world.urls.single { !it.contains("plans-version") }
+        assertFalse(pull.contains("last_sync_time"), "a force pull must be unconditional: $pull")
+        assertEquals("s-pull", world.dao.meta[CoachDao.KEY_LAST_SERVER_SYNC_TIME])
+    }
+
+    @Test
+    @DisplayName("triggerSync, by contrast, always sends the stored watermark")
+    fun triggerSyncStillSendsTheWatermark() = runTest {
+        val world = World()
+        world.dao.meta[CoachDao.KEY_LAST_SERVER_SYNC_TIME] = "s-old"
+
+        world.store().triggerSync()
+
+        assertTrue(world.urls.single().contains("last_sync_time=s-old"), world.urls.single())
+    }
+
+    @Test
+    @DisplayName("upload still goes first on the force path")
+    fun forceSyncUploadsBeforePulling() = runTest {
+        val world = World()
+        world.seedLog(today, """{"_lastModified":"day-tok","ex_1":{"sets":[{"reps":5}]}}""", dirty = true, generation = 1)
+        world.postResponse = post(results = """"$today":{"session_feedback":{},"_lastModified":"srv-1"}""")
+
+        world.store().forceSync()
+
+        assertEquals(listOf("POST", "GET"), world.httpCalls())
+    }
+
+    @Test
+    @DisplayName("the reported count is the dates actually sent, not the dates that were dirty")
+    fun forceSyncCountsUploadedDates() = runTest {
+        val world = World()
+        world.seedLog(today, """{"ex_1":{"sets":[{"reps":5}]}}""", dirty = true, generation = 1)
+        // Empty and never synced: unsatisfiable, dropped before the POST.
+        world.seedLog("2026-08-05", """{"session_feedback":{}}""", dirty = true, generation = 1)
+        world.postResponse = post(results = """"$today":{"session_feedback":{},"_lastModified":"srv-1"}""")
+
+        val result = world.store().forceSync()
+
+        assertEquals(ForceSyncModuleResult.Success(ForceSyncCounts.Coach(uploadedDates = 1)), result)
+    }
+
+    @Test
+    @DisplayName("offline is a skip with its own reason")
+    fun forceSyncOffline() = runTest {
+        val world = World()
+        world.online = false
+
+        assertEquals(
+            ForceSyncModuleResult.Skipped(ForceSyncSkipReason.OFFLINE),
+            world.store().forceSync(),
+        )
+        assertTrue(world.urls.isEmpty())
+    }
+
+    @Test
+    @DisplayName("a cycle already running is a busy skip")
+    fun forceSyncBusy() = runTest {
+        val world = World()
+        world.seedLog(today, """{"ex_1":{"sets":[{"reps":5}]}}""", dirty = true, generation = 1)
+        var nested: ForceSyncModuleResult? = null
+        world.onUpload = { nested = world.store().forceSync() }
+        world.postResponse = post(results = """"$today":{"session_feedback":{},"_lastModified":"srv-1"}""")
+
+        world.store().triggerSync()
+
+        assertEquals(ForceSyncModuleResult.Skipped(ForceSyncSkipReason.BUSY), nested)
+    }
+
+    @Test
+    @DisplayName("a failing pull is a Failed result and a red dot")
+    fun forceSyncFailure() = runTest {
+        val world = World()
+        world.getStatus = HttpStatusCode.InternalServerError
+
+        val result = world.store().forceSync()
+
+        assertTrue(result is ForceSyncModuleResult.Failed)
+        assertEquals(SyncStatus.RED, world.store().syncStatus.value)
+    }
+
+    // ---- full-snapshot plans ---------------------------------------------
+
+    @Test
+    @DisplayName("a plan the server no longer sends is deleted on the force path")
+    fun forceSyncDeletesPlansAbsentFromTheResponse() = runTest {
+        val world = World()
+        world.seedPlan("2030-01-04", """{"_lastModified":"p-old","session":{}}""")
+        world.seedPlan(today, """{"_lastModified":"p-1","session":{}}""")
+        // A full pull carries no `deletedPlanDates` — the server computes those
+        // relative to a last_sync_time it was not given. Without full-snapshot
+        // semantics the stale plan would survive every "full reconciliation".
+        world.getResponse = get(plans = """"$today":{"_lastModified":"p-2","session":{}}""")
+
+        world.store().forceSync()
+
+        assertFalse(world.dao.plans.containsKey("2030-01-04"), "a server-deleted plan survived the force sync")
+        assertEquals("p-2", world.dao.plans.getValue(today).lastModified)
+    }
+
+    @Test
+    @DisplayName("the incremental path is untouched: an absent plan is kept without an explicit deletion")
+    fun incrementalPullKeepsPlansAbsentFromTheResponse() = runTest {
+        val world = World()
+        world.seedPlan("2030-01-04", """{"_lastModified":"p-old","session":{}}""")
+        world.getResponse = get(plans = """"$today":{"_lastModified":"p-2","session":{}}""")
+
+        world.store().triggerSync()
+
+        assertTrue(
+            world.dao.plans.containsKey("2030-01-04"),
+            "an incremental pull only reports what changed; absence means nothing",
+        )
+    }
+
+    @Test
+    @DisplayName("a dirty local log is never deleted by the full snapshot — it has no server copy yet")
+    fun forceSyncKeepsDirtyLogsAbsentFromTheResponse() = runTest {
+        val world = World()
+        world.seedLog("2030-01-04", """{"ex_1":{"sets":[{"reps":9}]}}""", dirty = true, generation = 1)
+        world.postResponse = post(results = "")
+        world.getResponse = get(logs = """"$today":{"session_feedback":{}}""")
+
+        world.store().forceSync()
+
+        assertTrue(world.dao.logs.containsKey("2030-01-04"), "unsent local work was destroyed by the snapshot")
+        assertEquals(
+            9,
+            world.storedLog("2030-01-04")["ex_1"]!!.jsonObject["sets"]!!.jsonArray[0]
+                .jsonObject["reps"]!!.jsonPrimitive.content.toInt(),
+        )
+    }
+
+    @Test
+    @DisplayName("an explicit deletedPlanDates is still honoured on the force path")
+    fun forceSyncStillHonoursExplicitDeletions() = runTest {
+        val world = World()
+        world.seedPlan("2030-01-03", """{"_lastModified":"p-a","session":{}}""")
+        world.getResponse = get(deletedPlanDates = """"2030-01-03"""")
+
+        world.store().forceSync()
+
+        assertFalse(world.dao.plans.containsKey("2030-01-03"))
+    }
+
+    // ---- the server-switch fence -----------------------------------------
+
+    @Test
+    @DisplayName("a pull that lands after the session closes writes NOTHING — no rows, no watermark")
+    fun closedGateFencesTheDownloadApply() = runTest {
+        val world = World()
+        world.getResponse = get(
+            plans = """"$today":{"_lastModified":"p-1","session":{}}""",
+            logs = """"$today":{"session_feedback":{}}""",
+            serverTime = "s-late",
+        )
+        world.onDownload = { world.session.close() }
+
+        val result = world.store().triggerSync()
+
+        assertFalse(result.success)
+        assertTrue(world.dao.plans.isEmpty(), "old-server plans reached the wiped database")
+        assertTrue(world.dao.logs.isEmpty(), "old-server logs reached the wiped database")
+        assertNull(
+            world.dao.meta[CoachDao.KEY_LAST_SERVER_SYNC_TIME],
+            "the old server's watermark was restored — the next full pull would be skipped",
+        )
+    }
+
+    @Test
+    @DisplayName("an upload response that lands after the session closes adopts nothing")
+    fun closedGateFencesTheUploadApply() = runTest {
+        val world = World()
+        world.seedLog(today, """{"_lastModified":"day-tok","ex_1":{"sets":[{"reps":5}]}}""", dirty = true, generation = 1)
+        world.postResponse = post(results = """"$today":{"session_feedback":{},"_lastModified":"srv-1"}""")
+        world.onUpload = { world.session.close() }
+
+        world.store().triggerSync()
+
+        assertEquals(
+            "day-tok",
+            world.storedLog(today)["_lastModified"]!!.jsonPrimitive.content,
+            "a post-wipe adoption was applied",
+        )
+        assertTrue(world.dao.logs.getValue(today).isDirty)
+    }
+
+    @Test
+    @DisplayName("awaitQuiescence returns once no cycle holds the sync lock")
+    fun quiescenceReturnsWhenIdle() = runTest {
+        val world = World()
+
+        world.store().triggerSync()
+        world.store().awaitQuiescence()
+
+        assertEquals(listOf("GET"), world.httpCalls())
+    }
+
     // ---- harness ---------------------------------------------------------
 
     private fun obj(text: String): JsonObject = json.parseToJsonElement(text).jsonObject
@@ -925,7 +1140,11 @@ class CoachSyncStoreTest {
         var getStatus: HttpStatusCode = HttpStatusCode.OK
         var plansVersionStatus: HttpStatusCode = HttpStatusCode.OK
         var onUpload: suspend () -> Unit = {}
+        var onDownload: suspend () -> Unit = {}
         var scheduledUploads = 0
+
+        /** Open unless a test closes it — the server-switch fence. */
+        val session = ServerSessionGate()
 
         private val debugLog = mockk<DebugLog>(relaxed = true).also {
             every { it.log(any(), any(), any()) } returns Unit
@@ -948,6 +1167,7 @@ class CoachSyncStoreTest {
 
                     else -> {
                         dao.calls += "GET"
+                        onDownload()
                         respondJson(getResponse, getStatus)
                     }
                 }
@@ -960,6 +1180,7 @@ class CoachSyncStoreTest {
                 dao = dao,
                 api = api,
                 isOnline = { online },
+                session = session,
                 json = json,
                 // A real (mocked) log, not null: the log lines build JsonObjects
                 // eagerly, and a safe call on a null receiver would skip them.
@@ -1073,9 +1294,10 @@ internal open class FakeCoachDao : CoachDao() {
         logs: List<CoachLogEntity>,
         earliestDate: DateString?,
         watermark: String?,
+        fullSnapshotPlans: Boolean,
     ) {
         calls += "applyDownload:start"
-        super.applyDownload(plans, deletedPlanDates, logs, earliestDate, watermark)
+        super.applyDownload(plans, deletedPlanDates, logs, earliestDate, watermark, fullSnapshotPlans)
         calls += "applyDownload:end"
     }
 

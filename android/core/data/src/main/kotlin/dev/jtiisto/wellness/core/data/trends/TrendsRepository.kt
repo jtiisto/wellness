@@ -7,6 +7,7 @@ import dev.jtiisto.wellness.core.data.network.DateString
 import dev.jtiisto.wellness.core.data.network.TrendsApi
 import dev.jtiisto.wellness.core.data.network.isNetworkError
 import dev.jtiisto.wellness.core.data.sync.DebugLog
+import dev.jtiisto.wellness.core.data.sync.ServerSessionGate
 import io.ktor.client.plugins.ResponseException
 import io.ktor.client.plugins.ServerResponseException
 import kotlinx.coroutines.CancellationException
@@ -38,6 +39,7 @@ class TrendsRepository(
     private val api: TrendsApi,
     private val cacheDao: PayloadCacheDao,
     private val debugLog: DebugLog,
+    private val session: ServerSessionGate,
     private val json: Json = WellnessJson,
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
@@ -118,7 +120,11 @@ class TrendsRepository(
         val value = json.decodeFromString(deserializer, body)
 
         try {
-            cacheDao.upsert(PayloadCacheEntity(MODULE, cacheKey, body, clock()))
+            // The lease spans the upsert, not merely a check in front of it: the
+            // upsert suspends, so a write admitted before the switch closed
+            // would otherwise land after the wipe and seed the cache with the
+            // previous server's chart data.
+            session.withWriteLease { cacheDao.upsert(PayloadCacheEntity(MODULE, cacheKey, body, clock())) }
         } catch (cancellation: CancellationException) {
             throw cancellation
         } catch (error: Throwable) {

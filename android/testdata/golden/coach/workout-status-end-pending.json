@@ -1,0 +1,14 @@
+{
+  "start": {
+    "fired_at": "2026-08-09T10:15:00.000000Z",
+    "exit_code": 0
+  },
+  "end": {
+    "fired_at": "2026-08-09T11:05:00.000000Z",
+    "exit_code": null
+  },
+  "actions_available": {
+    "start": true,
+    "end": true
+  }
+}

@@ -93,5 +93,31 @@ val MIGRATION_3_4 = object : Migration(3, 4) {
     }
 }
 
+/**
+ * v4 → v5: the server address book (Phase 8).
+ *
+ * Additive, and here the reasoning has an extra edge to it. This table is what
+ * the *next* boot reads to decide which server the app talks to, so an install
+ * that upgrades has to arrive with no active row — which is exactly what an
+ * empty table means, and exactly what the built-in `BuildConfig` server it has
+ * been using all along resolves to. Anyone upgrading keeps their dirty rows,
+ * their watermarks and their server, and nothing about the switch machinery
+ * touches them until they add a profile themselves.
+ *
+ * Transcribed verbatim from `schemas/…WellnessDatabase/5.json` with
+ * `${TABLE_NAME}` substituted; `Migration4to5Test` re-validates it against the
+ * real schema, and also runs the whole v1 → v5 chain.
+ */
+val MIGRATION_4_5 = object : Migration(4, 5) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `server_profiles` (" +
+                "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                "`nickname` TEXT NOT NULL, `url` TEXT NOT NULL, " +
+                "`isActive` INTEGER NOT NULL DEFAULT 0)",
+        )
+    }
+}
+
 /** Every migration the app ships, in order. Never add destructive fallbacks. */
-val WELLNESS_MIGRATIONS = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+val WELLNESS_MIGRATIONS = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)

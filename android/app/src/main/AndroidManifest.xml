@@ -24,5 +24,20 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Exports and debug-log dumps reach a share sheet through here.
+             exported=false with grantUriPermissions=true is the whole contract:
+             no other app may address the provider, and the only access anyone
+             gets is the per-URI read grant that travels with the share Intent
+             and expires with it. Paths are restricted in file_paths.xml. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
     </application>
 </manifest>

@@ -8,8 +8,13 @@ import dev.jtiisto.wellness.core.data.db.CoachPlanEntity
 import dev.jtiisto.wellness.core.data.db.PendingUpload
 import dev.jtiisto.wellness.core.data.network.CoachApi
 import dev.jtiisto.wellness.core.data.network.DateString
+import dev.jtiisto.wellness.core.data.network.describeForLog
 import dev.jtiisto.wellness.core.data.network.SyncStamp
 import dev.jtiisto.wellness.core.data.sync.DebugLog
+import dev.jtiisto.wellness.core.data.sync.ForceSyncCounts
+import dev.jtiisto.wellness.core.data.sync.ForceSyncModuleResult
+import dev.jtiisto.wellness.core.data.sync.ForceSyncSkipReason
+import dev.jtiisto.wellness.core.data.sync.ServerSessionGate
 import dev.jtiisto.wellness.core.data.sync.SyncResult
 import dev.jtiisto.wellness.core.data.sync.SyncSkipReason
 import dev.jtiisto.wellness.core.data.sync.SyncStatus
@@ -69,6 +74,8 @@ const val EXTRA_SESSION_TITLE: String = "Zone 2 — extra session"
  *    inside the day object.
  *
  * @param isOnline gates the whole cycle; offline is a skip, not a failure.
+ * @param session the server-switch fence, checked immediately before each write
+ *   that turns a server response into rows. See [ServerSessionGate].
  * @param clock supplies the advisory `_lastModifiedAt` stamps, and nothing
  *   else. It is never a source of sync ordering — the server's stamps are.
  * @param scheduleUpload the scheduler's debounce hook, called after every local
@@ -79,6 +86,7 @@ class CoachSyncStore(
     private val dao: CoachDao,
     private val api: CoachApi,
     private val isOnline: () -> Boolean,
+    private val session: ServerSessionGate,
     private val json: Json = WellnessJson,
     private val debugLog: DebugLog? = null,
     private val scheduleUpload: () -> Unit = {},
@@ -316,17 +324,23 @@ class CoachSyncStore(
         createIfAbsent: Boolean = true,
         transform: (JsonObject) -> JsonObject,
     ) {
-        val clientId = clientId()
-        val stamp = clock()
-        val changed = dao.updateLogAndMarkDirty(date) { storedJson ->
-            val current = when {
-                storedJson != null -> parseObject(storedJson)
-                createIfAbsent -> emptyDay(stamp, clientId)
-                else -> return@updateLogAndMarkDirty null
+        // The lease opens BEFORE clientId(). That call is a DAO read and so a
+        // suspension point: a mutation parked there while the switch closed
+        // would otherwise resume and commit a dirty row into the wiped
+        // database, belonging to the server the user just left.
+        val changed = session.withWriteLease {
+            val clientId = clientId()
+            val stamp = clock()
+            dao.updateLogAndMarkDirty(date) { storedJson ->
+                val current = when {
+                    storedJson != null -> parseObject(storedJson)
+                    createIfAbsent -> emptyDay(stamp, clientId)
+                    else -> return@updateLogAndMarkDirty null
+                }
+                val next = transform(current)
+                if (next === current) return@updateLogAndMarkDirty null
+                encode(stamped(next, stamp, clientId))
             }
-            val next = transform(current)
-            if (next === current) return@updateLogAndMarkDirty null
-            encode(stamped(next, stamp, clientId))
         }
         if (!changed) return
         updateSyncStatus()
@@ -349,6 +363,70 @@ class CoachSyncStore(
         } finally {
             syncMutex.unlock()
         }
+    }
+
+    /**
+     * Full reconciliation: the ordinary upload-first cycle with a **pull that
+     * carries no watermark**, applied as an authoritative snapshot.
+     *
+     * A separate entry point rather than a flag on [triggerSync] — see
+     * `JournalSyncStore.forceSync` for why. Upload still goes first: the server
+     * is the only arbiter, so sending local edits before asking for changes
+     * means the answer already contains them, and the full pull that follows
+     * can then be applied as truth without discarding anything unsent.
+     *
+     * Watermark regression is accepted and safe here for the same reason it is
+     * on the journal side: a lower stamp only replays deliveries the protocol
+     * already applies idempotently.
+     */
+    suspend fun forceSync(): ForceSyncModuleResult {
+        if (!syncMutex.tryLock()) {
+            return ForceSyncModuleResult.Skipped(ForceSyncSkipReason.BUSY)
+        }
+        try {
+            if (!isOnline()) {
+                _syncStatus.value = SyncStatus.GRAY
+                return ForceSyncModuleResult.Skipped(ForceSyncSkipReason.OFFLINE)
+            }
+            _isSyncing.value = true
+            try {
+                val clientId = clientId()
+                debugLog?.log(
+                    TAG,
+                    "force sync start",
+                    buildJsonObject { put("dirtyDates", dao.countDirty()) },
+                )
+
+                val uploaded = uploadDirtyLogs(clientId)
+                downloadServerChanges(clientId, watermark = null, fullSnapshot = true)
+
+                debugLog?.log(TAG, "force sync complete", buildJsonObject { put("uploaded", uploaded) })
+                updateSyncStatus()
+                return ForceSyncModuleResult.Success(ForceSyncCounts.Coach(uploaded))
+            } catch (cancellation: CancellationException) {
+                throw cancellation
+            } catch (error: Throwable) {
+                debugLog?.log(
+                    TAG,
+                    "force sync error",
+                    buildJsonObject { put("error", describeForLog(error)) },
+                )
+                _syncStatus.value = SyncStatus.RED
+                return ForceSyncModuleResult.Failed(describeForLog(error))
+            } finally {
+                _isSyncing.value = false
+            }
+        } finally {
+            syncMutex.unlock()
+        }
+    }
+
+    /**
+     * Block until no sync cycle is in flight — the server switch's drain. See
+     * `JournalSyncStore.awaitQuiescence`.
+     */
+    suspend fun awaitQuiescence() {
+        syncMutex.withLock { }
     }
 
     private suspend fun runSyncCycle(): SyncResult {
@@ -383,7 +461,7 @@ class CoachSyncStore(
             debugLog?.log(
                 TAG,
                 "sync error",
-                buildJsonObject { put("message", error.message ?: error::class.simpleName ?: "") },
+                buildJsonObject { put("error", describeForLog(error)) },
             )
             _syncStatus.value = SyncStatus.RED
             return SyncResult(success = false, error = error)
@@ -393,15 +471,16 @@ class CoachSyncStore(
     }
 
     /**
-     * Step 1: send the dirty days.
+     * Step 1: send the dirty days. Returns how many dates actually went on the
+     * wire — the number the force-sync dialog reports.
      *
      * The payload, the generations it was built at, and the exact JSON each day
      * held all come out of one read transaction — see [PendingUpload] for why
      * they cannot be gathered separately.
      */
-    private suspend fun uploadDirtyLogs(clientId: String) {
+    private suspend fun uploadDirtyLogs(clientId: String): Int {
         val pending = dao.buildPendingUpload(::buildPendingUpload)
-        if (pending.generations.isEmpty()) return
+        if (pending.generations.isEmpty()) return 0
 
         // Dates that can never upload are dropped from the dirty set BEFORE the
         // POST. Leaving them would wedge the client red and re-sync every poll.
@@ -417,7 +496,7 @@ class CoachSyncStore(
         // Every dirty date was unsatisfiable: there is nothing to say. The PWA's
         // `triggerSync` still POSTs an empty `logs` map here; its own forceSync
         // guards against it, and we adopt the guarded form everywhere.
-        if (pending.payload.isEmpty()) return
+        if (pending.payload.isEmpty()) return 0
 
         debugLog?.log(
             TAG,
@@ -426,6 +505,7 @@ class CoachSyncStore(
         )
         val response = api.syncPost(clientId, pending.payload)
         applyUploadResults(response, pending)
+        return pending.payload.size
     }
 
     /** Runs inside the DAO's read transaction. See [PendingUpload]. */
@@ -450,20 +530,23 @@ class CoachSyncStore(
      */
     private suspend fun applyUploadResults(response: CoachSyncPostResponseDto, pending: PendingUpload) {
         val resultDates = response.results.keys.toList()
-        dao.applyUploadResults(
-            dates = resultDates,
-            clears = clearsFor(pending.payload.keys, pending),
-            adopt = { currentRows ->
-                val next = adoptUploadResults(
-                    localLogs = currentRows.associate { it.date to parseObject(it.logJson) },
-                    results = response.results,
-                    snapshotGens = pending.generations,
-                    dirtyDateGenerations = currentRows.associate { it.date to it.dirtyGeneration },
-                    uploadedLogs = pending.payload,
-                )
-                resultDates.mapNotNull { date -> next[date]?.let { logEntity(date, it) } }
-            },
-        )
+        // The lease spans the write; see [ServerSessionGate].
+        session.withWriteLease {
+            dao.applyUploadResults(
+                dates = resultDates,
+                clears = clearsFor(pending.payload.keys, pending),
+                adopt = { currentRows ->
+                    val next = adoptUploadResults(
+                        localLogs = currentRows.associate { it.date to parseObject(it.logJson) },
+                        results = response.results,
+                        snapshotGens = pending.generations,
+                        dirtyDateGenerations = currentRows.associate { it.date to it.dirtyGeneration },
+                        uploadedLogs = pending.payload,
+                    )
+                    resultDates.mapNotNull { date -> next[date]?.let { logEntity(date, it) } }
+                },
+            )
+        }
         debugLog?.log(TAG, "upload applied", buildJsonObject { put("dates", resultDates.size) })
     }
 
@@ -494,8 +577,21 @@ class CoachSyncStore(
      * because that copy is the merged day this cycle just adopted. (The PWA
      * clears after the pull instead; the outcome is the same and the ordering
      * is pinned by a test.)
+     *
+     * [fullSnapshot] switches the plan half from incremental to authoritative.
+     * The server only computes `deletedPlanDates` relative to a `last_sync_time`
+     * it was given; a watermark-free pull therefore reports no deletions at
+     * all, and a plan the server dropped would survive every "full
+     * reconciliation" the user ever ran. So on the force path the response's
+     * plan set *is* the truth and anything else local is removed. Logs are not
+     * treated that way and must not be: a locally-created dirty day has no
+     * server copy yet by definition.
      */
-    private suspend fun downloadServerChanges(clientId: String, watermark: SyncStamp?) {
+    private suspend fun downloadServerChanges(
+        clientId: String,
+        watermark: SyncStamp?,
+        fullSnapshot: Boolean = false,
+    ) {
         val data = api.sync(clientId, watermark)
         debugLog?.log(
             TAG,
@@ -504,16 +600,20 @@ class CoachSyncStore(
                 put("plans", data.plans.size)
                 put("logs", data.logs.size)
                 put("deletedPlans", data.deletedPlanDates.size)
+                put("fullSnapshot", fullSnapshot)
             },
         )
 
-        dao.applyDownload(
-            plans = data.plans.map { (date, plan) -> planEntity(date, plan) },
-            deletedPlanDates = data.deletedPlanDates,
-            logs = data.logs.map { (date, log) -> logEntity(date, log) },
-            earliestDate = data.earliestDate,
-            watermark = requireWatermark(data.serverTime),
-        )
+        session.withWriteLease {
+            dao.applyDownload(
+                plans = data.plans.map { (date, plan) -> planEntity(date, plan) },
+                deletedPlanDates = data.deletedPlanDates,
+                logs = data.logs.map { (date, log) -> logEntity(date, log) },
+                earliestDate = data.earliestDate,
+                watermark = requireWatermark(data.serverTime),
+                fullSnapshotPlans = fullSnapshot,
+            )
+        }
 
         // Consume the version only now that the pull has landed. Both halves
         // matter: the plans in this response, and whatever `plans-version` the

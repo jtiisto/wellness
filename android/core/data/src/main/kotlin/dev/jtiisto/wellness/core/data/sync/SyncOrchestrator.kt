@@ -20,8 +20,9 @@ import kotlinx.coroutines.plus
 class SyncOrchestrator(
     private val scope: CoroutineScope,
     private val connectivity: ConnectivityMonitor,
+    onBackground: suspend () -> Unit = {},
 ) {
-    private val core = SyncOrchestratorCore(scope)
+    private val core = SyncOrchestratorCore(scope, onBackground)
     private var started = false
 
     /** Late registration is fine: the scheduler is handed current state at once. */
@@ -59,7 +60,10 @@ class SyncOrchestrator(
  * Every transition is serialized on the main dispatcher, so no two events can
  * fan out concurrently and a registration can never race a state change.
  */
-internal class SyncOrchestratorCore(scope: CoroutineScope) {
+internal class SyncOrchestratorCore(
+    scope: CoroutineScope,
+    private val onBackground: suspend () -> Unit = {},
+) {
 
     private val control = scope + Dispatchers.Main.immediate
     private val schedulers = mutableListOf<SyncScheduler>()
@@ -83,6 +87,11 @@ internal class SyncOrchestratorCore(scope: CoroutineScope) {
             // than waiting out a poll interval.
             if (value && online) schedulers.forEach(SyncScheduler::requestSync)
             applyPolling()
+            // Last, and only on the way out: hand anything still dirty to
+            // WorkManager, which is the only part of this that survives the
+            // process being killed. Polling is already stopped by here, so the
+            // dirty check cannot race a cycle this class just started.
+            if (!value) onBackground()
         }
     }
 

@@ -7,6 +7,7 @@ import dev.jtiisto.wellness.core.data.network.ServerConfig
 import dev.jtiisto.wellness.core.data.network.TrendsApi
 import dev.jtiisto.wellness.core.data.network.buildHttpClient
 import dev.jtiisto.wellness.core.data.sync.DebugLog
+import dev.jtiisto.wellness.core.data.sync.ServerSessionGate
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
 import io.ktor.client.engine.mock.respondError
@@ -103,6 +104,7 @@ class TrendsRepositoryTest {
     }
 
     private fun build(engine: MockEngine, config: ServerConfig) = TrendsRepository(
+        session = ServerSessionGate(),
         api = TrendsApi(buildHttpClient(engine, config, WellnessJson, mockk(relaxed = true)), config),
         cacheDao = dao,
         debugLog = debugLog,

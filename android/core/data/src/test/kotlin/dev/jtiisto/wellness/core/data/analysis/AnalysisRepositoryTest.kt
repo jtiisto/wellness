@@ -8,6 +8,7 @@ import dev.jtiisto.wellness.core.data.network.AnalysisHttpException
 import dev.jtiisto.wellness.core.data.network.ServerConfig
 import dev.jtiisto.wellness.core.data.network.buildHttpClient
 import dev.jtiisto.wellness.core.data.sync.DebugLog
+import dev.jtiisto.wellness.core.data.sync.ServerSessionGate
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.MockRequestHandleScope
 import io.ktor.client.engine.mock.respond
@@ -91,6 +92,7 @@ class AnalysisRepositoryTest {
     private fun build(engine: MockEngine): AnalysisRepository {
         val config = ServerConfig(BASE)
         return AnalysisRepository(
+            session = ServerSessionGate(),
             api = AnalysisApi(buildHttpClient(engine, config, WellnessJson, mockk(relaxed = true)), config, WellnessJson),
             cacheDao = dao,
             debugLog = debugLog,

@@ -262,6 +262,19 @@ abstract class CoachDao {
      * This is the only place `lastServerSyncTime` is written, and it comes from
      * the GET's `serverTime` — the one stamp offset into the past far enough to
      * re-deliver a write that committed during the pull.
+     *
+     * [fullSnapshotPlans] is the force-sync path's one difference, and it is a
+     * correctness fix rather than an optimization. `deletedPlanDates` is
+     * computed by the server *relative to the `last_sync_time` it was given*, so
+     * a watermark-free pull reports no deletions at all. Without this, a plan
+     * the server has removed would survive every full reconciliation forever —
+     * the pull would simply never mention it. When set, the response's plan set
+     * is authoritative and any local plan missing from it is deleted, before the
+     * upserts and inside the same transaction.
+     *
+     * Logs are deliberately never treated this way. A day the user created
+     * locally and has not uploaded yet is absent from the server's response by
+     * definition, and deleting it would destroy unsent work.
      */
     @Transaction
     open suspend fun applyDownload(
@@ -270,7 +283,14 @@ abstract class CoachDao {
         logs: List<CoachLogEntity>,
         earliestDate: DateString?,
         watermark: SyncStamp?,
+        fullSnapshotPlans: Boolean = false,
     ) {
+        if (fullSnapshotPlans) {
+            val present = plans.mapTo(mutableSetOf()) { it.date }
+            for (row in listAllPlans()) {
+                if (row.date !in present) deletePlan(row.date)
+            }
+        }
         for (date in deletedPlanDates) deletePlan(date)
         for (plan in plans) upsertPlan(plan)
 

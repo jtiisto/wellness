@@ -4,6 +4,7 @@ import dev.jtiisto.wellness.core.data.WellnessJson
 import dev.jtiisto.wellness.core.data.db.JournalEntryEntity
 import dev.jtiisto.wellness.core.data.db.JournalTrackerEntity
 import dev.jtiisto.wellness.core.data.network.JournalApi
+import dev.jtiisto.wellness.core.data.sync.ServerSessionGate
 import io.mockk.mockk
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
@@ -203,6 +204,7 @@ class MergeEntryTest {
         var scheduledUploads = 0
 
         val store = JournalSyncStore(
+            session = ServerSessionGate(),
             dao = dao,
             api = mockk<JournalApi>(relaxed = true),
             isOnline = { true },

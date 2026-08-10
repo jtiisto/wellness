@@ -14,6 +14,10 @@ import dev.jtiisto.wellness.core.data.network.ServerConfig
 import dev.jtiisto.wellness.core.data.network.SyncStamp
 import dev.jtiisto.wellness.core.data.network.buildHttpClient
 import dev.jtiisto.wellness.core.data.sync.DebugLog
+import dev.jtiisto.wellness.core.data.sync.ForceSyncCounts
+import dev.jtiisto.wellness.core.data.sync.ForceSyncModuleResult
+import dev.jtiisto.wellness.core.data.sync.ForceSyncSkipReason
+import dev.jtiisto.wellness.core.data.sync.ServerSessionGate
 import dev.jtiisto.wellness.core.data.sync.SyncSkipReason
 import dev.jtiisto.wellness.core.data.sync.SyncStatus
 import io.ktor.client.engine.mock.MockEngine
@@ -675,6 +679,211 @@ class JournalSyncStoreTest {
         assertEquals(12.5, day.getValue("t2").value?.jsonPrimitive?.content?.toDouble())
     }
 
+
+    // ---- force sync ------------------------------------------------------
+
+    @Test
+    @DisplayName("forceSync pulls with no `since` even when a watermark is stored")
+    fun forceSyncIgnoresTheStoredWatermark() = runTest {
+        val world = World()
+        world.dao.meta[JournalDao.KEY_LAST_SERVER_SYNC_TIME] = "s-old"
+        world.delta = delta(serverTime = "s-new")
+
+        val result = world.store().forceSync()
+
+        assertTrue(result is ForceSyncModuleResult.Success)
+        assertFalse(world.urls.first().contains("since="), "a force pull must be unconditional: ${world.urls.first()}")
+        assertEquals("s-new", world.dao.meta[JournalDao.KEY_LAST_SERVER_SYNC_TIME])
+    }
+
+    @Test
+    @DisplayName("triggerSync, by contrast, always sends the stored watermark")
+    fun triggerSyncStillSendsTheWatermark() = runTest {
+        val world = World()
+        world.dao.meta[JournalDao.KEY_LAST_SERVER_SYNC_TIME] = "s-old"
+
+        world.store().triggerSync()
+
+        // This is why forceSync had to be a separate entry point rather than a
+        // flag: there is no honest way for this path to skip the watermark.
+        assertTrue(world.urls.first().contains("since=s-old"), world.urls.first())
+    }
+
+    @Test
+    @DisplayName("a watermark that goes backwards is accepted: replay is idempotent by protocol")
+    fun forceSyncToleratesWatermarkRegression() = runTest {
+        val world = World()
+        world.dao.meta[JournalDao.KEY_LAST_SERVER_SYNC_TIME] = "s-9"
+        // The server stamps wall-clock minus 2s, so a full pull can legitimately
+        // answer below the stored value. The cost is re-delivery, not loss.
+        world.delta = delta(serverTime = "s-1")
+
+        world.store().forceSync()
+
+        assertEquals("s-1", world.dao.meta[JournalDao.KEY_LAST_SERVER_SYNC_TIME])
+    }
+
+    @Test
+    @DisplayName("offline is a skip with its own reason, not a failure")
+    fun forceSyncOffline() = runTest {
+        val world = World()
+        world.online = false
+
+        val result = world.store().forceSync()
+
+        assertEquals(ForceSyncModuleResult.Skipped(ForceSyncSkipReason.OFFLINE), result)
+        assertTrue(world.urls.isEmpty())
+        assertEquals(SyncStatus.GRAY, world.store().syncStatus.value)
+    }
+
+    @Test
+    @DisplayName("a cycle already running is a busy skip, and the running one is left alone")
+    fun forceSyncBusy() = runTest {
+        val world = World()
+        world.seedTracker("t1", name = "Water", stamp = "s0", isDirty = true, generation = 1)
+        var nested: ForceSyncModuleResult? = null
+        world.onUpload = { nested = world.store().forceSync() }
+        world.update = update(accepted = """{"id":"t1","lastModifiedAt":"s1"}""")
+
+        world.store().triggerSync()
+
+        assertEquals(ForceSyncModuleResult.Skipped(ForceSyncSkipReason.BUSY), nested)
+    }
+
+    @Test
+    @DisplayName("counts come from the response: accepted rows and conflicts, both halves summed")
+    fun forceSyncCounts() = runTest {
+        val world = World()
+        world.seedTracker("t1", name = "Water", stamp = "s0", isDirty = true, generation = 1)
+        world.seedEntry("2026-08-06", "t2", completed = true, stamp = "s0", isDirty = true, generation = 1)
+        world.update = update(
+            accepted = """{"id":"t1","lastModifiedAt":"s1"}""",
+            acceptedEntries = """{"date":"2026-08-06","trackerId":"t2","lastModifiedAt":"s1"}""",
+            rejected = """{"id":"t3","errorKind":"stale"}""",
+        )
+
+        val result = world.store().forceSync()
+
+        assertEquals(
+            ForceSyncModuleResult.Success(ForceSyncCounts.Journal(accepted = 2, conflicts = 1)),
+            result,
+        )
+    }
+
+    @Test
+    @DisplayName("nothing dirty: a full pull, no upload, and honest zeroes")
+    fun forceSyncWithNothingDirty() = runTest {
+        val world = World()
+
+        val result = world.store().forceSync()
+
+        assertEquals(1, world.urls.size, "no upload should have been attempted")
+        assertEquals(
+            ForceSyncModuleResult.Success(ForceSyncCounts.Journal(accepted = 0, conflicts = 0)),
+            result,
+        )
+    }
+
+    @Test
+    @DisplayName("a failing pull is a Failed result and a red dot, never a thrown exception")
+    fun forceSyncFailure() = runTest {
+        val world = World()
+        world.deltaStatus = HttpStatusCode.InternalServerError
+
+        val result = world.store().forceSync()
+
+        assertTrue(result is ForceSyncModuleResult.Failed)
+        assertEquals(SyncStatus.RED, world.store().syncStatus.value)
+    }
+
+    @Test
+    @DisplayName("the failure message is the exception class and status, never its message")
+    fun forceSyncFailureIsDescribedSafely() = runTest {
+        val world = World()
+        world.deltaStatus = HttpStatusCode.BadRequest
+        // Ktor puts the whole response body in `Throwable.message`; a 422 from
+        // FastAPI echoes the rejected input, which is journal content.
+        world.delta = """{"detail":"value was SECRET-JOURNAL-VALUE"}"""
+
+        val result = world.store().forceSync() as ForceSyncModuleResult.Failed
+
+        assertFalse(result.message.contains("SECRET-JOURNAL-VALUE"), "leaked a response body: ${result.message}")
+        assertTrue(result.message.contains("400"), result.message)
+    }
+
+    // ---- the server-switch fence -----------------------------------------
+
+    @Test
+    @DisplayName("a delta that lands after the session closes writes NOTHING — no rows, no watermark")
+    fun closedGateFencesTheDeltaApply() = runTest {
+        val world = World()
+        world.delta = delta(
+            config = """{"id":"t1","name":"Water","category":"Habits","type":"simple","lastModifiedAt":"s1"}""",
+            days = """"2026-08-06":{"t1":{"value":null,"completed":true,"lastModifiedAt":"s1"}}""",
+            serverTime = "s2",
+        )
+        // The switch is confirmed while this response is in flight.
+        world.onDelta = { world.session.close() }
+
+        val result = world.store().triggerSync()
+
+        assertTrue(result.success.not(), "the fenced cycle must not report success")
+        assertTrue(world.dao.trackers.isEmpty(), "old-server rows reached the wiped database")
+        assertTrue(world.dao.entries.isEmpty(), "old-server entries reached the wiped database")
+        assertNull(
+            world.dao.meta[JournalDao.KEY_LAST_SERVER_SYNC_TIME],
+            "the old server's watermark was restored — the next full pull would be skipped",
+        )
+    }
+
+    @Test
+    @DisplayName("an upload response that lands after the session closes applies no stamps")
+    fun closedGateFencesTheUploadApply() = runTest {
+        val world = World()
+        world.seedTracker("t1", name = "Water", stamp = "s0", isDirty = true, generation = 1)
+        world.update = update(accepted = """{"id":"t1","lastModifiedAt":"s-new"}""")
+        world.onUpload = { world.session.close() }
+
+        world.store().triggerSync()
+
+        assertEquals("s0", world.storedStamp("t1"), "a post-wipe stamp was applied")
+        assertTrue(world.dao.trackers.getValue("t1").isDirty, "the row was cleared against a wiped database")
+    }
+
+    @Test
+    @DisplayName("forceSync is fenced too")
+    fun closedGateFencesForceSync() = runTest {
+        val world = World()
+        world.delta = delta(
+            config = """{"id":"t1","name":"Water","type":"simple","lastModifiedAt":"s1"}""",
+            serverTime = "s2",
+        )
+        world.onDelta = { world.session.close() }
+
+        val result = world.store().forceSync()
+
+        assertTrue(result is ForceSyncModuleResult.Failed)
+        assertTrue(world.dao.trackers.isEmpty())
+        assertNull(world.dao.meta[JournalDao.KEY_LAST_SERVER_SYNC_TIME])
+    }
+
+    @Test
+    @DisplayName("awaitQuiescence returns once no cycle holds the sync lock")
+    fun quiescenceWaitsOutACycle() = runTest {
+        val world = World()
+        var quiesced = false
+        world.onDelta = {
+            // Mid-cycle: the drain must not be able to complete yet.
+            quiesced = false
+        }
+
+        world.store().triggerSync()
+        world.store().awaitQuiescence()
+        quiesced = true
+
+        assertTrue(quiesced)
+    }
+
     // ---- harness ---------------------------------------------------------
 
     private fun delta(
@@ -704,7 +913,11 @@ class JournalSyncStoreTest {
         var update: String = update()
         var deltaStatus: HttpStatusCode = HttpStatusCode.OK
         var onUpload: suspend () -> Unit = {}
+        var onDelta: suspend () -> Unit = {}
         var scheduledUploads = 0
+
+        /** Open unless a test closes it — the server-switch fence. */
+        val session = ServerSessionGate()
 
         private val debugLog = mockk<DebugLog>(relaxed = true).also {
             every { it.log(any(), any(), any()) } returns Unit
@@ -719,6 +932,7 @@ class JournalSyncStoreTest {
                     onUpload()
                     respondJson(update, HttpStatusCode.OK)
                 } else {
+                    onDelta()
                     respondJson(delta, deltaStatus)
                 }
             }
@@ -730,6 +944,7 @@ class JournalSyncStoreTest {
                 dao = dao,
                 api = api,
                 isOnline = { online },
+                session = session,
                 json = json,
                 // A real (mocked) log, not null: the log lines build JsonObjects
                 // eagerly, and a safe call on a null receiver would skip them.

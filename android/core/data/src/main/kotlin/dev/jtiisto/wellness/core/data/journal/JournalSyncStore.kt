@@ -14,9 +14,14 @@ import dev.jtiisto.wellness.core.data.db.TrackerStamp
 import dev.jtiisto.wellness.core.data.db.UploadResponseApply
 import dev.jtiisto.wellness.core.data.network.DateString
 import dev.jtiisto.wellness.core.data.network.JournalApi
+import dev.jtiisto.wellness.core.data.network.describeForLog
 import dev.jtiisto.wellness.core.data.network.SyncStamp
 import dev.jtiisto.wellness.core.data.sync.DebugLog
 import dev.jtiisto.wellness.core.data.sync.DirtyState
+import dev.jtiisto.wellness.core.data.sync.ForceSyncCounts
+import dev.jtiisto.wellness.core.data.sync.ForceSyncModuleResult
+import dev.jtiisto.wellness.core.data.sync.ForceSyncSkipReason
+import dev.jtiisto.wellness.core.data.sync.ServerSessionGate
 import dev.jtiisto.wellness.core.data.sync.SyncResult
 import dev.jtiisto.wellness.core.data.sync.SyncSkipReason
 import dev.jtiisto.wellness.core.data.sync.SyncStatus
@@ -63,6 +68,10 @@ private const val TAG = "journal-sync"
  *    are values and the generation each was uploaded at.
  *
  * @param isOnline gates the whole cycle; offline is a skip, not a failure.
+ * @param session the server-switch fence. Checked immediately before each of
+ *   the two writes that turn a server response into rows, so a response that
+ *   arrives after a switch has been confirmed cannot repopulate the wiped
+ *   database with the previous server's data.
  * @param scheduleUpload the scheduler's debounce hook, called after every local
  *   mutation. Supplied as a lambda because the scheduler is built around this
  *   store and the two would otherwise be a construction cycle.
@@ -71,6 +80,7 @@ class JournalSyncStore(
     private val dao: JournalDao,
     private val api: JournalApi,
     private val isOnline: () -> Boolean,
+    private val session: ServerSessionGate,
     private val json: Json = WellnessJson,
     private val debugLog: DebugLog? = null,
     private val scheduleUpload: () -> Unit = {},
@@ -149,7 +159,7 @@ class JournalSyncStore(
      * upload as "insert only if this id is free".
      */
     suspend fun addTracker(tracker: TrackerDto) {
-        dao.upsertTrackerAndMarkDirty(trackerEntity(tracker, deleted = false))
+        session.withWriteLease { dao.upsertTrackerAndMarkDirty(trackerEntity(tracker, deleted = false)) }
         afterLocalChange()
     }
 
@@ -163,20 +173,24 @@ class JournalSyncStore(
      * nothing: saving the config form without edits must not dirty a tracker.
      */
     suspend fun updateTracker(id: String, transform: (TrackerDto) -> TrackerDto) {
-        val updated = dao.updateTrackerAndMarkDirty(id) { existing ->
-            trackerEntity(transform(decodeTracker(existing)), deleted = existing.deleted)
+        val updated = session.withWriteLease {
+            dao.updateTrackerAndMarkDirty(id) { existing ->
+                trackerEntity(transform(decodeTracker(existing)), deleted = existing.deleted)
+            }
         }
         if (updated) afterLocalChange()
     }
 
     /** Soft delete: the row stays until the server confirms, base token and all. */
     suspend fun deleteTracker(id: String) {
-        dao.softDeleteTrackerAndMarkDirty(id)
+        session.withWriteLease { dao.softDeleteTrackerAndMarkDirty(id) }
         afterLocalChange()
     }
 
     suspend fun updateEntry(date: DateString, trackerId: String, value: JsonElement?, completed: Boolean?) {
-        dao.upsertEntryAndMarkDirty(date, trackerId, value?.let(::encodeValue), completed)
+        session.withWriteLease {
+            dao.upsertEntryAndMarkDirty(date, trackerId, value?.let(::encodeValue), completed)
+        }
         afterLocalChange()
     }
 
@@ -195,14 +209,16 @@ class JournalSyncStore(
         val value = patch.value
         val completed = patch.completed
         if (value !is EntryField.Set && completed !is EntryField.Set) return
-        dao.mergeEntryAndMarkDirty(
-            date = date,
-            trackerId = trackerId,
-            setValue = value is EntryField.Set,
-            valueJson = (value as? EntryField.Set)?.value?.let(::encodeValue),
-            setCompleted = completed is EntryField.Set,
-            completed = (completed as? EntryField.Set)?.value,
-        )
+        session.withWriteLease {
+            dao.mergeEntryAndMarkDirty(
+                date = date,
+                trackerId = trackerId,
+                setValue = value is EntryField.Set,
+                valueJson = (value as? EntryField.Set)?.value?.let(::encodeValue),
+                setCompleted = completed is EntryField.Set,
+                completed = (completed as? EntryField.Set)?.value,
+            )
+        }
         afterLocalChange()
     }
 
@@ -212,7 +228,7 @@ class JournalSyncStore(
      * the time a screen reacts to a tap, a pull may have replaced it.
      */
     suspend fun setEntryCompleted(date: DateString, trackerId: String, completed: Boolean?) {
-        dao.setEntryCompletedAndMarkDirty(date, trackerId, completed)
+        session.withWriteLease { dao.setEntryCompletedAndMarkDirty(date, trackerId, completed) }
         afterLocalChange()
     }
 
@@ -239,6 +255,120 @@ class JournalSyncStore(
         } finally {
             syncMutex.unlock()
         }
+    }
+
+    /**
+     * Full reconciliation: a pull with **no watermark at all**, then the
+     * ordinary dirty upload.
+     *
+     * A separate entry point rather than a flag on [triggerSync], because that
+     * method reads the stored watermark and there is no honest way for it to
+     * do otherwise — a "force" flag would be a second meaning for the same
+     * code path, and the one thing the user reaches for this button to fix is a
+     * watermark that has got ahead of the data.
+     *
+     * Ordering follows the PWA's `forceSync`, which is the journal's ordinary
+     * order too: pull first, then upload. The pull leaves locally-dirty rows
+     * untouched, so nothing unsent is lost by going first, and the upload that
+     * follows arbitrates them against a server view this cycle just refreshed.
+     *
+     * **The watermark may go backwards here, and that is safe.** The server
+     * stamps its `serverTime` at wall-clock minus two seconds; a full pull's
+     * stamp can therefore land below the one already stored. The only
+     * consequence is that the next incremental pull re-delivers a few
+     * deliveries it already made, and application is idempotent by protocol —
+     * every row carries the token that decides whether it changes anything.
+     */
+    suspend fun forceSync(): ForceSyncModuleResult {
+        if (!syncMutex.tryLock()) {
+            return ForceSyncModuleResult.Skipped(ForceSyncSkipReason.BUSY)
+        }
+        try {
+            if (!isOnline()) {
+                _syncStatus.value = SyncStatus.GRAY
+                return ForceSyncModuleResult.Skipped(ForceSyncSkipReason.OFFLINE)
+            }
+            isSyncing = true
+            try {
+                return runForceCycle()
+            } catch (cancellation: CancellationException) {
+                throw cancellation
+            } catch (error: Throwable) {
+                debugLog?.log(
+                    TAG,
+                    "force sync error",
+                    buildJsonObject { put("error", describeForLog(error)) },
+                )
+                _syncStatus.value = SyncStatus.RED
+                return ForceSyncModuleResult.Failed(describeForLog(error))
+            } finally {
+                isSyncing = false
+            }
+        } finally {
+            syncMutex.unlock()
+        }
+    }
+
+    private suspend fun runForceCycle(): ForceSyncModuleResult {
+        val clientId = clientId()
+
+        // Before any network call, exactly as in the ordinary cycle: an edit
+        // made during the upload advances past this snapshot and stays dirty.
+        val snapshotTrackerGens = dao.snapshotDirtyTrackers().associate { it.id to it.dirtyGeneration }
+        val snapshotEntryGens = dao.snapshotDirtyEntries()
+            .associate { entryKey(it.date, it.trackerId) to it.dirtyGeneration }
+
+        debugLog?.log(
+            TAG,
+            "force sync start",
+            buildJsonObject {
+                put("dirtyTrackers", snapshotTrackerGens.size)
+                put("dirtyEntries", snapshotEntryGens.size)
+            },
+        )
+
+        // The whole point: null, never the stored watermark.
+        pullServerChanges(clientId, null)
+
+        if (dao.countDirty() == 0) {
+            debugLog?.log(TAG, "force sync complete (no upload)")
+            updateSyncStatus()
+            return ForceSyncModuleResult.Success(ForceSyncCounts.Journal(accepted = 0, conflicts = 0))
+        }
+
+        val pending = buildUpload(clientId)
+        val response = api.syncUpdate(pending.payload.payload)
+        applyUploadResponse(response, pending, snapshotTrackerGens, snapshotEntryGens)
+
+        dao.pruneEntriesBefore(localDataWindowStart(today()))
+        pruneSettledDeletedTrackers()
+
+        val accepted = response.acceptedTrackers.size + response.acceptedEntries.size
+        val conflicts = response.rejectedTrackers.size + response.rejectedEntries.size
+        logRejections(response)
+        debugLog?.log(
+            TAG,
+            "force sync complete",
+            buildJsonObject {
+                put("accepted", accepted)
+                put("conflicts", conflicts)
+            },
+        )
+        updateSyncStatus()
+        return ForceSyncModuleResult.Success(ForceSyncCounts.Journal(accepted, conflicts))
+    }
+
+    /**
+     * Block until no sync cycle is in flight — the server switch's drain.
+     *
+     * Taking the lock is the wait: a cycle already running keeps the mutex
+     * until it finishes, by design (an upload is never abandoned halfway). Its
+     * writes are already fenced by [session], so what this buys is the
+     * certainty that nothing is still between a response and a write when the
+     * wipe transaction opens.
+     */
+    suspend fun awaitQuiescence() {
+        syncMutex.withLock { }
     }
 
     private suspend fun runSyncCycle(): SyncResult {
@@ -303,7 +433,7 @@ class JournalSyncStore(
             debugLog?.log(
                 TAG,
                 "sync error",
-                buildJsonObject { put("message", error.message ?: error::class.simpleName ?: "") },
+                buildJsonObject { put("error", describeForLog(error)) },
             )
             _syncStatus.value = SyncStatus.RED
             return SyncResult(success = false, error = error)
@@ -326,7 +456,11 @@ class JournalSyncStore(
             day.map { (trackerId, entry) -> entryEntity(date, trackerId, entry) }
         }
 
-        dao.applyDelta(trackers, entries, delta.deletedTrackers, requireWatermark(delta.serverTime, "delta"))
+        // The lease spans the write itself. A check in front of it would be a
+        // check-then-act: admitted, suspended, wiped, and then landing anyway.
+        session.withWriteLease {
+            dao.applyDelta(trackers, entries, delta.deletedTrackers, requireWatermark(delta.serverTime, "delta"))
+        }
 
         // Normalize whatever legacy shapes the server just handed us. Changed
         // trackers upload in THIS cycle but only clear next: normalization runs
@@ -464,28 +598,31 @@ class JournalSyncStore(
             snapshotEntryGens = snapshotEntryGens,
         )
 
-        dao.applyUploadResponse(
-            plan = UploadResponseApply(
-                trackerStamps = response.acceptedTrackers.map { TrackerStamp(it.id, it.lastModifiedAt) },
-                entryStamps = response.acceptedEntries.map { EntryStamp(it.date, it.trackerId, it.lastModifiedAt) },
-                trackerAdoptions = trackerAdoptions,
-                entryAdoptions = entryAdoptions,
-                settledDeletes = settledDeletes,
-                trackerClears = (snapshotTrackerGens.keys - cleared.trackers.keys.toSet())
-                    .map { TrackerDirtyClear(it, snapshotTrackerGens.getValue(it)) },
-                entryClears = (snapshotEntryGens.keys - cleared.entries.keys.toSet())
-                    .map { EntryDirtyClear(entryKeyDate(it), entryKeyTrackerId(it), snapshotEntryGens.getValue(it)) },
-                watermark = requireWatermark(response.serverTime, "update"),
-            ),
-            restampTracker = { current, stamp ->
-                trackerEntity(
-                    tracker = decodeTracker(current).copy(lastModifiedAt = stamp),
-                    deleted = current.deleted,
-                    isDirty = current.isDirty,
-                    dirtyGeneration = current.dirtyGeneration,
-                )
-            },
-        )
+        // See [pullServerChanges]: the lease spans the write.
+        session.withWriteLease {
+            dao.applyUploadResponse(
+                plan = UploadResponseApply(
+                    trackerStamps = response.acceptedTrackers.map { TrackerStamp(it.id, it.lastModifiedAt) },
+                    entryStamps = response.acceptedEntries.map { EntryStamp(it.date, it.trackerId, it.lastModifiedAt) },
+                    trackerAdoptions = trackerAdoptions,
+                    entryAdoptions = entryAdoptions,
+                    settledDeletes = settledDeletes,
+                    trackerClears = (snapshotTrackerGens.keys - cleared.trackers.keys.toSet())
+                        .map { TrackerDirtyClear(it, snapshotTrackerGens.getValue(it)) },
+                    entryClears = (snapshotEntryGens.keys - cleared.entries.keys.toSet())
+                        .map { EntryDirtyClear(entryKeyDate(it), entryKeyTrackerId(it), snapshotEntryGens.getValue(it)) },
+                    watermark = requireWatermark(response.serverTime, "update"),
+                ),
+                restampTracker = { current, stamp ->
+                    trackerEntity(
+                        tracker = decodeTracker(current).copy(lastModifiedAt = stamp),
+                        deleted = current.deleted,
+                        isDirty = current.isDirty,
+                        dirtyGeneration = current.dirtyGeneration,
+                    )
+                },
+            )
+        }
     }
 
     /**

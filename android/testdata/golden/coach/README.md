@@ -21,6 +21,18 @@ Hand-written test JSON pins what we think the protocol is; these pin what it is.
 `sync-post-tombstone-roundtrip.json` is the one file holding a request and its
 response together: an accepted delete shows up as the *absence* of the key from
 the merged day, which is unreadable without the request that asked for it.
+| `workout-status-idle-both-available.json` | hooks configured, neither fired |
+| `workout-status-start-fired.json` | start succeeded (`exit_code: 0`), with a payload |
+| `workout-status-start-failed.json` | start ran and failed (`exit_code: 3`) |
+| `workout-status-end-pending.json` | end fired, still running (`exit_code: null`) |
+| `workout-status-none-available.json` | no hooks configured on the server |
+
+
+The five `workout-status-*` files are an availability x result matrix. A null
+`exit_code` is the server's marker for a hook still running, not "unknown", so
+it needs a fixture of its own; the values are invented (`fixture-` prefixed)
+because hook payloads are free-form.
+
 
 ## Provenance
 

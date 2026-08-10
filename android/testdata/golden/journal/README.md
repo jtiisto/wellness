@@ -15,6 +15,15 @@ Hand-written test JSON pins what we think the protocol is; these pin what it is.
 | `update-request.json` | the exact body of an accepted `POST /sync/update` |
 | `update-response-accepted.json` | that upload's response |
 | `update-response-rejected.json` | the same body replayed, so every base token is stale |
+| `sync-status-value.json` | `GET /sync/status` with a watermark present |
+| `sync-status-null.json` | the same endpoint with **no** journal rows yet |
+
+
+The two `sync-status-*` files exist as a pair for one reason: FastAPI emits
+`{"lastModified": null}`, it does not omit the key. Omitting optional fields is
+*our* upload convention and is not symmetric — the decoder has to accept an
+explicit null from this endpoint, and only a fixture proves it does.
+
 
 ## Provenance
 

@@ -1,0 +1,13 @@
+{
+  "start": {
+    "fired_at": "2026-08-09T10:15:00.000000Z",
+    "exit_code": 0,
+    "data": {
+      "fixture_note": "fixture-hook-payload"
+    }
+  },
+  "actions_available": {
+    "start": true,
+    "end": true
+  }
+}

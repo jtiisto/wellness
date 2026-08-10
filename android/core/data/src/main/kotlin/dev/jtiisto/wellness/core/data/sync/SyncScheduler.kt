@@ -217,9 +217,11 @@ class SyncScheduler(
 
     private fun handleError(error: Throwable) {
         val networkError = isNetworkError(error)
+        // The class name, never `message`: a Ktor ResponseException carries the
+        // whole response body in its message, and this log is shareable.
         debugLog?.log(logTag, "sync error", buildJsonObject {
             put("errorType", if (networkError) "network" else "server")
-            put("message", error.message ?: error::class.simpleName ?: "")
+            put("error", error::class.simpleName ?: "error")
         })
         // Network errors stay silent — the status indicator already showed it.
         if (!networkError) onServerError(error)

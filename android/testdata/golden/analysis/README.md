@@ -40,6 +40,14 @@ position** (`<img src=x onerror=…>` / `<b onmouseover=…>`).
 That last one is the point of the file. The renderer has no HTML path at all —
 raw HTML becomes inert `Text` carrying its own source lexeme — and this fixture
 is what proves a stored report cannot smuggle markup into the render tree.
+| `submit-request-with-location.json` | the exact `POST /reports` body when the user typed a location |
+| `submit-request-without-location.json` | the same body with the key **absent**, not null |
+
+
+The two `submit-request-*` files are byte-compared against what the client
+actually sends. `location` must be *omitted* when empty rather than sent as
+null: a persisted null is a value the server would store.
+
 
 ## Provenance
 

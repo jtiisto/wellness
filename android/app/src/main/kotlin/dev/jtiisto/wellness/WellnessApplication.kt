@@ -1,13 +1,7 @@
 package dev.jtiisto.wellness
 
 import android.app.Application
-import dev.jtiisto.wellness.core.data.analysis.AnalysisStore
-import dev.jtiisto.wellness.core.data.di.CoachScheduler
-import dev.jtiisto.wellness.core.data.di.JournalScheduler
 import dev.jtiisto.wellness.core.data.di.coreDataModule
-import dev.jtiisto.wellness.core.data.sync.ConnectivityMonitor
-import dev.jtiisto.wellness.core.data.sync.SyncOrchestrator
-import dev.jtiisto.wellness.core.data.sync.SyncScheduler
 import dev.jtiisto.wellness.di.appModule
 import dev.jtiisto.wellness.feature.analysis.di.analysisModule
 import dev.jtiisto.wellness.feature.coach.di.coachModule
@@ -33,19 +27,9 @@ class WellnessApplication : Application() {
             )
         }.koin
 
-        // Process-lifetime sync plumbing: connectivity first, so the
-        // orchestrator's first foreground event already sees the right state,
-        // then every module scheduler, then the orchestrator itself.
-        koin.get<ConnectivityMonitor>().start()
-        val orchestrator = koin.get<SyncOrchestrator>()
-        orchestrator.register(koin.get<SyncScheduler>(JournalScheduler))
-        orchestrator.register(koin.get<SyncScheduler>(CoachScheduler))
-        orchestrator.start()
-
-        // Analysis owns a poll rather than a scheduler, so it observes the
-        // process lifecycle itself. Created here rather than when the tab opens:
-        // a foreground event that arrives before the first visit has to be
-        // latched, and there is nothing to latch it if the store does not exist.
-        koin.get<AnalysisStore>().start()
+        // Resolves which server this process talks to and, only then, starts
+        // anything that could talk to it. A failure leaves everything unstarted
+        // and the UI on a recovery screen; see [bootWellness].
+        bootWellness(koin)
     }
 }

@@ -10,7 +10,9 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -132,7 +134,24 @@ class AnalysisStore(
     private val controlContext: CoroutineContext,
     private val now: () -> Long = System::currentTimeMillis,
 ) {
-    private val control = scope + controlContext
+    /**
+     * A job of this store's own, parented to the app scope.
+     *
+     * Everything below launches into it, which is what makes
+     * [stopAndJoin] able to cancel exactly this module's work — the app scope
+     * is shared with both sync schedulers and cancelling it would take them
+     * down too.
+     */
+    private val controlJob = SupervisorJob(scope.coroutineContext[Job])
+
+    private val control = scope + controlContext + controlJob
+
+    /**
+     * Set by [stopAndJoin]. Every entry point checks it, so a tap that lands
+     * between the switch confirmation and the process exiting starts nothing.
+     */
+    @Volatile
+    private var stopped = false
 
     private val _state = MutableStateFlow(AnalysisState())
     val state: StateFlow<AnalysisState> = _state.asStateFlow()
@@ -178,10 +197,34 @@ class AnalysisStore(
         lifecycleRegistered = true
         ProcessLifecycleOwner.get().lifecycle.addObserver(
             object : DefaultLifecycleObserver {
-                override fun onStart(owner: LifecycleOwner) = onForeground()
-                override fun onStop(owner: LifecycleOwner) = onBackground()
+                override fun onStart(owner: LifecycleOwner) {
+                    if (!stopped) onForeground()
+                }
+
+                override fun onStop(owner: LifecycleOwner) {
+                    if (!stopped) onBackground()
+                }
             },
         )
+    }
+
+    /**
+     * Bring the module to a standstill, and do not return until it is — the
+     * server switch's third quiescence step.
+     *
+     * Three things in order, and the order is the point. The flag goes up
+     * first, so nothing new is accepted while we are tearing down; the
+     * lifecycle observer reads the same flag, so a backgrounding event racing
+     * the switch cannot restart the poll behind us. Then the store's own job is
+     * cancelled and **joined**: a poll tick that has already returned from Ktor
+     * has no suspension point left before its commit, so returning before it
+     * finishes would put us back exactly where the gate had to be invented.
+     *
+     * Terminal. There is no restart; the process is on its way out.
+     */
+    suspend fun stopAndJoin() {
+        stopped = true
+        controlJob.cancelAndJoin()
     }
 
     // ---- entry points ------------------------------------------------------
@@ -196,6 +239,7 @@ class AnalysisStore(
      * query list empty for the lifetime of the page.
      */
     suspend fun initialize() {
+        if (stopped) return
         val deferred = withContext(controlContext) {
             initDeferred ?: control.async { runInitialize() }.also { initDeferred = it }
         }
@@ -250,6 +294,7 @@ class AnalysisStore(
      * and two taps fit comfortably before one of those.
      */
     fun submit(queryId: String, location: String?) {
+        if (stopped) return
         control.launch {
             if (_state.value.submitInFlight) return@launch
             _state.update { it.copy(submitInFlight = true) }
@@ -290,6 +335,7 @@ class AnalysisStore(
      * query, and must not put that query's result on screen either.
      */
     fun openReport(id: Long) {
+        if (stopped) return
         control.launch {
             viewIntentGeneration += 1
             openGeneration += 1
@@ -377,6 +423,7 @@ class AnalysisStore(
      * writer would put the first one back.
      */
     fun delete(id: Long) {
+        if (stopped) return
         control.launch {
             historyMutex.withLock {
                 val remaining = _state.value.history.filterNot { it.id == id }

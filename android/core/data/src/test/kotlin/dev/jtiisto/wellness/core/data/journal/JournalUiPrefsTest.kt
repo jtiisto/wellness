@@ -6,6 +6,7 @@ import dev.jtiisto.wellness.core.data.db.JournalTrackerEntity
 import dev.jtiisto.wellness.core.data.network.JournalApi
 import dev.jtiisto.wellness.core.data.network.ServerConfig
 import dev.jtiisto.wellness.core.data.network.buildHttpClient
+import dev.jtiisto.wellness.core.data.sync.ServerSessionGate
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
 import io.ktor.client.engine.mock.toByteArray
@@ -255,6 +256,7 @@ class JournalUiPrefsTest {
 
         val store: JournalSyncStore by lazy {
             JournalSyncStore(
+                session = ServerSessionGate(),
                 dao = dao,
                 api = api,
                 isOnline = { true },

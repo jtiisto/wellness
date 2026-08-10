@@ -38,6 +38,9 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import dev.jtiisto.wellness.bootWellness
+import dev.jtiisto.wellness.core.data.network.ServerBootstrap
+import dev.jtiisto.wellness.core.data.network.ServerResolution
 import dev.jtiisto.wellness.core.data.sync.SyncErrorEvents
 import dev.jtiisto.wellness.core.ui.motion.WellnessMotion
 import dev.jtiisto.wellness.core.ui.theme.LocalModuleAccent
@@ -49,6 +52,8 @@ import dev.jtiisto.wellness.feature.coach.CoachScreen
 import dev.jtiisto.wellness.feature.journal.JournalTab
 import dev.jtiisto.wellness.feature.trends.ui.TrendsScreen
 import dev.jtiisto.wellness.ui.tools.ToolsScreen
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import org.koin.compose.getKoin
 import org.koin.compose.koinInject
 
 private const val JOURNAL_ROUTE = "journal"
@@ -75,6 +80,17 @@ private val topLevelDestinations = listOf(
 @Composable
 fun WellnessApp() {
     WellnessTheme {
+        val koin = getKoin()
+        val resolution by koin.get<ServerBootstrap>().state.collectAsStateWithLifecycle()
+        // Fail-closed: with no resolved server there is no HTTP client and no
+        // scheduler to render a tab against, and falling back to the built-in
+        // address would sync the previous server's data to it. See
+        // [ServerRecoveryScreen].
+        (resolution as? ServerResolution.Failed)?.let { failure ->
+            ServerRecoveryScreen(message = failure.message, onRetry = { bootWellness(koin) })
+            return@WellnessTheme
+        }
+
         val navController = rememberNavController()
         val backStackEntry by navController.currentBackStackEntryAsState()
         val currentDestination = backStackEntry?.destination
@@ -163,7 +179,7 @@ fun WellnessApp() {
                                 COACH_ROUTE -> CoachScreen()
                                 TRENDS_ROUTE -> TrendsScreen()
                                 ANALYSIS_ROUTE -> AnalysisScreen(snackbarHostState)
-                                TOOLS_ROUTE -> ToolsScreen()
+                                TOOLS_ROUTE -> ToolsScreen(snackbarHostState)
                                 else -> StubScreen(destination.label)
                             }
                         }

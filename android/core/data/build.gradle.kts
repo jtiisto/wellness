@@ -61,8 +61,10 @@ dependencies {
 
     implementation(libs.koin.android)
     implementation(libs.androidx.lifecycle.process)
-    // WorkManager arrives with Phase 2's background flush — declaring it now
-    // would already run its Initializer at app startup.
+    // WorkManager: the one-shot flush enqueued when the app backgrounds with
+    // dirty rows (plan §3). Its startup Initializer is why this waited until
+    // there was a Worker for it to initialize.
+    implementation(libs.androidx.work.runtime)
 
     testImplementation(libs.ktor.client.mock)
 
