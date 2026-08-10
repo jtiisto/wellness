@@ -1,15 +1,17 @@
 # HR Wire Protocol v1 (cross-repo contract)
 
-**Status: DRAFT — awaiting approval.**
+**Status: SUPERSEDED (2026-08-10).** The server side is implemented; the protocol's
+authoritative home is now the server repo's `~/dev/health/wellness/docs/ARCHITECTURE.md`
+("HR: Idempotent Batch Ingestion"). This file stays as the Android-side working reference,
+but on any disagreement ARCHITECTURE.md wins.
 
 The wire contract between the wellness Android client (this repo, `feature/coach-pulse`) and the
 wellness server's `hr` module (implemented in `~/dev/health/wellness`, planned in that repo's
 `plans/hr-module.md`). Parent feature spec: `specs/coach-heart-rate.md`.
 
-**This file is the authoritative contract** until the server work lands, at which point the server
-repo's `docs/ARCHITECTURE.md` gains an HR section and takes over (matching how every other protocol
-is documented). Golden fixtures pin the byte-level shapes in **both** repos — Android
-`testdata/golden/hr/`, server pytest fixtures — and any protocol change updates both in the same
+Golden fixtures pin the byte-level shapes in **both** repos — Android
+`testdata/golden/hr/` (pending its phase 1; copy the bytes from the server's
+`test/hr/golden/`), server pytest fixtures — and any protocol change updates both in the same
 breath. Fixtures are synthetic only, never copied from live data.
 
 ## Conventions
@@ -145,6 +147,9 @@ DDL and migrations live in the server plan (`~/dev/health/wellness/plans/hr-modu
 ## Canonical example payloads
 
 Checked in as golden fixtures in both repos; shown here for review. All values synthetic.
+Calendar dates are deliberately far-future (2030): the server repo's personal-data guard
+scans staged literals against the live health databases, and any plausible past date can
+collide with a real lab/scan/log date. Keep it that way when editing these payloads.
 
 `samples-batch-request.json`
 ```json
@@ -168,9 +173,16 @@ Checked in as golden fixtures in both repos; shown here for review. All values s
   {"sessionId":"11111111-2222-3333-4444-555555555555","deviceId":"AA:BB:CC:DD:EE:FF","startedAtMs":1769999990000,"workoutDate":"2030-01-03","workoutSessionId":42}]}
 ```
 
-`batch-response.json`
+`ingest-response.json` — the response shape shared by the two INSERT OR IGNORE
+endpoints (samples, set-events); both canonical requests above happen to carry
+3 rows, so one fixture serves both:
 ```json
 {"accepted":3,"duplicates":0,"totalReceived":3}
+```
+
+`upsert-response.json` — the sessions endpoint's distinct response shape:
+```json
+{"upserted":1,"totalReceived":1}
 ```
 
 ## Open questions

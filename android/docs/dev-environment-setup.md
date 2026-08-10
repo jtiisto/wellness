@@ -113,18 +113,30 @@ emulator -avd Pixel-Dev
 
 Option B — Start from Android Studio Device Manager (click the play button).
 
-### 2.4 Enable ADB over TCP on the Emulator
+### 2.4 Expose the Emulator's ADB Port via Port Proxy
 
-In a PowerShell or CMD window on Windows:
+The emulator's ADB bridge binds to `127.0.0.1:5555` (loopback only) on the Windows host. What
+makes it reachable from the Linux server is a **netsh port proxy** that forwards the external
+interface to loopback (one-time setup, Administrator PowerShell):
+
+```powershell
+netsh interface portproxy add v4tov4 listenport=5555 listenaddress=0.0.0.0 connectport=5555 connectaddress=127.0.0.1
+# Verify:
+netsh interface portproxy show all
+```
+
+`adb tcpip 5555` is **not** part of this path — the proxy talks straight to the emulator's
+qemu ADB bridge, no device-side TCP mode needed.
+
+**Boot-order trap:** the proxy's wildcard bind makes port 5555 look busy when the emulator
+starts, so the emulator may skip to the next port pair (console 5556 / ADB 5557) — and the proxy
+then forwards to a port where nothing listens. See "ADB connects but device stays offline" in
+Troubleshooting.
 
 ```powershell
 # Verify emulator is running and visible to local ADB
 adb devices
-# Should show: emulator-5554   device
-
-# Tell the emulator to also listen on TCP port 5555
-adb tcpip 5555
-# Output: restarting in TCP mode port: 5555
+# Should show: emulator-5554   device   (emulator-5556 means the port pair shifted — see Troubleshooting)
 ```
 
 ### 2.5 Allow ADB Through Windows Firewall
@@ -239,9 +251,30 @@ For these cases, you can open the project in Android Studio on Windows by clonin
 
 ### ADB connection refused
 - Verify emulator is running on Windows (`adb devices` on Windows should show it)
-- Re-run `adb tcpip 5555` on Windows
-- Check firewall rule is active
+- Check the firewall rule and the port proxy are active (`netsh interface portproxy show all`)
 - Verify Tailscale IPs can ping each other: `ping 100.x.x.x`
+
+### ADB connects but device stays offline (diagnosed 2026-08-10)
+Symptoms: `adb connect` says "failed to connect" yet `adb devices` on Linux lists the address as
+`offline`, retries never help, and on Windows `adb devices` shows a ghost `emulator-5554  offline`
+alongside a live `emulator-5556  device`.
+
+Cause: the port proxy held `0.0.0.0:5555` when the emulator started, so the emulator considered
+the port busy and took the next pair (console 5556 / ADB **5557**). The proxy now forwards to
+`127.0.0.1:5555` where nothing listens — it accepts the TCP connection and drops the relay, which
+the Linux side reads as a permanently-offline device. (The ghost `emulator-5554` entry is the
+Windows ADB server probing loopback 5555 and finding the proxy's self-loop.)
+
+Fix (Administrator PowerShell) — retarget the proxy at the live emulator's actual ADB port
+(console port shown by `adb devices` + 1):
+
+```powershell
+netsh interface portproxy set v4tov4 listenport=5555 listenaddress=0.0.0.0 connectport=5557 connectaddress=127.0.0.1
+```
+
+Then `adb connect` from Linux works immediately. After a reboot or emulator restart the pair may
+shift back to 5554/5555 — retarget accordingly. Red herrings that do NOT fix this: `adb tcpip`,
+`adb kill-server` on either side, reconnect loops.
 
 ### ADB unauthorized
 - Check the emulator screen for an "Allow USB debugging?" prompt and accept it
