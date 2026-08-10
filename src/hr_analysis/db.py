@@ -62,7 +62,7 @@ def _query(sql, params=(), db_path=None):
         raise HrDataUnavailable(_explain(path, exc)) from exc
 
 
-def list_sessions(limit=20, db_path=None):
+def list_sessions(limit=20, *, start_ms=None, end_ms=None, db_path=None):
     """Recent sessions as (session_id, device_id, start_ms, end_ms, beats, workout_date).
 
     Derived from `intervals`, not from the `sessions` table: the batches arrive
@@ -71,11 +71,27 @@ def list_sessions(limit=20, db_path=None):
     analysable data. The LEFT JOIN only decorates the row with the coach-side
     `workout_date` when it happens to be there.
 
+    `start_ms`/`end_ms` select whole sessions that OVERLAP that window (HAVING
+    over the aggregates), rather than filtering individual beats: a session is
+    the unit a caller goes on to analyse, and a per-beat WHERE would report a
+    partial `beats` count and a start/end cropped to the window for a session
+    whose analysis would then cover all of it. Filtering before LIMIT also keeps
+    "the 5 most recent sessions in this window" meaning what it says.
+
     Rows come back as `sqlite3.Row`, so the aggregates are aliased and a caller
     may read them either positionally or by name.
     """
+    having, params = [], []
+    if start_ms is not None:
+        having.append("MAX(i.timestamp_ms) >= ?")
+        params.append(start_ms)
+    if end_ms is not None:
+        having.append("MIN(i.timestamp_ms) <= ?")
+        params.append(end_ms)
+    params.append(limit)
+
     return _query(
-        """
+        f"""
         SELECT i.session_id                AS session_id,
                i.device_id                 AS device_id,
                MIN(i.timestamp_ms)         AS start_ms,
@@ -85,10 +101,30 @@ def list_sessions(limit=20, db_path=None):
         FROM intervals i
         LEFT JOIN sessions s ON s.session_id = i.session_id
         GROUP BY i.session_id
+        {"HAVING " + " AND ".join(having) if having else ""}
         ORDER BY MIN(i.timestamp_ms) DESC
         LIMIT ?
         """,
-        (limit,),
+        params,
+        db_path,
+    )
+
+
+def session_devices(session_id, db_path=None):
+    """Distinct (device_id, sensor_type) pairs that contributed beats to a session.
+
+    Provenance for a report header. Read off `intervals` for the same reason the
+    listing is: it is the table that actually holds the capture, so this answers
+    "what produced these beats" even when no `sessions` row was ever uploaded.
+    """
+    return _query(
+        """
+        SELECT DISTINCT device_id, sensor_type
+        FROM intervals
+        WHERE session_id = ?
+        ORDER BY device_id, sensor_type
+        """,
+        (session_id,),
         db_path,
     )
 

@@ -55,7 +55,8 @@ wellness/
 │   └── manifest.json       # PWA manifest
 ├── mcp_servers/            # MCP servers for AI data access
 │   ├── journal_mcp/        # Read-only journal queries
-│   └── coach_mcp/          # Read/write workout data
+│   ├── coach_mcp/          # Read/write workout data
+│   └── hr_mcp/             # Read-only heart-rate sessions + analysis
 ├── test/                   # Test suites
 │   ├── test_*.py           # Top-level unit tests
 │   ├── journal/, coach/    # Per-module unit + integration tests

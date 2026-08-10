@@ -13,6 +13,7 @@ from hr_analysis.db import (
     latest_session,
     list_sessions,
     load_beats,
+    session_devices,
 )
 
 from .conftest import T0, beat_rows
@@ -141,6 +142,74 @@ class TestListSessions:
     def test_empty_database_lists_nothing(self, hr_db):
         db_path, _ = hr_db
         assert list_sessions(db_path=db_path) == []
+
+
+@pytest.mark.unit
+class TestListSessionsWindow:
+    """start_ms/end_ms select whole sessions that OVERLAP the window.
+
+    Added for the MCP's session-listing tool. Overlap rather than a per-beat
+    WHERE: the caller picks a session out of this listing and then analyses all
+    of it, so a partial `beats` count and a start/end cropped to the window
+    would describe something the next call does not do.
+    """
+
+    @pytest.fixture
+    def two_sessions(self, hr_db):
+        db_path, insert = hr_db
+        insert(intervals=(beat_rows("older", 3)
+                          + beat_rows("newer", 3, t0=T0 + 500_000)))
+        return db_path
+
+    def test_start_bound_drops_sessions_that_ended_earlier(self, two_sessions):
+        assert [row[0] for row in list_sessions(start_ms=T0 + 500_000, db_path=two_sessions)] \
+            == ["newer"]
+
+    def test_end_bound_drops_sessions_that_started_later(self, two_sessions):
+        assert [row[0] for row in list_sessions(end_ms=T0 + 400_000, db_path=two_sessions)] \
+            == ["older"]
+
+    def test_gap_between_sessions_matches_neither(self, two_sessions):
+        assert list_sessions(start_ms=T0 + 100_000, end_ms=T0 + 400_000,
+                             db_path=two_sessions) == []
+
+    def test_partial_overlap_returns_the_whole_session(self, two_sessions):
+        """The window starts mid-capture; the row still reports the full span
+        and every beat, because that is what analysing it would cover."""
+        (sid, _dev, start, end, beats, _wd), = list_sessions(
+            start_ms=T0 + 1600, end_ms=T0 + 100_000, db_path=two_sessions)
+        assert (sid, beats) == ("older", 3)
+        assert (start, end) == (T0 + 800, T0 + 2400)
+
+    def test_window_edges_are_inclusive(self, two_sessions):
+        """A window that merely touches a session's first or last beat matches
+        (HAVING uses >= / <=, pinned here so a future < doesn't slip in)."""
+        assert [row[0] for row in list_sessions(end_ms=T0 + 800,
+                                                db_path=two_sessions)] == ["older"]
+        assert [row[0] for row in list_sessions(start_ms=T0 + 2400,
+                                                end_ms=T0 + 2400,
+                                                db_path=two_sessions)] == ["older"]
+
+    def test_window_filters_before_the_limit_applies(self, two_sessions):
+        """LIMIT after HAVING, so "the most recent session in this window" is
+        the most recent *matching* one, not a match that survived the cap."""
+        assert [row[0] for row in list_sessions(limit=1, end_ms=T0 + 400_000,
+                                                db_path=two_sessions)] == ["older"]
+
+
+@pytest.mark.unit
+class TestSessionDevices:
+    def test_returns_distinct_device_sensor_pairs(self, hr_db):
+        db_path, insert = hr_db
+        insert(intervals=(beat_rows("s-1", 3)
+                          + beat_rows("s-1", 3, device_id="dev-b", t0=T0 + 10_000)))
+        assert [tuple(row) for row in session_devices("s-1", db_path=db_path)] == [
+            ("dev-a", "garmin_hrm"), ("dev-b", "garmin_hrm")]
+
+    def test_unknown_session_has_no_devices(self, hr_db):
+        db_path, insert = hr_db
+        insert(intervals=beat_rows("s-1", 3))
+        assert session_devices("nope", db_path=db_path) == []
 
 
 @pytest.mark.unit

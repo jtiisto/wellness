@@ -174,12 +174,13 @@ The Analysis module invokes Claude Code CLI in a specific working directory so i
 
 ## MCP Server Setup
 
-The application includes two MCP servers that provide AI tools with structured access to wellness data:
+The application includes three MCP servers that provide AI tools with structured access to wellness data:
 
 - **Journal MCP** (`mcp_servers/journal_mcp/`) - Read-only SQL access to journal tracking data
 - **Coach MCP** (`mcp_servers/coach_mcp/`) - Read/write access to workout plans, read-only access to logs
+- **HR MCP** (`mcp_servers/hr_mcp/`) - Read-only access to captured heart-rate sessions and their analysis
 
-Both servers use the FastMCP framework and communicate over stdio transport.
+All three use the FastMCP framework and communicate over stdio transport.
 
 ### Claude Code
 
@@ -203,12 +204,22 @@ Add the MCP servers to your Claude Code settings file at `.claude/settings.local
       "env": {
         "COACH_DB_PATH": "/absolute/path/to/wellness/data/coach.db"
       }
+    },
+    "hr-localdb": {
+      "command": "python3",
+      "args": ["-m", "hr_mcp"],
+      "cwd": "/absolute/path/to/wellness/mcp_servers",
+      "env": {
+        "HR_DB_PATH": "/absolute/path/to/wellness/data/hr.db"
+      }
     }
   }
 }
 ```
 
-The `cwd` must point to the `mcp_servers/` directory so Python can resolve the module packages. The `env` overrides are optional - both servers default to `../../data/<module>.db` relative to their own location.
+The `cwd` must point to the `mcp_servers/` directory so Python can resolve the module packages. The `env` overrides are optional - each server defaults to `../../data/<module>.db` relative to its own location.
+
+The HR server starts even when `hr.db` does not exist yet (HR history starts empty — the file appears when the server accepts its first capture batch); its tools then report that in a message rather than failing to launch.
 
 #### Verifying MCP tools
 
@@ -219,7 +230,7 @@ claude
 > /mcp
 ```
 
-You should see `journal-localdb` and `coach-localdb` listed with their tools (e.g., `execute_sql_query`, `list_trackers` for journal; `get_workout_plan`, `set_workout_plan` for coach).
+You should see `journal-localdb`, `coach-localdb`, and `hr-localdb` listed with their tools (e.g., `execute_sql_query`, `list_trackers` for journal; `get_workout_plan`, `set_workout_plan` for coach; `list_sessions`, `get_session_report` for HR).
 
 ### Gemini CLI
 
@@ -242,6 +253,14 @@ Add MCP servers to your Gemini CLI settings file at `~/.gemini/settings.json`:
       "cwd": "/absolute/path/to/wellness/mcp_servers",
       "env": {
         "COACH_DB_PATH": "/absolute/path/to/wellness/data/coach.db"
+      }
+    },
+    "hr-localdb": {
+      "command": "python3",
+      "args": ["-m", "hr_mcp"],
+      "cwd": "/absolute/path/to/wellness/mcp_servers",
+      "env": {
+        "HR_DB_PATH": "/absolute/path/to/wellness/data/hr.db"
       }
     }
   }
@@ -291,14 +310,29 @@ Write tools (plans only — logs are never writable via MCP):
 
 Unlike the Journal MCP, the Coach MCP exposes no raw SQL tools — all access goes through the structured tools above. It opens the database in read-only mode for queries and read-write mode only for plan modifications.
 
+#### HR MCP tools
+
+Read-only throughout — the `hr` module's batch endpoints are the only writer of `hr.db`:
+
+| Tool | Description |
+|------|-------------|
+| `list_sessions` | Captured sessions (newest first), optionally limited to a time window |
+| `get_session_report` | Full analysis of one session: HR + zones, RMSSD, DFA alpha1, work/rest bouts, quality |
+| `get_latest_session_report` | The same report for the most recent capture |
+| `get_aligned_timeseries` | Compact HR/quality buckets, for reading a session's shape when bout detection is uncertain |
+| `get_vo2_summary` | Planned VO2/HIIT intervals vs. what the capture actually shows |
+
+The metrics come from the shared `src/hr_analysis` package, so these tools and the `python -m hr_analysis` CLI report the same numbers.
+
 ### Environment Variables
 
-Both MCP servers accept environment variables to override database paths:
+The MCP servers accept environment variables to override database paths:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `JOURNAL_DB_PATH` | `mcp_servers/../data/journal.db` | Path to journal SQLite database |
 | `COACH_DB_PATH` | `mcp_servers/../data/coach.db` | Path to coach SQLite database |
+| `HR_DB_PATH` | `mcp_servers/../data/hr.db` | Path to HR SQLite database (shared with the server and the analysis CLI) |
 
 ### Trends module (server)
 
@@ -355,7 +389,7 @@ Chrome on Android identifies PWAs by scope on the same origin. If Wellness and S
 ### MCP server errors
 
 - Ensure `fastmcp` is installed: `pip install fastmcp`
-- Verify the database files exist in `data/` (they are created on first server start)
+- Verify the database files exist in `data/` (they are created on first server start — except `hr.db`, which appears with the first captured heart-rate batch; the HR tools say so rather than failing)
 - Check that `cwd` in MCP config points to the `mcp_servers/` directory, not the individual server directory
 - Test a server directly: `cd mcp_servers && python3 -m journal_mcp`
 
