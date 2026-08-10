@@ -208,7 +208,7 @@ class TestInstantFormattingRoutedThroughHelpers:
     trip this — the absence of `.isoformat()` is the durable signal that no new
     instant-format drift (the +00:00 vs Z bug) has crept back in."""
 
-    @pytest.mark.parametrize("module_file", ["coach.py", "journal.py"])
+    @pytest.mark.parametrize("module_file", ["coach.py", "journal.py", "hr.py"])
     def test_no_inline_isoformat(self, module_file):
         source = (_SRC_MODULES / module_file).read_text()
         assert ".isoformat()" not in source, (
