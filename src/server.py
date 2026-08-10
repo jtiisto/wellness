@@ -319,8 +319,8 @@ def create_app(db_path_overrides=None):
     called with no argument and resolves its own read-only sources via config
     helpers. Adding a module is a config-only change.
 
-    ``db_path_overrides`` maps a module id ("journal"/"coach"/"analysis") to a
-    DB path that supersedes the configured one. Production calls
+    ``db_path_overrides`` maps a module id ("journal"/"coach"/"analysis"/"hr")
+    to a DB path that supersedes the configured one. Production calls
     ``create_app()`` with no overrides; tests pass per-test temp paths so each
     test gets a fully isolated app+DB without poking module globals. (DB-less
     modules follow the owners' env vars, so they need no override entry.)
@@ -356,10 +356,15 @@ def create_app(db_path_overrides=None):
 
     @inner_app.get("/api/modules")
     def list_modules():
-        """Return list of enabled modules for the frontend."""
+        """Return list of enabled modules for the frontend.
+
+        Headless modules (API-only, no PWA tab — e.g. hr) are mounted above but
+        filtered out here: they carry no name/icon/color and the frontend has no
+        component to load for them.
+        """
         return JSONResponse(content=[
             {"id": m["id"], "name": m["name"], "icon": m["icon"], "color": m["color"]}
-            for m in enabled_modules
+            for m in enabled_modules if not m.get("headless")
         ])
 
     inner_app.include_router(static_router)

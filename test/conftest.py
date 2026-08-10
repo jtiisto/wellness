@@ -26,6 +26,38 @@ sys.path.insert(0, str(_MCP_DIR))
 sys.path.insert(0, str(Path(__file__).parent))
 from seeds import seed_coach_plan  # noqa: E402
 
+_REAL_DATA_DIR = Path(__file__).parent.parent / "data"
+
+
+@pytest.fixture(scope="session", autouse=True)
+def real_data_dir_gains_no_databases():
+    """No test run may create a database in the real data/ directory.
+
+    Every app-construction path in the tests must point every module's DB at a
+    temp path. The hr module's build broke this twice in one day — the e2e
+    conftest and test_app_lifecycle's subprocess env each hand-list module DB
+    paths, and neither knew about HR_DB_PATH, so create_app() silently resolved
+    the module's real data/ default. This guard turns that silent leak into a
+    session-level failure for the next new module.
+
+    Only new *.db files are checked: existing databases legitimately gain WAL
+    sidecars if a dev server (bin/server.sh --test) runs alongside a test
+    session, so watching for those would flake.
+    """
+    def db_files():
+        return {p.name for p in _REAL_DATA_DIR.glob("*.db")} \
+            if _REAL_DATA_DIR.exists() else set()
+
+    before = db_files()
+    yield
+    leaked = db_files() - before
+    assert not leaked, (
+        f"Test session created database(s) in the real data/ dir: {sorted(leaked)}. "
+        "Some app-construction path is missing a module's *_DB_PATH env var or "
+        "db_path_overrides entry (check test/conftest.py, test/e2e_browser/"
+        "conftest.py, and test_app_lifecycle's subprocess env)."
+    )
+
 
 @pytest.fixture(scope="function")
 def tmp_journal_db(tmp_path):
@@ -46,7 +78,14 @@ def tmp_analysis_db(tmp_path):
 
 
 @pytest.fixture(scope="function")
-def test_app(tmp_path, tmp_journal_db, tmp_coach_db, tmp_analysis_db, monkeypatch):
+def tmp_hr_db(tmp_path):
+    """Temporary database file for the hr module."""
+    return tmp_path / "hr_test.db"
+
+
+@pytest.fixture(scope="function")
+def test_app(tmp_path, tmp_journal_db, tmp_coach_db, tmp_analysis_db, tmp_hr_db,
+             monkeypatch):
     """
     Create a test FastAPI app with isolated databases for all modules.
 
@@ -99,6 +138,7 @@ def test_app(tmp_path, tmp_journal_db, tmp_coach_db, tmp_analysis_db, monkeypatc
     monkeypatch.setenv("JOURNAL_DB_PATH", str(tmp_journal_db))
     monkeypatch.setenv("COACH_DB_PATH", str(tmp_coach_db))
     monkeypatch.setenv("ANALYSIS_DB_PATH", str(tmp_analysis_db))
+    monkeypatch.setenv("HR_DB_PATH", str(tmp_hr_db))
     # Point trends' external sources at NONEXISTENT tmp paths so no test can
     # ever read the developer's real ~/.garmy/health.db or
     # ~/.bodyspecy/bodyspec.db; the endpoints' available:false paths are the
@@ -122,6 +162,7 @@ def test_app(tmp_path, tmp_journal_db, tmp_coach_db, tmp_analysis_db, monkeypatc
         "journal": tmp_journal_db,
         "coach": tmp_coach_db,
         "analysis": tmp_analysis_db,
+        "hr": tmp_hr_db,
     })
 
     yield app

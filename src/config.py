@@ -48,6 +48,18 @@ MODULES = [
         "api_prefix": "/api/trends",
         "router_factory": "modules.trends:create_router",
     },
+    {
+        # Headless: an API-only module (heart-rate ingestion from the native
+        # client) with no PWA tab, so it carries no name/icon/color and
+        # `/api/modules` filters it out. Listed after the UI modules because
+        # MODULES order is the tab order for everything that IS visible.
+        "id": "hr",
+        "headless": True,
+        "api_prefix": "/api/hr",
+        "router_factory": "modules.hr:create_router",
+        "db_env": "HR_DB_PATH",
+        "db_default": DATA_DIR / "hr.db",
+    },
 ]
 
 

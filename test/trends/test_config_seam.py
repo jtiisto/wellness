@@ -27,10 +27,13 @@ class TestRegistrySeam:
         assert trends["api_prefix"] == "/api/trends"
 
     def test_trends_is_last_in_tab_order(self):
-        # Tab order = MODULES order; journal must stay the default (first),
-        # and the owning modules must register (and migrate) before trends.
-        assert MODULES[-1]["id"] == "trends"
-        assert MODULES[0]["id"] == "journal"
+        # Tab order = MODULES order over the modules that HAVE a tab (headless
+        # entries are filtered out of /api/modules); journal must stay the
+        # default (first), and the owning modules must register (and migrate)
+        # before trends.
+        tabs = [m["id"] for m in MODULES if not m.get("headless")]
+        assert tabs[-1] == "trends"
+        assert tabs[0] == "journal"
 
     def test_get_module_db_path_honors_env(self, monkeypatch, tmp_path):
         monkeypatch.setenv("COACH_DB_PATH", str(tmp_path / "elsewhere.db"))

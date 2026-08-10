@@ -4,8 +4,8 @@ import pytest
 
 
 class TestListModules:
-    def test_returns_all_modules(self, client):
-        """GET /api/modules should return all 4 modules."""
+    def test_returns_all_visible_modules(self, client):
+        """GET /api/modules should return the 4 modules that have a PWA tab."""
         resp = client.get("/api/modules")
         assert resp.status_code == 200
         data = resp.json()
@@ -44,6 +44,34 @@ class TestListModules:
             assert len(m["color"]) == 7  # #RRGGBB
 
 
+class TestHeadlessModules:
+    """A headless module is mounted like any other but never advertised to the
+    frontend: it has no name/icon/color and no view component to load."""
+
+    def test_headless_module_is_not_listed(self, client):
+        ids = [m["id"] for m in client.get("/api/modules").json()]
+        assert "hr" not in ids
+
+    def test_headless_module_is_still_mounted(self, client):
+        """Filtering is a projection over the response, not a mount decision."""
+        assert client.get("/api/hr/status").status_code == 200
+
+    def test_headless_entries_carry_no_presentation_fields(self):
+        """The filter is load-bearing: the /api/modules projection reads
+        name/icon/color unconditionally, so listing a headless module would
+        KeyError rather than render a blank tab."""
+        from config import MODULES
+        for m in MODULES:
+            if m.get("headless"):
+                assert not {"name", "icon", "color"} & m.keys()
+
+    def test_visible_modules_default_to_not_headless(self):
+        """`headless` is opt-in — absent means the module has a tab."""
+        from config import MODULES
+        visible = [m for m in MODULES if not m.get("headless")]
+        assert [m["id"] for m in visible] == ["journal", "coach", "analysis", "trends"]
+
+
 class TestDisabledModules:
     def test_disabled_modules_env_var(self, client, monkeypatch):
         """WELLNESS_DISABLED_MODULES should disable modules.
@@ -71,8 +99,9 @@ class TestDisabledModules:
         assert "coach" in ids
 
     def test_empty_disabled_modules(self, monkeypatch):
-        """Empty WELLNESS_DISABLED_MODULES should enable all modules."""
+        """Empty WELLNESS_DISABLED_MODULES should enable all modules
+        (5: the 4 with a tab plus headless hr)."""
         from config import get_enabled_modules, MODULES
         monkeypatch.setenv("WELLNESS_DISABLED_MODULES", "")
         enabled = get_enabled_modules()
-        assert len(enabled) == len(MODULES) == 4
+        assert len(enabled) == len(MODULES) == 5

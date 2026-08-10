@@ -75,6 +75,7 @@ def app_server(tmp_path_factory):
         "JOURNAL_DB_PATH": str(db_dir / "journal.db"),
         "COACH_DB_PATH": str(db_dir / "coach.db"),
         "ANALYSIS_DB_PATH": str(db_dir / "analysis.db"),
+        "HR_DB_PATH": str(db_dir / "hr.db"),
         # Nonexistent by default: trends' external-source cards exercise
         # their available:false paths and no e2e run touches the real
         # ~/.garmy or ~/.bodyspecy DBs.
@@ -101,6 +102,7 @@ def app_server(tmp_path_factory):
         "journal": Path(env_vars["JOURNAL_DB_PATH"]),
         "coach": Path(env_vars["COACH_DB_PATH"]),
         "analysis": Path(env_vars["ANALYSIS_DB_PATH"]),
+        "hr": Path(env_vars["HR_DB_PATH"]),
     })
 
     port = _find_free_port()

@@ -22,14 +22,17 @@ _SRC_DIR = Path(__file__).resolve().parents[2] / "src"
 
 
 def _run_import_snippet(snippet: str, db_dir: Path):
-    """Import `server` in a fresh interpreter with the three module DB paths
-    pointed at db_dir, then run `snippet`. Returns the CompletedProcess."""
+    """Import `server` in a fresh interpreter with every module DB path pointed
+    at db_dir, then run `snippet`. Returns the CompletedProcess. Every db_env in
+    config.MODULES must be listed here — a missing one makes the subprocess's
+    create_app() resolve that module's REAL data/ path."""
     env = {
         **os.environ,
         "PYTHONPATH": str(_SRC_DIR),
         "JOURNAL_DB_PATH": str(db_dir / "journal.db"),
         "COACH_DB_PATH": str(db_dir / "coach.db"),
         "ANALYSIS_DB_PATH": str(db_dir / "analysis.db"),
+        "HR_DB_PATH": str(db_dir / "hr.db"),
     }
     return subprocess.run(
         [sys.executable, "-c", snippet],
@@ -66,4 +69,5 @@ class TestImportIsSideEffectFree:
         assert result.returncode == 0, f"stderr:\n{result.stderr}"
         assert "BUILT" in result.stdout
         created = sorted(p.name for p in tmp_path.iterdir())
-        assert "journal.db" in created and "coach.db" in created and "analysis.db" in created, created
+        for db in ("journal.db", "coach.db", "analysis.db", "hr.db"):
+            assert db in created, created
