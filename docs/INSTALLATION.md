@@ -6,6 +6,8 @@
 - pip
 - Claude Code CLI (for the Analysis module)
 - FastMCP (`pip install fastmcp`) for MCP servers
+- NumPy (in `requirements.txt`) for the HR analysis CLI
+- matplotlib — **optional**, charts only (see below)
 
 ## Development Setup
 
@@ -22,6 +24,12 @@ git config core.hooksPath githooks
 ```
 
 The hooks live in `githooks/` (tracked). `core.hooksPath` is per-clone local config, so the one-time command above is required on every fresh clone — without it, the commit/push quality gates don't run. Machine-specific post-commit actions (e.g. an off-machine backup) belong in an untracked `.git/hooks-local/post-commit`, which the tracked `githooks/post-commit` dispatcher runs if present.
+
+**Optional: matplotlib.** The HR analysis CLI (`src/hr_analysis`) renders a chart alongside its JSON report when matplotlib is importable, and skips only the chart when it isn't — so it stays out of `requirements.txt` and off production. Install it where you actually read the reports:
+
+```bash
+pip install matplotlib
+```
 
 ### 2. Install Playwright browsers (for E2E tests)
 

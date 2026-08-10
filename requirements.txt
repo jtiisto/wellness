@@ -4,6 +4,12 @@ pydantic>=2.0.0
 httpx>=0.27.0
 fastmcp>=2.0.0,<4.0.0
 
+# HR analysis CLI (src/hr_analysis) — not imported by the server
+numpy>=1.26.0
+# matplotlib is OPTIONAL and deliberately unpinned here: `python -m hr_analysis`
+# writes its JSON report either way and skips only the PNG chart when the import
+# fails. Install it (`pip install matplotlib`) if you want the charts.
+
 # Testing
 pytest>=8.0.0
 pytest-asyncio>=0.23.0
