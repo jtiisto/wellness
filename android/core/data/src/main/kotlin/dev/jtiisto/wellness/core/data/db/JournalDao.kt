@@ -38,6 +38,9 @@ data class EntryAdoption(val row: JournalEntryEntity, val expectedGeneration: Lo
 /** A local delete the server has settled, guarded the same way. */
 data class SettledDelete(val id: String, val expectedGeneration: Long?)
 
+/** One entry, by its composite key. */
+data class EntryRef(val date: DateString, val trackerId: String)
+
 /**
  * Everything one upload response changes, applied as a single transaction.
  *
@@ -51,6 +54,18 @@ data class UploadResponseApply(
     val trackerAdoptions: List<TrackerAdoption> = emptyList(),
     val entryAdoptions: List<EntryAdoption> = emptyList(),
     val settledDeletes: List<SettledDelete> = emptyList(),
+    /**
+     * Rows the server answered `missing` for, dropped **unguarded**.
+     *
+     * Deliberately not [SettledDelete]s. A generation guard exists to protect a
+     * mid-sync edit worth arbitrating, and there is nothing here to arbitrate
+     * against: the server has no such row, and the local row carries a base
+     * token the server will reject again for the same reason. Guarding would
+     * only postpone the same deletion by a cycle — and a user editing every
+     * cycle would keep the phantom, and its red indicator, indefinitely.
+     */
+    val missingTrackerIds: List<String> = emptyList(),
+    val missingEntries: List<EntryRef> = emptyList(),
     val trackerClears: List<TrackerDirtyClear> = emptyList(),
     val entryClears: List<EntryDirtyClear> = emptyList(),
     val watermark: SyncStamp? = null,
@@ -219,6 +234,9 @@ abstract class JournalDao {
 
     @Query("DELETE FROM journal_entries WHERE trackerId = :trackerId")
     abstract suspend fun deleteEntriesOf(trackerId: String)
+
+    @Query("DELETE FROM journal_entries WHERE date = :date AND trackerId = :trackerId")
+    abstract suspend fun deleteEntry(date: DateString, trackerId: String)
 
     /**
      * The 7-day window prune. Dirty rows are excluded: the PWA deletes old days
@@ -500,6 +518,18 @@ abstract class JournalDao {
             if (current?.dirtyGeneration != delete.expectedGeneration) continue
             deleteEntriesOf(delete.id)
             deleteTracker(delete.id)
+        }
+
+        // The phantom rows, dropped whatever their generation says. See
+        // [UploadResponseApply.missingTrackerIds] for why no guard belongs here.
+        // Deleting the row takes its dirty flag with it — the flag is a column,
+        // not a separate set — so the purge the protocol asks for is the delete.
+        for (id in plan.missingTrackerIds) {
+            deleteEntriesOf(id)
+            deleteTracker(id)
+        }
+        for (entry in plan.missingEntries) {
+            deleteEntry(entry.date, entry.trackerId)
         }
 
         for (clear in plan.trackerClears) clearTrackerDirty(clear.id, clear.generation)

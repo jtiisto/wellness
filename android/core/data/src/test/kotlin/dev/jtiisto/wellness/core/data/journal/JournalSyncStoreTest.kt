@@ -360,6 +360,96 @@ class JournalSyncStoreTest {
         assertEquals(0, world.dao.countDirty())
     }
 
+    // ---- `missing` rejections: converge by dropping the phantom -----------
+
+    @Test
+    @DisplayName("a `missing` tracker rejection deletes the phantom, its entries and its dirty state")
+    fun missingTrackerRejectionDeletesThePhantom() = runTest {
+        val world = World()
+        world.seedTracker("t1", name = "phantom", stamp = "s0", isDirty = true, generation = 1)
+        world.seedEntry("2026-08-06", "t1", completed = true, stamp = "s0", isDirty = true, generation = 1)
+        world.seedTracker("t2", name = "survivor", stamp = "s0")
+        // serverRow absent, deleted true: the server has no such row and is
+        // telling the client to converge by dropping it. Before this was
+        // adopted, the rejection only cleared the dirty flag and the row stayed
+        // forever — it never re-uploaded, and no delta can deliver a row that
+        // does not exist.
+        world.update = update(
+            serverTime = "s5",
+            rejected = """{"id":"t1","errorKind":"missing","deleted":true}""",
+        )
+
+        world.store().triggerSync()
+
+        assertEquals(setOf("t2"), world.dao.trackers.keys)
+        assertTrue(world.dao.entries.isEmpty(), "the phantom's entries outlived it")
+        assertEquals(0, world.dao.countDirty())
+    }
+
+    @Test
+    @DisplayName("a `missing` entry rejection deletes that entry alone, tracker and siblings intact")
+    fun missingEntryRejectionDeletesThatEntry() = runTest {
+        val world = World()
+        world.seedTracker("t1", name = "real", stamp = "s0")
+        world.seedEntry("2026-08-06", "t1", completed = true, stamp = "s0", isDirty = true, generation = 1)
+        world.seedEntry("2026-08-05", "t1", completed = true, stamp = "s0")
+        world.update = update(
+            serverTime = "s5",
+            rejectedEntries = """{"date":"2026-08-06","trackerId":"t1","errorKind":"missing","deleted":true}""",
+        )
+
+        world.store().triggerSync()
+
+        assertEquals(setOf("2026-08-05|t1"), world.dao.entries.keys)
+        assertTrue(world.dao.trackers.containsKey("t1"), "a missing ENTRY says nothing about its tracker")
+        assertEquals(0, world.dao.countDirty())
+    }
+
+    @Test
+    @DisplayName("a phantom re-edited mid-sync is dropped anyway — the guard would only postpone it")
+    fun missingRejectionIgnoresAMidSyncEdit() = runTest {
+        val world = World()
+        world.seedTracker("t1", name = "phantom", stamp = "s0", isDirty = true, generation = 1)
+        world.update = update(
+            serverTime = "s5",
+            rejected = """{"id":"t1","errorKind":"missing","deleted":true}""",
+        )
+        // The user edits while the POST is in flight, advancing the generation
+        // past the one the body was built at.
+        world.onUpload = { world.store().updateTracker("t1") { it.copy(name = "edited mid-sync") } }
+
+        world.store().triggerSync()
+
+        // Unguarded, unlike a settled delete. There is nothing to arbitrate
+        // against — the server has no row, and the edit still carries a base
+        // token it will reject for the same reason — so a generation guard would
+        // only postpone this deletion by a cycle. Worse, a user editing every
+        // cycle would keep the phantom, and its red indicator, indefinitely.
+        assertTrue(world.dao.trackers.isEmpty(), "the phantom survived a mid-sync edit")
+        assertEquals(0, world.dao.countDirty(), "a dirty flag with no row behind it pins the indicator red")
+    }
+
+    @Test
+    @DisplayName("a settled delete keeps its generation guard — only `missing` is unguarded")
+    fun settledDeleteStillHonoursTheGuard() = runTest {
+        val world = World()
+        world.seedTracker("t1", name = "local", stamp = "s0", isDirty = true, generation = 1)
+        // A stale rejection carrying a REAL soft-deleted row: there IS a server
+        // row to arbitrate against, so a mid-sync edit must survive to be
+        // arbitrated next cycle.
+        world.update = update(
+            serverTime = "s5",
+            rejected = """{"id":"t1","errorKind":"stale","serverRow":{"id":"t1","deleted":true}}""",
+        )
+        world.onUpload = { world.store().updateTracker("t1") { it.copy(name = "edited mid-sync") } }
+
+        world.store().triggerSync()
+
+        val row = world.dao.trackers.getValue("t1")
+        assertEquals("edited mid-sync", row.name, "the guard exists to protect exactly this edit")
+        assertTrue(row.isDirty, "and to keep it queued for the next cycle's arbitration")
+    }
+
     @Test
     @DisplayName("nothing dirty after the pull means no upload at all")
     fun noDirtyShortCircuits() = runTest {
@@ -1183,6 +1273,11 @@ internal open class FakeJournalDao : JournalDao() {
 
     override suspend fun deleteEntriesOf(trackerId: String) {
         entries.values.removeIf { it.trackerId == trackerId }
+        touch()
+    }
+
+    override suspend fun deleteEntry(date: DateString, trackerId: String) {
+        entries.remove(key(date, trackerId))
         touch()
     }
 

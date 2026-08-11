@@ -13,16 +13,18 @@ import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 
 /**
- * The transcribed `test/js/coach-sync-logic.test.js` — all 27 cases, 1:1.
+ * The transcribed `test/js/coach-sync-logic.test.js` — its 37 cases 1:1, as of
+ * 2026-08-11, plus one native-only case marked as such below.
  *
  * The fixtures are the JS ones verbatim (they are synthetic: `d1`/`ex_1`
  * placeholders and made-up tokens). Where the port's shape differs from the
  * JS — `nextDirtyAfterApply` returns the shared `DirtyState` rather than a
  * coach-specific pair — the assertion follows the port; nothing else moves.
  *
- * The tombstone-verdict and per-record arbitration cases go beyond the
- * transcription: they pin decisions the JS never had to make, and each one
- * marks a way a mid-sync edit silently destroyed another device's data.
+ * **The transcription runs both ways now.** The per-record arbitration cases
+ * were written here first, against the verdict-reversal bug, and ported BACK
+ * into the JS when the PWA took the same fix. So a case added on either side
+ * belongs on both, and this count going stale is the signal that one drifted.
  */
 class CoachSyncLogicTest {
 
@@ -222,6 +224,66 @@ class CoachSyncLogicTest {
     }
 
     @Test
+    @DisplayName("adoptUploadResults re-modified: an ACCEPTED untouched record adopts the echoed row")
+    fun reModifiedAdoptsTheAcceptedEchoedRow() {
+        // The same rule with the happy verdict: the server took the upload and
+        // echoed it back with a fresh stamp, so adopting it is just taking the
+        // new token.
+        val uploaded = logs(
+            "d2" to """{"ex_1":{"reps":32,"_lastModified":"old-ex","_baseLastModifiedAt":"old-ex"}}""",
+        )
+        val local = logs("d2" to """{"_lastModified":"old-day","ex_1":{"reps":32,"_lastModified":"old-ex"}}""")
+        val results = logs("d2" to """{"_lastModified":"srv-day","ex_1":{"reps":32,"_lastModified":"srv-ex"}}""")
+
+        val next = adoptUploadResults(local, results, mapOf("d2" to 1L), mapOf("d2" to 2L), uploaded)
+
+        assertEquals(obj("""{"reps":32,"_lastModified":"srv-ex"}"""), next.getValue("d2")["ex_1"])
+    }
+
+    @Test
+    @DisplayName("adoptUploadResults re-modified: an accepted record echoed at its OLD stamp is adopted just the same")
+    fun acceptedRecordMayCarryItsOldStamp() {
+        // Native-only case (no JS twin). The server's unchanged-content guard
+        // skips the UPDATE — and so the re-stamp — when the incoming record
+        // already equals the stored row, so an ACCEPTED record can come back
+        // carrying the very base it was sent. Nothing may read "the stamp did
+        // not move" as a rejection: the row is adopted verbatim either way, and
+        // `stored <= base` accepts on equality.
+        val uploaded = logs(
+            "d2" to """{"ex_1":{"reps":32,"_lastModified":"old-ex","_baseLastModifiedAt":"old-ex"}}""",
+        )
+        val local = logs("d2" to """{"_lastModified":"old-day","ex_1":{"reps":32,"_lastModified":"old-ex"}}""")
+        val results = logs("d2" to """{"_lastModified":"old-day","ex_1":{"reps":32,"_lastModified":"old-ex"}}""")
+
+        val next = adoptUploadResults(local, results, mapOf("d2" to 1L), mapOf("d2" to 2L), uploaded)
+
+        assertEquals(obj("""{"reps":32,"_lastModified":"old-ex"}"""), next.getValue("d2")["ex_1"])
+        assertEquals(JsonPrimitive("old-day"), next.getValue("d2")["_lastModified"])
+    }
+
+    @Test
+    @DisplayName("adoptUploadResults → next cycle: a rejection verdict cannot be re-litigated")
+    fun rejectionVerdictCannotBeReLitigated() {
+        // Two-cycle proof of the fix. Cycle 1: the stale 32 loses to the remote
+        // 28 and the verdict is adopted. Cycle 2's upload is then BUILT FROM the
+        // adopted state, so the retry echoes the server's own content behind the
+        // server's own stamp — an idempotent no-op to the arbiter, never a stale
+        // 32 behind a winning base, which was the whole verdict-reversal bug.
+        val uploaded = logs(
+            "d2" to """{"ex_1":{"reps":32,"_lastModified":"old-ex","_baseLastModifiedAt":"old-ex"}}""",
+        )
+        val local = logs("d2" to """{"_lastModified":"old-day","ex_1":{"reps":32,"_lastModified":"old-ex"}}""")
+        val results = logs("d2" to """{"_lastModified":"srv-day","ex_1":{"reps":28,"_lastModified":"srv-ex"}}""")
+
+        val next = adoptUploadResults(local, results, mapOf("d2" to 1L), mapOf("d2" to 2L), uploaded)
+        val retry = withBaseTokens(next.getValue("d2")) // the date is still dirty → it re-uploads
+
+        assertEquals(JsonPrimitive(28), retry.getValue("ex_1").jsonObject["reps"])
+        assertEquals(JsonPrimitive("srv-ex"), retry.getValue("ex_1").jsonObject["_baseLastModifiedAt"])
+        assertEquals(JsonPrimitive("srv-day"), retry["_baseLastModifiedAt"])
+    }
+
+    @Test
     @DisplayName("adoptUploadResults re-modified: a record genuinely re-edited keeps its content and advances")
     fun reModifiedKeepsTheReEditedRecordAndAdvancesItsToken() {
         // reps 99 landed after the payload was built, so it is newer intent
@@ -356,6 +418,44 @@ class CoachSyncLogicTest {
         val entry = next.getValue("d1").getValue("extra_zone2").jsonObject
         assertFalse("_readd" in entry, "a settled re-add kept a marker that no longer means anything")
         assertEquals(JsonPrimitive("t2"), entry["_lastModified"])
+    }
+
+    @Test
+    @DisplayName("adoptUploadResults re-modified: nested set edits are compared structurally, not by identity")
+    fun nestedSetEditsAreComparedStructurally() {
+        // The stored day is re-parsed from its blob, so an untouched record is
+        // an equal-but-DISTINCT instance of what was uploaded, and a re-edit
+        // differs only deep inside `sets`. Reference identity would call both
+        // re-edited and lose every verdict.
+        val uploaded = logs(
+            "d1" to """{"ex_a":{"sets":[{"set_num":1,"reps":5}],"_lastModified":"a1","_baseLastModifiedAt":"a1"},""" +
+                """"ex_b":{"sets":[{"set_num":1,"reps":5}],"_lastModified":"b1","_baseLastModifiedAt":"b1"}}""",
+        )
+        val local = logs(
+            "d1" to """{"_lastModified":"old-day",""" +
+                """"ex_a":{"sets":[{"set_num":1,"reps":5}],"_lastModified":"a1"},""" + // untouched copy
+                """"ex_b":{"sets":[{"set_num":1,"reps":5,"rpe":8}],"_lastModified":"b1"}}""", // re-edited deep
+        )
+        val results = logs(
+            "d1" to """{"_lastModified":"srv-day",""" +
+                """"ex_a":{"sets":[{"set_num":1,"reps":9}],"_lastModified":"a2"},""" +
+                """"ex_b":{"sets":[{"set_num":1,"reps":9}],"_lastModified":"b2"}}""",
+        )
+
+        val next = adoptUploadResults(local, results, mapOf("d1" to 1L), mapOf("d1" to 2L), uploaded)
+
+        val day = next.getValue("d1")
+        assertEquals(
+            obj("""{"sets":[{"set_num":1,"reps":9}]}""")["sets"],
+            day.getValue("ex_a").jsonObject["sets"],
+            "the verdict on a structurally-equal untouched record was discarded",
+        )
+        assertEquals(
+            obj("""{"sets":[{"set_num":1,"reps":5,"rpe":8}]}""")["sets"],
+            day.getValue("ex_b").jsonObject["sets"],
+            "a deep re-edit was clobbered",
+        )
+        assertEquals(JsonPrimitive("b2"), day.getValue("ex_b").jsonObject["_lastModified"])
     }
 
     // ---- entry deletion (tombstones) -------------------------------------

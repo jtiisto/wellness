@@ -3,6 +3,7 @@ package dev.jtiisto.wellness.core.data.journal
 import dev.jtiisto.wellness.core.data.WellnessJson
 import dev.jtiisto.wellness.core.data.db.EntryAdoption
 import dev.jtiisto.wellness.core.data.db.EntryDirtyClear
+import dev.jtiisto.wellness.core.data.db.EntryRef
 import dev.jtiisto.wellness.core.data.db.EntryStamp
 import dev.jtiisto.wellness.core.data.db.JournalDao
 import dev.jtiisto.wellness.core.data.db.JournalEntryEntity
@@ -551,14 +552,24 @@ class JournalSyncStore(
         val deletedAtBuild = pending.trackers.filter { it.deleted }.map { it.id }.toSet()
 
         // The pure port decides what a rejection means: a live serverRow is an
-        // adoption, a soft-deleted one is a deletion. Given empty local state
-        // it yields precisely those two sets, with no stale rows mixed in.
+        // adoption, a soft-deleted one is a deletion, and a `missing` one is an
+        // instruction to drop the local row. Given empty local state it yields
+        // precisely those sets, with no stale rows mixed in.
         val rejected = computeRejectedApply(
             response.rejectedTrackers,
             response.rejectedEntries,
             emptyList(),
             emptyMap(),
         )
+
+        // Which of the tracker deletions were phantoms. The pure state puts them
+        // in one list, as the PWA's single cleanup path does, but the two arrive
+        // at that list for different reasons and are applied under different
+        // guards — so the flag on the wire, not the list, is what separates them.
+        val missingTrackerIds = response.rejectedTrackers.filter { it.deleted }.map { it.id }
+        val missingEntries = response.rejectedEntries
+            .filter { it.deleted }
+            .map { EntryRef(it.date, it.trackerId) }
 
         // Adoption takes the server's row whole, local delete flag included —
         // the PWA replaces the tracker object outright, so a delete the server
@@ -590,6 +601,8 @@ class JournalSyncStore(
                 }
             }
             for (id in rejected.trackerIdsToDelete) {
+                // The phantoms go through the unguarded path instead.
+                if (id in missingTrackerIds) continue
                 add(SettledDelete(id, builtTrackerGens[id]))
             }
         }
@@ -623,6 +636,8 @@ class JournalSyncStore(
                     trackerAdoptions = trackerAdoptions,
                     entryAdoptions = entryAdoptions,
                     settledDeletes = settledDeletes,
+                    missingTrackerIds = missingTrackerIds,
+                    missingEntries = missingEntries,
                     trackerClears = (snapshotTrackerGens.keys - cleared.trackers.keys.toSet())
                         .map { TrackerDirtyClear(it, snapshotTrackerGens.getValue(it)) },
                     entryClears = (snapshotEntryGens.keys - cleared.entries.keys.toSet())

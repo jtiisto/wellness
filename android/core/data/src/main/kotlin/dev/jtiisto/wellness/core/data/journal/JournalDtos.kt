@@ -113,12 +113,24 @@ data class AcceptedEntryDto(val date: DateString, val trackerId: String, val las
  * An upload the server refused. [serverRow] carries its current state so the
  * client recovers in the same cycle instead of waiting for the next delta;
  * it is absent when the row does not exist server-side (`errorKind = "missing"`).
+ *
+ * [deleted] is that case's explicit instruction: "there is no such row here,
+ * converge by dropping yours". Without it a `missing` rejection only cleared the
+ * dirty flag, and the client kept a phantom row forever — it never re-uploaded
+ * and no delta can deliver a row that does not exist.
+ *
+ * **Two different levels, deliberately not merged.** This flag says the server
+ * has no row at all. `serverRow.deleted` says the server has a REAL row that is
+ * soft-deleted, which arrives on `stale` rejections and flows through the
+ * ordinary adoption path. A synthetic tombstone `serverRow` was rejected
+ * server-side precisely because it would be indistinguishable from that.
  */
 @Serializable
 data class RejectedTrackerDto(
     val id: String,
     val errorKind: String? = null,
     val serverRow: TrackerDto? = null,
+    val deleted: Boolean = false,
 )
 
 @Serializable
@@ -127,6 +139,7 @@ data class RejectedEntryDto(
     val trackerId: String,
     val errorKind: String? = null,
     val serverRow: EntryDto? = null,
+    val deleted: Boolean = false,
 )
 
 /** `POST /api/journal/sync/update`. Accepted and rejected are both *settled*. */

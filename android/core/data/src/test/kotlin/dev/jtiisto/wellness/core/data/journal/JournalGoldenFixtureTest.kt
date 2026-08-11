@@ -115,10 +115,43 @@ class JournalGoldenFixtureTest {
         assertEquals(4, response.acceptedEntries.size)
         assertTrue(response.rejectedTrackers.isEmpty())
         assertTrue(response.rejectedEntries.isEmpty())
-        assertNotNull(response.serverTime)
-        assertTrue(response.acceptedTrackers.all { it.lastModifiedAt == response.serverTime })
+        val serverTime = requireNotNull(response.serverTime)
+        // The envelope is never AHEAD of the tokens it answers for.
+        //
+        // This asserted equality until 2026-08-11, which is now a false claim
+        // about the protocol: `/sync/update` backdates its envelope `serverTime`
+        // by the same two-second overlap `/sync/delta` uses, while the
+        // per-record `lastModifiedAt` tokens stay at the real write time. The
+        // live server therefore answers strictly greater — and the trap was that
+        // this fixture, captured 2026-08-07, still satisfied the old assertion.
+        //
+        // `>=` rather than `>` deliberately: these files pin what the protocol
+        // IS, captured from the dev server, so the committed copy still shows
+        // the pre-fix equality and must not be hand-edited into agreement.
+        // TIGHTEN THIS TO `>` when `testdata/golden/journal/` is regenerated
+        // against the fixed server — the same regeneration that will finally
+        // produce a `missing` rejection (see `rejectedResponseDecodes`).
+        //
+        // Lexical, not parsed: server stamps are opaque strings by protocol
+        // rule, and a client reaching for Instant.parse to order them has
+        // already broken it.
+        assertTrue(
+            response.acceptedTrackers.all { it.lastModifiedAt >= serverTime },
+            "accepted tokens must not predate the backdated envelope: " +
+                "${response.acceptedTrackers.map { it.lastModifiedAt }} vs $serverTime",
+        )
     }
 
+    /**
+     * **Coverage gap, not an omission here:** this fixture is every rejection
+     * the generator can currently produce, and all of them are `stale`. The
+     * `missing` case — `serverRow` absent, rejection-level `deleted` true, the
+     * instruction to drop a phantom row — has no golden at all, because
+     * `testdata/golden/journal/generate.py` has no way to provoke one. Its
+     * decoding and its effect are pinned by hand-written tests
+     * (`JournalSyncLogicTest`, `JournalSyncStoreTest`) until a server-side
+     * regeneration supplies the real payload.
+     */
     @Test
     @DisplayName("the rejected upload response carries a full serverRow the client can adopt")
     fun rejectedResponseDecodes() {
@@ -128,6 +161,11 @@ class JournalGoldenFixtureTest {
         assertEquals(5, response.rejectedTrackers.size)
         assertEquals(4, response.rejectedEntries.size)
         assertTrue(response.rejectedTrackers.all { it.errorKind == "stale" })
+        // A `stale` rejection is never a deletion instruction: it carries a real
+        // serverRow, and confusing the two levels would turn arbitration into
+        // data loss.
+        assertTrue(response.rejectedTrackers.none { it.deleted })
+        assertTrue(response.rejectedEntries.none { it.deleted })
 
         val tracker = response.rejectedTrackers.first { it.id == "fixture-quant" }
         val serverRow = requireNotNull(tracker.serverRow)

@@ -292,14 +292,84 @@ class JournalSyncLogicTest {
     }
 
     @Test
-    @DisplayName("computeRejectedApply: rejection with no serverRow is skipped")
+    @DisplayName("computeRejectedApply: rejection with no serverRow and no deleted flag is skipped")
     fun rejectedApplySkipsMissingServerRow() {
         val config = listOf(TrackerDto(id = "t1", name = "orig"))
 
         val next = computeRejectedApply(listOf(RejectedTrackerDto("t1")), emptyList(), config, emptyMap())
 
+        // The pre-2026-08-11 shape, and still the rule when the server says
+        // nothing: only an explicit `deleted` may be read as a deletion.
         assertEquals("orig", next.trackerConfig.first { it.id == "t1" }.name)
         assertEquals(emptyList<String>(), next.trackerIdsToDelete)
+        assertEquals(emptyList<String>(), next.entryKeysToDelete)
+    }
+
+    @Test
+    @DisplayName("computeRejectedApply: a `missing` tracker rejection is a deletion instruction")
+    fun rejectedApplyDeletesMissingTracker() {
+        val config = listOf(TrackerDto(id = "t1", name = "phantom"))
+
+        // serverRow absent AND deleted true — the server has no such row. The
+        // flag has to be read BEFORE the serverRow check, or this is swallowed
+        // as "nothing to apply" and the phantom lives forever.
+        val next = computeRejectedApply(
+            listOf(RejectedTrackerDto("t1", errorKind = "missing", deleted = true)),
+            emptyList(),
+            config,
+            emptyMap(),
+        )
+
+        assertEquals(listOf("t1"), next.trackerIdsToDelete)
+        // Listed, not removed here: the caller runs the full cleanup, exactly as
+        // it does for a soft-deleted serverRow.
+        assertEquals("phantom", next.trackerConfig.first { it.id == "t1" }.name)
+    }
+
+    @Test
+    @DisplayName("computeRejectedApply: a `missing` entry rejection routes to entryKeysToDelete")
+    fun rejectedApplyDeletesMissingEntry() {
+        val logs = mapOf("2026-05-01" to mapOf("t1" to EntryDto(JsonPrimitive(99), completed = false)))
+
+        val next = computeRejectedApply(
+            emptyList(),
+            listOf(RejectedEntryDto("2026-05-01", "t1", errorKind = "missing", deleted = true)),
+            emptyList(),
+            logs,
+        )
+
+        assertEquals(listOf("2026-05-01|t1"), next.entryKeysToDelete)
+        assertEquals(emptyList<String>(), next.trackerIdsToDelete)
+        // Same shape as the tracker half: listed for the caller's cleanup, and
+        // never adopted as an entry with a null value.
+        assertEquals(
+            EntryDto(JsonPrimitive(99), completed = false),
+            next.dailyLogs.getValue("2026-05-01").getValue("t1"),
+        )
+    }
+
+    @Test
+    @DisplayName("computeRejectedApply: a stale rejection carrying a soft-deleted serverRow is NOT a `missing`")
+    fun rejectedApplyKeepsTheTwoDeleteLevelsApart() {
+        val config = listOf(TrackerDto(id = "t1", name = "keep-me"), TrackerDto(id = "t2", name = "phantom"))
+
+        val next = computeRejectedApply(
+            listOf(
+                // A REAL row the server has tombstoned: rejection-level deleted
+                // stays false, and serverRow.deleted carries the verdict.
+                RejectedTrackerDto("t1", errorKind = "stale", serverRow = TrackerDto(id = "t1", deleted = true)),
+                // No row at all.
+                RejectedTrackerDto("t2", errorKind = "missing", deleted = true),
+            ),
+            emptyList(),
+            config,
+            emptyMap(),
+        )
+
+        // Both converge by deleting, and they must reach that from their own
+        // branch — collapsing the levels would let a `stale` verdict become a
+        // general deletion channel.
+        assertEquals(listOf("t1", "t2"), next.trackerIdsToDelete)
     }
 
     // ---- computeDropDeletedTrackers (server-side delete cleanup) ---------

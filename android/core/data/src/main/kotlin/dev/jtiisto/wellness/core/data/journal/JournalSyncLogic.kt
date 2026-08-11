@@ -270,21 +270,34 @@ fun computeAcceptedApply(
     return AppliedState(nextConfig, nextLogs)
 }
 
-/** [AppliedState] plus the soft-deleted server rows that need full cleanup. */
+/** [AppliedState] plus the rows that need full cleanup rather than an upsert. */
 data class RejectedApplyState(
     val trackerConfig: List<TrackerDto>,
     val dailyLogs: Map<DateString, Map<String, EntryDto>>,
     val trackerIdsToDelete: List<String>,
+    /** `"date|trackerId"`, the same key shape [entryKey] mints. */
+    val entryKeysToDelete: List<String> = emptyList(),
 )
 
 /**
  * Apply the `serverRow` of rejected uploads so the client recovers in-cycle
  * without a follow-up delta pull.
  *
- * A non-deleted serverRow upserts. A soft-deleted one is deliberately NOT
- * upserted: its id goes to [RejectedApplyState.trackerIdsToDelete] so the
- * caller routes it through the full delete cleanup (tracker + entries + dirty
- * state). Rejections with no serverRow are skipped.
+ * Three outcomes, and the order of the checks is the contract:
+ *
+ * 1. **`deleted` on the rejection itself** — the server has no such row
+ *    (`errorKind = "missing"`) and is instructing the client to converge by
+ *    dropping its own. Tested FIRST, because these rejections carry no
+ *    `serverRow` at all and the old `?: continue` swallowed them: the dirty flag
+ *    was cleared, nothing was adopted, and the phantom row stayed forever.
+ * 2. **A soft-deleted `serverRow`** — a REAL row the server has tombstoned.
+ *    Deliberately not upserted; its id joins the same cleanup list.
+ * 3. **A live `serverRow`** upserts.
+ *
+ * (1) and (2) look alike and are not: the first means "no row exists", the
+ * second "a row exists and is deleted". Only the first may be inferred from a
+ * missing `serverRow`, which is why it is a flag and not a synthetic tombstone.
+ * A rejection with neither flag nor `serverRow` is still skipped.
  *
  * Returns the SAME references when a section has nothing to apply.
  */
@@ -295,11 +308,16 @@ fun computeRejectedApply(
     dailyLogs: Map<DateString, Map<String, EntryDto>>,
 ): RejectedApplyState {
     val trackerIdsToDelete = mutableListOf<String>()
+    val entryKeysToDelete = mutableListOf<String>()
 
     var nextConfig = trackerConfig
     if (rejectedTrackers.isNotEmpty()) {
         val updated = trackerConfig.toMutableList()
         for (rejected in rejectedTrackers) {
+            if (rejected.deleted) {
+                trackerIdsToDelete += rejected.id
+                continue
+            }
             val serverRow = rejected.serverRow ?: continue
             if (serverRow.deleted == true) {
                 trackerIdsToDelete += rejected.id
@@ -315,6 +333,10 @@ fun computeRejectedApply(
     if (rejectedEntries.isNotEmpty()) {
         val logs = LinkedHashMap(dailyLogs)
         for (rejected in rejectedEntries) {
+            if (rejected.deleted) {
+                entryKeysToDelete += entryKey(rejected.date, rejected.trackerId)
+                continue
+            }
             val serverRow = rejected.serverRow ?: continue
             val day = logs[rejected.date] ?: emptyMap()
             logs[rejected.date] = day + (
@@ -328,7 +350,7 @@ fun computeRejectedApply(
         nextLogs = logs
     }
 
-    return RejectedApplyState(nextConfig, nextLogs, trackerIdsToDelete)
+    return RejectedApplyState(nextConfig, nextLogs, trackerIdsToDelete, entryKeysToDelete)
 }
 
 // ---- deletion ------------------------------------------------------------

@@ -69,8 +69,10 @@ data class EntryDto(
 )
 @Serializable data class AcceptedTrackerDto(val id: String, val lastModifiedAt: SyncStamp)
 @Serializable data class AcceptedEntryDto(val date: DateString, val trackerId: String, val lastModifiedAt: SyncStamp)
-@Serializable data class RejectedTrackerDto(val id: String, val errorKind: String? = null, val serverRow: TrackerDto? = null)
-@Serializable data class RejectedEntryDto(val date: DateString, val trackerId: String, val errorKind: String? = null, val serverRow: EntryDto? = null)
+// `deleted` is the rejection-level "no such row here, drop yours" flag (errorKind = "missing").
+// Distinct from serverRow.deleted, which is a REAL soft-deleted row. See the envelope/`missing` section.
+@Serializable data class RejectedTrackerDto(val id: String, val errorKind: String? = null, val serverRow: TrackerDto? = null, val deleted: Boolean = false)
+@Serializable data class RejectedEntryDto(val date: DateString, val trackerId: String, val errorKind: String? = null, val serverRow: EntryDto? = null, val deleted: Boolean = false)
 @Serializable data class UpdateResponseDto(
     val serverTime: SyncStamp? = null,
     val acceptedTrackers: List<AcceptedTrackerDto> = emptyList(),
@@ -168,12 +170,65 @@ class JournalSyncStore(dao, api, debugLog, json, scope, isOnline: () -> Boolean,
    Then run `computeNormalizedConfig` over the fresh config; changed trackers are marked dirty. **They upload this same cycle, but their dirty flags clear only NEXT cycle**: normalization runs after the step-2 snapshot, so the resolved-key clear (snapshot-gated) skips them — one harmless re-upload, PWA-identical semantics.
 4. If no dirty rows now → status update, return success (no upload).
 5. **Upload**: rebuild payload from CURRENT rows (post-pull tokens), `syncUpdate(payload)`.
-6. **Pure computation only — no Room writes**: compute accepted-stamp application and rejected-serverRow adoption (upsert; soft-deleted serverRow → collect for drop-deleted cleanup). `errorKind` is logged, not branched on.
-7. Resolved set = accepted ∪ rejected (both are settled). **The single mutating transaction** (deviation 1): stamped rows + rejected adoptions + soft-delete cleanup (trackers, entries, dirty state) + per-key dirty clear iff generation == snapshot (snapshot-present keys only) + watermark ← upload `serverTime`.
+6. **Pure computation only — no Room writes**: compute accepted-stamp application and rejected-row disposition — rejection-level `deleted` → collect for the unguarded phantom drop; soft-deleted serverRow → collect for drop-deleted cleanup; live serverRow → upsert. `errorKind` is logged, not branched on: the deletion instruction is the `deleted` flag, not the string.
+7. Resolved set = accepted ∪ rejected (both are settled). **The single mutating transaction** (deviation 1): stamped rows + rejected adoptions + soft-delete cleanup (trackers, entries, dirty state) + phantom drops + per-key dirty clear iff generation == snapshot (snapshot-present keys only). **No watermark** — see the envelope rule below.
 8. Prune: non-dirty entries outside the 7-day window (port `isWithinLastNDays` from `shared/utils.js` VERBATIM; boundary pinned by test — never re-derive); locally-soft-deleted trackers (+ their entries).
 9. Update status; return success. Any thrown error → status RED, return `SyncResult(success=false, error=e)` (scheduler classifies network-vs-server via `isNetworkError` = Ktor IO/timeout exceptions).
 
 Status derivation (`updateSyncStatus`): offline → GRAY; dirty>0 → RED; watermark present → GREEN; else GRAY.
+
+### The upload envelope, and `missing` rejections (adopted 2026-08-11)
+
+Two protocol rules settled with the server session in the same round; both are
+about the difference between what an upload response says and what the client
+may conclude from it.
+
+**The POST's `serverTime` is never the pull watermark, and is now one overlap
+behind its own writes.** `/sync/delta` returns a watermark deliberately
+backdated by `SYNC_WATERMARK_OVERLAP_SECONDS = 2`, so the next incremental pull
+re-reads the window in which another client's commit may have landed but not yet
+become visible. Storing the upload's stamp over it threw that overlap away and
+made rows committed in `(delta_watermark, update_now]` undeliverable — silent
+cross-client staleness, and now that a PWA and this app share an account, a real
+two-client setup. Only `applyDelta` advances the watermark; the upload
+transaction passes `null`. The server has since backdated `/sync/update`'s
+envelope by the same overlap, so belt and braces. **Per-record `lastModifiedAt`
+tokens are NOT backdated** — they stay at the real write time, because
+backdating them would corrupt arbitration. The observable consequence is that
+accepted tokens now sit strictly *after* the envelope they arrive in; a golden
+fixture captured before 2026-08-11 still shows them equal, which is why
+`JournalGoldenFixtureTest` asserts `>=` until the fixtures are regenerated.
+
+**A `missing` rejection carries `deleted: true` and means "drop your row".**
+`errorKind = "missing"` has always arrived with `serverRow: null`; both clients
+then cleared the dirty flag and adopted nothing, leaving a phantom row that
+could never re-upload and that no delta could ever deliver — permanent, silent
+divergence. The server now sends a sibling `deleted` flag as an explicit
+instruction. Adoption on this side: `deleted` is checked BEFORE the `serverRow`
+null-check (a missing rejection has no row to check), a missing tracker takes its
+entries and dirty state with it, a missing entry is dropped alone, and the drop
+is **unguarded by generation** — unlike a settled delete, which keeps its guard.
+There is nothing to arbitrate against when the server has no row: the local copy
+carries a base token that will be rejected for the same reason next cycle, so a
+guard would only postpone the same deletion, and a user editing every cycle would
+keep the phantom and its red indicator indefinitely.
+
+Two levels of `deleted` now exist on a rejection and must not be conflated:
+**rejection-level** means no row exists server-side, **`serverRow.deleted`** means
+a real row exists and is tombstoned (this is what `stale` rejections carry, and
+it flows through the ordinary adoption path). A synthetic tombstone `serverRow`
+was rejected server-side precisely because it would be indistinguishable from the
+second. How `missing` arises at all: nothing in the app hard-deletes a journal row
+— tracker deletion is a soft flag and entries outlive their tracker for MCP
+history — so it means the server's rows were replaced under a client still
+holding tokens: a restore from backup, a re-created DB, or a client aimed at a
+different instance.
+
+Two adjacent gaps stay open, deliberately: a phantom that is never edited never
+uploads, so it never draws a rejection and self-heals only on the next edit
+(`forceSync`'s full pull does not prune local rows absent from the response); and
+journal's server-side DB runs with `foreign_keys=False`, so an entry uploaded for
+a nonexistent tracker inserts an orphan the delta's `JOIN trackers` hides.
 
 ## Golden fixtures (`testdata/golden/journal/`)
 

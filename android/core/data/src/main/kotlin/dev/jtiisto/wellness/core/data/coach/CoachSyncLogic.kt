@@ -358,6 +358,18 @@ private fun advanceRecordTokens(
  * A null [uploadedLog] means nothing is known to have been sent, and a record
  * absent from it was created after the payload was built. Neither has been
  * arbitrated, so neither may have a verdict applied.
+ *
+ * The comparison is **structural**, not by reference: the stored day is
+ * re-parsed from its blob, so an untouched record is an equal-but-distinct
+ * instance of the one that was uploaded, and identity would call every record
+ * re-edited and lose every verdict.
+ *
+ * Two divergences from the JS twin (`sync-logic.js`) are known, unreachable,
+ * and recorded here so the next porter does not "fix" them into existence:
+ * [applyVerdict] removes the key where the JS would adopt a bare JSON array
+ * (the server never sends one), and `JsonPrimitive` distinguishes `5` from
+ * `5.0` where JS number equality cannot (every numeric write here funnels
+ * through `journalNumberJson`, so the two spellings never both occur).
  */
 private fun wasArbitrated(localLog: JsonObject, uploadedLog: JsonObject?, key: String): Boolean {
     val uploaded = uploadedLog?.get(key) as? JsonObject ?: return false
