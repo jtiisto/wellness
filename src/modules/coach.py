@@ -547,6 +547,83 @@ def _delete_exercise_log(cursor, exercise_log_id):
     cursor.execute("DELETE FROM exercise_logs WHERE id = ?", (exercise_log_id,))
 
 
+def _set_row_values(s):
+    """The `set_logs` column values one payload set stores, in column order.
+
+    The SINGLE source of truth for both the INSERT below and the
+    unchanged-content comparison, so the two can never drift — the comparison's
+    whole safety argument is "re-inserting this payload would produce
+    byte-identical rows", which only holds while it applies the insert's own
+    normalization (set_num default 0, unit default 'lbs', completed → 1/0).
+    """
+    return (
+        s.get("set_num", 0),
+        s.get("weight"),
+        s.get("reps"),
+        s.get("rpe"),
+        s.get("unit", "lbs"),
+        s.get("duration_sec"),
+        1 if s.get("completed") else 0,
+    )
+
+
+def _stored_set_values(cursor, exercise_log_id):
+    """The stored sets as `_set_row_values` tuples, in INSERTION order — the
+    order the payload's sets were written in, so a positional compare against a
+    fresh payload is exact. (The read path sorts by set_num instead; that is a
+    presentation order, not the storage order this compares.)"""
+    rows = cursor.execute(
+        "SELECT set_num, weight, reps, rpe, unit, duration_sec, completed "
+        "FROM set_logs WHERE exercise_log_id = ? ORDER BY id",
+        (exercise_log_id,),
+    ).fetchall()
+    return [tuple(r) for r in rows]
+
+
+def _stored_checklist_items(cursor, exercise_log_id):
+    """The stored checklist item texts in insertion order (see above)."""
+    return [
+        r["item_text"]
+        for r in cursor.execute(
+            "SELECT item_text FROM checklist_log_items WHERE exercise_log_id = ? ORDER BY id",
+            (exercise_log_id,),
+        ).fetchall()
+    ]
+
+
+def _exercise_content_unchanged(cursor, existing_ex, exercise_data):
+    """Would writing `exercise_data` over the stored exercise change nothing?
+
+    Compares only CLIENT-OWNED content — the four scalars plus the complete set
+    and checklist lists — against what the DB actually holds. Server-derived
+    metadata (exercise_id, canonical_slug, exposure) is deliberately excluded;
+    see the callsite for what happens when only that differs.
+
+    The question is deliberately "is the write a no-op at the storage level",
+    not "is the payload identical to the last one": a false CHANGED verdict
+    costs nothing but today's behavior (a needless re-stamp), while a false
+    UNCHANGED verdict would silently drop a real edit. Everything ambiguous
+    therefore reads as changed — set/checklist ORDER included, and a payload
+    whose types don't match the column's affinity (a numeric sent as a string)
+    included. Numeric int/float differences do compare equal, because column
+    affinity would store the identical value either way.
+    """
+    if existing_ex["last_modified"] is None:
+        # A pre-migration-3 row has no token yet, and the arbiter reads a NULL
+        # stamp as "accept anything". Skipping the write would leave it that way
+        # forever, so an unstamped row is always written (and thereby stamped)
+        # even when its content matches.
+        return False
+    for field in ("user_note", "duration_min", "avg_hr", "max_hr"):
+        if existing_ex[field] != exercise_data.get(field):
+            return False
+    incoming_sets = [_set_row_values(s) for s in exercise_data.get("sets", [])]
+    if _stored_set_values(cursor, existing_ex["id"]) != incoming_sets:
+        return False
+    incoming_items = list(exercise_data.get("completed_items", []))
+    return _stored_checklist_items(cursor, existing_ex["id"]) == incoming_items
+
+
 def _store_log(conn, date_str, log_data, client_id, now):
     """Apply a coach log upload at per-record granularity (R3).
 
@@ -558,6 +635,17 @@ def _store_log(conn, date_str, log_data, client_id, now):
     Exercises absent from the payload are never touched. Never whole-rejects.
     Returns the reconciled day (merged serverRow, carrying per-exercise + day
     tokens) for the client to adopt. See plans/phase4-r3-coach-upsert.md.
+
+    UNCHANGED-CONTENT GUARD: a record whose client-owned content already equals
+    the stored row is not written at all — no UPDATE, no `last_modified`
+    re-stamp, no set/checklist delete+reinsert. A record's stamp is the
+    optimistic-concurrency token every OTHER device echoes as its base; the
+    clients upload the whole day, so re-stamping on content that did not change
+    turned one set tick into a fresh stamp on every record of the day, staling
+    every other device's bases and manufacturing rejections for records nobody
+    edited. Skipping keeps those bases valid. The response still reports stored
+    reality, so an unchanged record legitimately carries its OLD stamp — both
+    clients adopt returned rows verbatim.
     """
     cursor = conn.cursor()
     meta_keys = {"session_feedback", "_lastModifiedAt", "_lastModifiedBy", "_baseLastModifiedAt"}
@@ -578,7 +666,8 @@ def _store_log(conn, date_str, log_data, client_id, now):
     notes = feedback.get("general_notes")
 
     existing_sl = cursor.execute(
-        "SELECT id, last_modified FROM workout_session_logs WHERE date = ?", (date_str,)
+        "SELECT id, last_modified, session_id, pain_discomfort, general_notes "
+        "FROM workout_session_logs WHERE date = ?", (date_str,)
     ).fetchone()
     if existing_sl is None:
         cursor.execute("""
@@ -590,12 +679,30 @@ def _store_log(conn, date_str, log_data, client_id, now):
     else:
         session_log_id = existing_sl["id"]
         if should_accept_log_write(existing_sl["last_modified"], session_base):
-            cursor.execute("""
-                UPDATE workout_session_logs
-                SET session_id = ?, pain_discomfort = ?, general_notes = ?,
-                    last_modified = ?, modified_by = ?
-                WHERE id = ?
-            """, (session_id, pain, notes, now, client_id, session_log_id))
+            if (pain == existing_sl["pain_discomfort"]
+                    and notes == existing_sl["general_notes"]):
+                # Unchanged feedback → no write, no stamp (guard; see docstring).
+                # `modified_by` stays too: whoever last CHANGED the feedback is
+                # still its last modifier.
+                # The plan link is refreshed regardless, without advancing the
+                # stamp. session_id is SERVER-derived metadata — a plan authored
+                # after the log synced (the case is_off_plan_entry documents) —
+                # not client content, and it is absent from the lean sync shape,
+                # so no client has anything to learn from a relink. Advancing
+                # the day token for a change no client made is exactly the
+                # amplification this guard removes.
+                if session_id != existing_sl["session_id"]:
+                    cursor.execute(
+                        "UPDATE workout_session_logs SET session_id = ? WHERE id = ?",
+                        (session_id, session_log_id),
+                    )
+            else:
+                cursor.execute("""
+                    UPDATE workout_session_logs
+                    SET session_id = ?, pain_discomfort = ?, general_notes = ?,
+                        last_modified = ?, modified_by = ?
+                    WHERE id = ?
+                """, (session_id, pain, notes, now, client_id, session_log_id))
         # else: feedback's base is stale → keep the server's feedback row.
 
     # --- Exercise records: arbitrate + upsert each independently.
@@ -604,7 +711,8 @@ def _store_log(conn, date_str, log_data, client_id, now):
             continue
 
         existing_ex = cursor.execute(
-            "SELECT id, last_modified FROM exercise_logs "
+            "SELECT id, last_modified, exercise_id, canonical_slug, user_note, "
+            "duration_min, avg_hr, max_hr FROM exercise_logs "
             "WHERE session_log_id = ? AND exercise_key = ?",
             (session_log_id, exercise_key),
         ).fetchone()
@@ -686,6 +794,27 @@ def _store_log(conn, date_str, log_data, client_id, now):
             exercise_log_id = cursor.lastrowid
         else:
             exercise_log_id = existing_ex["id"]
+            if _exercise_content_unchanged(cursor, existing_ex, exercise_data):
+                # Unchanged → skip the UPDATE, the stamp AND the set/checklist
+                # delete+reinsert (guard; see docstring). The rows keep their
+                # identity, and every other device's base token for this
+                # exercise stays valid.
+                # Server-derived metadata is still refreshed — and still without
+                # advancing the stamp. canonical_slug/exercise_id re-resolve from
+                # the plan on every write (unlike the frozen `exposure`), so a
+                # plan authored or repointed after this log synced must reach the
+                # row for the analysis reads that key on it. Neither field is in
+                # the lean sync shape, so nothing propagates to clients and no
+                # consumer can be relying on "slug moved ⇒ stamp moved"; the
+                # incremental GET arms read stamps only.
+                if (exercise_id != existing_ex["exercise_id"]
+                        or canonical_slug != existing_ex["canonical_slug"]):
+                    cursor.execute(
+                        "UPDATE exercise_logs SET exercise_id = ?, canonical_slug = ? "
+                        "WHERE id = ?",
+                        (exercise_id, canonical_slug, exercise_log_id),
+                    )
+                continue
             # `exposure` is deliberately absent from this UPDATE — asymmetric
             # with canonical_slug, which re-resolves from the plan on every
             # write. Exposure is FROZEN at the row's first insert ("logging
@@ -712,12 +841,7 @@ def _store_log(conn, date_str, log_data, client_id, now):
                 INSERT INTO set_logs
                 (exercise_log_id, set_num, weight, reps, rpe, unit, duration_sec, completed)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                exercise_log_id, s.get("set_num", 0),
-                s.get("weight"), s.get("reps"), s.get("rpe"),
-                s.get("unit", "lbs"), s.get("duration_sec"),
-                1 if s.get("completed") else 0,
-            ))
+            """, (exercise_log_id, *_set_row_values(s)))
         for item in exercise_data.get("completed_items", []):
             cursor.execute("""
                 INSERT INTO checklist_log_items (exercise_log_id, item_text)
@@ -791,7 +915,12 @@ def _plans_version(get_db):
       row, so without this arm deleting a non-latest plan never moved MAX),
     - LOG writes (workout_session_logs.last_modified — without this arm another
       device's logged sets reached a continuously-visible client only on a
-      refocus/online event; mid-workout phone+tablet is exactly that case).
+      refocus/online event; mid-workout phone+tablet is exactly that case),
+    - EXERCISE-record writes (exercise_logs.last_modified — the day-level stamp
+      is no longer a proxy for these: the unchanged-content guard stopped
+      re-stamping untouched feedback, so a lone set tick moves ONLY its
+      exercise's stamp. Before the guard, the unconditional feedback restamp
+      masked this missing arm),
     - log-entry deletions (deleted_exercise_logs.deleted_at — a hard DELETE
       leaves no child stamp, and the day-level stamp only moves when the
       feedback record is accepted, so without this arm a delete whose feedback
@@ -808,6 +937,8 @@ def _plans_version(get_db):
                 SELECT MAX(deleted_at) as v FROM deleted_plans
                 UNION ALL
                 SELECT MAX(last_modified) as v FROM workout_session_logs
+                UNION ALL
+                SELECT MAX(last_modified) as v FROM exercise_logs
                 UNION ALL
                 SELECT MAX(deleted_at) as v FROM deleted_exercise_logs
             )

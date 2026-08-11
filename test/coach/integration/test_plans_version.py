@@ -131,3 +131,35 @@ class TestPlansVersion:
         version_after = client.get("/api/coach/plans-version").json()["version"]
         assert version_after != version_before
         assert version_after == log_ts
+
+    def test_exercise_only_edit_bumps_the_version(self, client, tmp_coach_db):
+        """An accepted edit that touches ONLY an exercise record must move the
+        poll version. The day-level stamp is no longer a proxy for this: the
+        unchanged-content guard stopped re-stamping untouched feedback, so a
+        lone set tick moves only exercise_logs.last_modified — the arm this
+        test pins (its absence was masked pre-guard by the unconditional
+        feedback restamp)."""
+        conn = sqlite3.connect(tmp_coach_db)
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute(
+            "INSERT INTO workout_session_logs (date, last_modified) VALUES (?, ?)",
+            ("2025-06-15", "2025-06-15T12:00:00Z"),
+        )
+        session_log_id = conn.execute(
+            "SELECT id FROM workout_session_logs WHERE date = '2025-06-15'"
+        ).fetchone()[0]
+        conn.commit()
+        version_before = client.get("/api/coach/plans-version").json()["version"]
+
+        ex_ts = "2025-06-16T09:30:00Z"  # later than the day-level stamp
+        conn.execute(
+            "INSERT INTO exercise_logs (session_log_id, exercise_key, last_modified) "
+            "VALUES (?, 'ex_1', ?)",
+            (session_log_id, ex_ts),
+        )
+        conn.commit()
+        conn.close()
+
+        version_after = client.get("/api/coach/plans-version").json()["version"]
+        assert version_after != version_before
+        assert version_after == ex_ts
