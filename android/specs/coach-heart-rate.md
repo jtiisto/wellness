@@ -1,6 +1,11 @@
 # Coach Heart Rate Integration (pulse-bridge merge)
 
-**Status: APPROVED — Phase 1 (set-event log) implemented 2026-08-11; Phases 2–3 pending.** Branch: `feature/coach-pulse`. Instrumented tests await the next emulator session; device acceptance pending.
+**Status: APPROVED — all three phases implemented (P1+P2 2026-08-11 this repo; P3 server-side by
+the server session's plans/hr-module.md phases 3–5, parity note repointed 2026-08-11).**
+Branch: `feature/coach-pulse`. Outstanding before checkoff: device acceptance of the end-to-end
+flow (strap → capture → hr.db → analysis), the instrumented-test run next emulator session, and
+the deferred items (ForceSync HR arm; hr_mcp client registration; pulse-bridge retirement — an
+explicit later call).
 
 ## Goal
 
