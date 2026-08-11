@@ -18,6 +18,7 @@ import dev.jtiisto.wellness.core.data.sync.ForceSyncOrchestrator
 import dev.jtiisto.wellness.core.data.sync.ServerSwitcher
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
@@ -74,13 +75,6 @@ sealed interface ToolsEvent {
     data class Share(val path: String, val mimeType: String) : ToolsEvent
 
     data class Message(val text: String) : ToolsEvent
-
-    /**
-     * The switch has committed. The Activity finishes the task and ends the
-     * process; the user reopens the app, which is when boot resolution runs
-     * against the profile that was just made active.
-     */
-    data object CloseApp : ToolsEvent
 }
 
 data class ToolsUiState(
@@ -89,6 +83,8 @@ data class ToolsUiState(
     val buildStamp: String = "",
     val ping: ServerPing = ServerPing.Idle,
     val forceSync: ForceSyncUi = ForceSyncUi.Idle,
+    /** A switch is committing. Every action that touches server data is off. */
+    val switching: Boolean = false,
     val servers: List<ServerProfileRow> = emptyList(),
     val dialog: ToolsDialog? = null,
     val log: List<DebugLogEntity> = emptyList(),
@@ -110,6 +106,11 @@ data class ToolsUiState(
  * @param probeSyncStatus the server-reachability probe, as a lambda rather than
  *   the `JournalApi` behind it. The tab needs one string from the network layer
  *   and has no other business with it.
+ * @param appScope the process-lived scope, used for exactly one thing: the
+ *   server switch. That work quiesces every writer, wipes the database and ends
+ *   the process, and none of it may be tied to a screen the user can leave —
+ *   `viewModelScope` would cancel it the moment the tab goes away, which is
+ *   easily half of the four-figure milliseconds a switch takes.
  */
 class ToolsViewModel(
     private val probeSyncStatus: suspend () -> String?,
@@ -120,6 +121,7 @@ class ToolsViewModel(
     private val exporter: DataExporter,
     private val sharedFiles: SharedFileStore,
     private val switcher: ServerSwitcher,
+    private val appScope: CoroutineScope,
     private val debugLog: DebugLog,
     private val buildStamp: String,
     private val io: CoroutineDispatcher = Dispatchers.IO,
@@ -132,19 +134,26 @@ class ToolsViewModel(
     private val _events = Channel<ToolsEvent>(capacity = 8, onBufferOverflow = BufferOverflow.DROP_OLDEST)
     val events: Flow<ToolsEvent> = _events.receiveAsFlow()
 
+    /** The three in-flight indicators, folded into one source so `combine` fits. */
+    private data class Progress(
+        val ping: ServerPing,
+        val forceSync: ForceSyncUi,
+        val switching: Boolean,
+    )
+
     val uiState: StateFlow<ToolsUiState> = combine(
-        ping,
-        forceSync,
+        combine(ping, forceSync, switcher.switching, ::Progress),
         dialog,
         profilesDao.observeAll(),
         debugLog.entries(),
-    ) { ping, forceSync, dialog, profiles, log ->
+    ) { progress, dialog, profiles, log ->
         ToolsUiState(
             baseUrl = serverConfig.normalizedBaseUrl,
             activeNickname = ToolsLogic.activeNickname(profiles),
             buildStamp = buildStamp,
-            ping = ping,
-            forceSync = forceSync,
+            ping = progress.ping,
+            forceSync = progress.forceSync,
+            switching = progress.switching,
             servers = ToolsLogic.rows(profiles, bootstrap.builtInUrl),
             dialog = dialog,
             log = log,
@@ -174,7 +183,7 @@ class ToolsViewModel(
     // ---- force sync ------------------------------------------------------
 
     fun requestForceSync() {
-        if (forceSync.value == ForceSyncUi.Running) return
+        if (forceSync.value == ForceSyncUi.Running || switcher.switching.value) return
         dialog.value = ToolsDialog.ConfirmForceSync
     }
 
@@ -188,7 +197,12 @@ class ToolsViewModel(
      */
     fun confirmForceSync() {
         if (forceSync.value == ForceSyncUi.Running) return
+        // The dialog goes either way. What must not follow a switch confirmed
+        // while it was open is the cycle: the gate is already closed, so every
+        // write it made would be refused and the counts it reported would
+        // describe a server the app has left.
         dialog.value = null
+        if (switcher.switching.value) return
         forceSync.value = ForceSyncUi.Running
         viewModelScope.launch {
             try {
@@ -316,7 +330,7 @@ class ToolsViewModel(
 
     /** Tapping a row that is not the active one. */
     fun requestSwitch(row: ServerProfileRow) {
-        if (row.isActive) return
+        if (row.isActive || switcher.switching.value) return
         viewModelScope.launch {
             val target = row.id?.let { profilesDao.find(it) }
             // The row was deleted between the render and the tap.
@@ -325,20 +339,25 @@ class ToolsViewModel(
         }
     }
 
+    /**
+     * The confirmed switch — the one action here that is not this screen's to
+     * own.
+     *
+     * It runs on [appScope], and the nickname it logs is read here rather than
+     * inside the coroutine: from the moment the wipe transaction commits, every
+     * flow this ViewModel exposes is describing a server the app no longer uses.
+     * [ServerSwitcher] ends the process when it is done, so nothing collected
+     * from here has to survive to make that happen.
+     */
     fun confirmSwitch(target: ServerProfileEntity?) {
         dialog.value = null
-        viewModelScope.launch {
-            switcher.switchTo(target, fromNickname = uiState.value.activeNickname)
-            _events.send(ToolsEvent.CloseApp)
-        }
+        val from = uiState.value.activeNickname
+        appScope.launch { switcher.switchTo(target, fromNickname = from) }
     }
 
     fun confirmDeleteActive(profile: ServerProfileEntity) {
         dialog.value = null
-        viewModelScope.launch {
-            switcher.deleteActive(profile)
-            _events.send(ToolsEvent.CloseApp)
-        }
+        appScope.launch { switcher.deleteActive(profile) }
     }
 
     fun dismissDialog() {

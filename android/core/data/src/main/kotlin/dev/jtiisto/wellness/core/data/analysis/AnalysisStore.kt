@@ -210,7 +210,7 @@ class AnalysisStore(
 
     /**
      * Bring the module to a standstill, and do not return until it is — the
-     * server switch's third quiescence step.
+     * server switch's fourth quiescence step.
      *
      * Three things in order, and the order is the point. The flag goes up
      * first, so nothing new is accepted while we are tearing down; the
@@ -237,6 +237,14 @@ class AnalysisStore(
      * The memo is cleared only by a foreground retry after a *transient*
      * failure — the PWA memoized unconditionally, so one offline launch left the
      * query list empty for the lifetime of the page.
+     *
+     * **Constraint on the memo.** It can end up holding a *cancelled*
+     * [Deferred]: this `async` is a child of [controlJob], and [stopAndJoin]
+     * cancels it. Awaiting one throws rather than reloading. That is sound only
+     * because the store is terminal once stopped — every entry point refuses
+     * and the process is leaving — so there is no reopen path for a dead memo
+     * to poison. Anything that ever adds one must clear [initDeferred] as part
+     * of reopening; lowering [stopped] would not be enough.
      */
     suspend fun initialize() {
         if (stopped) return
@@ -564,6 +572,14 @@ class AnalysisStore(
         if (terminalOnScreen) return
 
         val generation = pollGeneration
+        // The open generation matters as much as the poll's, and guarding on
+        // the poll's alone swallowed a tap: [adopt] calls
+        // [invalidateOpenRequest], so an adoption landing behind a History tap
+        // made while this request was in flight would invalidate that open, and
+        // the user's `GET` would come back to a generation mismatch and return
+        // silently — a row tapped, nothing on screen, no error. An open that
+        // started after this check began is the newer intent and wins.
+        val open = openGeneration
         val row = try {
             repository.pending().firstOrNull()
         } catch (cancellation: CancellationException) {
@@ -572,7 +588,7 @@ class AnalysisStore(
             debugLog.log(TAG, "foreground pending check failed (${error.javaClass.simpleName})")
             return
         }
-        if (generation != pollGeneration || row == null) return
+        if (generation != pollGeneration || open != openGeneration || row == null) return
 
         adopt(ActiveReport.Loaded(row), navigateFromQueriesOnly = true)
         startPoll(row.id)
@@ -666,11 +682,34 @@ class AnalysisStore(
         pollJob = if (isForeground) launchPollLoop(id, pollGeneration) else null
     }
 
+    /** Called from outside the loop, where cancelling abandons an in-flight tick. */
     private fun stopPoll() {
+        val running = pollJob
+        stopPollFromTick()
+        running?.cancel()
+    }
+
+    /**
+     * The same bookkeeping, minus the cancel, for a tick that has decided it was
+     * the last one.
+     *
+     * Inside a tick [pollJob] **is** the coroutine calling this, so cancelling
+     * it cancels the caller — and the caller's very next act is
+     * [cacheReport], whose first suspension point then throws
+     * `CancellationException` into a best-effort write that swallows it. The
+     * effect was that no terminal report ever reached the cache in production:
+     * every completed report re-fetched itself from the network on the next
+     * open, and offline it was simply unavailable.
+     *
+     * Cancelling is not needed here in any case. [launchPollLoop] re-reads
+     * [pollGeneration] after every tick and returns on the mismatch this bump
+     * creates, so the loop ends on its own — one tick later at the very most,
+     * with no `delay` in between.
+     */
+    private fun stopPollFromTick() {
         pollGeneration += 1
         pollTarget = null
         unknownSince = null
-        pollJob?.cancel()
         pollJob = null
     }
 
@@ -708,11 +747,16 @@ class AnalysisStore(
         if (terminal) fetched.raw?.let { raw -> cacheReport(fetched.detail.id, raw) }
     }
 
-    /** Returns whether the tick was terminal, and therefore worth caching. */
+    /**
+     * Returns whether the tick was terminal, and therefore worth caching.
+     *
+     * Runs inside the poll coroutine, so every exit here goes through
+     * [stopPollFromTick] rather than [stopPoll] — see that KDoc.
+     */
     private fun applyTick(detail: ReportDetailDto): Boolean {
         val status = detail.reportStatus
         if (status.isTerminal) {
-            stopPoll()
+            stopPollFromTick()
             _state.update { current ->
                 val onProgress = current.view == AnalysisView.PROGRESS
                 current.copy(
@@ -743,14 +787,15 @@ class AnalysisStore(
         if (now() - since < UNKNOWN_CEILING_MS) return false
         // Longer than any registered query plus the server's reaper grace. The
         // row is not coming back; say so instead of polling into the evening.
-        stopPoll()
+        stopPollFromTick()
         _state.update { it.copy(unknownStalled = true) }
         debugLog.log(TAG, "unknown status ceiling reached for ${detail.id}")
         return false
     }
 
+    /** Also inside the poll coroutine; [stopPollFromTick] for the same reason. */
     private fun onPolledReportGone(id: Long) {
-        stopPoll()
+        stopPollFromTick()
         _state.update { current ->
             val wasViewingIt = current.viewing?.id == id
             current.copy(
@@ -790,6 +835,7 @@ class AnalysisStore(
         }
     }
 
+    /** On [control], so the refresh is a child of [controlJob] and not of the tick that asked for it. */
     private fun refreshHistoryAsync() {
         control.launch { loadHistory() }
     }
@@ -840,10 +886,20 @@ class AnalysisStore(
         }
     }
 
+    /**
+     * Snackbar copy for a failure the module has no sentence of its own for.
+     *
+     * The last arm is the class name and deliberately not `error.message`. What
+     * lands there is a decode failure, and kotlinx quotes the JSON it choked on
+     * inside its message — for this module that text is `response_markdown`,
+     * the most private string the app handles. It reaches the user through
+     * `adoptAfterConflict`'s `SubmitError` with nothing in between.
+     * [describeReportFailure] above settles for the same, and so does the log.
+     */
     private fun describe(error: Throwable): String = when {
         error is AnalysisHttpException -> error.detail ?: "HTTP ${error.status}"
         isNetworkError(error) -> "Server unreachable"
-        else -> error.message?.takeIf { it.isNotBlank() } ?: error.javaClass.simpleName
+        else -> error.javaClass.simpleName
     }
 
     companion object {

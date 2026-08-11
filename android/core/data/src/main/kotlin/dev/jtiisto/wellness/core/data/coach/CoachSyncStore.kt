@@ -173,9 +173,13 @@ class CoachSyncStore(
     fun observePlan(date: DateString): Flow<PlanDto?> =
         dao.observePlan(date).map { row -> row?.let { decodePlan(it.planJson, date) } }
 
-    /** The day's log, exactly as stored — arbitrary keys and all. */
+    /**
+     * The day's log, exactly as stored — arbitrary keys and all. A blob that
+     * will not parse reads as an absent day rather than throwing, for the same
+     * reason [observePlan] yields null: this flow feeds the UI.
+     */
     fun observeLog(date: DateString): Flow<JsonObject?> =
-        dao.observeLog(date).map { row -> row?.let { parseObject(it.logJson) } }
+        dao.observeLog(date).map { row -> row?.let { parseLogOrNull(it.logJson, date) } }
 
     /**
      * Every plan in the window, keyed by date.
@@ -192,9 +196,17 @@ class CoachSyncStore(
         rows.associate { row -> row.date to decodePlan(row.planJson, row.date) }
     }
 
-    /** Every stored day, keyed by date. See [observeAllPlans]. */
+    /**
+     * Every stored day, keyed by date.
+     *
+     * Unlike [observeAllPlans], an unreadable blob **drops the key**. A plan is
+     * kept as a null value because its absence would be read as a rest day and
+     * offer an ad-hoc session on top of a real workout; a log's absence claims
+     * nothing beyond "nothing readable was logged", which is exactly the
+     * situation, and the map's value type is what the readers already expect.
+     */
     fun observeAllLogs(): Flow<Map<DateString, JsonObject>> = dao.observeAllLogs().map { rows ->
-        rows.associate { row -> row.date to parseObject(row.logJson) }
+        rows.mapNotNull { row -> parseLogOrNull(row.logJson, row.date)?.let { row.date to it } }.toMap()
     }
 
     /**
@@ -213,9 +225,15 @@ class CoachSyncStore(
      * only serializes the first access; the DAO makes the insert race-safe even
      * across processes. `POST /register` is never called — the server registers
      * the client inside `POST /sync`.
+     *
+     * The mint is a write, so it takes a lease like every other. Self-contained
+     * shape: the candidate id is already in hand, so only the insert needs the
+     * fence — a first access parked here across a server switch is refused
+     * rather than seeding the wiped database with the old server's identity.
      */
     suspend fun clientId(): String = cachedClientId ?: clientIdMutex.withLock {
-        cachedClientId ?: dao.getOrCreateClientId(newClientId()).also { cachedClientId = it }
+        cachedClientId ?: session.withWriteLease { dao.getOrCreateClientId(newClientId()) }
+            .also { cachedClientId = it }
     }
 
     /**
@@ -354,6 +372,11 @@ class CoachSyncStore(
         // database, belonging to the server the user just left. The event rides
         // inside the same lease and the same transaction, so it is fenced by
         // construction — there is no second write to guard.
+        // A refused edit PROPAGATES, matching every `JournalSyncStore` mutator.
+        // (The prefs stores catch and drop instead; they write UI state, not
+        // user data, and losing a collapsed-category flag silently is fine.)
+        // There are two refusal points now, not one: this lease, and the nested
+        // one `clientId()` takes on the process's first mint.
         val changed = session.withWriteLease {
             val clientId = clientId()
             val stamp = clock()
@@ -521,7 +544,9 @@ class CoachSyncStore(
                 "dropping unsatisfiable dirty dates",
                 buildJsonObject { putJsonArray("dates") { pending.unsatisfiableDates.forEach { add(it) } } },
             )
-            dao.clearDirty(clearsFor(pending.unsatisfiableDates, pending))
+            // Self-contained mark: the dates and generations are already in
+            // hand, so the lease need only span the write itself.
+            session.withWriteLease { dao.clearDirty(clearsFor(pending.unsatisfiableDates, pending)) }
         }
 
         // Every dirty date was unsatisfiable: there is nothing to say. The PWA's
@@ -539,9 +564,17 @@ class CoachSyncStore(
         return pending.payload.size
     }
 
-    /** Runs inside the DAO's read transaction. See [PendingUpload]. */
+    /**
+     * Runs inside the DAO's read transaction. See [PendingUpload].
+     *
+     * A day whose blob will not parse is left out of the map entirely, which
+     * makes [selectLogsToUpload] report the date unsatisfiable: its dirty flag
+     * is dropped instead of failing this cycle and every cycle after it, and the
+     * row — no longer dirty — is then free to be overwritten by the next pull
+     * that carries the date. That is the recovery path for a corrupt blob.
+     */
     private fun buildPendingUpload(rows: List<CoachLogEntity>): PendingUpload {
-        val logs = rows.associate { it.date to parseObject(it.logJson) }
+        val logs = rows.mapNotNull { row -> parseLogOrNull(row.logJson, row.date)?.let { row.date to it } }.toMap()
         val selected = selectLogsToUpload(rows.map { it.date }, logs)
         return PendingUpload(
             generations = rows.associate { it.date to it.dirtyGeneration },
@@ -551,30 +584,60 @@ class CoachSyncStore(
     }
 
     /**
-     * Adopt the reconciled days and clear the dates that were actually sent —
-     * one transaction.
+     * Adopt the reconciled days and clear the dates the server actually
+     * answered — one transaction.
      *
-     * Whether a date is adopted wholesale or only has its tokens advanced is
+     * Whether a date is adopted wholesale or reconciled record by record is
      * decided against the generations read *inside* that transaction, compared
      * to the ones the payload was built at. A date edited in the meantime keeps
-     * its content.
+     * what the user re-edited.
+     *
+     * Two things the response promises are checked rather than assumed, because
+     * a dirty flag cleared for an edit the server never took is an edit lost
+     * with no trace: `success` is read (the server sets it on every healthy
+     * reply, so false means the cycle did not happen), and a payload date the
+     * `results` map does not mention keeps its dirty flag and re-uploads.
      */
     private suspend fun applyUploadResults(response: CoachSyncPostResponseDto, pending: PendingUpload) {
+        if (!response.success) {
+            debugLog?.log(TAG, "upload reported failure", buildJsonObject { put("dates", pending.payload.size) })
+            error("coach upload response reported success=false")
+        }
         val resultDates = response.results.keys.toList()
+        val answered = pending.payload.keys.filter { it in response.results }
+        val unanswered = pending.payload.keys - response.results.keys
+        if (unanswered.isNotEmpty()) {
+            debugLog?.log(
+                TAG,
+                "upload results missing dates",
+                buildJsonObject { putJsonArray("dates") { unanswered.forEach { add(it) } } },
+            )
+        }
         // The lease spans the write; see [ServerSessionGate].
         session.withWriteLease {
             dao.applyUploadResults(
                 dates = resultDates,
-                clears = clearsFor(pending.payload.keys, pending),
+                clears = clearsFor(answered, pending),
                 adopt = { currentRows ->
+                    val localLogs = LinkedHashMap<DateString, JsonObject>()
+                    val unreadable = mutableSetOf<DateString>()
+                    for (row in currentRows) {
+                        val log = parseLogOrNull(row.logJson, row.date)
+                        if (log != null) localLogs[row.date] = log else unreadable += row.date
+                    }
                     val next = adoptUploadResults(
-                        localLogs = currentRows.associate { it.date to parseObject(it.logJson) },
+                        localLogs = localLogs,
                         results = response.results,
                         snapshotGens = pending.generations,
                         dirtyDateGenerations = currentRows.associate { it.date to it.dirtyGeneration },
                         uploadedLogs = pending.payload,
                     )
-                    resultDates.mapNotNull { date -> next[date]?.let { logEntity(date, it) } }
+                    // An unreadable row is left exactly as stored: adoption
+                    // cannot tell a mid-sync re-edit from a corrupt blob, and
+                    // writing either answer would be a guess dressed up as a
+                    // verdict. The next pull repairs it.
+                    resultDates.filterNot { it in unreadable }
+                        .mapNotNull { date -> next[date]?.let { logEntity(date, it) } }
                 },
             )
         }
@@ -623,6 +686,11 @@ class CoachSyncStore(
         watermark: SyncStamp?,
         fullSnapshot: Boolean = false,
     ) {
+        // Captured BEFORE the request, and only this value may be retired. A
+        // probe that parks a version while this GET is in flight has seen data
+        // the response predates; consuming it here would answer "nothing
+        // changed" forever after for changes this client never pulled.
+        val probedVersion = pendingPlansVersion
         val data = api.sync(clientId, watermark)
         debugLog?.log(
             TAG,
@@ -654,9 +722,9 @@ class CoachSyncStore(
         // unretired and re-sync on every tick.
         lastKnownPlansVersion = laterStamp(
             maxPlanVersion(data.plans, lastKnownPlansVersion),
-            pendingPlansVersion,
+            probedVersion,
         )
-        pendingPlansVersion = null
+        if (pendingPlansVersion == probedVersion) pendingPlansVersion = null
     }
 
     private suspend fun updateSyncStatus() {
@@ -707,6 +775,28 @@ class CoachSyncStore(
 
     private fun parseObject(text: String): JsonObject = json.parseToJsonElement(text).jsonObject
 
+    /**
+     * A stored day, or null when the blob will not parse into one.
+     *
+     * The plan half has had this since it was written; the log half decoded
+     * bare, so a single corrupt row threw into the UI collectors AND into every
+     * sync cycle — permanently, because nothing in the cycle could get past it
+     * to repair the row. Each caller decides what "skipped" means for it; none
+     * of them may fail.
+     *
+     * The date is the only thing logged. A parse failure's message quotes the
+     * text it choked on, and that text is the user's training data.
+     */
+    private fun parseLogOrNull(text: String, date: DateString): JsonObject? {
+        val parsed = try {
+            json.parseToJsonElement(text) as? JsonObject
+        } catch (_: SerializationException) {
+            null
+        }
+        if (parsed == null) debugLog?.log(TAG, "log decode failed", buildJsonObject { put("date", date) })
+        return parsed
+    }
+
     private fun encode(value: JsonObject): String = json.encodeToString(JsonObject.serializer(), value)
 
     /**
@@ -730,8 +820,12 @@ class CoachSyncStore(
      * data loss, dressed up as a successful sync. Failing instead costs one
      * retry: the watermark stays put, and the server's equality-accepting
      * arbitration makes the eventual re-upload a no-op.
+     *
+     * An empty string is treated as absent rather than stored: it compares below
+     * every real stamp, so the next pull would send `last_sync_time=` and get an
+     * answer bounded by nothing in particular.
      */
-    private fun requireWatermark(serverTime: SyncStamp?): SyncStamp = serverTime
+    private fun requireWatermark(serverTime: SyncStamp?): SyncStamp = serverTime?.takeIf { it.isNotEmpty() }
         ?: error("coach pull response had no serverTime")
 
     /** The later of two server stamps, compared lexically. */

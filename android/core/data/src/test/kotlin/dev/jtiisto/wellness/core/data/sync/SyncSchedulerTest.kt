@@ -360,13 +360,55 @@ class SyncSchedulerTest {
         advanceTimeBy(1_000)
         assertEquals(emptyList<Long>(), robot.syncStarts)
 
-        // Nothing owned by the scheduler was running, so the flag survives until
-        // some later execution reaches its finally — odd, but PWA parity.
+        // The flag itself is PWA parity: nothing owned by the scheduler was
+        // running, so it survives until some later execution reaches its
+        // finally — which is the second start below. What is NOT parity is the
+        // timer this now also arms (see the test after this one); it is
+        // cancelled here by `requestSync`, so the timeline is unchanged.
         robot.storeSyncing = false
         scheduler.requestSync()
         advanceTimeBy(5_000)
 
         assertEquals(listOf(1_000L, 3_500L), robot.syncStarts)
+    }
+
+    @Test
+    @DisplayName("a trigger refused because an EXTERNAL syncer is busy still arms the debounce")
+    fun externallyBusyTriggerArmsTheDebounce() = schedulerTest { robot ->
+        // The flush Worker or the force-sync orchestrator owns the store's flag.
+        robot.storeSyncing = true
+        val scheduler = robot.build()
+
+        scheduler.requestSync()
+        advanceTimeBy(1_000)
+        assertEquals(emptyList<Long>(), robot.syncStarts)
+
+        // It finishes, and nothing triggers again — the case the PWA's parity
+        // does not cover, because the PWA had no external syncers. Without the
+        // armed timer the latch sits unread and the requested sync simply never
+        // happens.
+        robot.storeSyncing = false
+        advanceTimeBy(2_000)
+
+        assertEquals(listOf(2_500L), robot.syncStarts)
+    }
+
+    @Test
+    @DisplayName("the scheduler's OWN flight arms nothing extra — its finally is what re-arms")
+    fun ownFlightDoesNotDoubleArm() = schedulerTest { robot ->
+        robot.syncDurationMs = 10_000
+        val scheduler = robot.build()
+
+        scheduler.requestSync()
+        runCurrent()
+        // Refused because this scheduler is mid-flight: the running invocation
+        // owns the flag and consumes it in its finally, so arming here would be
+        // a second debounce racing that one.
+        scheduler.requestSync()
+        advanceTimeBy(30_000)
+
+        assertEquals(listOf(0L, 12_500L), robot.syncStarts)
+        assertEquals(1, robot.maxConcurrentSyncs)
     }
 
     @Test

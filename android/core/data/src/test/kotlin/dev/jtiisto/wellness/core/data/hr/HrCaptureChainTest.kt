@@ -6,7 +6,7 @@ import dev.jtiisto.wellness.core.ble.model.HeartRateSample
 import dev.jtiisto.wellness.core.data.db.FakeHrSampleDao
 import dev.jtiisto.wellness.core.data.db.FakeHrSessionDao
 import dev.jtiisto.wellness.core.data.sync.ServerSessionGate
-import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -34,7 +34,7 @@ private const val DEVICE = "AA:BB:CC:DD:EE:FF"
  */
 class HrCaptureChainTest {
 
-    private class Chain(scope: TestScope) {
+    private class Chain(scope: CoroutineScope) {
         val sessionDao = FakeHrSessionDao()
         val sampleDao = FakeHrSampleDao()
         val gate = ServerSessionGate()
@@ -45,6 +45,7 @@ class HrCaptureChainTest {
             sessionDao = sessionDao,
             sampleDao = sampleDao,
             session = gate,
+            scope = scope,
             scheduleUpload = { scheduled++ },
             newSessionId = { "session-${++minted}" },
             now = { NOW },
@@ -68,7 +69,7 @@ class HrCaptureChainTest {
     @Test
     @DisplayName("a gate closed mid-capture keeps the beats buffered and leaves the session open")
     fun closedGateKeepsTheBatchAndTheSession() = runTest {
-        val chain = Chain(this)
+        val chain = Chain(backgroundScope)
         val id = chain.store.startSession(DEVICE)
         chain.buffer.add(chain.beat(NOW), id)
         chain.buffer.add(chain.beat(NOW + 1000), id)
@@ -92,7 +93,7 @@ class HrCaptureChainTest {
     @Test
     @DisplayName("a flush refused by the gate reports failure rather than claiming success")
     fun refusedFlushReportsFailure() = runTest {
-        val chain = Chain(this)
+        val chain = Chain(backgroundScope)
         val id = chain.store.startSession(DEVICE)
         chain.buffer.add(chain.beat(NOW), id)
         chain.gate.close()
@@ -117,7 +118,7 @@ class HrCaptureChainTest {
     @Test
     @DisplayName("the same chain persists and closes normally while the gate is open")
     fun openGateStoresAndCloses() = runTest {
-        val chain = Chain(this)
+        val chain = Chain(backgroundScope)
         val id = chain.store.startSession(DEVICE)
         chain.buffer.add(chain.beat(NOW), id)
         chain.buffer.add(chain.beat(NOW + 1000), id)

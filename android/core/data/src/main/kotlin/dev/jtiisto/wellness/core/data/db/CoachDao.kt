@@ -303,6 +303,15 @@ abstract class CoachDao {
      * Logs are deliberately never treated this way. A day the user created
      * locally and has not uploaded yet is absent from the server's response by
      * definition, and deleting it would destroy unsent work.
+     *
+     * The snapshot is trusted for the deletion but **not for the watermark**.
+     * "Every local plan removed by a response that carried none of its own" is
+     * a legitimate empty schedule and also exactly what a server answering from
+     * an empty or half-restored database looks like; nothing in a 200 tells the
+     * two apart. So the deletion stands — the rule is right, and re-deriving it
+     * later is impossible once the cursor has moved — while the cursor stays
+     * put, leaving one ordinary incremental pull able to restore whatever the
+     * server really has.
      */
     @Transaction
     open suspend fun applyDownload(
@@ -313,11 +322,14 @@ abstract class CoachDao {
         watermark: SyncStamp?,
         fullSnapshotPlans: Boolean = false,
     ) {
+        var wipedOnAnEmptySnapshot = false
         if (fullSnapshotPlans) {
             val present = plans.mapTo(mutableSetOf()) { it.date }
-            for (row in listAllPlans()) {
+            val stored = listAllPlans()
+            for (row in stored) {
                 if (row.date !in present) deletePlan(row.date)
             }
+            wipedOnAnEmptySnapshot = plans.isEmpty() && stored.isNotEmpty()
         }
         for (date in deletedPlanDates) deletePlan(date)
         for (plan in plans) upsertPlan(plan)
@@ -329,7 +341,9 @@ abstract class CoachDao {
         }
 
         if (earliestDate != null) upsertMeta(CoachMetaEntity(KEY_EARLIEST_DATE, earliestDate))
-        if (watermark != null) upsertMeta(CoachMetaEntity(KEY_LAST_SERVER_SYNC_TIME, watermark))
+        if (watermark != null && !wipedOnAnEmptySnapshot) {
+            upsertMeta(CoachMetaEntity(KEY_LAST_SERVER_SYNC_TIME, watermark))
+        }
 
         // After the writes, never before: the server can legitimately deliver a
         // day that sits exactly on the boundary.

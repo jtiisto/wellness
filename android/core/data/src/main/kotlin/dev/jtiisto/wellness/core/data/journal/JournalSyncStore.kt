@@ -54,7 +54,7 @@ private const val TAG = "journal-sync"
  *
  * The pure decisions live in `JournalSyncLogic`; this class is the read → call
  * → write wrapper around them, plus the ordering that makes the protocol safe.
- * Three things it must never get wrong:
+ * Four things it must never get wrong:
  *
  * 1. **`dataJson` and its projected columns are written together.** Every path
  *    below goes through [trackerEntity], so a server stamp can never land in
@@ -66,6 +66,10 @@ private const val TAG = "journal-sync"
  * 3. **Nothing read outside a transaction is written back into one.** Rows are
  *    re-read inside [JournalDao.applyUploadResponse]; what this class passes in
  *    are values and the generation each was uploaded at.
+ * 4. **The POST's `serverTime` is never the pull watermark**, exactly as in
+ *    coach. Only the delta's carries the server's two-second overlap, and that
+ *    overlap is the whole defence against a concurrent writer's change falling
+ *    between two incremental pulls.
  *
  * @param isOnline gates the whole cycle; offline is a skip, not a failure.
  * @param session the server-switch fence. Checked immediately before each of
@@ -147,9 +151,18 @@ class JournalSyncStore(
      * The client identity, minted once and cached for the process. The mutex
      * only serializes the first access; the DAO makes the insert race-safe even
      * across processes.
+     *
+     * The mint is a write to a wiped table, so it takes a lease like any other
+     * — the drain that surrounds every caller of this is a one-shot wait, not a
+     * fence, and a first sync starting just after it would otherwise seed
+     * `journal_meta` with a row belonging to the server being left. A refusal
+     * fails the cycle, which is the right answer: there is no identity to sync
+     * under.
      */
     suspend fun clientId(): String = cachedClientId ?: clientIdMutex.withLock {
-        cachedClientId ?: dao.getOrCreateClientId(newClientId()).also { cachedClientId = it }
+        cachedClientId ?: session.withWriteLease { dao.getOrCreateClientId(newClientId()) }.also {
+            cachedClientId = it
+        }
     }
 
     // ---- mutators --------------------------------------------------------
@@ -340,8 +353,7 @@ class JournalSyncStore(
         val response = api.syncUpdate(pending.payload.payload)
         applyUploadResponse(response, pending, snapshotTrackerGens, snapshotEntryGens)
 
-        dao.pruneEntriesBefore(localDataWindowStart(today()))
-        pruneSettledDeletedTrackers()
+        pruneLocalData()
 
         val accepted = response.acceptedTrackers.size + response.acceptedEntries.size
         val conflicts = response.rejectedTrackers.size + response.rejectedEntries.size
@@ -421,8 +433,7 @@ class JournalSyncStore(
             val response = api.syncUpdate(pending.payload.payload)
             applyUploadResponse(response, pending, snapshotTrackerGens, snapshotEntryGens)
 
-            dao.pruneEntriesBefore(localDataWindowStart(today()))
-            pruneSettledDeletedTrackers()
+            pruneLocalData()
 
             logRejections(response)
             updateSyncStatus()
@@ -459,7 +470,7 @@ class JournalSyncStore(
         // The lease spans the write itself. A check in front of it would be a
         // check-then-act: admitted, suspended, wiped, and then landing anyway.
         session.withWriteLease {
-            dao.applyDelta(trackers, entries, delta.deletedTrackers, requireWatermark(delta.serverTime, "delta"))
+            dao.applyDelta(trackers, entries, delta.deletedTrackers, requireWatermark(delta.serverTime))
         }
 
         // Normalize whatever legacy shapes the server just handed us. Changed
@@ -475,16 +486,21 @@ class JournalSyncStore(
      * that landed in between.
      */
     private suspend fun normalizeLegacyTrackers() {
-        val count = dao.rewriteTrackers { rows ->
-            val normalized = computeNormalizedConfig(rows.map(::decodeTracker), locallyDeletedIds(rows))
-                ?: return@rewriteTrackers emptyList()
-            val byId = rows.associateBy { it.id }
-            normalized.config
-                .filter { it.id in normalized.changedIds }
-                .mapNotNull { tracker ->
-                    val existing = byId[tracker.id] ?: return@mapNotNull null
-                    trackerEntity(tracker, deleted = existing.deleted)
-                }
+        // Under the lease: the rows this rewrites came from the server that is
+        // being left, and the transaction is a read-modify-write of the tracker
+        // table the wipe is about to empty.
+        val count = session.withWriteLease {
+            dao.rewriteTrackers { rows ->
+                val normalized = computeNormalizedConfig(rows.map(::decodeTracker), locallyDeletedIds(rows))
+                    ?: return@rewriteTrackers emptyList()
+                val byId = rows.associateBy { it.id }
+                normalized.config
+                    .filter { it.id in normalized.changedIds }
+                    .mapNotNull { tracker ->
+                        val existing = byId[tracker.id] ?: return@mapNotNull null
+                        trackerEntity(tracker, deleted = existing.deleted)
+                    }
+            }
         }
         if (count > 0) {
             debugLog?.log(TAG, "normalized legacy trackers", buildJsonObject { put("count", count) })
@@ -611,7 +627,16 @@ class JournalSyncStore(
                         .map { TrackerDirtyClear(it, snapshotTrackerGens.getValue(it)) },
                     entryClears = (snapshotEntryGens.keys - cleared.entries.keys.toSet())
                         .map { EntryDirtyClear(entryKeyDate(it), entryKeyTrackerId(it), snapshotEntryGens.getValue(it)) },
-                    watermark = requireWatermark(response.serverTime, "update"),
+                    // Deliberately no watermark: only the DELTA's serverTime
+                    // advances the pull cursor. The server stamps a delta two
+                    // seconds behind wall clock precisely so an incremental pull
+                    // overlaps the writes that were in flight during the last
+                    // one; the POST's stamp is an ordinary write timestamp with
+                    // no such margin, and storing it discarded the overlap — a
+                    // change another client made in those two seconds would
+                    // never be delivered. Redelivery is the cost, and every row
+                    // carries the token that makes re-application a no-op.
+                    watermark = null,
                 ),
                 restampTracker = { current, stamp ->
                     trackerEntity(
@@ -623,6 +648,21 @@ class JournalSyncStore(
                 },
             )
         }
+    }
+
+    /**
+     * Retention, once the response has been applied: the seven-day entry window
+     * and the settled-delete backstop.
+     *
+     * One lease over both, taken before the first read either of them depends
+     * on. They are deletes rather than inserts, so a stray one cannot leave the
+     * previous server's rows behind — but it can still run its transaction
+     * against a database the wipe has already emptied, and the settled-delete
+     * half decides what to delete from rows it read outside that transaction.
+     */
+    private suspend fun pruneLocalData() = session.withWriteLease {
+        dao.pruneEntriesBefore(localDataWindowStart(today()))
+        pruneSettledDeletedTrackers()
     }
 
     /**
@@ -753,7 +793,7 @@ class JournalSyncStore(
     private fun parseObject(text: String): JsonObject = json.parseToJsonElement(text).jsonObject
 
     /**
-     * The response's watermark, or the cycle fails.
+     * The delta's watermark, or the cycle fails.
      *
      * There is deliberately no device-clock fallback. The watermark is a
      * *server* instant that the next delta uses as its `since`; a device clock
@@ -762,7 +802,11 @@ class JournalSyncStore(
      * dressed up as a successful sync. Failing instead costs one retry: the
      * watermark stays put, and the server's equality-accepting arbitration
      * makes the eventual re-upload a no-op.
+     *
+     * Only the pull calls this, which is why it names one. The upload
+     * response's `serverTime` is never a watermark, so its absence is not an
+     * error — see [applyUploadResponse].
      */
-    private fun requireWatermark(serverTime: SyncStamp?, source: String): SyncStamp = serverTime
-        ?: error("journal $source response had no serverTime")
+    private fun requireWatermark(serverTime: SyncStamp?): SyncStamp = serverTime
+        ?: error("journal delta response had no serverTime")
 }

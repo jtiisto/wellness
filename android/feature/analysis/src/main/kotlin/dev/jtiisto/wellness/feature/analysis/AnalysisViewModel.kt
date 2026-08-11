@@ -2,15 +2,12 @@ package dev.jtiisto.wellness.feature.analysis
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import dev.jtiisto.wellness.core.data.analysis.AnalysisEvents
 import dev.jtiisto.wellness.core.data.analysis.AnalysisQueryDto
 import dev.jtiisto.wellness.core.data.analysis.AnalysisState
 import dev.jtiisto.wellness.core.data.analysis.AnalysisStore
-import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.time.ZoneId
@@ -34,17 +31,18 @@ data class AnalysisUiState(
  * Every decision that outlives the screen lives in [AnalysisStore]: the poll
  * survives this ViewModel being cleared, and must, because leaving the tab is
  * not abandoning the query.
+ *
+ * `AnalysisEvents` deliberately does not pass through here. Anything scoped to
+ * this ViewModel is only collected while the tab is composed, and the events
+ * are raised by work that keeps running when it is not; `WellnessApp` collects
+ * them at the shell instead.
  */
 class AnalysisViewModel(
     private val store: AnalysisStore,
-    events: AnalysisEvents,
     val zone: ZoneId,
 ) : ViewModel() {
 
     val state: StateFlow<AnalysisState> = store.state
-
-    /** One snackbar per event, never re-raised by a recomposition. */
-    val messages: Flow<String> = events.events.map { it.message }
 
     private val _ui = MutableStateFlow(AnalysisUiState())
     val ui: StateFlow<AnalysisUiState> = _ui.asStateFlow()

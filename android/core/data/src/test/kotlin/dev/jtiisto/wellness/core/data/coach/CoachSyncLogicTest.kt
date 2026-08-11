@@ -19,6 +19,10 @@ import org.junit.jupiter.api.Test
  * placeholders and made-up tokens). Where the port's shape differs from the
  * JS — `nextDirtyAfterApply` returns the shared `DirtyState` rather than a
  * coach-specific pair — the assertion follows the port; nothing else moves.
+ *
+ * The tombstone-verdict and per-record arbitration cases go beyond the
+ * transcription: they pin decisions the JS never had to make, and each one
+ * marks a way a mid-sync edit silently destroyed another device's data.
  */
 class CoachSyncLogicTest {
 
@@ -194,20 +198,164 @@ class CoachSyncLogicTest {
         assertEquals(obj("""{"ex_1":{"local":true}}"""), local.getValue("d1")) // input not mutated
     }
 
+    // ---- re-modified dates are reconciled PER RECORD ---------------------
+
     @Test
-    @DisplayName("adoptUploadResults: re-modified date keeps local content but advances tokens")
-    fun reModifiedKeepsContentAdvancesTokens() {
+    @DisplayName("adoptUploadResults re-modified: a record nobody re-edited adopts the server's verdict")
+    fun reModifiedAdoptsTheVerdictForUntouchedRecords() {
+        // The DATE moved, but this record is still byte-for-byte what went on
+        // the wire, so the server has ruled on it: reps 28 is the remote edit
+        // that beat this upload. Keeping the local 32 behind the advanced token
+        // left stale content with a winning base — next cycle it passed the
+        // server's `stored <= base` test and destroyed that edit.
+        val uploaded = logs(
+            "d2" to """{"ex_1":{"reps":32,"_lastModified":"old-ex","_baseLastModifiedAt":"old-ex"}}""",
+        )
         val local = logs("d2" to """{"_lastModified":"old-day","ex_1":{"reps":32,"_lastModified":"old-ex"}}""")
         val results = logs("d2" to """{"_lastModified":"srv-day","ex_1":{"reps":28,"_lastModified":"srv-ex"}}""")
 
-        // d2 re-modified mid-sync (gen advanced) → keep local reps (32) but take
-        // the server's tokens, so the next upload echoes a fresh base.
-        val next = adoptUploadResults(local, results, mapOf("d2" to 1L), mapOf("d2" to 2L))
+        val next = adoptUploadResults(local, results, mapOf("d2" to 1L), mapOf("d2" to 2L), uploaded)
 
         val day = next.getValue("d2")
-        assertEquals(JsonPrimitive(32), day.getValue("ex_1").jsonObject["reps"]) // local re-edit kept
+        assertEquals(obj("""{"reps":28,"_lastModified":"srv-ex"}"""), day["ex_1"])
+        assertEquals(JsonPrimitive("srv-day"), day["_lastModified"])
+    }
+
+    @Test
+    @DisplayName("adoptUploadResults re-modified: a record genuinely re-edited keeps its content and advances")
+    fun reModifiedKeepsTheReEditedRecordAndAdvancesItsToken() {
+        // reps 99 landed after the payload was built, so it is newer intent
+        // than anything the server ruled on. It stays — and its base advances,
+        // or the retry echoes a token the server has already moved past and the
+        // re-edit is rejected away.
+        val uploaded = logs(
+            "d2" to """{"ex_1":{"reps":32,"_lastModified":"old-ex","_baseLastModifiedAt":"old-ex"}}""",
+        )
+        val local = logs("d2" to """{"_lastModified":"old-day","ex_1":{"reps":99,"_lastModified":"old-ex"}}""")
+        val results = logs("d2" to """{"_lastModified":"srv-day","ex_1":{"reps":28,"_lastModified":"srv-ex"}}""")
+
+        val next = adoptUploadResults(local, results, mapOf("d2" to 1L), mapOf("d2" to 2L), uploaded)
+
+        val day = next.getValue("d2")
+        assertEquals(JsonPrimitive(99), day.getValue("ex_1").jsonObject["reps"])
         assertEquals(JsonPrimitive("srv-ex"), day.getValue("ex_1").jsonObject["_lastModified"])
         assertEquals(JsonPrimitive("srv-day"), day["_lastModified"])
+    }
+
+    @Test
+    @DisplayName("adoptUploadResults re-modified: one day, one record ruled on and one re-edited")
+    fun reModifiedDecidesPerRecordNotPerDate() {
+        // The generation counter is per DATE, so it cannot say which record the
+        // user touched. Treating the whole day as re-edited shielded ex_a from
+        // its own verdict.
+        val uploaded = logs(
+            "d1" to """{"ex_a":{"reps":5,"_lastModified":"a1","_baseLastModifiedAt":"a1"},""" +
+                """"ex_b":{"reps":8,"_lastModified":"b1","_baseLastModifiedAt":"b1"}}""",
+        )
+        val local = logs(
+            "d1" to """{"_lastModified":"old-day","ex_a":{"reps":5,"_lastModified":"a1"},""" +
+                """"ex_b":{"reps":12,"_lastModified":"b1"}}""", // only ex_b was re-edited
+        )
+        val results = logs(
+            "d1" to """{"_lastModified":"srv-day","ex_a":{"reps":6,"_lastModified":"a2"},""" +
+                """"ex_b":{"reps":8,"_lastModified":"b2"}}""", // ex_a's upload lost to a remote edit
+        )
+
+        val next = adoptUploadResults(local, results, mapOf("d1" to 1L), mapOf("d1" to 2L), uploaded)
+
+        val day = next.getValue("d1")
+        assertEquals(obj("""{"reps":6,"_lastModified":"a2"}"""), day["ex_a"], "the verdict on an untouched record was discarded")
+        assertEquals(JsonPrimitive(12), day.getValue("ex_b").jsonObject["reps"], "the mid-sync re-edit was clobbered")
+        assertEquals(JsonPrimitive("b2"), day.getValue("ex_b").jsonObject["_lastModified"])
+    }
+
+    @Test
+    @DisplayName("adoptUploadResults re-modified: a record created mid-sync is kept, unarbitrated")
+    fun reModifiedKeepsARecordThatWasNeverUploaded() {
+        // Absent from the upload → created after the payload was built → no
+        // verdict exists for it, whatever the server row happens to say.
+        val uploaded = logs("d1" to """{"ex_a":{"reps":5,"_baseLastModifiedAt":"a1"}}""")
+        val local = logs("d1" to """{"_lastModified":"old-day","ex_a":{"reps":5},"ex_new":{"reps":3}}""")
+        val results = logs("d1" to """{"_lastModified":"srv-day","ex_a":{"reps":5,"_lastModified":"a2"}}""")
+
+        val next = adoptUploadResults(local, results, mapOf("d1" to 1L), mapOf("d1" to 2L), uploaded)
+
+        assertEquals(obj("""{"reps":3}"""), next.getValue("d1")["ex_new"])
+    }
+
+    @Test
+    @DisplayName("adoptUploadResults re-modified: with no uploaded copy known, no record gets a verdict")
+    fun unknownUploadKeepsEveryRecord() {
+        val local = logs("d1" to """{"_lastModified":"old-day","ex_1":{"reps":32,"_lastModified":"old-ex"}}""")
+        val results = logs("d1" to """{"_lastModified":"srv-day","ex_1":{"reps":28,"_lastModified":"srv-ex"}}""")
+
+        // uploadedLogs omitted: nothing can be shown to have been arbitrated,
+        // so every record is treated as touched mid-sync and keeps its content.
+        val next = adoptUploadResults(local, results, mapOf("d1" to 1L), mapOf("d1" to 2L))
+
+        val entry = next.getValue("d1").getValue("ex_1").jsonObject
+        assertEquals(JsonPrimitive(32), entry["reps"])
+        assertEquals(JsonPrimitive("srv-ex"), entry["_lastModified"])
+    }
+
+    @Test
+    @DisplayName("adoptUploadResults re-modified: untouched feedback adopts the server's, since the DAY token is its base")
+    fun reModifiedAdoptsUntouchedFeedback() {
+        // `session_feedback` is arbitrated on the day-level token, so advancing
+        // that token while keeping the local feedback armed exactly the same
+        // overwrite one cycle later.
+        val uploaded = logs(
+            "d1" to """{"session_feedback":{"general_notes":"mine"},"_baseLastModifiedAt":"old-day"}""",
+        )
+        val local = logs("d1" to """{"_lastModified":"old-day","session_feedback":{"general_notes":"mine"}}""")
+        val results = logs("d1" to """{"_lastModified":"srv-day","session_feedback":{"general_notes":"theirs"}}""")
+
+        val next = adoptUploadResults(local, results, mapOf("d1" to 1L), mapOf("d1" to 2L), uploaded)
+
+        val day = next.getValue("d1")
+        assertEquals(JsonPrimitive("theirs"), day.getValue("session_feedback").jsonObject["general_notes"])
+        assertEquals(JsonPrimitive("srv-day"), day["_lastModified"])
+    }
+
+    @Test
+    @DisplayName("adoptUploadResults re-modified: feedback edited mid-sync is kept, and the day token still advances")
+    fun reModifiedKeepsReEditedFeedback() {
+        val uploaded = logs("d1" to """{"session_feedback":{},"_baseLastModifiedAt":"old-day"}""")
+        val local = logs("d1" to """{"_lastModified":"old-day","session_feedback":{"general_notes":"mid-sync"}}""")
+        val results = logs("d1" to """{"_lastModified":"srv-day","session_feedback":{"general_notes":"theirs"}}""")
+
+        val next = adoptUploadResults(local, results, mapOf("d1" to 1L), mapOf("d1" to 2L), uploaded)
+
+        val day = next.getValue("d1")
+        assertEquals(JsonPrimitive("mid-sync"), day.getValue("session_feedback").jsonObject["general_notes"])
+        // The token has to move even here, or the re-edit's retry is rejected.
+        assertEquals(JsonPrimitive("srv-day"), day["_lastModified"])
+    }
+
+    @Test
+    @DisplayName("adoptUploadResults re-modified: a settled re-add sheds its _readd marker with the verdict")
+    fun settledReaddShedsItsMarker() {
+        // `_readd` is transient — the server never stores or echoes it, so
+        // adopting any result is what retires it. The keep-and-advance path
+        // carried the marker forward past the cycle that settled it.
+        val uploaded = logs(
+            "d1" to """{"extra_zone2":{"duration_min":45,"_readd":true,"_lastModified":"t1",""" +
+                """"_baseLastModifiedAt":"t1"}}""",
+        )
+        val local = logs(
+            "d1" to """{"_lastModified":"old-day","session_feedback":{"general_notes":"mid-sync"},""" +
+                """"extra_zone2":{"duration_min":45,"_readd":true,"_lastModified":"t1"}}""",
+        )
+        val results = logs(
+            "d1" to """{"_lastModified":"srv-day","session_feedback":{},""" +
+                """"extra_zone2":{"duration_min":45,"_lastModified":"t2"}}""",
+        )
+
+        val next = adoptUploadResults(local, results, mapOf("d1" to 1L), mapOf("d1" to 2L), uploaded)
+
+        val entry = next.getValue("d1").getValue("extra_zone2").jsonObject
+        assertFalse("_readd" in entry, "a settled re-add kept a marker that no longer means anything")
+        assertEquals(JsonPrimitive("t2"), entry["_lastModified"])
     }
 
     // ---- entry deletion (tombstones) -------------------------------------

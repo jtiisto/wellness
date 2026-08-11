@@ -229,8 +229,31 @@ class JournalSyncStoreTest {
         assertEquals("s5", world.storedStamp("t1"))
         assertEquals("s5", world.dao.entries.getValue("2026-08-06|t1").lastModifiedAt)
         assertEquals(0, world.dao.countDirty())
-        assertEquals("s5", world.dao.meta[JournalDao.KEY_LAST_SERVER_SYNC_TIME])
+        // The pull's stamp, not the upload's: see `uploadDoesNotAdvanceTheWatermark`.
+        assertEquals("s-delta", world.dao.meta[JournalDao.KEY_LAST_SERVER_SYNC_TIME])
         assertEquals(SyncStatus.GREEN, store.syncStatus.value)
+    }
+
+    @Test
+    @DisplayName("an upload NEVER advances the pull watermark — only the delta's serverTime does")
+    fun uploadDoesNotAdvanceTheWatermark() = runTest {
+        val world = World()
+        world.seedTracker("t1", name = "Water", stamp = "s0", isDirty = true, generation = 1)
+        world.delta = delta(serverTime = "s-delta")
+        // Later than the delta's, as a real POST's always is — it is stamped at
+        // wall clock while the delta's is stamped two seconds behind it.
+        world.update = update(serverTime = "s-upload", accepted = """{"id":"t1","lastModifiedAt":"s5"}""")
+
+        world.store().triggerSync()
+
+        // Those two seconds are the server's deliberate overlap: the next
+        // incremental pull re-reads the window in which another client's write
+        // may have been committed but not yet visible. Storing the POST's stamp
+        // discarded it, and with a PWA and this app on the same account that is
+        // a change delivered to neither. Redelivery is the cost, and every row
+        // carries the token that makes re-applying it a no-op.
+        assertEquals("s-delta", world.dao.meta[JournalDao.KEY_LAST_SERVER_SYNC_TIME])
+        assertEquals("s5", world.storedStamp("t1"), "the row's own token still comes from the response")
     }
 
     @Test
@@ -398,8 +421,8 @@ class JournalSyncStoreTest {
     }
 
     @Test
-    @DisplayName("an upload response with no serverTime fails the cycle too, leaving the watermark put")
-    fun missingUpdateServerTimeFailsTheCycle() = runTest {
+    @DisplayName("an upload response with no serverTime is fine — nothing reads it")
+    fun missingUpdateServerTimeIsHarmless() = runTest {
         val world = World()
         world.seedTracker("t1", name = "Water", stamp = "s0", isDirty = true, generation = 1)
         world.delta = delta(serverTime = "s-delta")
@@ -408,11 +431,12 @@ class JournalSyncStoreTest {
 
         val result = world.store().triggerSync()
 
-        assertFalse(result.success)
-        // The delta's watermark had already landed in its own transaction; what
-        // must not happen is a fabricated one replacing it.
+        // The pull is the only half with a watermark to require, so a missing
+        // stamp here fails nothing: the cycle settles the upload as usual and
+        // the delta's watermark stands.
+        assertTrue(result.success)
         assertEquals("s-delta", world.dao.meta[JournalDao.KEY_LAST_SERVER_SYNC_TIME])
-        assertTrue(world.dao.trackers.getValue("t1").isDirty, "the upload never settled, so it stays dirty")
+        assertFalse(world.dao.trackers.getValue("t1").isDirty, "the acceptance still settled the row")
     }
 
     // ---- upload wire shape -----------------------------------------------

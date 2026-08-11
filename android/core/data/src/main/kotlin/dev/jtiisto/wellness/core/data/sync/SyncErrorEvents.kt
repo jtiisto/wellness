@@ -1,5 +1,6 @@
 package dev.jtiisto.wellness.core.data.sync
 
+import dev.jtiisto.wellness.core.data.network.describeForLog
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
@@ -30,11 +31,17 @@ class SyncErrorEvents {
     /** Consumed once. A second collector will not see an already-shown message. */
     val messages: Flow<String> = channel.receiveAsFlow()
 
+    /**
+     * Described through [describeForLog], never from `Throwable.message`.
+     *
+     * The snackbar is the same disclosure as the debug dump and then some — it
+     * appears unasked, over whatever tab the user is on. A Ktor
+     * `ResponseException` carries the request URL and the response body in its
+     * message, so a FastAPI 422 echoing the journal entry it rejected would put
+     * that entry, and the private server address, on screen.
+     */
     fun postServerError(error: Throwable) {
-        val detail = error.message?.takeIf { it.isNotBlank() }
-            ?: error::class.simpleName
-            ?: "unknown error"
-        channel.trySend("Sync Failed: $detail")
+        channel.trySend("Sync Failed: ${describeForLog(error)}")
     }
 
     /**

@@ -25,48 +25,64 @@ class ConnectivityMonitor(private val context: Context) {
     val isOnline: StateFlow<Boolean> = _isOnline.asStateFlow()
 
     private val validated = mutableSetOf<Network>()
+
+    /**
+     * Guarded by the same monitor as [validated], not merely volatile: `start`
+     * and `stop` are check-then-act on this field, and the app orchestrator's
+     * lifecycle callbacks are not guaranteed to reach them from one thread.
+     */
     private var callback: ConnectivityManager.NetworkCallback? = null
 
     /** Idempotent. Registers the callback, then seeds the current value. */
     fun start() {
-        if (callback != null) return
-        val manager = context.getSystemService(ConnectivityManager::class.java) ?: return
+        synchronized(validated) {
+            if (callback != null) return
+            val manager = context.getSystemService(ConnectivityManager::class.java) ?: return
 
-        synchronized(validated) { validated.clear() }
+            validated.clear()
 
-        val observer = object : ConnectivityManager.NetworkCallback() {
-            override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
-                update { if (capabilities.isValidatedInternet()) validated += network else validated -= network }
+            val observer = object : ConnectivityManager.NetworkCallback() {
+                override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+                    update { if (capabilities.isValidatedInternet()) validated += network else validated -= network }
+                }
+
+                override fun onLost(network: Network) {
+                    update { validated -= network }
+                }
             }
+            manager.registerNetworkCallback(
+                NetworkRequest.Builder().addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET).build(),
+                observer,
+            )
+            callback = observer
 
-            override fun onLost(network: Network) {
-                update { validated -= network }
-            }
-        }
-        manager.registerNetworkCallback(
-            NetworkRequest.Builder().addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET).build(),
-            observer,
-        )
-        callback = observer
-
-        // Seed AFTER registration, never before: a network alive at this point
-        // is already covered by the callback (its onLost will arrive), whereas
-        // one that died pre-registration would otherwise latch in the set
-        // forever — the framework replays events only for networks it still
-        // knows about.
-        update {
-            val active = manager.activeNetwork
-            if (active != null && manager.getNetworkCapabilities(active).isValidatedInternet()) {
-                validated += active
+            // Seed AFTER registration, never before: a network alive at this
+            // point is already covered by the callback (its onLost will
+            // arrive), whereas one that died pre-registration would otherwise
+            // latch in the set forever — the framework replays events only for
+            // networks it still knows about. The lock is reentrant, so the
+            // callback's own updates are ordered behind this one.
+            update {
+                val active = manager.activeNetwork
+                if (active != null && manager.getNetworkCapabilities(active).isValidatedInternet()) {
+                    validated += active
+                }
             }
         }
     }
 
     /** Idempotent. Unregisters the callback; the last known value stays put. */
     fun stop() {
-        val observer = callback ?: return
-        callback = null
-        context.getSystemService(ConnectivityManager::class.java)?.unregisterNetworkCallback(observer)
+        synchronized(validated) {
+            val observer = callback ?: return
+            // Unregister first, and only then forget it. Clearing the field
+            // ahead of a `getSystemService` that returns null would drop the
+            // app's only reference to a callback the framework still holds —
+            // an unremovable listener on a monitor that says it is stopped.
+            val manager = context.getSystemService(ConnectivityManager::class.java) ?: return
+            manager.unregisterNetworkCallback(observer)
+            callback = null
+        }
     }
 
     private inline fun update(mutate: () -> Unit) {

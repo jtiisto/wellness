@@ -135,8 +135,8 @@ val coreDataModule = module {
 
     single { ConnectivityMonitor(androidContext()) }
     single { SyncErrorEvents() }
-    single { JournalUiPrefs(dao = get(), json = get()) }
-    single { TrendsPrefs(dao = get()) }
+    single { JournalUiPrefs(dao = get(), session = get(), json = get()) }
+    single { TrendsPrefs(dao = get(), session = get()) }
     single { TrendsRepository(api = get(), cacheDao = get(), debugLog = get(), session = get(), json = get()) }
     single { DataExporter(dao = get(), clientVersion = get(AppVersionName)) }
 
@@ -265,6 +265,9 @@ val coreDataModule = module {
             sessionDao = get(),
             sampleDao = get(),
             session = get(),
+            // The lifecycle actor runs here and never stops: a close deferred by
+            // one capture has to outlive the service that deferred it.
+            scope = get(AppScope),
             scheduleUpload = { koinScope.get<HrSyncStore>().scheduleFlush() },
             debugLog = get(),
         )

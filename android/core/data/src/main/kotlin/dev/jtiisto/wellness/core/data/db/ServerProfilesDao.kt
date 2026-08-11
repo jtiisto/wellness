@@ -54,11 +54,17 @@ abstract class ServerProfilesDao {
      * crash inside it would boot the app against the built-in server holding
      * the previous one's data. One `CASE` update can only commit or not, so the
      * at-most-one invariant holds across any failure.
+     *
+     * **No production caller, by design** — this and [clearActive] exist for
+     * `ServerSwitcher`'s transaction and for tests. Repointing the active server
+     * from anywhere else skips the quiesce and the wipe, which leaves the
+     * previous server's dirty rows queued to upload to the new one: the exact
+     * contamination the switch flow was built to close.
      */
     @Query("UPDATE server_profiles SET isActive = CASE WHEN id = :id THEN 1 ELSE 0 END")
     abstract suspend fun activate(id: Long)
 
-    /** Return to the built-in server: no row is active. */
+    /** Return to the built-in server: no row is active. Same caller rule as [activate]. */
     @Query("UPDATE server_profiles SET isActive = 0")
     abstract suspend fun clearActive()
 }

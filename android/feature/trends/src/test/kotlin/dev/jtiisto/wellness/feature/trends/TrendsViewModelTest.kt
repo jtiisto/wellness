@@ -3,6 +3,7 @@ package dev.jtiisto.wellness.feature.trends
 import dev.jtiisto.wellness.core.data.db.TrendsMetaDao
 import dev.jtiisto.wellness.core.data.db.TrendsMetaEntity
 import dev.jtiisto.wellness.core.data.sync.DebugLog
+import dev.jtiisto.wellness.core.data.sync.ServerSessionGate
 import dev.jtiisto.wellness.core.data.trends.CardioDto
 import dev.jtiisto.wellness.core.data.trends.CompositionDto
 import dev.jtiisto.wellness.core.data.trends.ExerciseDetailDto
@@ -67,7 +68,7 @@ class TrendsViewModelTest {
     private val repository = mockk<TrendsRepository>()
     private val debugLog = mockk<DebugLog>(relaxed = true)
     private val dao = FakeTrendsMetaDao()
-    private val prefs = TrendsPrefs(dao)
+    private val prefs = TrendsPrefs(dao, ServerSessionGate())
 
     @BeforeEach
     fun setUp() {

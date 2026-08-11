@@ -1,5 +1,6 @@
 package dev.jtiisto.wellness.feature.analysis
 
+import dev.jtiisto.wellness.core.data.WellnessJson
 import dev.jtiisto.wellness.core.data.analysis.ActiveReport
 import dev.jtiisto.wellness.core.data.analysis.AnalysisEvent
 import dev.jtiisto.wellness.core.data.analysis.AnalysisEvents
@@ -458,6 +459,34 @@ class AnalysisStoreTest {
     }
 
     @Test
+    @DisplayName("a decode failure is named by its type — its message quotes the report body")
+    fun submitFailureNeverQuotesTheBodyItChokedOn() = runTest {
+        val received = collectEvents()
+        // The path the reviewer traced: a 409 sends the store to `pending()`,
+        // and a malformed answer there fails inside kotlinx — which quotes the
+        // input it choked on. For this module that input is a report, and
+        // `response_markdown` is the most private string the app holds.
+        val decodeFailure = runCatching {
+            WellnessJson.decodeFromString(ReportDetailDto.serializer(), MALFORMED_REPORT)
+        }.exceptionOrNull() ?: error("the fixture is supposed to be malformed")
+        assertTrue(
+            decodeFailure.message.orEmpty().contains(FORBIDDEN_BODY),
+            "premise: kotlinx quotes the input in its message:\n${decodeFailure.message}",
+        )
+
+        onSubmit = { _, _ -> throw AnalysisHttpException(409, "A query is already in progress.") }
+        onPending = { throw decodeFailure }
+        val store = foregroundStore()
+
+        store.submit("fixture-a", null)
+        runCurrent()
+
+        val shown = received.filterIsInstance<AnalysisEvent.SubmitError>().single().detail
+        assertFalse(shown.contains(FORBIDDEN_BODY), "the report body reached the snackbar: $shown")
+        assertEquals(decodeFailure.javaClass.simpleName, shown, "the class name is all that may be shown")
+    }
+
+    @Test
     @DisplayName("two taps before the first recomposition still submit once")
     fun submitGuardIsAtomic() = runTest {
         val gate = CompletableDeferred<Unit>()
@@ -771,6 +800,51 @@ class AnalysisStoreTest {
 
         assertEquals(pendingBefore, pendingCalls)
         assertEquals(2, reportCalls.size, "it resumed instead")
+    }
+
+    @Test
+    @DisplayName("a History tap made during the foreground pending check is not swallowed by the adoption")
+    fun foregroundAdoptionYieldsToAnOpenStartedAfterIt() = runTest {
+        val pendingGate = CompletableDeferred<Unit>()
+        val openGate = CompletableDeferred<Unit>()
+        onQueries = { listOf(query("fixture-a")) }
+        val store = foregroundStore()
+        initialized(store)
+
+        onPending = {
+            withContext(NonCancellable) { pendingGate.await() }
+            listOf(detail(7, "running"))
+        }
+        onReport = { id ->
+            if (id != 41L) {
+                detail(7, "running")
+            } else {
+                withContext(NonCancellable) { openGate.await() }
+                detail(41, "completed", "# body")
+            }
+        }
+
+        store.onBackground()
+        store.onForeground()
+        runCurrent()
+
+        // The tap lands while the pending check is still out, and its own `GET`
+        // is still out when the check comes back. Adoption bumps the *open*
+        // generation, so guarding only on the poll's let the adoption land and
+        // the tap then return to a mismatch and give up silently: a row tapped,
+        // nothing opened, nothing said.
+        store.openReport(41)
+        runCurrent()
+
+        pendingGate.complete(Unit)
+        runCurrent()
+        openGate.complete(Unit)
+        runCurrent()
+
+        assertEquals(AnalysisView.REPORT, store.state.value.view, "the tap is the newer intent")
+        assertEquals(41L, store.state.value.viewing?.id)
+        assertNull(store.state.value.active, "the superseded adoption seats nothing")
+        assertEquals(listOf(41L), reportCalls, "and starts no poll")
     }
 
     // ---- navigation --------------------------------------------------------
@@ -1377,5 +1451,14 @@ class AnalysisStoreTest {
         const val CREATED = "2031-03-04T09:15:00.000000Z"
         const val COMPLETED = "2031-03-04T09:18:00.000000Z"
         const val RAW_BODY = """{"id":0,"status":"completed"}"""
+
+        /** Stands in for a report body, the module's most private string. */
+        const val FORBIDDEN_BODY = "FORBIDDEN-REPORT-BODY"
+
+        /**
+         * Short and broken early, so kotlinx quotes the whole thing rather than
+         * a truncated window that might not reach the sentinel.
+         */
+        const val MALFORMED_REPORT = """{"response_markdown":"$FORBIDDEN_BODY","id":}"""
     }
 }

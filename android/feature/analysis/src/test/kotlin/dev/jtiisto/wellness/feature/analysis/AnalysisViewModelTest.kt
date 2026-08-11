@@ -1,7 +1,5 @@
 package dev.jtiisto.wellness.feature.analysis
 
-import app.cash.turbine.test
-import dev.jtiisto.wellness.core.data.analysis.AnalysisEvent
 import dev.jtiisto.wellness.core.data.analysis.AnalysisEvents
 import dev.jtiisto.wellness.core.data.analysis.AnalysisQueryDto
 import dev.jtiisto.wellness.core.data.analysis.AnalysisRepository
@@ -79,7 +77,7 @@ class AnalysisViewModelTest {
         )
         store.onForeground()
         runCurrent()
-        return AnalysisViewModel(store, events, ZoneId.of("UTC")).also {
+        return AnalysisViewModel(store, ZoneId.of("UTC")).also {
             it.initialize()
             runCurrent()
         }
@@ -169,20 +167,6 @@ class AnalysisViewModelTest {
         viewModel.confirmDelete()
         runCurrent()
         assertNull(viewModel.ui.value.confirmDeleteId, "a dismissed dialog leaves nothing to confirm")
-    }
-
-    @Test
-    @DisplayName("store events arrive as snackbar text, once each")
-    fun eventsBecomeMessages() = runTest {
-        val viewModel = viewModel()
-
-        viewModel.messages.test {
-            events.post(AnalysisEvent.DeleteSuccess)
-            events.post(AnalysisEvent.SubmitError("Unknown query_id: fixture-gone"))
-            assertEquals("Report deleted.", awaitItem())
-            assertEquals("Unknown query_id: fixture-gone", awaitItem())
-            cancelAndIgnoreRemainingEvents()
-        }
     }
 
     private companion object {

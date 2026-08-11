@@ -193,18 +193,56 @@ class CaptureLifecycleTest {
 
     @Test
     @DisplayName("a paint that outlived its capture is taken back down")
-    fun paintIsVerifiedAfterTheFact() {
+    fun paintIsCancelledWhenNothingIsCapturing() {
         // Teardown landed between the pre-check and notify(), so the call put
         // back a notification nothing is left running to clear.
-        assertTrue(notificationOutlivedCapture(HrCaptureState()))
+        val published = HrCaptureState(isRunning = true, sessionId = "s1", bpm = 142)
+
+        assertEquals(PaintVerdict.CANCEL, paintVerdict(published, HrCaptureState()))
     }
 
     @Test
-    @DisplayName("a paint superseded by a newer one is left alone, not cancelled")
-    fun supersededPaintIsNotCancelled() {
-        // The question after painting is "is anything capturing", not "is my
-        // value still live" — cancelling here would remove a live notification.
-        assertFalse(notificationOutlivedCapture(HrCaptureState(isRunning = true, bpm = 143)))
+    @DisplayName("a paint superseded within the same capture is left alone")
+    fun supersededPaintIsKept() {
+        val published = HrCaptureState(isRunning = true, sessionId = "s1", bpm = 142)
+        val newer = published.copy(bpm = 143)
+
+        // Cancelling here would remove a live notification, and repainting would
+        // undo a value that is more current than this one.
+        assertEquals(PaintVerdict.KEEP, paintVerdict(published, newer))
+    }
+
+    @Test
+    @DisplayName("a paint that landed on the NEXT capture's notification is repainted, not cancelled")
+    fun stalePaintOverANewCaptureIsRepainted() {
+        val published = HrCaptureState(isRunning = true, sessionId = "s1", bpm = 142)
+        val nextCapture = HrCaptureState(isRunning = true, sessionId = "s2", bpm = 96)
+
+        // A teardown *and a restart* landed in the gap, so this call overwrote a
+        // live capture's notification with the previous capture's content.
+        // Cancelling would take down a running foreground service's notification;
+        // the answer is to put back what is true now.
+        assertEquals(PaintVerdict.REPAINT, paintVerdict(published, nextCapture))
+    }
+
+    // ---- a refused start that still has something to say ------------------
+
+    @Test
+    @DisplayName("a refused start carrying a workout anchor still has work to do")
+    fun refusedStartWithAnAnchor() {
+        // A Start Workout tap landing while a resume-startup is in flight loses
+        // the claim, but its anchor is the one thing the running capture does not
+        // already have — and it is the link that makes the recording mean
+        // something afterwards.
+        assertTrue(refusedStartCarriesAnchor("2026-08-10"))
+    }
+
+    @Test
+    @DisplayName("a refused start with no anchor is the duplicate delivery it looks like")
+    fun refusedStartWithoutAnAnchor() {
+        assertFalse(refusedStartCarriesAnchor(null))
+        assertFalse(refusedStartCarriesAnchor(""))
+        assertFalse(refusedStartCarriesAnchor("   "))
     }
 
     @Test

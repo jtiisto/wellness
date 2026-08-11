@@ -70,7 +70,7 @@ class SyncFlushSchedulerTest {
         // The Worker runs the ordinary triggerSync precisely because the store's
         // tryLock makes this safe: the sync it would have done is already
         // happening, so queueing a backoff would achieve nothing.
-        assertEquals(false, SyncFlushWorker.needsRetry(listOf(skipped, skipped)))
+        assertEquals(false, SyncFlushWorker.needsRetry(listOf(skipped, skipped), sessionOpen = true))
     }
 
     @Test
@@ -82,8 +82,8 @@ class SyncFlushSchedulerTest {
         // unvalidated Wi-Fi association, where the app's validated-internet
         // check correctly reports offline. Reporting success there let the
         // process die with the dirty rows still unsent.
-        assertEquals(true, SyncFlushWorker.needsRetry(listOf(offline, SyncResult(success = true))))
-        assertEquals(true, SyncFlushWorker.needsRetry(listOf(offline, offline)))
+        assertEquals(true, SyncFlushWorker.needsRetry(listOf(offline, SyncResult(success = true)), true))
+        assertEquals(true, SyncFlushWorker.needsRetry(listOf(offline, offline), sessionOpen = true))
     }
 
     @Test
@@ -92,7 +92,7 @@ class SyncFlushSchedulerTest {
         val offline = SyncResult(success = false, reason = SyncSkipReason.OFFLINE)
         val busy = SyncResult(success = false, reason = SyncSkipReason.ALREADY_SYNCING)
 
-        assertEquals(true, SyncFlushWorker.needsRetry(listOf(busy, offline)))
+        assertEquals(true, SyncFlushWorker.needsRetry(listOf(busy, offline), sessionOpen = true))
     }
 
     @Test
@@ -100,7 +100,10 @@ class SyncFlushSchedulerTest {
     fun cleanRunDoesNotRetry() {
         assertEquals(
             false,
-            SyncFlushWorker.needsRetry(listOf(SyncResult(success = true), SyncResult(success = true))),
+            SyncFlushWorker.needsRetry(
+                listOf(SyncResult(success = true), SyncResult(success = true)),
+                sessionOpen = true,
+            ),
         )
     }
 
@@ -109,7 +112,22 @@ class SyncFlushSchedulerTest {
     fun errorIsRetried() {
         val failed = SyncResult(success = false, error = IllegalStateException("server down"))
 
-        assertEquals(true, SyncFlushWorker.needsRetry(listOf(SyncResult(success = true), failed)))
+        assertEquals(true, SyncFlushWorker.needsRetry(listOf(SyncResult(success = true), failed), true))
+    }
+
+    @Test
+    @DisplayName("a switch confirmed mid-flush is never retried, whatever the failures say")
+    fun closedSessionIsNeverRetried() {
+        // The cycle runs with no outer lease, so a switch closing the gate
+        // halfway through turns every remaining write into a refusal the stores
+        // report as an ordinary error. Backing off on those would wake the
+        // process to talk to a server the user has already left — and the run
+        // WorkManager would be retrying is one the switch cancelled.
+        val refused = SyncResult(success = false, error = ServerSessionClosedException())
+        val offline = SyncResult(success = false, reason = SyncSkipReason.OFFLINE)
+
+        assertEquals(false, SyncFlushWorker.needsRetry(listOf(SyncResult(success = true), refused), false))
+        assertEquals(false, SyncFlushWorker.needsRetry(listOf(offline, refused), sessionOpen = false))
     }
 
     @Test

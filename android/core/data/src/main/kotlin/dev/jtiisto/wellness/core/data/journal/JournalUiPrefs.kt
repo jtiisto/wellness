@@ -4,6 +4,8 @@ import dev.jtiisto.wellness.core.data.WellnessJson
 import dev.jtiisto.wellness.core.data.db.JournalDao
 import dev.jtiisto.wellness.core.data.db.JournalMetaEntity
 import dev.jtiisto.wellness.core.data.network.DateString
+import dev.jtiisto.wellness.core.data.sync.ServerSessionClosedException
+import dev.jtiisto.wellness.core.data.sync.ServerSessionGate
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
@@ -31,9 +33,15 @@ import java.util.Locale
  * watermark's home, but the upload builder reads only the tracker and entry
  * tables, so nothing here can ever reach a request body — pinned by test,
  * because the cost of being wrong is leaking local UI state into the protocol.
+ *
+ * @param session the server-switch fence. Device-local is not the same as
+ *   server-independent: both values are keyed by tracker id, `journal_meta` is
+ *   wiped with the rest of the module, and a stamp written after the wipe would
+ *   annotate a tracker the new server has never sent.
  */
 class JournalUiPrefs(
     private val dao: JournalDao,
+    private val session: ServerSessionGate,
     private val json: Json = WellnessJson,
     private val now: () -> Instant = Instant::now,
     private val today: () -> LocalDate = LocalDate::now,
@@ -63,14 +71,16 @@ class JournalUiPrefs(
      */
     suspend fun toggleCategoryExpanded(category: String) {
         writeMutex.withLock {
-            val current = decodeCategories(dao.getMeta(KEY_EXPANDED_CATEGORIES))
-            val next = if (category in current) current - category else current + category
-            dao.upsertMeta(
-                JournalMetaEntity(
-                    key = KEY_EXPANDED_CATEGORIES,
-                    value = JsonArray(next.sorted().map(::JsonPrimitive)).toString(),
-                ),
-            )
+            fenced {
+                val current = decodeCategories(dao.getMeta(KEY_EXPANDED_CATEGORIES))
+                val next = if (category in current) current - category else current + category
+                dao.upsertMeta(
+                    JournalMetaEntity(
+                        key = KEY_EXPANDED_CATEGORIES,
+                        value = JsonArray(next.sorted().map(::JsonPrimitive)).toString(),
+                    ),
+                )
+            }
         }
     }
 
@@ -85,17 +95,41 @@ class JournalUiPrefs(
      */
     suspend fun markValueUpdated(date: DateString, trackerId: String) {
         writeMutex.withLock {
-            val current = decodeStamps(dao.getMeta(KEY_VALUE_UPDATED_TIMES))
-            val windowStart = localDataWindowStart(today())
-            val next = current
-                .filterKeys { entryKeyDate(it) >= windowStart }
-                .plus(entryKey(date, trackerId) to now().toString())
-            dao.upsertMeta(
-                JournalMetaEntity(
-                    key = KEY_VALUE_UPDATED_TIMES,
-                    value = JsonObject(next.mapValues { (_, stamp) -> JsonPrimitive(stamp) }).toString(),
-                ),
-            )
+            fenced {
+                val current = decodeStamps(dao.getMeta(KEY_VALUE_UPDATED_TIMES))
+                val windowStart = localDataWindowStart(today())
+                val next = current
+                    .filterKeys { entryKeyDate(it) >= windowStart }
+                    .plus(entryKey(date, trackerId) to now().toString())
+                dao.upsertMeta(
+                    JournalMetaEntity(
+                        key = KEY_VALUE_UPDATED_TIMES,
+                        value = JsonObject(next.mapValues { (_, stamp) -> JsonPrimitive(stamp) }).toString(),
+                    ),
+                )
+            }
+        }
+    }
+
+    /**
+     * Run a merge under the write lease, and let a refusal pass.
+     *
+     * The lease spans the **read** as well as the write, unlike the
+     * self-contained marks elsewhere: both of these are read-modify-writes on a
+     * single JSON blob, so a lease taken after the read would admit a merge
+     * whose base is a row the wipe has since deleted, and write it back into the
+     * emptied table.
+     *
+     * A refusal is swallowed. Both callers are tap handlers on a UI scope, and
+     * the switch that refused the write is wiping the row it would have written
+     * — taking the journal tab down on the way out is the only difference
+     * raising it would make.
+     */
+    private suspend fun fenced(write: suspend () -> Unit) {
+        try {
+            session.withWriteLease(write)
+        } catch (_: ServerSessionClosedException) {
+            Unit
         }
     }
 

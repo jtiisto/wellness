@@ -41,6 +41,7 @@ import androidx.navigation.compose.rememberNavController
 import dev.jtiisto.wellness.bootWellness
 import dev.jtiisto.wellness.core.ble.capture.HrCaptureState
 import dev.jtiisto.wellness.core.ble.di.HrCaptureStateQualifier
+import dev.jtiisto.wellness.core.data.analysis.AnalysisEvents
 import dev.jtiisto.wellness.core.data.network.ServerBootstrap
 import dev.jtiisto.wellness.core.data.network.ServerResolution
 import dev.jtiisto.wellness.core.data.sync.SyncErrorEvents
@@ -108,6 +109,22 @@ fun WellnessApp() {
         LaunchedEffect(syncErrors) {
             syncErrors.messages.collect { message ->
                 snackbarHostState.showSnackbar(message = message, duration = SnackbarDuration.Long)
+            }
+        }
+
+        // Analysis raises its own events, and they are collected here rather
+        // than on the tab for the reason the poll lives in the store: the work
+        // outlives the composition. Collected on the screen, a report finishing
+        // while the user is reading Journal announced itself whenever they next
+        // opened Analysis — which could be minutes, and by then the snackbar is
+        // about something they have stopped waiting for.
+        val analysisEvents = koinInject<AnalysisEvents>()
+        LaunchedEffect(analysisEvents) {
+            analysisEvents.events.collect { event ->
+                snackbarHostState.showSnackbar(
+                    message = event.message,
+                    duration = SnackbarDuration.Short,
+                )
             }
         }
 
@@ -194,7 +211,7 @@ fun WellnessApp() {
                                 JOURNAL_ROUTE -> JournalTab()
                                 COACH_ROUTE -> CoachScreen()
                                 TRENDS_ROUTE -> TrendsScreen()
-                                ANALYSIS_ROUTE -> AnalysisScreen(snackbarHostState)
+                                ANALYSIS_ROUTE -> AnalysisScreen()
                                 TOOLS_ROUTE -> ToolsScreen(snackbarHostState)
                                 else -> StubScreen(destination.label)
                             }

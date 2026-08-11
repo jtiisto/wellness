@@ -1,6 +1,8 @@
 package dev.jtiisto.wellness.core.data.trends
 
 import dev.jtiisto.wellness.core.data.db.TrendsMetaDao
+import dev.jtiisto.wellness.core.data.sync.ServerSessionClosedException
+import dev.jtiisto.wellness.core.data.sync.ServerSessionGate
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
@@ -18,8 +20,16 @@ import kotlinx.coroutines.sync.withLock
  * taps in flight at once would otherwise land in whichever order the DAO
  * happened to schedule them, and the last one tapped is the one the user
  * expects to survive.
+ *
+ * @param session the server-switch fence. `trends_meta` is a wiped table and
+ *   these values are not purely local: a selection reconciled against a slice
+ *   the *previous* server returned would otherwise land in the emptied table
+ *   and point the new server's charts at an exercise it has never heard of.
  */
-class TrendsPrefs(private val dao: TrendsMetaDao) {
+class TrendsPrefs(
+    private val dao: TrendsMetaDao,
+    private val session: ServerSessionGate,
+) {
 
     private val writeMutex = Mutex()
 
@@ -44,7 +54,22 @@ class TrendsPrefs(private val dao: TrendsMetaDao) {
 
     suspend fun setLabPanel(value: String) = put(KEY_LAB_PANEL, value)
 
-    private suspend fun put(key: String, value: String) = writeMutex.withLock { dao.put(key, value) }
+    /**
+     * A self-contained mark: the value is already in hand, so only the write
+     * itself is fenced.
+     *
+     * A refusal is swallowed rather than raised. Every caller is a tap handler
+     * or a post-load reconciliation on a UI scope, and the switch that refused
+     * this write is about to wipe the row it would have written — crashing the
+     * tab on the way out would be the only visible consequence.
+     */
+    private suspend fun put(key: String, value: String) = writeMutex.withLock {
+        try {
+            session.withWriteLease { dao.put(key, value) }
+        } catch (_: ServerSessionClosedException) {
+            Unit
+        }
+    }
 
     companion object {
         const val KEY_RANGE = "ui.range"

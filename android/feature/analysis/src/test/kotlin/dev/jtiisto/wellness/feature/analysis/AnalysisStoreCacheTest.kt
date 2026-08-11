@@ -20,6 +20,7 @@ import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.yield
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
@@ -45,6 +46,14 @@ class AnalysisStoreCacheTest {
         val rows = mutableMapOf<Pair<String, String>, PayloadCacheEntity>()
 
         override suspend fun upsert(entry: PayloadCacheEntity) {
+            // Room's generated suspend write dispatches, so it observes
+            // cancellation before it observes the row. A fake that never
+            // suspends does not, and that difference hid a real bug for a
+            // release: the terminal tick cancelled itself on its way to this
+            // call, and every cache write in production threw
+            // `CancellationException` into a best-effort `catch` while this
+            // test went on passing. Do not remove this yield.
+            yield()
             rows[entry.module to entry.key] = entry
         }
 
@@ -129,6 +138,14 @@ class AnalysisStoreCacheTest {
         )
     }
 
+    /**
+     * The positive control, and — since the fake gained its suspension point —
+     * the regression test for the poll cancelling itself. The terminal tick
+     * used to call `stopPoll`, which cancelled `pollJob`: the very coroutine
+     * running the tick, one line before it wrote the body. Nothing else in the
+     * suite noticed, because everything else the store does after that point
+     * either does not suspend or is launched on the store's own scope.
+     */
     @Test
     @DisplayName("a tick the store accepts does cache its body — the positive control")
     fun acceptedTerminalTickIsCached() = runTest {

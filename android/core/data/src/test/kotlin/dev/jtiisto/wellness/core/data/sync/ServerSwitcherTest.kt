@@ -66,11 +66,19 @@ class ServerSwitcherTest {
         }
     }
 
-    private class Harness(scope: TestScope, root: File) {
+    private class Harness(scope: TestScope, private val root: File) {
         val order = mutableListOf<String>()
         val gate = ServerSessionGate()
         val dao = FakeSwitchDao()
         val sharedFiles = SharedFileStore(root = root, now = { 1_786_285_805_000L })
+
+        /** How many times the switch ended the process. Never actually exits here. */
+        var exits = 0
+            private set
+
+        /** What was still staged in `shared/` when the wipe transaction opened. */
+        var stagedAtWipe: List<String>? = null
+            private set
 
         /** A real scheduler, so `stop()` is the production one. */
         val scheduler = SyncScheduler(
@@ -112,18 +120,24 @@ class ServerSwitcherTest {
                 override suspend fun insertLogLine(entry: DebugLogEntity) = dao.insertLogLine(entry)
 
                 override suspend fun switchTo(targetId: Long?, boundary: DebugLogEntity) {
-                    order += "wipe"
+                    recordWipe()
                     dao.switchTo(targetId, boundary)
                 }
 
                 override suspend fun deleteActiveProfile(id: Long, boundary: DebugLogEntity) {
-                    order += "wipe"
+                    recordWipe()
                     dao.deleteActiveProfile(id, boundary)
                 }
             },
             sharedFiles = sharedFiles,
             now = { 1_786_285_805_000L },
+            exitApp = { exits++ },
         )
+
+        private fun recordWipe() {
+            order += "wipe"
+            stagedAtWipe = root.list()?.toList().orEmpty()
+        }
     }
 
     private fun profile(id: Long, nickname: String, active: Boolean = false) =
@@ -285,16 +299,87 @@ class ServerSwitcherTest {
     }
 
     @Test
-    @DisplayName("the files go after the wipe commits, never before it")
-    fun sharedFilesGoLast() = switcherTest { harness ->
+    @DisplayName("the files go BEFORE the wipe commits, so a committed switch can never leave one behind")
+    fun sharedFilesGoBeforeTheWipe() = switcherTest { harness ->
         val shared = File(cacheRoot, "shared").apply { mkdirs() }
         File(shared, "stale.json").writeText("x")
 
         harness.switcher.switchTo(profile(2, "B"), fromNickname = "A")
 
-        // Deleting first and then failing the wipe would have destroyed a file
-        // that still correctly described the device.
-        assertEquals("wipe", harness.order.last())
+        // The transaction is the commit point, and the process exits right
+        // after it — there is no second chance at this cleanup. An export
+        // describing the previous server's data surviving a durable switch is
+        // the expensive mistake; losing a regenerable staged file to a wipe
+        // that then fails is the cheap one.
+        assertEquals(emptyList<String>(), harness.stagedAtWipe)
         assertEquals(emptyList<String>(), shared.list()!!.toList())
+    }
+
+    // ---- ownership and cancellation --------------------------------------
+
+    @Test
+    @DisplayName("the switch ends the process itself, once, after the transaction")
+    fun theSwitchExitsTheProcess() = switcherTest { harness ->
+        harness.switcher.switchTo(profile(2, "B"), fromNickname = "A")
+
+        // Not a one-shot event for the UI to collect: a `LaunchedEffect` dies
+        // with its screen, and the app would then go on running against config
+        // only the next boot can apply.
+        assertEquals(1, harness.exits)
+        assertEquals("wipe", harness.order.last())
+    }
+
+    @Test
+    @DisplayName("a caller cancelled mid-quiesce still commits — a closed gate must never be stranded")
+    fun cancelledCallerStillCommits() = switcherTest { harness ->
+        val held = CompletableDeferred<Unit>()
+        harness.drainGate = held
+        val job = launch { harness.switcher.switchTo(profile(2, "B"), fromNickname = "A") }
+        runCurrent()
+        assertFalse(harness.gate.isOpen, "the switch should have reached close()")
+
+        // The tab leaves composition, or its scope is cancelled for any other
+        // reason, in the window between close() and the transaction. There is
+        // no reopening a gate, so abandoning here would leave every writer in
+        // the process permanently refused with nothing on screen to say why.
+        job.cancel()
+        held.complete(Unit)
+        job.join()
+
+        assertTrue(harness.order.contains("wipe"), "the switch was abandoned with the gate closed")
+        assertEquals(1, harness.exits)
+    }
+
+    @Test
+    @DisplayName("a second switch confirmed mid-flight is refused rather than run across the first")
+    fun secondSwitchIsRefused() = switcherTest { harness ->
+        val held = CompletableDeferred<Unit>()
+        harness.drainGate = held
+        val first = launch { harness.switcher.switchTo(profile(2, "B"), fromNickname = "A") }
+        runCurrent()
+        assertTrue(harness.switcher.switching.value, "the flag the UI disables itself on")
+
+        harness.switcher.switchTo(profile(3, "C"), fromNickname = "A")
+        held.complete(Unit)
+        first.join()
+
+        // One quiesce, one wipe, one exit: the second call returned without
+        // touching anything.
+        assertEquals(listOf("drain", "stopAnalysis", "cancelWork", "wipe"), harness.order)
+        assertEquals(1, harness.exits)
+        assertTrue(harness.dao.calls.contains("activate:2"))
+        assertFalse(harness.dao.calls.contains("activate:3"))
+    }
+
+    @Test
+    @DisplayName("switching is false until a switch is claimed, and stays true afterwards")
+    fun switchingFlagIsTerminal() = switcherTest { harness ->
+        assertFalse(harness.switcher.switching.value)
+
+        harness.switcher.switchTo(profile(2, "B"), fromNickname = "A")
+
+        // Never cleared: the gate is closed by now, so there is nothing this
+        // process could usefully re-enable.
+        assertTrue(harness.switcher.switching.value)
     }
 }

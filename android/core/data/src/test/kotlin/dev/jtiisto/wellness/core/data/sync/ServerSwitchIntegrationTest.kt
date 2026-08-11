@@ -1,5 +1,7 @@
 package dev.jtiisto.wellness.core.data.sync
 
+import dev.jtiisto.wellness.core.ble.buffer.BufferedSample
+import dev.jtiisto.wellness.core.data.hr.HrCaptureStore
 import dev.jtiisto.wellness.core.data.WellnessJson
 import dev.jtiisto.wellness.core.data.coach.CoachSyncStore
 import dev.jtiisto.wellness.core.data.coach.FakeCoachDao
@@ -15,15 +17,19 @@ import dev.jtiisto.wellness.core.data.db.PayloadCacheEntity
 import dev.jtiisto.wellness.core.data.db.ServerProfileEntity
 import dev.jtiisto.wellness.core.data.db.ServerSwitchDao
 import dev.jtiisto.wellness.core.data.db.SetEventEntity
+import dev.jtiisto.wellness.core.data.db.TrendsMetaDao
+import dev.jtiisto.wellness.core.data.db.TrendsMetaEntity
 import dev.jtiisto.wellness.core.data.export.SharedFileStore
 import dev.jtiisto.wellness.core.data.journal.FakeJournalDao
 import dev.jtiisto.wellness.core.data.journal.JournalSyncStore
+import dev.jtiisto.wellness.core.data.journal.JournalUiPrefs
 import dev.jtiisto.wellness.core.data.journal.TrackerDto
 import dev.jtiisto.wellness.core.data.network.CoachApi
 import dev.jtiisto.wellness.core.data.network.JournalApi
 import dev.jtiisto.wellness.core.data.network.ServerConfig
 import dev.jtiisto.wellness.core.data.network.TrendsApi
 import dev.jtiisto.wellness.core.data.network.buildHttpClient
+import dev.jtiisto.wellness.core.data.trends.TrendsPrefs
 import dev.jtiisto.wellness.core.data.trends.TrendsRepository
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
@@ -34,6 +40,9 @@ import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
@@ -236,6 +245,10 @@ class ServerSwitchIntegrationTest {
             json = json,
         )
 
+        /** How many times the switch ended the process. Never actually exits here. */
+        var exits = 0
+            private set
+
         val switcher = ServerSwitcher(
             gate = gate,
             schedulers = emptyList(),
@@ -245,6 +258,9 @@ class ServerSwitchIntegrationTest {
             dao = switchDao,
             sharedFiles = SharedFileStore(File(cacheRoot, "shared"), now = { 1_786_285_805_000L }),
             now = { 1_786_285_805_000L },
+            // The production switch ends the process here. Counted rather than
+            // performed, for obvious reasons.
+            exitApp = { exits += 1 },
         )
 
         /** Populate all eleven wiped tables, so emptiness afterwards means something. */
@@ -363,7 +379,16 @@ class ServerSwitchIntegrationTest {
             world.coach.updateLog("2026-08-06", "ex_1", buildJsonObject { put("reps", 5) })
         }
         world.coachDao.reached.await()
-        assertEquals(1, world.gate.leaseCount)
+        // Two, exactly: `mutateDay`'s write lease plus the nested clientId-mint
+        // lease. Pinned rather than loosened to `>= 1`, because the lease this
+        // test is named after is the OUTER one — the mint's is released the
+        // moment `clientId()` returns and fences nothing that follows it, so a
+        // future edit that dropped `mutateDay`'s lease would still satisfy
+        // `>= 1` while reopening the original bug. The nesting happens only for
+        // the writer that actually reaches the DAO to mint: `clientId()`
+        // memoizes, so anyone arriving later finds the id cached, returns
+        // without a nested lease, and would see 1 here.
+        assertEquals(2, world.gate.leaseCount, "the writer should be holding a lease")
 
         val switch = launch { world.switcher.switchTo(target(world), fromNickname = "Laptop") }
         runCurrent()
@@ -464,5 +489,182 @@ class ServerSwitchIntegrationTest {
         assertEquals(emptyList<String>(), world.populatedTables())
         assertTrue(world.profiles.none { it.id == 1L }, "the active profile should be gone")
         assertTrue(world.profiles.none { it.isActive }, "and nothing left active")
+    }
+
+    // ---- the heart-rate writer -------------------------------------------
+    // Appended, and self-contained: the store and its fakes are built inside the
+    // test rather than added to World, so nothing above changes shape.
+
+    @Test
+    @DisplayName("a capture's sample write is refused once the switch has closed the gate")
+    fun hrCaptureWriteIsRefusedAfterTheSwitch() = switchTest { world ->
+        world.seedEverything()
+        val capture = HrCaptureStore(
+            sessionDao = world.hrSessionDao,
+            sampleDao = world.hrSampleDao,
+            session = world.gate,
+            scope = backgroundScope,
+        )
+        val sessionId = capture.startSession("AA:BB:CC:DD:EE:FF")
+
+        world.switcher.switchTo(world.profiles.first { !it.isActive }, fromNickname = "Laptop")
+
+        // The strap is still recording — the service knows nothing about the
+        // switch — and this is the batch that arrives after the wipe. It has to
+        // be refused rather than silently re-populating a table the switch just
+        // emptied for the server being left.
+        val refused = runCatching {
+            capture.store(
+                listOf(
+                    BufferedSample(
+                        deviceId = "AA:BB:CC:DD:EE:FF",
+                        timestampMs = 1_786_285_805_000L,
+                        seq = 0,
+                        heartRateBpm = 142,
+                        rrIntervalMs = 428,
+                        isGapBefore = false,
+                        sessionId = sessionId,
+                    ),
+                ),
+            )
+        }.exceptionOrNull()
+
+        assertTrue(refused is ServerSessionClosedException, "expected a refusal, got $refused")
+        assertEquals(emptyList<String>(), world.populatedTables())
+    }
+
+    @Test
+    @DisplayName("the switch waits for a capture's sample write that is already in flight")
+    fun hrCaptureWriteHoldsTheSwitchOff() = switchTest { world ->
+        world.seedEverything()
+        val reached = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val blockingSamples = object : FakeHrSampleDao() {
+            override suspend fun insertAll(rows: List<HrSampleEntity>): List<Long> {
+                reached.complete(Unit)
+                release.await()
+                return super.insertAll(rows)
+            }
+        }
+        val capture = HrCaptureStore(
+            sessionDao = world.hrSessionDao,
+            sampleDao = blockingSamples,
+            session = world.gate,
+            scope = backgroundScope,
+        )
+        val sessionId = capture.startSession("AA:BB:CC:DD:EE:FF")
+
+        val writer = launch {
+            capture.store(
+                listOf(
+                    BufferedSample(
+                        deviceId = "AA:BB:CC:DD:EE:FF",
+                        timestampMs = 1_786_285_805_000L,
+                        seq = 0,
+                        heartRateBpm = 142,
+                        rrIntervalMs = 428,
+                        isGapBefore = false,
+                        sessionId = sessionId,
+                    ),
+                ),
+            )
+        }
+        reached.await()
+
+        val switch = launch { world.switcher.switchTo(world.profiles.first { !it.isActive }, "Laptop") }
+        runCurrent()
+        // The lease is held by the beat that is mid-insert, so the wipe has not
+        // run — exactly as it waits for a journal or coach writer.
+        assertFalse(world.gate.isOpen)
+        assertFalse(world.everythingIsEmpty())
+
+        release.complete(Unit)
+        writer.join()
+        switch.join()
+
+        assertEquals(emptyList<String>(), world.populatedTables())
+    }
+
+    // ---- the UI-preference writers ---------------------------------------
+    // The quiet ones. Neither goes near the network, and both were unfenced for
+    // exactly that reason — but `trends_meta` and `journal_meta` are wiped
+    // tables, and a "device-local" value keyed by an id the previous server
+    // issued is the previous server's data.
+
+    /** A trends-meta DAO over the very map the wipe clears, with a barrier on the write. */
+    private class WiredTrendsMetaDao(private val rows: MutableMap<String, String>) : TrendsMetaDao() {
+        var barrier: CompletableDeferred<Unit>? = null
+        val reached = CompletableDeferred<Unit>()
+
+        private val revision = MutableStateFlow(0)
+
+        override fun observe(key: String): Flow<String?> = revision.map { rows[key] }
+
+        override suspend fun get(key: String): String? = rows[key]
+
+        override suspend fun upsert(row: TrendsMetaEntity) {
+            barrier?.let {
+                reached.complete(Unit)
+                it.await()
+            }
+            rows[row.key] = row.value
+            revision.value += 1
+        }
+    }
+
+    @Test
+    @DisplayName("a trends selection written after the switch cannot repopulate `trends_meta`")
+    fun postCloseTrendsPrefWriteIsRefused() = switchTest { world ->
+        world.seedEverything()
+        val prefs = TrendsPrefs(WiredTrendsMetaDao(world.trendsMeta), world.gate)
+
+        world.switcher.switchTo(target(world), fromNickname = "Laptop")
+
+        // The tab reconciles its remembered selection after a slice load, and
+        // the value it settles on is one the OLD server's payload offered.
+        prefs.setExercise("fixture-press")
+
+        assertEquals(emptyList<String>(), world.populatedTables())
+    }
+
+    @Test
+    @DisplayName("a trends selection admitted before the close holds the switch off and dies with its table")
+    fun blockedTrendsPrefWriteIsWaitedFor() = switchTest { world ->
+        world.seedEverything()
+        val barrier = CompletableDeferred<Unit>()
+        val dao = WiredTrendsMetaDao(world.trendsMeta).apply { this.barrier = barrier }
+        val prefs = TrendsPrefs(dao, world.gate)
+
+        val writer = launch { prefs.setExercise("fixture-press") }
+        dao.reached.await()
+        assertEquals(1, world.gate.leaseCount, "the preference write should be holding a lease")
+
+        val switch = launch { world.switcher.switchTo(target(world), fromNickname = "Laptop") }
+        runCurrent()
+        assertFalse(world.gate.isOpen, "the switch should have reached close()")
+        assertFalse(world.everythingIsEmpty(), "the wipe ran while a preference write was in flight")
+
+        barrier.complete(Unit)
+        writer.join()
+        switch.join()
+
+        assertEquals(emptyList<String>(), world.populatedTables())
+    }
+
+    @Test
+    @DisplayName("a journal UI stamp written after the switch cannot repopulate `journal_meta`")
+    fun postCloseJournalPrefWriteIsRefused() = switchTest { world ->
+        world.seedEverything()
+        val prefs = JournalUiPrefs(dao = world.journalDao, session = world.gate)
+
+        world.switcher.switchTo(target(world), fromNickname = "Laptop")
+
+        // Both writers, because they are separate keys and separate merges.
+        prefs.markValueUpdated("2026-08-06", "t1")
+        prefs.toggleCategoryExpanded("Habits")
+
+        // Refusals are swallowed by design — these run on tap handlers — so the
+        // table is the only place the outcome shows.
+        assertEquals(emptyList<String>(), world.populatedTables())
     }
 }

@@ -29,8 +29,17 @@ import kotlinx.serialization.json.put
  * `_lastModified` tokens echoed back as `_baseLastModifiedAt`.
  */
 
+/**
+ * The day's feedback record. It is arbitrated on the DAY token rather than one
+ * of its own, which is why the two always move together.
+ */
+private const val SESSION_FEEDBACK_KEY = "session_feedback"
+
+/** The base token a record echoes on upload. The server consumes it. */
+private const val BASE_TOKEN_KEY = "_baseLastModifiedAt"
+
 /** Keys that are never an exercise entry, whatever their value. */
-private val NON_EXERCISE_KEYS = setOf("_lastModifiedAt", "_lastModifiedBy", "session_feedback")
+private val NON_EXERCISE_KEYS = setOf("_lastModifiedAt", "_lastModifiedBy", SESSION_FEEDBACK_KEY)
 
 // ---- content predicates --------------------------------------------------
 
@@ -247,16 +256,18 @@ fun withBaseTokens(log: JsonObject): JsonObject = buildJsonObject {
  * Adopt the merged server day returned per uploaded date. For each date NOT
  * re-modified mid-sync (its generation still matches [snapshotGens]), replace
  * the local log with the reconciled server row — which embeds each record's
- * fresh `_lastModified` token. A re-modified date keeps its local content and
- * only advances tokens (it stays dirty and re-uploads next cycle).
+ * fresh `_lastModified` token. A re-modified date stays dirty and re-uploads
+ * next cycle, and is reconciled one record at a time — see
+ * [advanceRecordTokens], where the difference between "the user re-edited this"
+ * and "the server ruled on this" is decided.
  *
  * Two nullabilities are load-bearing and different:
  * - [snapshotGens] `null` disables re-modification detection entirely, so every
  *   result adopts wholesale. An **empty map is not the same thing**: against it
  *   any date with a live generation compares unequal and counts as re-modified.
- * - [uploadedLogs] `null` means no tombstone is known to have been uploaded, so
- *   every re-modified tombstone is treated as created mid-sync and preserved —
- *   never mistaken for an arbitrated verdict.
+ * - [uploadedLogs] `null` means nothing is known to have been uploaded, so no
+ *   record of a re-modified date may have a verdict applied to it: every one is
+ *   treated as touched mid-sync and its local content preserved.
  */
 fun adoptUploadResults(
     localLogs: Map<DateString, JsonObject>,
@@ -271,10 +282,8 @@ fun adoptUploadResults(
         if (serverRow !is JsonObject) continue
         val reModified = snapshotGens != null && dirtyDateGenerations[date] != snapshotGens[date]
         next[date] = if (reModified) {
-            // Keep the local re-edit (it stays dirty and re-uploads), but
-            // ADVANCE each record's token to the server's stamp so the next
-            // upload echoes a fresh base rather than the stale pre-sync one,
-            // which the now-advanced server would reject — losing the re-edit.
+            // The generation says the DAY moved, not which record did, so the
+            // verdict is applied per record — see [advanceRecordTokens].
             advanceRecordTokens(localLogs[date] ?: JsonObject(emptyMap()), serverRow, uploadedLogs?.get(date))
         } else {
             serverRow
@@ -284,19 +293,34 @@ fun adoptUploadResults(
 }
 
 /**
- * Copy the server row's `_lastModified` tokens (day + per record) onto the
- * local log, keeping all local content.
+ * Apply the server's arbitration to a date the user re-modified mid-sync,
+ * record by record.
  *
- * Tombstones are the exception to "keep local content": a tombstone that was IN
- * the upload has just been arbitrated, and its verdict must be applied — the
- * server row carrying the key means the delete was REJECTED (a newer remote
- * edit won), so adopt the surviving server record; the key being absent means
- * the delete was ACCEPTED, so drop the tombstone. Merely advancing its token
- * turned a rejected delete into a winning one on the next cycle: the advanced
- * token matched the server stamp, so the retry destroyed the other client's
- * newer edit. A tombstone NOT in the upload was created mid-sync, has not been
- * arbitrated yet, and is kept verbatim so the next cycle arbitrates it with its
- * original base.
+ * Re-modification is a property of the DATE — one generation counter for the
+ * whole day — so it says nothing about WHICH record the user touched. Deciding
+ * per record is the whole of this function, and getting it wrong destroys data:
+ *
+ * - A record that was uploaded and is **still byte-identical to what went on
+ *   the wire** has been arbitrated, and the server row is its verdict, so adopt
+ *   it. Merely advancing such a record's token to the winning stamp left stale
+ *   local content sitting behind a fresh base: next cycle it passed the
+ *   server's `stored <= base` test and overwrote the other client's newer edit,
+ *   silently and on every device.
+ * - A record that genuinely differs from the uploaded copy IS the mid-sync
+ *   re-edit. Keep it (the date stays dirty and re-uploads) and ADVANCE its
+ *   token, or the retry would echo the stale pre-sync base that the
+ *   now-advanced server rejects — losing the re-edit.
+ *
+ * Two records do not follow the plain rule:
+ * - `session_feedback` is arbitrated on the DAY token, so its verdict and that
+ *   token move together. The day token advances either way: with the verdict
+ *   when the feedback settled, ahead of the re-edit when it did not.
+ * - A tombstone's token is **never** advanced. Either its verdict applies — the
+ *   server row carrying the key means the delete was REJECTED (a newer remote
+ *   edit won), so adopt the surviving record; the key being absent means it was
+ *   ACCEPTED, so drop the tombstone — or it was created mid-sync, has not been
+ *   arbitrated at all, and waits verbatim with its original base for the next
+ *   cycle.
  */
 private fun advanceRecordTokens(
     localLog: JsonObject,
@@ -304,16 +328,18 @@ private fun advanceRecordTokens(
     uploadedLog: JsonObject?,
 ): JsonObject {
     val out = LinkedHashMap<String, JsonElement>(localLog)
+    if (wasArbitrated(localLog, uploadedLog, SESSION_FEEDBACK_KEY)) {
+        applyVerdict(out, serverRow, SESSION_FEEDBACK_KEY)
+    }
     serverRow["_lastModified"]?.takeIf { it.isTruthy() }?.let { out["_lastModified"] = it }
+
     for ((key, value) in localLog) {
-        if (isDeletedEntry(value)) {
-            if (isDeletedEntry(uploadedLog?.get(key))) {
-                val serverRecord = serverRow[key]
-                if (serverRecord is JsonObject) out[key] = serverRecord else out.remove(key)
-            }
-            continue // mid-sync tombstone: keep, do not advance its token
+        if (key in NON_EXERCISE_KEYS || value !is JsonObject) continue
+        if (wasArbitrated(localLog, uploadedLog, key)) {
+            applyVerdict(out, serverRow, key)
+            continue
         }
-        if (value !is JsonObject) continue
+        if (isDeletedEntry(value)) continue // unarbitrated tombstone: base untouched
         val stamp = (serverRow[key] as? JsonObject)?.get("_lastModified")?.takeIf { it.isTruthy() }
             ?: continue
         out[key] = buildJsonObject {
@@ -322,6 +348,30 @@ private fun advanceRecordTokens(
         }
     }
     return JsonObject(out)
+}
+
+/**
+ * Was this record part of the upload and untouched since it was built? The
+ * uploaded copy differs from the stored one by exactly the echoed base token,
+ * so stripping that makes the two comparable.
+ *
+ * A null [uploadedLog] means nothing is known to have been sent, and a record
+ * absent from it was created after the payload was built. Neither has been
+ * arbitrated, so neither may have a verdict applied.
+ */
+private fun wasArbitrated(localLog: JsonObject, uploadedLog: JsonObject?, key: String): Boolean {
+    val uploaded = uploadedLog?.get(key) as? JsonObject ?: return false
+    val local = localLog[key] ?: return false
+    return JsonObject(uploaded - BASE_TOKEN_KEY) == local
+}
+
+/**
+ * Take the server's outcome for one record: its reconciled row, or — when the
+ * merged day does not carry the key at all — its removal.
+ */
+private fun applyVerdict(out: MutableMap<String, JsonElement>, serverRow: JsonObject, key: String) {
+    val record = serverRow[key]
+    if (record is JsonObject) out[key] = record else out.remove(key)
 }
 
 // ---- window pruning + plan version ---------------------------------------

@@ -17,6 +17,7 @@ import dev.jtiisto.wellness.core.data.sync.DebugLog
 import dev.jtiisto.wellness.core.data.sync.ForceSyncCounts
 import dev.jtiisto.wellness.core.data.sync.ForceSyncModuleResult
 import dev.jtiisto.wellness.core.data.sync.ForceSyncSkipReason
+import dev.jtiisto.wellness.core.data.sync.ServerSessionClosedException
 import dev.jtiisto.wellness.core.data.sync.ServerSessionGate
 import dev.jtiisto.wellness.core.data.sync.SyncSkipReason
 import dev.jtiisto.wellness.core.data.sync.SyncStatus
@@ -176,6 +177,44 @@ class CoachSyncStoreTest {
     }
 
     @Test
+    @DisplayName("a mid-POST edit of one record does not shield the OTHER record from its verdict")
+    fun adoptionDecidesPerRecordNotPerDate() = runTest {
+        val world = World()
+        world.seedLog(
+            today,
+            """{"_lastModified":"day-tok","session_feedback":{},""" +
+                """"ex_a":{"reps":5,"_lastModified":"a1"},"ex_b":{"reps":8,"_lastModified":"b1"}}""",
+            dirty = true,
+            generation = 1,
+        )
+        // ex_b is edited while the POST is in flight. ex_a is not touched at
+        // all — but the generation counter is per DATE and cannot say so.
+        world.onUpload = { world.store().updateLog(today, "ex_b", buildJsonObject { put("reps", 12) }) }
+        // ex_a's upload lost to a newer remote edit; the server returns the winner.
+        world.postResponse = post(
+            results = """"$today":{"session_feedback":{},"_lastModified":"srv-day",""" +
+                """"ex_a":{"reps":6,"_lastModified":"a2"},"ex_b":{"reps":8,"_lastModified":"b2"}}""",
+        )
+
+        world.store().triggerSync()
+
+        val stored = world.storedLog(today)
+        assertEquals(world.obj("""{"reps":6,"_lastModified":"a2"}"""), stored["ex_a"], "the verdict on ex_a was discarded")
+        assertEquals(JsonPrimitive(12), stored.getValue("ex_b").jsonObject["reps"], "the mid-POST re-edit was clobbered")
+        assertEquals(JsonPrimitive("b2"), stored.getValue("ex_b").jsonObject["_lastModified"])
+        assertTrue(world.dao.logs.getValue(today).isDirty)
+
+        // The harm, one cycle later: stale content behind an advanced token
+        // passes `stored <= base` and destroys the remote edit for good.
+        world.onUpload = {}
+        world.postResponse = post(results = """"$today":{"session_feedback":{},"_lastModified":"srv-day-2"}""")
+        world.store().triggerSync()
+
+        val body = world.uploadBody()
+        assertFalse(body.contains(""""reps":5"""), "the pre-sync content went back up with a winning base: $body")
+    }
+
+    @Test
     @DisplayName("an edit made before the payload is built is part of that payload, and settles with it")
     fun editBeforeTheBuildIsIncludedInThePayload() = runTest {
         val world = World()
@@ -325,6 +364,77 @@ class CoachSyncStoreTest {
         assertTrue(body.contains(""""_baseLastModifiedAt":"t1""""), "the re-add's base token was lost: $body")
     }
 
+    // ---- what the upload response has to say before anything clears ------
+
+    @Test
+    @DisplayName("success=false fails the cycle: nothing is cleared, nothing is adopted, and the pull does not run")
+    fun uploadReportingFailureClearsNothing() = runTest {
+        val world = World()
+        world.seedLog(today, """{"ex_1":{"sets":[{"reps":5}]}}""", dirty = true, generation = 1)
+        world.postResponse = """{"success":false,"results":{},"serverTime":"s-post"}"""
+
+        val result = world.store().triggerSync()
+
+        assertFalse(result.success)
+        assertTrue(world.dao.logs.getValue(today).isDirty, "a rejected upload dropped the dirty flag")
+        assertEquals(listOf("POST"), world.httpCalls(), "the pull must not run on top of a failed upload")
+        assertEquals(SyncStatus.RED, world.store().syncStatus.value)
+    }
+
+    @Test
+    @DisplayName("a payload date the results map never mentions keeps its dirty flag")
+    fun unansweredDateStaysDirty() = runTest {
+        val world = World()
+        world.seedLog(today, """{"ex_1":{"sets":[{"reps":5}]}}""", dirty = true, generation = 1)
+        world.seedLog("2026-08-05", """{"ex_1":{"sets":[{"reps":9}]}}""", dirty = true, generation = 1)
+        // The server answers every date it is sent. If one is missing, nothing
+        // in the response says that date landed, and clearing it on the
+        // assumption that it did loses the edit with no trace.
+        world.postResponse = post(results = """"$today":{"session_feedback":{},"_lastModified":"srv-day"}""")
+
+        world.store().triggerSync()
+
+        assertFalse(world.dao.logs.getValue(today).isDirty)
+        assertTrue(world.dao.logs.getValue("2026-08-05").isDirty, "an unanswered date was reported as settled")
+        val unanswered = world.storedLog("2026-08-05").getValue("ex_1").jsonObject.getValue("sets").jsonArray
+        assertEquals(JsonPrimitive(9), unanswered.single().jsonObject["reps"], "its content was touched anyway")
+    }
+
+    // ---- a blob that will not parse --------------------------------------
+
+    @Test
+    @DisplayName("a corrupt log blob reads as an absent day and drops out of the whole-window map")
+    fun corruptBlobReadsAsAbsent() = runTest {
+        val world = World()
+        world.seedLog(today, """{"ex_1":{"sets":[""") // truncated
+        world.seedLog("2026-08-05", """{"session_feedback":{}}""")
+        val store = world.store()
+
+        assertNull(store.observeLog(today).first(), "a corrupt blob threw into a UI collector")
+        assertEquals(setOf("2026-08-05"), store.observeAllLogs().first().keys)
+    }
+
+    @Test
+    @DisplayName("a corrupt dirty day drops out of the upload, stops being dirty, and the next pull repairs it")
+    fun corruptDirtyDayDoesNotWedgeTheCycle() = runTest {
+        val world = World()
+        world.seedLog(today, """{"ex_1":{"sets":[""", dirty = true, generation = 1)
+        world.seedLog("2026-08-05", """{"ex_1":{"sets":[{"reps":5}]}}""", dirty = true, generation = 1)
+        world.postResponse = post(results = """"2026-08-05":{"session_feedback":{},"_lastModified":"srv-day"}""")
+        world.getResponse = get(logs = """"$today":{"session_feedback":{},"_lastModified":"s1"}""")
+
+        val result = world.store().triggerSync()
+
+        // Decoding bare made one bad row fail this cycle and every cycle after
+        // it — including the pull that would have replaced the row.
+        assertTrue(result.success, "one unreadable row failed the whole cycle")
+        assertFalse(world.uploadBody().contains(today), "an unparseable day reached the wire: ${world.uploadBody()}")
+        // Dropped as unsatisfiable, which is precisely what frees the pull to
+        // overwrite it.
+        assertEquals(world.obj("""{"session_feedback":{},"_lastModified":"s1"}"""), world.storedLog(today))
+        assertEquals(0, world.dao.dirtyCount())
+    }
+
     // ---- download --------------------------------------------------------
 
     @Test
@@ -459,6 +569,18 @@ class CoachSyncStoreTest {
     }
 
     @Test
+    @DisplayName("an EMPTY serverTime is no watermark either — it would bound the next pull by nothing")
+    fun emptyServerTimeFailsTheCycle() = runTest {
+        val world = World()
+        world.getResponse = get(serverTime = "")
+
+        val result = world.store().triggerSync()
+
+        assertFalse(result.success)
+        assertNull(world.dao.meta[CoachDao.KEY_LAST_SERVER_SYNC_TIME])
+    }
+
+    @Test
     @DisplayName("a pull with no serverTime fails the cycle rather than inventing a watermark")
     fun missingServerTimeFailsTheCycle() = runTest {
         val world = World()
@@ -542,6 +664,25 @@ class CoachSyncStoreTest {
         assertTrue(store.triggerSync().success)
 
         assertFalse(store.pollCheck(), "a log-driven version bump was never retired")
+    }
+
+    @Test
+    @DisplayName("a version probed WHILE the pull is in flight stays parked — the pull predates it")
+    fun probeDuringAnInFlightPullIsNotConsumed() = runTest {
+        val world = World()
+        world.plansVersion = """{"version":"v1"}"""
+        val store = world.store()
+        assertTrue(store.pollCheck())
+
+        // A second probe lands while the GET is on the wire. Whatever moved the
+        // version this time, the response already being built cannot contain it.
+        world.onDownload = {
+            world.plansVersion = """{"version":"v2"}"""
+            store.pollCheck()
+        }
+        assertTrue(store.triggerSync().success)
+
+        assertTrue(store.pollCheck(), "an in-flight probe was consumed by a pull that predates it")
     }
 
     @Test
@@ -1043,6 +1184,50 @@ class CoachSyncStoreTest {
     }
 
     @Test
+    @DisplayName("a snapshot that empties the plan set still deletes, but leaves the watermark where it was")
+    fun emptySnapshotWipeKeepsTheCursor() = runTest {
+        val world = World()
+        world.dao.meta[CoachDao.KEY_LAST_SERVER_SYNC_TIME] = "s-old"
+        world.seedPlan(today, """{"_lastModified":"p-1","session":{}}""")
+        world.getResponse = get(plans = "", serverTime = "s-new")
+
+        world.store().forceSync()
+
+        // The deletion rule is right and cannot be re-derived later, so it
+        // stands. But "the server has no plans" and "the server answered from
+        // an empty database" are the same 200, so the cursor does not move —
+        // one ordinary incremental pull then restores whatever is really there.
+        assertTrue(world.dao.plans.isEmpty())
+        assertEquals("s-old", world.dao.meta[CoachDao.KEY_LAST_SERVER_SYNC_TIME])
+    }
+
+    @Test
+    @DisplayName("a snapshot that carries plans advances the watermark as usual")
+    fun nonEmptySnapshotAdvancesTheCursor() = runTest {
+        val world = World()
+        world.dao.meta[CoachDao.KEY_LAST_SERVER_SYNC_TIME] = "s-old"
+        world.seedPlan("2030-01-04", """{"_lastModified":"p-old","session":{}}""")
+        world.getResponse = get(plans = """"$today":{"_lastModified":"p-2","session":{}}""", serverTime = "s-new")
+
+        world.store().forceSync()
+
+        assertFalse(world.dao.plans.containsKey("2030-01-04"), "the snapshot rule stopped applying")
+        assertEquals("s-new", world.dao.meta[CoachDao.KEY_LAST_SERVER_SYNC_TIME])
+    }
+
+    @Test
+    @DisplayName("an empty snapshot with nothing to wipe advances the watermark — the guard is about the wipe")
+    fun emptySnapshotWithNothingToWipeAdvancesTheCursor() = runTest {
+        val world = World()
+        world.dao.meta[CoachDao.KEY_LAST_SERVER_SYNC_TIME] = "s-old"
+        world.getResponse = get(plans = "", serverTime = "s-new")
+
+        world.store().forceSync()
+
+        assertEquals("s-new", world.dao.meta[CoachDao.KEY_LAST_SERVER_SYNC_TIME])
+    }
+
+    @Test
     @DisplayName("an explicit deletedPlanDates is still honoured on the force path")
     fun forceSyncStillHonoursExplicitDeletions() = runTest {
         val world = World()
@@ -1094,6 +1279,61 @@ class CoachSyncStoreTest {
             "a post-wipe adoption was applied",
         )
         assertTrue(world.dao.logs.getValue(today).isDirty)
+    }
+
+    @Test
+    @DisplayName("minting the client id is a leased write — a closed session refuses it")
+    fun closedGateFencesTheClientIdMint() = runTest {
+        val world = World()
+        world.session.close()
+
+        assertThrows<ServerSessionClosedException> { world.store().clientId() }
+        assertFalse(
+            CoachDao.KEY_CLIENT_ID in world.dao.meta,
+            "the old server's identity was seeded into the wiped database",
+        )
+    }
+
+    @Test
+    @DisplayName("EVERY mutator propagates the refusal after the session closes, and none of them writes")
+    fun closedGateRefusesEveryMutator() = runTest {
+        val world = World()
+        world.seedLog(today, """{"session_feedback":{},"ex_1":{"sets":[]}}""")
+        world.session.close()
+
+        // Propagating matches every JournalSyncStore mutator; the prefs stores
+        // catch and drop instead, but they write UI state rather than user data.
+        // ServerSwitchIntegrationTest pins updateLog; these are the other three,
+        // including the delete whose no-op path is decided AFTER the lease.
+        assertThrows<ServerSessionClosedException> { world.store().deleteLogEntry(today, "ex_1") }
+        assertThrows<ServerSessionClosedException> {
+            world.store().updateSessionFeedback(today, feedback("general_notes", "n"))
+        }
+        assertThrows<ServerSessionClosedException> {
+            world.store().transformLogEntry(today, "ex_1") { buildJsonObject { put("reps", 6) } }
+        }
+
+        assertEquals(
+            world.obj("""{"session_feedback":{},"ex_1":{"sets":[]}}"""),
+            world.storedLog(today),
+            "a refused edit reached the database anyway",
+        )
+        assertEquals(0, world.scheduledUploads, "a refused edit woke the uploader")
+    }
+
+    @Test
+    @DisplayName("the unsatisfiable-date clear is leased too — a session closed before it writes nothing")
+    fun closedGateFencesTheUnsatisfiableClear() = runTest {
+        val world = World()
+        // Empty and never synced, so this date takes the pre-POST clear.
+        world.seedLog(today, """{"session_feedback":{}}""", dirty = true, generation = 1)
+        world.dao.beforeBuildPendingUpload = { world.session.close() }
+
+        val result = world.store().triggerSync()
+
+        assertFalse(result.success)
+        assertTrue(world.dao.logs.getValue(today).isDirty, "a dirty flag was cleared against a wiped database")
+        assertTrue(world.urls.isEmpty(), "nothing should have reached the wire")
     }
 
     @Test

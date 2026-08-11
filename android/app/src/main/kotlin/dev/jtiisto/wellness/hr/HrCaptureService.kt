@@ -71,6 +71,16 @@ import java.util.concurrent.atomic.AtomicInteger
  * mid-session permission revocation both reach here without passing through
  * that UI.
  */
+/**
+ * Whether a start intent that lost the claim still has something to contribute.
+ *
+ * Almost every refused start is a duplicate delivery and should do nothing. The
+ * exception is a Start Workout tap landing while a capture is still getting
+ * going: the strap and the session are already covered, but the workout anchor
+ * is new, and it is the link that makes the recording mean anything afterwards.
+ */
+internal fun refusedStartCarriesAnchor(workoutDate: String?): Boolean = !workoutDate.isNullOrBlank()
+
 class HrCaptureService : Service() {
 
     private val captureState: MutableStateFlow<HrCaptureState> by inject(HrCaptureStateQualifier)
@@ -151,7 +161,20 @@ class HrCaptureService : Service() {
         //
         // onStartCommand runs on the main thread, so the claim closes the
         // double-start window before any async work is launched.
-        if (connection != null || !lifecycle.claimStart()) return false
+        if (connection != null || !lifecycle.claimStart()) {
+            // Not entirely redundant, though. A Start Workout tap that arrives
+            // while a resume-startup is still in flight loses the claim, and its
+            // workout anchor is the one thing in the intent the running capture
+            // does not already have. Dropping it silently loses the workout link
+            // for the whole session.
+            if (refusedStartCarriesAnchor(workoutDate)) {
+                serviceScope.launch {
+                    runCatching { captureStore.anchorToWorkout(requireNotNull(workoutDate), workoutSessionId) }
+                        .onFailure { bleLog.log("late anchor failed: ${it.javaClass.simpleName}") }
+                }
+            }
+            return false
+        }
 
         val refusal = CaptureStartGate.evaluate(
             address = address,
@@ -530,9 +553,14 @@ class HrCaptureService : Service() {
         manager.notify(HrCaptureNotification.NOTIFICATION_ID, notification.build(updated))
         // Paint, then verify. A teardown that landed between the check above and
         // the call just above would have removed the notification and had it put
-        // straight back — permanently, since nothing would be running to clear it.
-        if (notificationOutlivedCapture(captureState.value)) {
-            manager.cancel(HrCaptureNotification.NOTIFICATION_ID)
+        // straight back — and a teardown *plus a restart* would have left this
+        // capture's content sitting on the next capture's notification.
+        val live = captureState.value
+        when (paintVerdict(updated, live)) {
+            PaintVerdict.KEEP -> Unit
+            PaintVerdict.CANCEL -> manager.cancel(HrCaptureNotification.NOTIFICATION_ID)
+            PaintVerdict.REPAINT ->
+                manager.notify(HrCaptureNotification.NOTIFICATION_ID, notification.build(live))
         }
     }
 

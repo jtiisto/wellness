@@ -118,18 +118,39 @@ fun bufferTimerStops(result: CaptureStopResult): Boolean = when (result) {
 fun notificationFollows(committed: Boolean, published: HrCaptureState, live: HrCaptureState): Boolean =
     committed && published.isRunning && live === published
 
+/** What to do about a notification that has just been painted. */
+enum class PaintVerdict {
+    /** It still describes the live capture. */
+    KEEP,
+
+    /** Nothing is capturing — take it down. */
+    CANCEL,
+
+    /** A different capture is running; the content is stale but the row is not. */
+    REPAINT,
+}
+
 /**
- * After painting: whether what was just drawn has outlived the capture it
- * described, and has to be taken back down.
+ * After painting: whether what was just drawn still describes what is happening.
  *
- * [notificationFollows] is checked before `notify()`, and a teardown can still
- * land in the gap between that check and the call — resetting the state and
- * removing the notification, only for the call to put it back. The window is
- * tiny and the artifact is permanent: an ongoing notification for a capture that
- * has stopped, which nothing is left running to ever clear.
+ * [notificationFollows] is checked before `notify()`, and the world can move
+ * between that check and the call. Two ways, and they need opposite answers:
  *
- * So the paint is verified as well as guarded. The question afterwards is not
- * "is my value still live" — a *newer* publisher superseding this one is fine and
- * must not cancel anything — but the simpler "is anything capturing at all".
+ * - **A teardown landed.** The notification was removed and the call put it
+ *   straight back. The window is tiny and the artifact is permanent — an ongoing
+ *   notification for a capture that has stopped, with nothing left running to
+ *   ever clear it. [CANCEL].
+ * - **A teardown *and a restart* landed.** A new capture is running and has its
+ *   own notification, which this call has just overwritten with the old
+ *   capture's content. Cancelling would take down a live foreground service's
+ *   notification, so the answer is to [REPAINT] with what is true now.
+ *
+ * Which is why the check is on **capture identity**, not on "is anything
+ * running". A newer publisher for the *same* capture is fine and gets [KEEP] —
+ * it paints its own value, and it is more current than this one.
  */
-fun notificationOutlivedCapture(live: HrCaptureState): Boolean = !live.isRunning
+fun paintVerdict(published: HrCaptureState, live: HrCaptureState): PaintVerdict = when {
+    !live.isRunning -> PaintVerdict.CANCEL
+    live.sessionId != published.sessionId -> PaintVerdict.REPAINT
+    else -> PaintVerdict.KEEP
+}

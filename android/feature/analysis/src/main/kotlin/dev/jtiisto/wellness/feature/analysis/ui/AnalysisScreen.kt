@@ -15,8 +15,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.SnackbarDuration
-import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -40,19 +38,20 @@ import org.koin.androidx.compose.koinViewModel
  * routes — the poll has to outlive every one of them, and a back stack that
  * could pop a report out from under a running query would be exactly the bug
  * this design exists to avoid.
+ *
+ * The module's snackbars are **not** collected here. The poll outlives this
+ * composition, so its events do too: collected on the screen, a report
+ * finishing while the user is in Journal would sit in the channel until they
+ * next opened this tab and then announce itself minutes late. `WellnessApp`
+ * collects them at the shell, where `SyncErrorEvents` is already collected.
  */
 @Composable
-fun AnalysisScreen(snackbarHostState: SnackbarHostState, modifier: Modifier = Modifier) {
+fun AnalysisScreen(modifier: Modifier = Modifier) {
     val viewModel: AnalysisViewModel = koinViewModel()
     val state by viewModel.state.collectAsStateWithLifecycle()
     val ui by viewModel.ui.collectAsStateWithLifecycle()
 
     LaunchedEffect(viewModel) { viewModel.initialize() }
-    LaunchedEffect(viewModel, snackbarHostState) {
-        viewModel.messages.collect { message ->
-            snackbarHostState.showSnackbar(message = message, duration = SnackbarDuration.Short)
-        }
-    }
 
     // Back walks the sub-views, never the poll: leaving the progress screen is
     // not abandoning the query, and only Cancel says otherwise. On the query

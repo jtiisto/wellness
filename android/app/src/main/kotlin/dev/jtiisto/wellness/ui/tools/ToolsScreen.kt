@@ -49,7 +49,6 @@ import dev.jtiisto.wellness.core.ui.theme.WellnessSpace
 import dev.jtiisto.wellness.core.ui.theme.WellnessTheme
 import dev.jtiisto.wellness.core.data.sync.ForceSyncCopy
 import org.koin.androidx.compose.koinViewModel
-import kotlin.system.exitProcess
 
 @Composable
 fun ToolsScreen(
@@ -64,13 +63,6 @@ fun ToolsScreen(
             when (event) {
                 is ToolsEvent.Share -> shareStagedFile(context, event.path, event.mimeType)
                 is ToolsEvent.Message -> snackbarHostState.showSnackbar(event.text)
-                // The switch has committed. Ending the task and the process is
-                // the whole point: nothing in memory is valid for the new
-                // server, and the user reopens into a clean boot.
-                ToolsEvent.CloseApp -> {
-                    context.findActivity()?.finishAffinity()
-                    exitProcess(0)
-                }
             }
         }
     }
@@ -219,7 +211,10 @@ private fun ActionsCard(state: ToolsUiState, actions: ToolsActions, modifier: Mo
     ToolsCard(modifier = modifier) {
         Button(
             onClick = actions.forceSync,
-            enabled = !running,
+            // Off during a switch as well: the gate is already closed, so the
+            // cycle would refuse every write it made and report counts for a
+            // server the app is in the middle of leaving.
+            enabled = !running && !state.switching,
             shape = WellnessShape.card,
             colors = WellnessDefaults.accentButtonColors(),
             modifier = Modifier.fillMaxWidth(),
@@ -264,13 +259,30 @@ private fun ServersCard(state: ToolsUiState, actions: ToolsActions, modifier: Mo
             )
         }
         state.servers.forEach { row ->
-            ServerRow(row = row, actions = actions)
+            ServerRow(row = row, switching = state.switching, actions = actions)
+        }
+        // The switch takes seconds — quiescing every writer, then a wipe — and
+        // ends with the app closing. Saying so is the difference between a
+        // deliberate shutdown and one that reads as a crash.
+        if (state.switching) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(WellnessSpace.sm),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                CircularProgressIndicator(
+                    color = WellnessTheme.accent.fill,
+                    trackColor = palette.line,
+                    modifier = Modifier.size(18.dp),
+                )
+                Text(ToolsCopy.SWITCHING, style = WellnessTheme.type.secondary, color = palette.textSecondary)
+            }
         }
     }
 }
 
 @Composable
-private fun ServerRow(row: ServerProfileRow, actions: ToolsActions) {
+private fun ServerRow(row: ServerProfileRow, switching: Boolean, actions: ToolsActions) {
     val palette = WellnessTheme.palette
     val accent = WellnessTheme.accent
     Row(
@@ -278,7 +290,7 @@ private fun ServerRow(row: ServerProfileRow, actions: ToolsActions) {
             .fillMaxWidth()
             .heightIn(min = WellnessSpace.touchTarget)
             .clip(WellnessShape.input)
-            .clickable(enabled = !row.isActive) { actions.requestSwitch(row) }
+            .clickable(enabled = !row.isActive && !switching) { actions.requestSwitch(row) }
             .background(if (row.isActive) accent.wash else palette.card)
             .padding(horizontal = WellnessSpace.sm, vertical = WellnessSpace.xs),
         verticalAlignment = Alignment.CenterVertically,
@@ -305,7 +317,7 @@ private fun ServerRow(row: ServerProfileRow, actions: ToolsActions) {
                 url = row.url,
                 isActive = row.isActive,
             )
-            IconButton(onClick = { actions.editProfile(profile) }) {
+            IconButton(onClick = { actions.editProfile(profile) }, enabled = !switching) {
                 Icon(
                     Icons.Filled.Edit,
                     contentDescription = "Edit ${row.nickname}",
@@ -313,7 +325,9 @@ private fun ServerRow(row: ServerProfileRow, actions: ToolsActions) {
                     modifier = Modifier.size(18.dp),
                 )
             }
-            IconButton(onClick = { actions.requestDelete(profile) }) {
+            // Deleting the active profile IS a switch, so it is off for the same
+            // reason the rows are.
+            IconButton(onClick = { actions.requestDelete(profile) }, enabled = !switching) {
                 Icon(
                     Icons.Filled.Delete,
                     contentDescription = "Delete ${row.nickname}",

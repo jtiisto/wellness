@@ -134,14 +134,18 @@ class SyncScheduler(
      * Terminal and idempotent: every timer is cancelled and later calls no-op.
      * A [syncFn] already in flight runs to completion — we never leave an
      * upload half-applied.
+     *
+     * Returns the job that does it, because the work is dispatched to [control]
+     * rather than performed here: the server switch has to *know* no new cycle
+     * can be scheduled before it drains, and calling this from a background
+     * thread only queues that onto the main dispatcher. Callers with no such
+     * ordering requirement can ignore it.
      */
-    fun stop() {
-        control.launch {
-            stopped = true
-            cancelPolling()
-            cancelDebounce()
-            cancelRetryTimer()
-        }
+    fun stop(): Job = control.launch {
+        stopped = true
+        cancelPolling()
+        cancelDebounce()
+        cancelRetryTimer()
     }
 
     // --- Internal: all of the below runs on [control] ---
@@ -178,6 +182,14 @@ class SyncScheduler(
         // the flag and consumes it when it completes.
         if (isSyncing() || syncInFlight) {
             pendingSync = true
+            // …unless the flight is not ours. When the busy-ness comes from the
+            // store's own flag — the flush Worker, the force-sync orchestrator
+            // — no `finally` of this scheduler will ever run to consume the
+            // latch, and the trigger would be dropped until some unrelated edit
+            // came along. Arming the timer here is what that missing finally
+            // would have done; it re-checks in one debounce and costs nothing
+            // while the external syncer is still working.
+            if (!syncInFlight) armDebounce()
             return
         }
 

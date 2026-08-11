@@ -142,8 +142,12 @@ class IntervalBufferTest {
     }
 
     @Test
-    fun `a failed flush is reported to the log`() = runTest {
+    fun `a failed flush is reported to the log by exception type, never by message`() = runTest {
         sink.failures = 1
+        // The log is a shareable dump, and the sink is on the other side of an
+        // interface: what its exceptions say is not this module's to promise.
+        // The type and the row count are what a diagnosis reads anyway.
+        sink.thrown = IllegalStateException("FORBIDDEN-SINK-DETAIL")
         val logged = mutableListOf<String>()
         val buffer = buffer(backgroundScope, log = { logged += it })
 
@@ -152,7 +156,8 @@ class IntervalBufferTest {
 
         assertEquals(1, logged.size)
         assertTrue(logged[0].contains("keeping 1 rows"), logged[0])
-        assertTrue(logged[0].contains("database or disk is full"), logged[0])
+        assertTrue(logged[0].contains("IllegalStateException"), logged[0])
+        assertFalse(logged[0].contains("FORBIDDEN-SINK-DETAIL"), logged[0])
     }
 
     @Test

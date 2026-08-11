@@ -229,11 +229,52 @@ class JournalUiPrefsTest {
         assertNull(formatLastUpdated("not-a-timestamp", "2026-08-06", utc, Locale.US))
     }
 
+    // ---- the server-switch fence -------------------------------------------
+
+    @Test
+    @DisplayName("both writers are refused after the session closes — `journal_meta` is a wiped table")
+    fun postCloseWritesAreRefused() = runTest {
+        val world = World()
+        world.session.close()
+
+        world.prefs.toggleCategoryExpanded("Habits")
+        world.prefs.markValueUpdated("2026-08-06", "t1")
+
+        // Device-local is not server-independent: both values are keyed by
+        // tracker id, and a stamp written after the wipe annotates a tracker the
+        // new server has never sent.
+        assertTrue(world.dao.meta.isEmpty(), "post-wipe UI state reached journal_meta: ${world.dao.meta}")
+    }
+
+    @Test
+    @DisplayName("the refusal does not escape into the tap handler that made it")
+    fun refusalDoesNotEscape() = runTest {
+        val world = World()
+        world.prefs.toggleCategoryExpanded("Habits")
+        world.session.close()
+
+        // A crash here would take the journal tab down in the two seconds
+        // between confirming a switch and the process exiting — for a write
+        // whose row is about to be deleted anyway.
+        world.prefs.toggleCategoryExpanded("Supplements")
+
+        assertEquals(setOf("Habits"), world.prefs.expandedCategories.first())
+    }
+
     private inner class World(var now: Instant = Instant.parse("2026-08-06T12:00:00Z")) {
         val dao = FakeJournalDao()
         val bodies = mutableListOf<String>()
 
-        val prefs = JournalUiPrefs(dao = dao, json = WellnessJson, now = { now }, today = { today })
+        /** Open unless a test closes it — the server-switch fence. */
+        val session = ServerSessionGate()
+
+        val prefs = JournalUiPrefs(
+            dao = dao,
+            session = session,
+            json = WellnessJson,
+            now = { now },
+            today = { today },
+        )
 
         private val api: JournalApi by lazy {
             val config = ServerConfig("http://localhost:9001/wellness")
@@ -256,7 +297,7 @@ class JournalUiPrefsTest {
 
         val store: JournalSyncStore by lazy {
             JournalSyncStore(
-                session = ServerSessionGate(),
+                session = session,
                 dao = dao,
                 api = api,
                 isOnline = { true },

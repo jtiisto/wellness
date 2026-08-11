@@ -15,7 +15,8 @@ Porting sources (behavior is theirs, not ours to redesign):
 ### Declared deviations from the PWA (intentional, all else is 1:1)
 1. **Sequential poll loop** — `while { delay(30 s); pollOnce() }` between *completed* cycles instead of `setInterval`'s fixed-rate ticks. No overlapping poll checks; cadence may drift by cycle duration. (JS could overlap a slow `pollCheckFn` with the next tick; we forbid it.)
 2. **Foreground-gated polling** — polling runs iff `foreground && online`. The literal PWA starts polling on an `online` event even while hidden; we do not. An online-transition while backgrounded still fires one `requestSync()` (dirty-data flush parity).
-3. **Single-flight is enforced internally** (serialized scheduler state), not just advised by the caller's `isSyncing()` — see Behavior §2. The PWA's busy→`pendingSync` observable behavior is preserved.
+3. **Single-flight is enforced internally** (serialized scheduler state), not just advised by the caller's `isSyncing()` — see Behavior §2.
+4. **A trigger refused because an *external* syncer is busy arms the debounce** rather than latching `pendingSync` with no timer — see Behavior §1.2 for why the parity behavior does not transfer.
 
 ## API / Interface
 
@@ -182,7 +183,7 @@ MVI ViewModel + screen replacing the "Tools" stub:
 
 1. **Execution flow** (`sync-scheduler.js` `_executeSync`, order preserved exactly):
    1. If `!isOnline()` → return (nothing scheduled).
-   2. **Busy check happens BEFORE the try/finally**: if `isSyncing()` (or an internal flight is active) → set `pendingSync = true` and return — this path must NOT run the finally-block (the running invocation's finally consumes the flag). If `isSyncing()` is externally true with no scheduler-owned flight, `pendingSync` stays set until some later execution reaches its finally (PWA parity, odd but pinned).
+   2. **Busy check happens BEFORE the try/finally**: if `isSyncing()` (or an internal flight is active) → set `pendingSync = true` and return — this path must NOT run the finally-block (the running invocation's finally consumes the flag). **Declared deviation (Phase 1 coach-pulse):** when the busy-ness comes from `isSyncing()` alone, with no scheduler-owned flight, the debounce timer is armed as the finally would have armed it. The PWA left the flag latched with no timer because it had no external syncers; this app has two (`SyncFlushWorker`, `ForceSyncOrchestrator`), and neither runs a finally of this scheduler's — so the parity behavior dropped the trigger outright instead of merely deferring it.
    3. Run `syncFn()`; classify: RESET → zero retry timer + attempt counter; SKIP → nothing; ERROR → network errors silent / server errors via `onServerError`, then schedule retry; RETRY → silent retry. A **thrown** exception = ERROR path — except `CancellationException`, which is rethrown, never classified, never retried.
    4. `finally`: if `pendingSync || hasDirtyData()` → clear flag, `scheduleUpload()`.
 2. **Cancellation discipline & single-flight**: timer jobs (debounce, retry, poll) and the in-flight sync are **separate Jobs**. Cancelling a timer never aborts a running `syncFn`; `scheduleUpload()`/`requestSync()`/`onOffline()`/`stop()` never cancel an in-flight sync. Scheduler state is confined to a single-threaded context (main-immediate dispatcher; tests: the TestScope's scheduler), making the busy-check atomic — two concurrent triggers cannot both enter `syncFn`; the loser takes the `pendingSync` path.
@@ -216,3 +217,4 @@ Verification: `./gradlew build` green (hooks enforce on commit); APK to `gdrive:
 1. **Base URL default** — the tailscale-serve HTTPS endpoint `https://pop-os.tailexample.ts.net:9443/wellness` (overridable via `local.properties` `wellness.baseUrl`).
 2. **Server-error surfacing** — Phase 1 logs to DebugLog only; global snackbar host lands in Phase 3.
 3. **Deviations 1–3** (sequential poll loop; foreground-gated polling; internal single-flight) — accepted.
+4. **Deviation 4** (external-busy trigger arms the debounce) — added in the Phase 1 coach-pulse review round; the PWA had no external syncers for the parity to be about.

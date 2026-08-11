@@ -6,9 +6,13 @@ import dev.jtiisto.wellness.core.data.db.FakeHrSampleDao
 import dev.jtiisto.wellness.core.data.db.FakeHrSessionDao
 import dev.jtiisto.wellness.core.data.db.HrSampleEntity
 import dev.jtiisto.wellness.core.data.db.HrSessionEntity
-import dev.jtiisto.wellness.core.data.network.DateString
 import dev.jtiisto.wellness.core.data.sync.ServerSessionClosedException
 import dev.jtiisto.wellness.core.data.sync.ServerSessionGate
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -23,62 +27,16 @@ private const val DEVICE = "AA:BB:CC:DD:EE:FF"
 private const val OTHER_DEVICE = "11:22:33:44:55:66"
 
 /**
- * A session DAO that lets a test drop another store call into the middle of a
- * write, which is the only way to reach the interleavings the two guarded
- * statements exist for.
- *
- * Each hook fires once and clears itself, so a hook that re-enters the DAO does
- * not recurse.
- */
-private class HookedHrSessionDao : FakeHrSessionDao() {
-
-    /** Runs *before* the next anchor statement evaluates its `endedAtMs IS NULL` guard. */
-    var beforeAnchor: (suspend () -> Unit)? = null
-
-    /** Runs *after* the next anchor lands, while the caller is still mid-call. */
-    var afterAnchor: (suspend () -> Unit)? = null
-
-    /** Runs *before* the next close statement — where a read-modify-write would have read. */
-    var beforeClose: (suspend () -> Unit)? = null
-
-    /**
-     * Runs *after* the next open-session query has read its row but before the
-     * caller sees it — so the caller comes back holding a genuinely stale answer,
-     * which is the sticky-resume race.
-     */
-    var afterNewestOpen: (suspend () -> Unit)? = null
-
-    override suspend fun newestOpen(): HrSessionEntity? {
-        val row = super.newestOpen()
-        afterNewestOpen?.let { afterNewestOpen = null; it() }
-        return row
-    }
-
-    override suspend fun anchorWorkout(
-        sessionId: String,
-        workoutDate: DateString,
-        workoutSessionId: Long?,
-    ): Int {
-        beforeAnchor?.let { beforeAnchor = null; it() }
-        val rows = super.anchorWorkout(sessionId, workoutDate, workoutSessionId)
-        afterAnchor?.let { afterAnchor = null; it() }
-        return rows
-    }
-
-    override suspend fun closeSession(sessionId: String, endedAtMs: Long): Int {
-        beforeClose?.let { beforeClose = null; it() }
-        return super.closeSession(sessionId, endedAtMs)
-    }
-}
-
-/**
  * One store, its two DAO fakes and a real [ServerSessionGate].
  *
  * The gate is the real one deliberately: "a refused write is a failure, not a
  * silent drop" is the property most worth pinning here, and a fake gate would
  * only assert that the fake refuses.
  */
-private class World(val sessionDao: FakeHrSessionDao = FakeHrSessionDao()) {
+private class World(
+    scope: CoroutineScope,
+    val sessionDao: FakeHrSessionDao = FakeHrSessionDao(),
+) {
     val sampleDao = FakeHrSampleDao()
     val gate = ServerSessionGate()
 
@@ -92,6 +50,7 @@ private class World(val sessionDao: FakeHrSessionDao = FakeHrSessionDao()) {
         sessionDao = sessionDao,
         sampleDao = sampleDao,
         session = gate,
+        scope = scope,
         scheduleUpload = { scheduled++ },
         newSessionId = { "session-${++minted}" },
         now = { clock },
@@ -132,7 +91,7 @@ class HrCaptureStoreTest {
     @Test
     @DisplayName("starting writes an open session and makes it current")
     fun startWritesTheRow() = runTest {
-        val world = World()
+        val world = World(backgroundScope)
 
         val id = world.store.startSession(DEVICE, workoutDate = "2026-08-10", workoutSessionId = 42L)
 
@@ -154,7 +113,7 @@ class HrCaptureStoreTest {
     @Test
     @DisplayName("a new session is pending upload at generation 1")
     fun startIsPendingUpload() = runTest {
-        val world = World()
+        val world = World(backgroundScope)
 
         val id = world.store.startSession(DEVICE)
 
@@ -168,7 +127,7 @@ class HrCaptureStoreTest {
     @Test
     @DisplayName("capture started outside a workout records no anchor")
     fun startWithoutAWorkout() = runTest {
-        val world = World()
+        val world = World(backgroundScope)
 
         val id = world.store.startSession(DEVICE)
 
@@ -183,7 +142,7 @@ class HrCaptureStoreTest {
     @Test
     @DisplayName("a restart resumes the newest session nobody closed")
     fun resumePicksTheNewestOpenSession() = runTest {
-        val world = World()
+        val world = World(backgroundScope)
         world.sessionDao.upsert(HrSessionEntity("older", DEVICE, startedAtMs = NOW - 20_000))
         world.sessionDao.upsert(HrSessionEntity("newer", DEVICE, startedAtMs = NOW - 10_000))
         world.sessionDao.upsert(
@@ -202,7 +161,7 @@ class HrCaptureStoreTest {
     @Test
     @DisplayName("a resumed session brings its workout anchor back off the row")
     fun resumeRepublishesTheAnchor() = runTest {
-        val world = World()
+        val world = World(backgroundScope)
         world.sessionDao.upsert(
             HrSessionEntity(
                 sessionId = "open",
@@ -227,7 +186,7 @@ class HrCaptureStoreTest {
     @Test
     @DisplayName("a resumed unanchored session comes back unanchored")
     fun resumeWithoutAnAnchor() = runTest {
-        val world = World()
+        val world = World(backgroundScope)
         world.sessionDao.upsert(HrSessionEntity("open", DEVICE, startedAtMs = NOW - 10_000))
 
         world.store.resumeOpenSession()
@@ -236,33 +195,9 @@ class HrCaptureStoreTest {
     }
 
     @Test
-    @DisplayName("a resume holding a stale row refuses to displace the capture that started under it")
-    fun resumeNeverDisplacesARunningCapture() = runTest {
-        val dao = HookedHrSessionDao()
-        val world = World(dao)
-        // Left open by an earlier capture. The sticky query reads exactly this
-        // row and then, before the resume can act on it, a real start intent is
-        // served — on another strap, so the stale-session backstop does not
-        // retire it and the resume really is holding a live-looking stale row.
-        world.sessionDao.upsert(HrSessionEntity("stale", DEVICE, startedAtMs = NOW - 100_000))
-        dao.afterNewestOpen = { world.store.startSession(OTHER_DEVICE) }
-
-        val resumed = world.store.resumeOpenSession()
-
-        assertNull(resumed)
-        // The published session is the live one, not the stale one the query
-        // returned. Publishing "stale" here would record samples under the new
-        // session while every stop read the old — closing the wrong one and
-        // leaving the right one open for ever.
-        assertEquals("session-1", world.store.currentSessionId)
-        assertEquals(CaptureSession("session-1"), world.store.current.value)
-        assertNull(world.session("stale").endedAtMs)
-    }
-
-    @Test
     @DisplayName("a session published by a resume can be handed back when no capture follows")
     fun abandonReleasesAResumedSession() = runTest {
-        val world = World()
+        val world = World(backgroundScope)
         world.sessionDao.upsert(HrSessionEntity("open", DEVICE, startedAtMs = NOW - 10_000))
         assertEquals("open", world.store.resumeOpenSession()?.sessionId)
 
@@ -279,7 +214,7 @@ class HrCaptureStoreTest {
     @Test
     @DisplayName("abandoning a session someone else has since started is a no-op")
     fun abandonCannotClobberANewerCapture() = runTest {
-        val world = World()
+        val world = World(backgroundScope)
         val live = world.store.startSession(DEVICE)
 
         world.store.abandonSession("some-older-session")
@@ -290,7 +225,7 @@ class HrCaptureStoreTest {
     @Test
     @DisplayName("a restart with nothing open resumes nothing")
     fun resumeWithNothingOpen() = runTest {
-        val world = World()
+        val world = World(backgroundScope)
         world.sessionDao.upsert(HrSessionEntity("closed", DEVICE, startedAtMs = NOW, endedAtMs = NOW + 1))
 
         assertNull(world.store.resumeOpenSession())
@@ -303,7 +238,7 @@ class HrCaptureStoreTest {
     @Test
     @DisplayName("anchoring a running session rewrites it and re-arms the upload")
     fun anchorRewritesTheSession() = runTest {
-        val world = World()
+        val world = World(backgroundScope)
         val id = world.store.startSession(DEVICE)
         world.sessionDao.markSynced(id, generation = 1L)
 
@@ -328,7 +263,7 @@ class HrCaptureStoreTest {
     @Test
     @DisplayName("a workout with no hook session anchors on the date alone")
     fun anchorWithoutAHookSession() = runTest {
-        val world = World()
+        val world = World(backgroundScope)
         val id = world.store.startSession(DEVICE)
 
         assertTrue(world.store.anchorToWorkout("2026-08-10"))
@@ -339,7 +274,7 @@ class HrCaptureStoreTest {
     @Test
     @DisplayName("an anchor the statement refused publishes nothing, even to the session it named")
     fun refusedAnchorPublishesNothing() = runTest {
-        val world = World()
+        val world = World(backgroundScope)
         val id = world.store.startSession(DEVICE)
         // Closed by something that is not this store's stop path — the stale
         // backstop, a sticky restart's cleanup — so `current` still holds the
@@ -359,7 +294,7 @@ class HrCaptureStoreTest {
     @Test
     @DisplayName("there is nothing to anchor when nothing is capturing")
     fun anchorWithoutACapture() = runTest {
-        val world = World()
+        val world = World(backgroundScope)
 
         assertFalse(world.store.anchorToWorkout("2026-08-10"))
         assertEquals(0, world.scheduled)
@@ -369,7 +304,7 @@ class HrCaptureStoreTest {
     @Test
     @DisplayName("anchoring a wiped session changes nothing")
     fun anchorAfterAWipe() = runTest {
-        val world = World()
+        val world = World(backgroundScope)
         val id = world.store.startSession(DEVICE)
         world.sessionDao.delete(id)
 
@@ -379,18 +314,23 @@ class HrCaptureStoreTest {
     }
 
     @Test
-    @DisplayName("a close that wins the race is not undone — the anchor no-ops, the session stays closed")
-    fun closeBeatsTheAnchor() = runTest {
-        val dao = HookedHrSessionDao()
-        val world = World(dao)
+    @DisplayName("a stop and an anchor cannot interleave — the actor takes one, then the other")
+    fun stopAndAnchorAreSerialized() = runTest {
+        val world = World(backgroundScope)
         val id = world.store.startSession(DEVICE)
-        // End Workout lands between the anchor being decided and its statement
-        // running. A read-modify-write would carry the row's old null endedAtMs
-        // back over the close and silently reopen a finished session.
-        dao.beforeAnchor = { world.store.stopSession { true } }
 
-        assertFalse(world.store.anchorToWorkout("2026-08-10", workoutSessionId = 7L))
+        // Both raised without waiting, so they reach the actor as two events on
+        // one channel rather than two coroutines inside one another's critical
+        // sections. Under the old lock this was where a read-modify-write anchor
+        // could carry a stale null endedAtMs back over the close and reopen a
+        // finished session.
+        val stop = async { world.store.stopSession { true } }
+        val anchored = async { world.store.anchorToWorkout("2026-08-10", workoutSessionId = 7L) }
 
+        assertEquals(CaptureStopResult.CLOSED, stop.await())
+        // The stop went first and released the session, so there is nothing left
+        // to anchor — and nothing was published for it either.
+        assertFalse(anchored.await())
         val row = world.session(id)
         assertEquals(NOW, row.endedAtMs)
         assertNull(row.workoutDate)
@@ -398,18 +338,16 @@ class HrCaptureStoreTest {
     }
 
     @Test
-    @DisplayName("an anchor landing mid-close survives it — a close touches only endedAtMs")
-    fun anchorSurvivesAConcurrentClose() = runTest {
-        val dao = HookedHrSessionDao()
-        val world = World(dao)
+    @DisplayName("an anchor taken before a close survives it — a close touches only endedAtMs")
+    fun anchorSurvivesAFollowingClose() = runTest {
+        val world = World(backgroundScope)
         val id = world.store.startSession(DEVICE)
-        // The mirror case: the anchor commits where a read-modify-write close
-        // would already have read the row, so writing the whole row back would
-        // erase it.
-        dao.beforeClose = { world.store.anchorToWorkout("2026-08-10", workoutSessionId = 7L) }
 
-        assertEquals(CaptureStopResult.CLOSED, world.store.stopSession { true })
+        val anchored = async { world.store.anchorToWorkout("2026-08-10", workoutSessionId = 7L) }
+        val stop = async { world.store.stopSession { true } }
 
+        assertTrue(anchored.await())
+        assertEquals(CaptureStopResult.CLOSED, stop.await())
         val row = world.session(id)
         assertEquals("2026-08-10", row.workoutDate)
         assertEquals(7L, row.workoutSessionId)
@@ -417,27 +355,29 @@ class HrCaptureStoreTest {
     }
 
     @Test
-    @DisplayName("an anchor whose write raced a stop does not republish a finished capture")
-    fun anchorLosesToAStopInFlight() = runTest {
-        val dao = HookedHrSessionDao()
-        val world = World(dao)
-        val id = world.store.startSession(DEVICE)
-        // The anchor lands, and only then does the capture end — so the row is
-        // rightly anchored while the live value must not say anything is running.
-        dao.afterAnchor = { world.store.stopSession { true } }
+    @DisplayName("a resume holding a stale row refuses to displace the capture that owns the store")
+    fun resumeNeverDisplacesARunningCapture() = runTest {
+        val world = World(backgroundScope)
+        // Left open by an earlier capture on another strap, and stamped later
+        // than the live one — so the open-session query genuinely hands the
+        // resume the wrong session.
+        world.sessionDao.upsert(HrSessionEntity("stale", OTHER_DEVICE, startedAtMs = NOW + 5_000))
+        val live = world.store.startSession(DEVICE)
 
-        assertTrue(world.store.anchorToWorkout("2026-08-10", workoutSessionId = 7L))
+        assertNull(world.store.resumeOpenSession())
 
-        assertEquals("2026-08-10", world.session(id).workoutDate)
-        assertNull(world.store.current.value)
+        // Ownership is a variable in the actor, checked in the same step that
+        // would have published. Publishing "stale" here would record samples
+        // under the live session while every stop read the stale one.
+        assertEquals(live, world.store.currentSessionId)
+        assertEquals(CaptureSession(live), world.store.current.value)
+        assertNull(world.session("stale").endedAtMs)
     }
-
-    // ---- the sink --------------------------------------------------------
 
     @Test
     @DisplayName("a buffered sample becomes its row field for field")
     fun sinkMapsOneForOne() = runTest {
-        val world = World()
+        val world = World(backgroundScope)
 
         world.store.store(
             listOf(
@@ -475,7 +415,7 @@ class HrCaptureStoreTest {
     @Test
     @DisplayName("a whole batch lands in one insert")
     fun sinkStoresTheWholeBatch() = runTest {
-        val world = World()
+        val world = World(backgroundScope)
 
         world.store.store((0 until 5).map { world.sample(timestampMs = NOW + it) })
 
@@ -486,7 +426,7 @@ class HrCaptureStoreTest {
     @Test
     @DisplayName("an empty batch writes nothing and arms nothing")
     fun sinkIgnoresAnEmptyBatch() = runTest {
-        val world = World()
+        val world = World(backgroundScope)
 
         world.store.store(emptyList())
 
@@ -497,7 +437,7 @@ class HrCaptureStoreTest {
     @Test
     @DisplayName("a batch flushed twice is stored once — the key is the dedup")
     fun sinkIsIdempotent() = runTest {
-        val world = World()
+        val world = World(backgroundScope)
         val batch = listOf(world.sample(), world.sample(seq = 1))
 
         world.store.store(batch)
@@ -512,9 +452,11 @@ class HrCaptureStoreTest {
     @Test
     @DisplayName("the upload debounce is armed after a successful flush, and only then")
     fun scheduleFiresOnlyOnSuccess() = runTest {
-        val world = World()
+        val world = World(backgroundScope)
 
         world.store.store(listOf(world.sample()))
+
+        world.store.awaitQuiescence()
         assertEquals(1, world.scheduled)
 
         world.gate.close()
@@ -529,7 +471,7 @@ class HrCaptureStoreTest {
     @Test
     @DisplayName("a write refused by a closed gate is a failure, never a silent drop")
     fun closedGateRefusesSamples() = runTest {
-        val world = World()
+        val world = World(backgroundScope)
         world.gate.close()
 
         val error = runCatching { world.store.store(listOf(world.sample())) }.exceptionOrNull()
@@ -543,7 +485,7 @@ class HrCaptureStoreTest {
     @Test
     @DisplayName("a session cannot be opened against a closed gate either")
     fun closedGateRefusesSessionStart() = runTest {
-        val world = World()
+        val world = World(backgroundScope)
         world.gate.close()
 
         val error = runCatching { world.store.startSession(DEVICE) }.exceptionOrNull()
@@ -556,7 +498,7 @@ class HrCaptureStoreTest {
     @Test
     @DisplayName("a refused close still ends the capture from this device's side")
     fun closedGateDuringStop() = runTest {
-        val world = World()
+        val world = World(backgroundScope)
         val id = world.store.startSession(DEVICE)
         world.gate.close()
 
@@ -574,7 +516,7 @@ class HrCaptureStoreTest {
     @Test
     @DisplayName("a landed final flush closes the session and sends it out again")
     fun stopClosesTheSession() = runTest {
-        val world = World()
+        val world = World(backgroundScope)
         val id = world.store.startSession(DEVICE)
         world.sessionDao.markSynced(id, generation = 1L)
         assertTrue(world.session(id).isSynced)
@@ -600,7 +542,7 @@ class HrCaptureStoreTest {
     @Test
     @DisplayName("a final flush that will not land leaves the session open")
     fun failedFinalFlushLeavesTheSessionOpen() = runTest {
-        val world = World()
+        val world = World(backgroundScope)
         val id = world.store.startSession(DEVICE)
         var attempts = 0
 
@@ -621,7 +563,7 @@ class HrCaptureStoreTest {
     @Test
     @DisplayName("a flush that lands on a retry still closes the session")
     fun retriedFinalFlushStillCloses() = runTest {
-        val world = World()
+        val world = World(backgroundScope)
         val id = world.store.startSession(DEVICE)
         var attempts = 0
 
@@ -637,7 +579,7 @@ class HrCaptureStoreTest {
     @Test
     @DisplayName("the deferred close lands as soon as the buffer's retry gets the rows down")
     fun deferredCloseCompletesOnALaterFlush() = runTest {
-        val world = World()
+        val world = World(backgroundScope)
         val id = world.store.startSession(DEVICE)
         assertEquals(CaptureStopResult.LEFT_OPEN, world.store.stopSession { false })
         assertNull(world.session(id).endedAtMs)
@@ -648,6 +590,8 @@ class HrCaptureStoreTest {
 
         world.store.store(listOf(world.sample(sessionId = id)))
 
+        world.store.awaitQuiescence()
+
         // The instant capture stopped, not the instant the flush landed — the
         // session did not go on recording for that minute.
         assertEquals(NOW, world.session(id).endedAtMs)
@@ -657,14 +601,16 @@ class HrCaptureStoreTest {
     @Test
     @DisplayName("a deferred close fires once and does not re-close on the next flush")
     fun deferredCloseIsClaimedOnce() = runTest {
-        val world = World()
+        val world = World(backgroundScope)
         val id = world.store.startSession(DEVICE)
         world.store.stopSession { false }
         world.store.store(listOf(world.sample(sessionId = id)))
+        world.store.awaitQuiescence()
         val closedGeneration = world.session(id).dirtyGeneration
 
         world.clock = NOW + 120_000
         world.store.store(listOf(world.sample(timestampMs = NOW + 1, sessionId = id)))
+        world.store.awaitQuiescence()
 
         // Re-closing would move the boundary later and claim coverage of samples
         // that were never part of the session.
@@ -675,7 +621,7 @@ class HrCaptureStoreTest {
     @Test
     @DisplayName("a resumed session cancels the deferred close that was waiting for it")
     fun resumeCancelsTheDeferredClose() = runTest {
-        val world = World()
+        val world = World(backgroundScope)
         val id = world.store.startSession(DEVICE)
         world.store.stopSession { false }
 
@@ -683,14 +629,71 @@ class HrCaptureStoreTest {
         // and the close it left behind must not fire underneath it.
         assertEquals(id, world.store.resumeOpenSession()?.sessionId)
         world.store.store(listOf(world.sample(sessionId = id)))
+        world.store.awaitQuiescence()
 
         assertNull(world.session(id).endedAtMs)
     }
 
     @Test
+    @DisplayName("registering a deferred close and releasing the session are one step")
+    fun deferredCloseSurvivesTheStopThatRegisteredIt() = runTest {
+        val world = World(backgroundScope)
+        val id = world.store.startSession(DEVICE)
+
+        assertEquals(CaptureStopResult.LEFT_OPEN, world.store.stopSession { false })
+
+        // There is no instant at which this session is both waiting to be closed
+        // and still current. Under two separate critical sections there was, and
+        // a drain landing in that gap deleted the close as "recording again"
+        // while nothing was recording — the session then stayed open for ever.
+        assertNull(world.store.currentSessionId)
+
+        world.store.store(listOf(world.sample(sessionId = id)))
+
+        world.store.awaitQuiescence()
+
+        assertEquals(NOW, world.session(id).endedAtMs)
+    }
+
+    @Test
+    @DisplayName("a caller cancelled mid-stop still leaves the store consistent")
+    fun cancelledCallerCannotStrandTheStore() = runTest {
+        val world = World(backgroundScope)
+        val id = world.store.startSession(DEVICE)
+        val flushing = CompletableDeferred<Unit>()
+
+        val caller = launch { world.store.stopSession { flushing.await(); true } }
+        runCurrent()
+        // The service is destroyed while the flush is in flight. With the state
+        // transition owned by the caller this skipped the release entirely, and
+        // an app-lived store then pointed at an ended session for the rest of the
+        // process: set events mislabelled, sticky resume refused for ever.
+        caller.cancel()
+        flushing.complete(Unit)
+        world.store.awaitQuiescence()
+
+        assertNull(world.store.currentSessionId)
+        assertEquals(NOW, world.session(id).endedAtMs)
+    }
+
+    @Test
+    @DisplayName("an event refused by a closed gate fails alone — the actor keeps serving")
+    fun aRefusedEventDoesNotKillTheActor() = runTest {
+        val world = World(backgroundScope)
+        world.gate.close()
+
+        assertTrue(runCatching { world.store.startSession(DEVICE) }.isFailure)
+
+        // Still answering. A single refused write must not take the lifecycle of
+        // every later capture with it.
+        assertNull(world.store.resumeOpenSession())
+        assertNull(world.store.currentSessionId)
+    }
+
+    @Test
     @DisplayName("a deferred close does not fire on a session that is recording again")
     fun deferredCloseYieldsToAResume() = runTest {
-        val world = World()
+        val world = World(backgroundScope)
         val id = world.store.startSession(DEVICE)
         world.store.stopSession { false }
         // The service came back and reattached between the close being deferred
@@ -702,6 +705,8 @@ class HrCaptureStoreTest {
 
         world.store.store(listOf(world.sample(sessionId = id)))
 
+        world.store.awaitQuiescence()
+
         assertNull(world.session(id).endedAtMs)
         assertEquals(id, world.store.currentSessionId)
     }
@@ -709,7 +714,7 @@ class HrCaptureStoreTest {
     @Test
     @DisplayName("two straps each strand a close, and both complete")
     fun everyStrandedCloseCompletes() = runTest {
-        val world = World()
+        val world = World(backgroundScope)
         val first = world.store.startSession(DEVICE)
         world.store.stopSession { false }
         world.clock = NOW + 30_000
@@ -722,6 +727,7 @@ class HrCaptureStoreTest {
 
         world.clock = NOW + 90_000
         world.store.store(listOf(world.sample(sessionId = second)))
+        world.store.awaitQuiescence()
 
         // Each carries the instant its own capture stopped.
         assertEquals(NOW, world.session(first).endedAtMs)
@@ -731,12 +737,14 @@ class HrCaptureStoreTest {
     @Test
     @DisplayName("a deferred close for a wiped session resolves rather than lingering")
     fun deferredCloseAfterAWipe() = runTest {
-        val world = World()
+        val world = World(backgroundScope)
         val id = world.store.startSession(DEVICE)
         world.store.stopSession { false }
         world.sessionDao.sessions.clear()
 
         world.store.store(listOf(world.sample(sessionId = id)))
+
+        world.store.awaitQuiescence()
 
         assertTrue(world.sessionDao.sessions.isEmpty())
     }
@@ -746,7 +754,7 @@ class HrCaptureStoreTest {
     @Test
     @DisplayName("a new capture force-closes a session the same strap left open")
     fun startClosesAStaleSession() = runTest {
-        val world = World()
+        val world = World(backgroundScope)
         world.sessionDao.upsert(HrSessionEntity("stale", DEVICE, startedAtMs = NOW - 100_000))
 
         val id = world.store.startSession(DEVICE)
@@ -761,7 +769,7 @@ class HrCaptureStoreTest {
     @Test
     @DisplayName("the backstop leaves another strap's open session alone")
     fun startLeavesOtherDevicesAlone() = runTest {
-        val world = World()
+        val world = World(backgroundScope)
         world.sessionDao.upsert(HrSessionEntity("other", "ZZ:ZZ", startedAtMs = NOW - 100_000))
 
         world.store.startSession(DEVICE)
@@ -772,7 +780,7 @@ class HrCaptureStoreTest {
     @Test
     @DisplayName("the backstop retires the deferred close it just made redundant")
     fun startClearsADeferredCloseItHonoured() = runTest {
-        val world = World()
+        val world = World(backgroundScope)
         val stale = world.store.startSession(DEVICE)
         world.store.stopSession { false }
         world.clock = NOW + 60_000
@@ -781,6 +789,7 @@ class HrCaptureStoreTest {
         // The buffer's retry finally lands, well after the backstop closed the
         // old session. It must not re-close it.
         world.store.store(listOf(world.sample(sessionId = stale)))
+        world.store.awaitQuiescence()
 
         assertEquals(NOW + 60_000, world.session(stale).endedAtMs)
         assertNull(world.session(fresh).endedAtMs)
@@ -789,7 +798,7 @@ class HrCaptureStoreTest {
     @Test
     @DisplayName("a first capture on a clean database closes nothing")
     fun startWithNothingStale() = runTest {
-        val world = World()
+        val world = World(backgroundScope)
 
         val id = world.store.startSession(DEVICE)
 
@@ -800,7 +809,7 @@ class HrCaptureStoreTest {
     @Test
     @DisplayName("a session left open is what a later restart reattaches to")
     fun aLeftOpenSessionIsResumable() = runTest {
-        val world = World()
+        val world = World(backgroundScope)
         val id = world.store.startSession(DEVICE)
         world.store.stopSession { false }
 
@@ -813,7 +822,7 @@ class HrCaptureStoreTest {
     @Test
     @DisplayName("stopping when nothing is capturing does not even flush")
     fun stopWithoutACapture() = runTest {
-        val world = World()
+        val world = World(backgroundScope)
         var flushed = false
 
         val result = world.store.stopSession { flushed = true; true }
@@ -826,7 +835,7 @@ class HrCaptureStoreTest {
     @Test
     @DisplayName("a session wiped mid-capture leaves nothing to close, and that is not a failure")
     fun stopAfterAWipe() = runTest {
-        val world = World()
+        val world = World(backgroundScope)
         world.store.startSession(DEVICE)
         // What a server switch does to these rows.
         world.sessionDao.sessions.clear()
@@ -844,7 +853,7 @@ class HrCaptureStoreTest {
     @Test
     @DisplayName("the current session id is what a set event carries, and only while capturing")
     fun currentSessionIdTracksTheCapture() = runTest {
-        val world = World()
+        val world = World(backgroundScope)
         assertNull(world.store.currentSessionId)
 
         val id = world.store.startSession(DEVICE)

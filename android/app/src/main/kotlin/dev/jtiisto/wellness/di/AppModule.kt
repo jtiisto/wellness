@@ -5,6 +5,7 @@ import dev.jtiisto.wellness.core.ble.capture.HrCaptureController
 import dev.jtiisto.wellness.core.ble.capture.HrCaptureState
 import dev.jtiisto.wellness.core.ble.di.HrCaptureStateQualifier
 import dev.jtiisto.wellness.core.ble.scanner.BleScanner
+import dev.jtiisto.wellness.core.data.di.AppScope
 import dev.jtiisto.wellness.core.data.di.AppVersionName
 import dev.jtiisto.wellness.core.data.network.JournalApi
 import dev.jtiisto.wellness.hr.ServiceHrCaptureController
@@ -35,6 +36,10 @@ val appModule = module {
             exporter = get(),
             sharedFiles = get(),
             switcher = get(),
+            // The switch outlives this ViewModel by design: it quiesces, wipes
+            // and then ends the process, none of which may stop because the
+            // user navigated away from the tab that started it.
+            appScope = get(AppScope),
             debugLog = get(),
             buildStamp = BuildConfig.BUILD_STAMP,
         )

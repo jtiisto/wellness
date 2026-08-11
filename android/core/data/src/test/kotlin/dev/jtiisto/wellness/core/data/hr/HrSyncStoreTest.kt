@@ -242,7 +242,10 @@ class HrSyncStoreTest {
         // of the second case eats the backlog three good rows at a time.
         assertEquals(SyncSkipReason.OTHER, result.reason)
         assertNull(result.error)
-        assertFalse(SyncFlushWorker.needsRetry(listOf(result)), "the Worker must not wake for this")
+        assertFalse(
+            SyncFlushWorker.needsRetry(listOf(result), sessionOpen = true),
+            "the Worker must not wake for this",
+        )
     }
 
     @Test
@@ -261,7 +264,7 @@ class HrSyncStoreTest {
         // earned and the failure is an ordinary retryable one.
         assertTrue(result.error is QuarantineLimitException, "was ${result.error}")
         assertNull(result.reason)
-        assertTrue(SyncFlushWorker.needsRetry(listOf(result)))
+        assertTrue(SyncFlushWorker.needsRetry(listOf(result), sessionOpen = true))
         assertEquals(10, world.eventDao.events.values.count { it.isQuarantined })
         assertTrue(world.eventDao.events.values.count { it.isSynced } >= 32)
     }

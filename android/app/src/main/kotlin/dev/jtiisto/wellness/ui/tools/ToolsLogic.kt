@@ -93,6 +93,13 @@ object ToolsCopy {
     const val ACTIVE_URL_LOCKED =
         "To change the active server's address, add it as a new profile and switch to it."
 
+    /**
+     * Shown while the switch runs. It names the closing as part of the
+     * operation, because the app going away on its own would otherwise be
+     * indistinguishable from a crash at the worst possible moment.
+     */
+    const val SWITCHING = "Switching servers — the app will close."
+
     const val EXPORT_FAILED = "Export failed"
     const val LOG_SHARE_FAILED = "Could not share the log"
 

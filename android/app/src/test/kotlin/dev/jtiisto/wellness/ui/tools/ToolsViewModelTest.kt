@@ -30,9 +30,11 @@ import dev.jtiisto.wellness.core.data.sync.ForceSyncOrchestrator
 import dev.jtiisto.wellness.core.data.sync.ForceSyncSkipReason
 import dev.jtiisto.wellness.core.data.sync.ServerSessionGate
 import dev.jtiisto.wellness.core.data.sync.ServerSwitcher
+import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -193,16 +195,31 @@ class ToolsViewModelTest {
 
         val bootstrap = ServerBootstrap(profilesDao, builtInUrl = "https://built-in/wellness")
 
+        /** Non-null parks the switch inside its drain until the test releases it. */
+        var switchGate: CompletableDeferred<Unit>? = null
+
+        /** How many times the switch ended the process. Never actually exits here. */
+        var exits = 0
+            private set
+
         val switcher = ServerSwitcher(
             gate = ServerSessionGate(),
             schedulers = emptyList(),
-            drains = emptyList(),
+            drains = listOf { switchGate?.await() },
             stopAnalysis = {},
             backgroundWork = {},
             dao = switchDao,
             sharedFiles = sharedFiles,
             now = { 1_786_285_805_000L },
+            exitApp = { exits += 1 },
         )
+
+        /**
+         * Stands in for the process-lived scope Koin injects. Deliberately NOT
+         * the ViewModel's own: the point of the switch running here is that it
+         * cannot be cancelled by the Tools tab going away.
+         */
+        val appScope = CoroutineScope(StandardTestDispatcher(scope.testScheduler))
 
         fun build(): ToolsViewModel {
             val config = ServerConfig("https://built-in/wellness")
@@ -219,6 +236,7 @@ class ToolsViewModelTest {
                 exporter = DataExporter(EmptyExportDao(), clientVersion = "1.2.3", json = json) { "now" },
                 sharedFiles = sharedFiles,
                 switcher = switcher,
+                appScope = appScope,
                 debugLog = debugLog,
                 buildStamp = "1.2.3 (dev)",
                 io = UnconfinedTestDispatcher(scope.testScheduler),
@@ -513,7 +531,9 @@ class ToolsViewModelTest {
 
         assertTrue(world.switchDao.calls.contains("deleteProfile:1"))
         assertTrue(world.switchDao.calls.contains("clearActive"))
-        assertEquals(ToolsEvent.CloseApp, vm.events.first())
+        // The switcher ends the process itself; no event is emitted for a
+        // screen-scoped collector to miss.
+        assertEquals(1, world.exits)
     }
 
     // ---- switching -------------------------------------------------------
@@ -560,8 +580,59 @@ class ToolsViewModelTest {
 
         assertTrue(world.switchDao.calls.contains("activate:2"))
         // Close-and-reopen rather than a task-flag restart, which guarantees no
-        // new process is launched at all.
-        assertEquals(ToolsEvent.CloseApp, vm.events.first())
+        // new process is launched at all — and it is the switcher that does it,
+        // not a one-shot event this screen has to still be alive to collect.
+        assertEquals(1, world.exits)
+    }
+
+    @Test
+    @DisplayName("the switch runs on the app scope, so it finishes even if the tab's own scope is cancelled")
+    fun switchSurvivesTheScreenGoingAway() = toolsTest { world, vm ->
+        val target = profile(2, "Other")
+        world.profilesDao.rows.value = listOf(profile(1, "Laptop", active = true), target)
+        val held = CompletableDeferred<Unit>()
+        world.switchGate = held
+        runCurrent()
+
+        vm.confirmSwitch(target)
+        runCurrent()
+        assertTrue(world.switchDao.calls.isEmpty(), "the switch should still be quiescing")
+
+        // The user navigates away mid-switch. On viewModelScope this cancelled
+        // the wipe with the gate already closed — every writer in the process
+        // refused, no wipe, no exit, and nothing on screen to say so.
+        vm.viewModelScope.cancel()
+        held.complete(Unit)
+        runCurrent()
+
+        assertTrue(world.switchDao.calls.contains("activate:2"), world.switchDao.calls.toString())
+        assertEquals(1, world.exits)
+    }
+
+    @Test
+    @DisplayName("while a switch is in flight the tab disables every action that touches server data")
+    fun switchingDisablesTheTab() = toolsTest { world, vm ->
+        val target = profile(2, "Other")
+        world.profilesDao.rows.value = listOf(profile(1, "Laptop", active = true), target)
+        val held = CompletableDeferred<Unit>()
+        world.switchGate = held
+        runCurrent()
+
+        vm.confirmSwitch(target)
+        runCurrent()
+        assertTrue(vm.uiState.value.switching, "the flag the screen greys itself out on")
+
+        // A second switch, and a force sync, are both refused: the gate is
+        // already closed, so either would queue work against a server the app is
+        // in the middle of leaving.
+        vm.requestSwitch(ServerProfileRow(id = 1, nickname = "Laptop", url = "https://x", isActive = false))
+        vm.requestForceSync()
+        runCurrent()
+        assertNull(vm.uiState.value.dialog)
+
+        held.complete(Unit)
+        runCurrent()
+        assertEquals(1, world.exits)
     }
 
     @Test

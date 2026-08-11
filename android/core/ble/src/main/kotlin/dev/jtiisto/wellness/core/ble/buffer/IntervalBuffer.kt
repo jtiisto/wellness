@@ -154,10 +154,13 @@ class IntervalBuffer(
         } catch (e: CancellationException) {
             throw e // batch kept; the buffer's scope outlives the capture
         } catch (e: Exception) {
-            // The sink is local persistence, so the message is a database
-            // error and never a server body — safe to log, unlike the upload
-            // path's, and the whole point of logging this at all.
-            log.log("interval buffer flush FAILED, keeping ${batch.size} rows: ${e.message}")
+            // The class name, not the message. The dump is shareable, and
+            // "this sink is local persistence so its message is safe" is an
+            // assumption about a module on the other side of an interface —
+            // one nothing here can enforce and a later implementation could
+            // quietly break. The exception's type is what a diagnosis reads
+            // anyway; the row count is the part that was ever worth logging.
+            log.log("interval buffer flush FAILED, keeping ${batch.size} rows: ${e.javaClass.simpleName}")
             return false
         }
         buffer.clear()

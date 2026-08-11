@@ -90,16 +90,20 @@ class SyncFlushWorker(
         if (bootstrap.state.value !is ServerResolution.Resolved) return Result.failure()
         if (!gate.isOpen) return Result.failure()
 
-        // The whole cycle runs under a write lease, so a switch confirmed while
-        // the Worker is mid-flush waits for it rather than wiping underneath it.
-        // Bounded by the HTTP client's timeouts; a nested lease taken after the
-        // close is refused, which unwinds this one and fails the flush safely.
+        // There is deliberately NO lease around the cycle as a whole, and an
+        // earlier one was removed: every write inside already takes its own, so
+        // an outer lease bought nothing and cost the switch three full network
+        // cycles of waiting — `close()` sets `open = false` *before* it awaits,
+        // so the nested leases would have been refused anyway. The switch paid
+        // the wait and lost the flush. Now `close()` returns as soon as the one
+        // write actually in flight finishes, and the refused nested lease ends
+        // this run.
         val results = try {
-            gate.withWriteLease { listOf(coach.triggerSync(), journal.triggerSync(), hr.flush()) }
+            listOf(coach.triggerSync(), journal.triggerSync(), hr.flush())
         } catch (_: ServerSessionClosedException) {
             return Result.failure()
         }
-        return if (needsRetry(results)) Result.retry() else Result.success()
+        return if (needsRetry(results, gate.isOpen)) Result.retry() else Result.success()
     }
 
     companion object {
@@ -126,9 +130,14 @@ class SyncFlushWorker(
          * it does not retry here — the foreground scheduler still will, on its
          * own capped backoff, which costs nothing and recovers by itself if the
          * server is fixed.
+         *
+         * [sessionOpen] answers all of them at once when it is false. A switch
+         * confirmed mid-flush turns every remaining write into a refusal, which
+         * the stores report as ordinary errors; retrying those would wake the
+         * process to talk to a server it has already left.
          */
-        fun needsRetry(results: List<SyncResult>): Boolean =
-            results.any { it.error != null || it.reason == SyncSkipReason.OFFLINE }
+        fun needsRetry(results: List<SyncResult>, sessionOpen: Boolean): Boolean =
+            sessionOpen && results.any { it.error != null || it.reason == SyncSkipReason.OFFLINE }
 
         /**
          * `WorkManager.getInstance` throws when the process never initialized

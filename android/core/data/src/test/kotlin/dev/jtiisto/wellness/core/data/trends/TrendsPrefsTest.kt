@@ -2,6 +2,7 @@ package dev.jtiisto.wellness.core.data.trends
 
 import dev.jtiisto.wellness.core.data.db.TrendsMetaDao
 import dev.jtiisto.wellness.core.data.db.TrendsMetaEntity
+import dev.jtiisto.wellness.core.data.sync.ServerSessionGate
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.first
@@ -23,7 +24,8 @@ import org.junit.jupiter.api.Test
 class TrendsPrefsTest {
 
     private val dao = FakeTrendsMetaDao()
-    private val prefs = TrendsPrefs(dao)
+    private val session = ServerSessionGate()
+    private val prefs = TrendsPrefs(dao, session)
 
     @Test
     @DisplayName("a first launch defaults to the 12-week overview")
@@ -93,6 +95,32 @@ class TrendsPrefsTest {
         assertEquals("6m", prefs.range.first())
         assertEquals("fixture-tracker-alpha", prefs.tracker.first())
         assertEquals("overview", prefs.screen.first())
+    }
+
+    @Test
+    @DisplayName("a write after the session closes is refused — `trends_meta` is a wiped table")
+    fun postCloseWriteIsRefused() = runTest {
+        session.close()
+
+        prefs.setExercise("fixture-press")
+
+        // The selection is not purely local: it names an exercise the PREVIOUS
+        // server's slice returned, and landing it in the emptied table would
+        // point the new server's charts at something it has never heard of.
+        assertTrue(dao.rows.isEmpty(), "a post-wipe selection reached trends_meta")
+    }
+
+    @Test
+    @DisplayName("the refusal is swallowed: a reconciliation after a switch must not take the tab down")
+    fun refusalDoesNotEscape() = runTest {
+        prefs.setRange("4w")
+        session.close()
+
+        // Every caller is a tap handler or a post-load reconciliation on a UI
+        // scope, and the write it lost is a row the switch is about to delete.
+        prefs.setRange("6m")
+
+        assertEquals("4w", dao.rows[TrendsPrefs.KEY_RANGE])
     }
 }
 
