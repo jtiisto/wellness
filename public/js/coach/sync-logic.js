@@ -8,11 +8,16 @@
  */
 import { clearApplied } from '../shared/dirty-set.js';
 
+const SESSION_FEEDBACK_KEY = 'session_feedback';
+const BASE_TOKEN_KEY = '_baseLastModifiedAt';
+// Day-level keys that are not exercise entries.
+const NON_EXERCISE_KEYS = ['_lastModifiedAt', '_lastModifiedBy', SESSION_FEEDBACK_KEY];
+
 // ---- Content predicates --------------------------------------------------
 
 export function logHasExerciseContent(log) {
     return Object.entries(log).some(([key, val]) => {
-        if (['_lastModifiedAt', '_lastModifiedBy', 'session_feedback'].includes(key)) return false;
+        if (NON_EXERCISE_KEYS.includes(key)) return false;
         if (typeof val !== 'object' || val === null) return false;
         // Completion is derived from data now; an exercise has real content when
         // it carries logged sets, checked items, or a duration.
@@ -185,14 +190,21 @@ export function withBaseTokens(log) {
  * Adopt the merged server day returned per uploaded date (R3 `results`). For each
  * date NOT re-modified mid-sync (its generation still matches the pre-sync
  * snapshot), replace the local log with the reconciled `serverRow` — which embeds
- * each record's fresh `_lastModified` token. A re-modified date keeps its local
- * log (it stays dirty and re-uploads next cycle). Replaces R1-2a's
- * applyAcceptedTokens + adoptRejectedServerRows with one mechanism.
+ * each record's fresh `_lastModified` token. A re-modified date stays dirty and
+ * re-uploads next cycle, and is reconciled one record at a time — see
+ * advanceRecordTokens, where "the user re-edited this" is told apart from "the
+ * server ruled on this". Replaces R1-2a's applyAcceptedTokens +
+ * adoptRejectedServerRows with one mechanism.
  *
- * `uploadedLogs` (the `logsToUpload` map actually sent) lets the re-modified
- * branch tell an ARBITRATED tombstone (it was in the upload — the serverRow is
- * its verdict) from one created mid-sync (not yet arbitrated) — see
- * advanceRecordTokens.
+ * Two nullabilities are load-bearing and different:
+ *  - `snapshotGens` null disables re-modification detection entirely, so every
+ *    result is adopted wholesale. An EMPTY object is not the same thing: against
+ *    it any date with a live generation compares unequal and counts as
+ *    re-modified.
+ *  - `uploadedLogs` null (the `logsToUpload` map actually sent) means nothing is
+ *    known to have been uploaded, so no record of a re-modified date may have a
+ *    verdict applied: every one is treated as touched mid-sync and keeps its
+ *    local content.
  *
  * @returns {Object} next logs
  */
@@ -203,12 +215,9 @@ export function adoptUploadResults(localLogs, results, snapshotGens, dirtyDateGe
         if (!serverRow) continue;
         const reModified = snapshotGens && dirtyDateGenerations[date] !== snapshotGens[date];
         if (reModified) {
-            // Re-modified mid-sync: keep the local re-edit (it stays dirty and
-            // re-uploads), but ADVANCE each record's token to the server's stamp
-            // so the next upload echoes a fresh base rather than the stale
-            // pre-sync one (which the now-advanced server would reject, losing the
-            // re-edit). Content is kept; only `_lastModified` tokens move forward.
-            next[date] = advanceRecordTokens(localLogs[date], serverRow, uploadedLogs?.[date]);
+            // The generation says the DAY moved, not which record did, so the
+            // verdict is applied per record — see advanceRecordTokens.
+            next[date] = advanceRecordTokens(localLogs[date] || {}, serverRow, uploadedLogs?.[date]);
         } else {
             next[date] = serverRow;  // not re-modified → adopt the merged day wholesale
         }
@@ -216,38 +225,99 @@ export function adoptUploadResults(localLogs, results, snapshotGens, dirtyDateGe
     return next;
 }
 
-/** Copy the server row's `_lastModified` tokens (day + per-record) onto the local
- *  log, keeping all local content. For a re-modified-mid-sync date (see
- *  adoptUploadResults). Pure shallow copy.
+/**
+ * Apply the server's arbitration to a date the user re-modified mid-sync,
+ * record by record.
  *
- *  Tombstones are the exception to "keep local content": a tombstone that was
- *  IN the upload has just been arbitrated, and its verdict must be applied —
- *  serverRow carries the key (delete rejected: a newer remote edit won) →
- *  adopt the surviving server record; serverRow lacks the key (delete
- *  accepted) → drop the tombstone. Merely advancing its token (the old
- *  behavior) turned a REJECTED delete into a winning delete on the next
- *  cycle: the advanced token matched the server stamp, so the retry
- *  destroyed the other client's newer edit. A tombstone NOT in the upload
- *  (created mid-sync) is kept as-is, token untouched — it has not been
- *  arbitrated yet and re-uploads next cycle with its original base. */
+ * Re-modification is a property of the DATE — one generation counter for the
+ * whole day — so it says nothing about WHICH record the user touched. Deciding
+ * per record is the whole of this function, and getting it wrong destroys data:
+ *
+ *  - A record that was uploaded and is STILL IDENTICAL to what went on the wire
+ *    has been arbitrated, and the server row is its verdict, so adopt it. Merely
+ *    advancing such a record's token to the winning stamp left stale local
+ *    content sitting behind a fresh base: next cycle it passed the server's
+ *    `stored <= base` test and overwrote the other client's newer edit, silently
+ *    and on every device.
+ *  - A record that genuinely differs from the uploaded copy IS the mid-sync
+ *    re-edit. Keep it (the date stays dirty and re-uploads) and ADVANCE its
+ *    token, or the retry would echo the stale pre-sync base that the
+ *    now-advanced server rejects — losing the re-edit.
+ *
+ * Two records do not follow the plain rule:
+ *  - `session_feedback` is arbitrated on the DAY token (the server row carries no
+ *    per-record stamp for it), so its verdict and that token move together. The
+ *    day token advances either way: with the verdict when the feedback settled,
+ *    ahead of the re-edit when it did not.
+ *  - A tombstone's token is NEVER advanced. Either its verdict applies — the
+ *    server row carrying the key means the delete was REJECTED (a newer remote
+ *    edit won), so adopt the surviving record; the key being absent means it was
+ *    ACCEPTED, so drop the tombstone — or it was created mid-sync, has not been
+ *    arbitrated at all, and waits verbatim with its original base for the next
+ *    cycle.
+ *
+ * Pure; returns a new log.
+ */
 function advanceRecordTokens(localLog, serverRow, uploadedLog = null) {
     const out = { ...localLog };
+    if (wasArbitrated(localLog, uploadedLog, SESSION_FEEDBACK_KEY)) {
+        applyVerdict(out, serverRow, SESSION_FEEDBACK_KEY);
+    }
     if (serverRow._lastModified) out._lastModified = serverRow._lastModified;
+
     for (const [key, val] of Object.entries(localLog)) {
-        if (val && typeof val === 'object' && isDeletedEntry(val)) {
-            if (isDeletedEntry(uploadedLog?.[key])) {
-                const srvRec = serverRow[key];
-                if (srvRec && typeof srvRec === 'object') out[key] = srvRec;
-                else delete out[key];
-            }
-            continue;  // mid-sync tombstone: keep, do not advance its token
+        if (NON_EXERCISE_KEYS.includes(key) || !val || typeof val !== 'object' || Array.isArray(val)) continue;
+        if (wasArbitrated(localLog, uploadedLog, key)) {
+            applyVerdict(out, serverRow, key);
+            continue;
         }
+        if (isDeletedEntry(val)) continue;  // unarbitrated tombstone: base untouched
         const srvRec = serverRow[key];
-        if (val && typeof val === 'object' && srvRec && srvRec._lastModified) {
+        if (srvRec && srvRec._lastModified) {
             out[key] = { ...val, _lastModified: srvRec._lastModified };
         }
     }
     return out;
+}
+
+/** Was this record part of the upload and untouched since it was built? The
+ *  uploaded copy differs from the stored one by exactly the echoed base token,
+ *  so stripping that makes the two comparable.
+ *
+ *  A null `uploadedLog` means nothing is known to have been sent, and a record
+ *  absent from it was created after the payload was built. Neither has been
+ *  arbitrated, so neither may have a verdict applied. */
+function wasArbitrated(localLog, uploadedLog, key) {
+    const uploaded = uploadedLog?.[key];
+    if (!uploaded || typeof uploaded !== 'object') return false;
+    const local = localLog[key];
+    if (!local || typeof local !== 'object') return false;
+    const sent = { ...uploaded };
+    delete sent[BASE_TOKEN_KEY];
+    return jsonEqual(sent, local);
+}
+
+/** Take the server's outcome for one record: its reconciled row, or — when the
+ *  merged day does not carry the key at all — its removal. */
+function applyVerdict(out, serverRow, key) {
+    const record = serverRow[key];
+    if (record && typeof record === 'object') out[key] = record;
+    else delete out[key];
+}
+
+/** Structural equality over JSON values (logs are JSON round-tripped on every
+ *  local write, so there is nothing else to compare): key order is irrelevant,
+ *  arrays compare element-wise. */
+function jsonEqual(a, b) {
+    if (a === b) return true;
+    if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') return false;
+    if (Array.isArray(a) !== Array.isArray(b)) return false;
+    if (Array.isArray(a)) {
+        return a.length === b.length && a.every((item, i) => jsonEqual(item, b[i]));
+    }
+    const keys = Object.keys(a);
+    if (keys.length !== Object.keys(b).length) return false;
+    return keys.every(k => Object.prototype.hasOwnProperty.call(b, k) && jsonEqual(a[k], b[k]));
 }
 
 // ---- Window pruning + plan version --------------------------------------

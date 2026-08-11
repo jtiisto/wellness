@@ -360,8 +360,8 @@ async function triggerSync() {
             const results = uploadResult.results || {};
             // Use the LIVE generations (markDateDirty replaces syncMetadata.value,
             // so `meta` captured at sync start is stale): a date re-modified mid-
-            // sync must be detected here so its re-edit is kept (tokens advanced)
-            // rather than clobbered by the server's now-stale row.
+            // sync must be detected here so its re-edit survives the adoption —
+            // its other records still take the server's verdict, one at a time.
             workoutLogs.value = adoptUploadResults(
                 workoutLogs.value, results, snapshotGens,
                 syncMetadata.value.dirtyDateGenerations, logsToUpload,

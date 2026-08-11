@@ -151,19 +151,218 @@ test('adoptUploadResults: adopts merged serverRow for non-re-modified dates', ()
     assert.deepEqual(local.d1, { ex_1: { local: true } });  // input not mutated
 });
 
-test('adoptUploadResults: re-modified date keeps local content but advances tokens', () => {
+// ---- re-modified dates are reconciled PER RECORD --------------------------
+
+test('adoptUploadResults re-modified: a record nobody re-edited adopts the server\'s verdict', () => {
+    // The DATE moved, but this record is still what went on the wire, so the
+    // server has ruled on it: reps 28 is the remote edit that beat this upload.
+    // Keeping the local 32 behind the advanced token left stale content with a
+    // winning base — next cycle it passed the server's `stored <= base` test and
+    // destroyed that edit (the verdict-reversal bug this test used to pin).
+    const uploaded = {
+        d2: { ex_1: { reps: 32, _lastModified: 'old-ex', _baseLastModifiedAt: 'old-ex' } },
+    };
     const local = {
         d2: { _lastModified: 'old-day', ex_1: { reps: 32, _lastModified: 'old-ex' } },
     };
     const results = {
         d2: { _lastModified: 'srv-day', ex_1: { reps: 28, _lastModified: 'srv-ex' } },
     };
-    // d2 re-modified mid-sync (gen advanced) → keep local reps (32) but take the
-    // server's tokens, so the next upload echoes a fresh base (the race-loss fix).
-    const next = adoptUploadResults(local, results, { d2: 1 }, { d2: 2 });
-    assert.equal(next.d2.ex_1.reps, 32);                  // local re-edit kept
+    const next = adoptUploadResults(local, results, { d2: 1 }, { d2: 2 }, uploaded);
+    assert.deepEqual(next.d2.ex_1, { reps: 28, _lastModified: 'srv-ex' });
+    assert.equal(next.d2._lastModified, 'srv-day');
+});
+
+test('adoptUploadResults re-modified: an ACCEPTED untouched record adopts the echoed row', () => {
+    // Same rule with the happy verdict: the server took the upload and echoed it
+    // back with a fresh stamp, so adopting it is just taking the new token.
+    const uploaded = {
+        d2: { ex_1: { reps: 32, _lastModified: 'old-ex', _baseLastModifiedAt: 'old-ex' } },
+    };
+    const local = {
+        d2: { _lastModified: 'old-day', ex_1: { reps: 32, _lastModified: 'old-ex' } },
+    };
+    const results = {
+        d2: { _lastModified: 'srv-day', ex_1: { reps: 32, _lastModified: 'srv-ex' } },
+    };
+    const next = adoptUploadResults(local, results, { d2: 1 }, { d2: 2 }, uploaded);
+    assert.deepEqual(next.d2.ex_1, { reps: 32, _lastModified: 'srv-ex' });
+});
+
+test('adoptUploadResults → next cycle: a rejection verdict cannot be re-litigated', () => {
+    // Two-cycle proof of the fix. Cycle 1: our stale 32 lost to the remote 28
+    // and the verdict is adopted. Cycle 2's upload is then BUILT FROM the
+    // adopted state, so the retry echoes the server's own content behind the
+    // server's own stamp — an idempotent no-op to the arbiter, never a stale 32
+    // behind a winning base (the exact mechanism of the verdict-reversal bug).
+    const uploaded = {
+        d2: { ex_1: { reps: 32, _lastModified: 'old-ex', _baseLastModifiedAt: 'old-ex' } },
+    };
+    const local = {
+        d2: { _lastModified: 'old-day', ex_1: { reps: 32, _lastModified: 'old-ex' } },
+    };
+    const results = {
+        d2: { _lastModified: 'srv-day', ex_1: { reps: 28, _lastModified: 'srv-ex' } },
+    };
+    const next = adoptUploadResults(local, results, { d2: 1 }, { d2: 2 }, uploaded);
+    const retry = withBaseTokens(next.d2);  // the date is still dirty → re-uploads
+    assert.equal(retry.ex_1.reps, 28);
+    assert.equal(retry.ex_1._baseLastModifiedAt, 'srv-ex');
+    assert.equal(retry._baseLastModifiedAt, 'srv-day');
+});
+
+test('adoptUploadResults re-modified: a record genuinely re-edited keeps its content and advances', () => {
+    // reps 99 landed after the payload was built, so it is newer intent than
+    // anything the server ruled on. It stays — and its base advances, or the
+    // retry echoes a token the server has already moved past and the re-edit is
+    // rejected away.
+    const uploaded = {
+        d2: { ex_1: { reps: 32, _lastModified: 'old-ex', _baseLastModifiedAt: 'old-ex' } },
+    };
+    const local = {
+        d2: { _lastModified: 'old-day', ex_1: { reps: 99, _lastModified: 'old-ex' } },
+    };
+    const results = {
+        d2: { _lastModified: 'srv-day', ex_1: { reps: 28, _lastModified: 'srv-ex' } },
+    };
+    const next = adoptUploadResults(local, results, { d2: 1 }, { d2: 2 }, uploaded);
+    assert.equal(next.d2.ex_1.reps, 99);                  // local re-edit kept
     assert.equal(next.d2.ex_1._lastModified, 'srv-ex');   // token advanced
     assert.equal(next.d2._lastModified, 'srv-day');       // day token advanced
+});
+
+test('adoptUploadResults re-modified: one day, one record ruled on and one re-edited', () => {
+    // The generation counter is per DATE, so it cannot say which record the user
+    // touched. Treating the whole day as re-edited shielded ex_a from its verdict.
+    const uploaded = {
+        d1: {
+            ex_a: { reps: 5, _lastModified: 'a1', _baseLastModifiedAt: 'a1' },
+            ex_b: { reps: 8, _lastModified: 'b1', _baseLastModifiedAt: 'b1' },
+        },
+    };
+    const local = {
+        d1: {
+            _lastModified: 'old-day',
+            ex_a: { reps: 5, _lastModified: 'a1' },    // untouched
+            ex_b: { reps: 12, _lastModified: 'b1' },   // re-edited mid-sync
+        },
+    };
+    const results = {
+        d1: {
+            _lastModified: 'srv-day',
+            ex_a: { reps: 6, _lastModified: 'a2' },    // ex_a's upload lost to a remote edit
+            ex_b: { reps: 8, _lastModified: 'b2' },
+        },
+    };
+    const next = adoptUploadResults(local, results, { d1: 1 }, { d1: 2 }, uploaded);
+    assert.deepEqual(next.d1.ex_a, { reps: 6, _lastModified: 'a2' });
+    assert.equal(next.d1.ex_b.reps, 12);
+    assert.equal(next.d1.ex_b._lastModified, 'b2');
+});
+
+test('adoptUploadResults re-modified: a record created mid-sync is kept, unarbitrated', () => {
+    // Absent from the upload → created after the payload was built → no verdict
+    // exists for it, whatever the server row happens to say.
+    const uploaded = { d1: { ex_a: { reps: 5, _baseLastModifiedAt: 'a1' } } };
+    const local = { d1: { _lastModified: 'old-day', ex_a: { reps: 5 }, ex_new: { reps: 3 } } };
+    const results = { d1: { _lastModified: 'srv-day', ex_a: { reps: 5, _lastModified: 'a2' } } };
+    const next = adoptUploadResults(local, results, { d1: 1 }, { d1: 2 }, uploaded);
+    assert.deepEqual(next.d1.ex_new, { reps: 3 });
+});
+
+test('adoptUploadResults re-modified: with no uploaded copy known, no record gets a verdict', () => {
+    const local = { d1: { _lastModified: 'old-day', ex_1: { reps: 32, _lastModified: 'old-ex' } } };
+    const results = { d1: { _lastModified: 'srv-day', ex_1: { reps: 28, _lastModified: 'srv-ex' } } };
+    // uploadedLogs omitted: nothing can be shown to have been arbitrated, so
+    // every record is treated as touched mid-sync and keeps its content.
+    const next = adoptUploadResults(local, results, { d1: 1 }, { d1: 2 });
+    assert.equal(next.d1.ex_1.reps, 32);
+    assert.equal(next.d1.ex_1._lastModified, 'srv-ex');
+});
+
+test('adoptUploadResults re-modified: untouched feedback adopts the server\'s, since the DAY token is its base', () => {
+    // `session_feedback` is arbitrated on the day-level token, so advancing that
+    // token while keeping the local feedback armed exactly the same overwrite one
+    // cycle later.
+    const uploaded = {
+        d1: { session_feedback: { general_notes: 'mine' }, _baseLastModifiedAt: 'old-day' },
+    };
+    const local = { d1: { _lastModified: 'old-day', session_feedback: { general_notes: 'mine' } } };
+    const results = { d1: { _lastModified: 'srv-day', session_feedback: { general_notes: 'theirs' } } };
+    const next = adoptUploadResults(local, results, { d1: 1 }, { d1: 2 }, uploaded);
+    assert.equal(next.d1.session_feedback.general_notes, 'theirs');
+    assert.equal(next.d1._lastModified, 'srv-day');
+});
+
+test('adoptUploadResults re-modified: feedback edited mid-sync is kept, and the day token still advances', () => {
+    const uploaded = { d1: { session_feedback: {}, _baseLastModifiedAt: 'old-day' } };
+    const local = { d1: { _lastModified: 'old-day', session_feedback: { general_notes: 'mid-sync' } } };
+    const results = { d1: { _lastModified: 'srv-day', session_feedback: { general_notes: 'theirs' } } };
+    const next = adoptUploadResults(local, results, { d1: 1 }, { d1: 2 }, uploaded);
+    assert.equal(next.d1.session_feedback.general_notes, 'mid-sync');
+    // The token has to move even here, or the re-edit's retry is rejected.
+    assert.equal(next.d1._lastModified, 'srv-day');
+});
+
+test('adoptUploadResults re-modified: a settled re-add sheds its _readd marker with the verdict', () => {
+    // `_readd` is transient — the server never stores or echoes it, so adopting
+    // any result is what retires it. The keep-and-advance path carried the marker
+    // forward past the cycle that settled it.
+    const uploaded = {
+        d1: {
+            extra_zone2: {
+                duration_min: 45, _readd: true, _lastModified: 't1', _baseLastModifiedAt: 't1',
+            },
+        },
+    };
+    const local = {
+        d1: {
+            _lastModified: 'old-day',
+            session_feedback: { general_notes: 'mid-sync' },
+            extra_zone2: { duration_min: 45, _readd: true, _lastModified: 't1' },
+        },
+    };
+    const results = {
+        d1: {
+            _lastModified: 'srv-day',
+            session_feedback: {},
+            extra_zone2: { duration_min: 45, _lastModified: 't2' },
+        },
+    };
+    const next = adoptUploadResults(local, results, { d1: 1 }, { d1: 2 }, uploaded);
+    assert.ok(!('_readd' in next.d1.extra_zone2));
+    assert.equal(next.d1.extra_zone2._lastModified, 't2');
+});
+
+test('adoptUploadResults re-modified: nested set edits are compared structurally, not by identity', () => {
+    // Local writes deep-clone the whole log map, so an untouched record is an
+    // equal-but-distinct copy of what was uploaded; a re-edit differs only deep
+    // inside `sets`. Reference identity would call both re-edited and lose every
+    // verdict.
+    const uploaded = {
+        d1: {
+            ex_a: { sets: [{ set_num: 1, reps: 5 }], _lastModified: 'a1', _baseLastModifiedAt: 'a1' },
+            ex_b: { sets: [{ set_num: 1, reps: 5 }], _lastModified: 'b1', _baseLastModifiedAt: 'b1' },
+        },
+    };
+    const local = {
+        d1: {
+            _lastModified: 'old-day',
+            ex_a: { sets: [{ set_num: 1, reps: 5 }], _lastModified: 'a1' },              // untouched copy
+            ex_b: { sets: [{ set_num: 1, reps: 5, rpe: 8 }], _lastModified: 'b1' },      // re-edited deep
+        },
+    };
+    const results = {
+        d1: {
+            _lastModified: 'srv-day',
+            ex_a: { sets: [{ set_num: 1, reps: 9 }], _lastModified: 'a2' },
+            ex_b: { sets: [{ set_num: 1, reps: 9 }], _lastModified: 'b2' },
+        },
+    };
+    const next = adoptUploadResults(local, results, { d1: 1 }, { d1: 2 }, uploaded);
+    assert.deepEqual(next.d1.ex_a.sets, [{ set_num: 1, reps: 9 }]);          // verdict adopted
+    assert.deepEqual(next.d1.ex_b.sets, [{ set_num: 1, reps: 5, rpe: 8 }]);  // re-edit kept
+    assert.equal(next.d1.ex_b._lastModified, 'b2');
 });
 
 // ---- entry deletion (tombstones) ------------------------------------------
