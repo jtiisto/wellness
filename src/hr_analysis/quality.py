@@ -18,15 +18,16 @@ import numpy as np
 # hand; test/hr/analysis/test_parity_constants.py at least fails loudly when a
 # value below is edited, so the edit cannot pass unnoticed.
 #
-# The Kotlin side is mid-migration (2026-08-10). Its only implementation today
-# is in the FROZEN pulse-bridge repo at
-#   ~/dev/native/pulse-bridge/feature/capture/src/main/kotlin/dev/jtiisto/
-#       pulsebridge/feature/capture/domain/SignalQualityTracker.kt
-# whose own parity comment still points at that repo's `server/analysis/`
-# (i.e. at this file's ancestor). It is being ported to the wellness Android
-# app's new `core/ble` module (~/dev/native/wellness, spec
-# `specs/coach-heart-rate.md`, Android phase 2); when that lands, repoint this
-# note — and the Kotlin one — at each other.
+# The live Kotlin implementation (landed 2026-08-11, Android phase 2 of the
+# wellness app's specs/coach-heart-rate.md) is
+#   ~/dev/native/wellness/core/ble/src/main/kotlin/dev/jtiisto/wellness/
+#       core/ble/quality/SignalQualityTracker.kt
+# whose own PARITY comment points back at this file, pipeline.py's
+# `_window_alpha1`, and test_parity_constants.py. It mirrors the values
+# byte-identically but evaluates its ectopic median TRAILING rather than
+# centered (no future beats exist live) — see the note at `ectopic_fraction`.
+# The FROZEN pulse-bridge repo retains the ancestor implementation and no
+# longer needs tracking.
 # ============================================================================
 ECTOPIC_THRESHOLD = 0.20   # |delta rr| / prev rr above this = ectopic/artifact
 OMISSION_FACTOR = 1.5      # timestamp gap > factor * rr = a beat was omitted
