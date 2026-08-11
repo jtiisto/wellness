@@ -450,13 +450,26 @@ class GarminHrmConnection(
      * The teardown calls, which cannot route anywhere: they *are* the failure
      * path, so a throw here has nothing left to fall back on and would only
      * strand the handle it was trying to release.
+     *
+     * These two catch **any** non-fatal exception, unlike [routingFailures] which
+     * catches only the permission failure it knows how to answer. A revoked grant
+     * is not the only way these throw: an adapter switched off underneath a live
+     * handle raises `IllegalStateException` from deep in the Bluetooth stack, and
+     * from inside a `BluetoothGattCallback` that escapes onto a Binder thread and
+     * takes the process with it. There is nothing to distinguish here — every
+     * outcome is "the link is gone", which is what was being asked for.
+     *
+     * Only the class name is logged. The shareable debug log never carries a
+     * platform message.
      */
     @SuppressLint("MissingPermission")
     private fun BluetoothGatt.disconnectSafely() {
         try {
             disconnect()
-        } catch (e: SecurityException) {
-            log.log("gatt disconnect refused: ${e.javaClass.simpleName}")
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            log.log("gatt disconnect failed: ${e.javaClass.simpleName}")
         }
     }
 
@@ -464,8 +477,10 @@ class GarminHrmConnection(
     private fun BluetoothGatt.closeSafely() {
         try {
             close()
-        } catch (e: SecurityException) {
-            log.log("gatt close refused: ${e.javaClass.simpleName}")
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            log.log("gatt close failed: ${e.javaClass.simpleName}")
         }
     }
 }

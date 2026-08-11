@@ -99,6 +99,12 @@ class HrCaptureService : Service() {
     /** Rows stored by this run, for the closing log line. Written off the main thread. */
     private val storedRows = AtomicInteger(0)
 
+    /**
+     * The session this service published, so a failed startup can give it back.
+     * Null until [beginCapture] has one.
+     */
+    private var startedSessionId: String? = null
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
@@ -137,7 +143,7 @@ class HrCaptureService : Service() {
         workoutDate: String? = null,
         workoutSessionId: Long? = null,
         resumedSessionId: String? = null,
-    ) {
+    ): Boolean {
         // First, and before the gate: a duplicate intent for a capture that is
         // already running must do nothing at all. Evaluating the gate ahead of
         // this would let a permission revoked mid-session turn a redundant start
@@ -145,7 +151,7 @@ class HrCaptureService : Service() {
         //
         // onStartCommand runs on the main thread, so the claim closes the
         // double-start window before any async work is launched.
-        if (connection != null || !lifecycle.claimStart()) return
+        if (connection != null || !lifecycle.claimStart()) return false
 
         val refusal = CaptureStartGate.evaluate(
             address = address,
@@ -157,7 +163,7 @@ class HrCaptureService : Service() {
             // Through the single exit, so the claim just taken is released — a
             // refusal that kept it would lock the service out of every later start.
             finishTeardown()
-            return
+            return false
         }
         val deviceAddress = requireNotNull(address)
 
@@ -174,7 +180,7 @@ class HrCaptureService : Service() {
 
         if (!promoteToForeground(initial)) {
             finishTeardown()
-            return
+            return false
         }
         acquireWakeLock()
 
@@ -199,11 +205,17 @@ class HrCaptureService : Service() {
                 if (!connected && lifecycle.mayContinueStartup()) {
                     withContext(NonCancellable) {
                         disconnectQuietly()
+                        // The session this startup opened, or resumed into, has
+                        // nothing recording for it. Left current it would put a
+                        // dead id on every set event and make the next sticky
+                        // restart reattach to a capture that never ran.
+                        startedSessionId?.let { captureStore.abandonSession(it) }
                         finishTeardown()
                     }
                 }
             }
         }
+        return true
     }
 
     /**
@@ -226,6 +238,7 @@ class HrCaptureService : Service() {
     ): Boolean {
         val sessionId = resumedSessionId
             ?: captureStore.startSession(address, workoutDate, workoutSessionId)
+        startedSessionId = sessionId
         if (!lifecycle.mayContinueStartup()) {
             // The row exists and is published as current, so the stop that is
             // already running closes it — with a final flush, and with the right
@@ -323,11 +336,26 @@ class HrCaptureService : Service() {
             // Through the same start gate as a user-initiated capture: a sticky
             // restart is not a way around a revoked permission or an unresolved
             // server, and the address comes off the row rather than an Intent.
-            startCapture(
-                address = open.deviceId,
-                name = withContext(Dispatchers.IO) { knownDevices.nameOf(open.deviceId) },
-                resumedSessionId = open.sessionId,
-            )
+            var started = false
+            try {
+                val name = withContext(Dispatchers.IO) { knownDevices.nameOf(open.deviceId) }
+                started = startCapture(
+                    address = open.deviceId,
+                    name = name,
+                    resumedSessionId = open.sessionId,
+                )
+            } finally {
+                // The resume published this session before knowing whether a
+                // capture would follow. A refusal — or a throw reading the
+                // device name — must hand it back, or it stays current with
+                // nothing feeding it.
+                if (!started) {
+                    withContext(NonCancellable) {
+                        captureStore.abandonSession(open.sessionId)
+                        stopSelf(startId)
+                    }
+                }
+            }
         }
     }
 
@@ -433,6 +461,7 @@ class HrCaptureService : Service() {
         startupJob = null
         cancelInactivityTimer()
         connection = null
+        startedSessionId = null
         storedRows.set(0)
         lifecycle.released()
         releaseWakeLock()
@@ -497,8 +526,14 @@ class HrCaptureService : Service() {
             if (current.isRunning) update(current) else current
         }
         if (!notificationFollows(committed, updated, captureState.value)) return
-        getSystemService(NotificationManager::class.java)
-            ?.notify(HrCaptureNotification.NOTIFICATION_ID, notification.build(updated))
+        val manager = getSystemService(NotificationManager::class.java) ?: return
+        manager.notify(HrCaptureNotification.NOTIFICATION_ID, notification.build(updated))
+        // Paint, then verify. A teardown that landed between the check above and
+        // the call just above would have removed the notification and had it put
+        // straight back — permanently, since nothing would be running to clear it.
+        if (notificationOutlivedCapture(captureState.value)) {
+            manager.cancel(HrCaptureNotification.NOTIFICATION_ID)
+        }
     }
 
     /**

@@ -283,6 +283,43 @@ class IntervalBufferTest {
         )
     }
 
+    @Test
+    fun `a pathological bundle is compressed into the collision window`() = runTest {
+        val buffer = buffer(backgroundScope, BufferConfig(maxBufferSize = 100))
+
+        // Three 60 s intervals: legal on the wire — the characteristic encodes
+        // RR as 1/1024 s in 16 bits — and 2 minutes of reach if trusted, which
+        // is further back than the seq memory remembers
+        buffer.add(sample(receivedAtMs = 1_000_000L, rrIntervalsMs = listOf(60_000, 60_000, 60_000)), SESSION)
+        buffer.flush()
+
+        val floor = 1_000_000L - MAX_ANCHOR_REACH_MS
+        assertTrue(sink.rows.all { it.timestampMs >= floor })
+        // The two beyond the boundary sit on it, told apart by seq; the last
+        // beat still lands at receipt time
+        assertEquals(
+            listOf(floor to 0, floor to 1, 1_000_000L to 0),
+            sink.rows.map { it.timestampMs to it.seq },
+        )
+    }
+
+    @Test
+    fun `the clamp leaves a bundle that fits and compresses one that does not`() = runTest {
+        val buffer = buffer(backgroundScope, BufferConfig(maxBufferSize = 100))
+        val receipt = 1_000_000L
+        val floor = receipt - MAX_ANCHOR_REACH_MS
+
+        // One second inside the boundary: the true anchor is kept
+        buffer.add(sample(deviceId = "AA:01", receivedAtMs = receipt, rrIntervalsMs = listOf(800, 54_000)), SESSION)
+        // One second outside: compressed to the boundary, not to its own anchor
+        buffer.add(sample(deviceId = "AA:02", receivedAtMs = receipt, rrIntervalsMs = listOf(800, 56_000)), SESSION)
+        buffer.flush()
+
+        val earliest = sink.rows.groupBy { it.deviceId }.mapValues { (_, rows) -> rows.minOf { it.timestampMs } }
+        assertEquals(receipt - 54_000L, earliest["AA:01"])
+        assertEquals(floor, earliest["AA:02"]) // and not receipt - 56_000
+    }
+
     // ---- gap marking -------------------------------------------------------
 
     @Test

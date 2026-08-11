@@ -13,33 +13,49 @@ import kotlinx.coroutines.sync.withLock
 /**
  * How far back a millisecond stays worth remembering for [IntervalBuffer.nextSeq].
  *
- * This is the invariant the constant protects: a notification reaches backwards
- * exactly as far as the intervals it carries, so the memory must outlast the
- * longest reach any single notification can have. At the default 23-byte ATT
- * MTU a Heart Rate Measurement has 20 payload bytes — flags plus an 8-bit BPM
- * leave 18, so nine 16-bit RR intervals — and even a pathological interval a
- * strap will report stays under ~2.5 s. That puts the worst case near 22 s, and
- * sixty seconds clears it with room for a negotiated larger MTU.
+ * The invariant: a beat may only be dated inside this window, so a later
+ * notification can never anchor onto a millisecond the memory has forgotten.
+ * [MAX_ANCHOR_REACH_MS] is what makes that true — the reach is clamped rather
+ * than assumed, because nothing upstream bounds it. The characteristic encodes
+ * each RR as a 16-bit count of 1/1024 s, so a single interval can legally
+ * arrive at nearly 64 s and a nine-interval bundle at nearly ten minutes; the
+ * parser passes those through, as it should, since they are what the strap
+ * said.
  *
  * Bundle arithmetic is not the only way a millisecond gets revisited: a
  * real-time clock correction stepping backwards returns receipt times to
- * milliseconds already used, with no bundle reaching anywhere. That makes the
- * memory worth more than the reach calculation alone suggests, and it is why
- * the prune below measures its cutoff from the newest millisecond seen rather
- * than from the one being written.
+ * milliseconds already used, with no bundle reaching anywhere. That is why the
+ * prune below measures its cutoff from the newest millisecond seen rather than
+ * from the one being written.
  *
- * A collision older than this is not prevented: the beat takes seq 0 again and
- * the duplicate key is dropped by the `INSERT OR IGNORE` downstream. That needs
- * a notification reaching back a full minute, which is beyond what the
- * characteristic can physically carry.
+ * **Caveat, accepted**: a large *forward* clock step is the one case this does
+ * not cover. It drags the cutoff past entries that are still current, pruning
+ * live milliseconds, and when the clock is corrected back a beat can land on
+ * one of them at seq 0 — a duplicate key the `INSERT OR IGNORE` downstream
+ * drops. Bounded to one row per collision, and it takes a clock jump of a
+ * minute or more to reach at all.
  */
 internal const val COLLISION_MEMORY_MS = 60_000L
 
 /**
- * Amortizes the prune scan: it runs once a device's memory exceeds this. Purely
- * a cost knob — correctness belongs to [COLLISION_MEMORY_MS], and holding more
- * entries than that window needs only wastes a few kilobytes. A minute of beats
- * is about 180 entries at a normal rate, so the scan is rare.
+ * The furthest back a notification may date its own beats, five seconds inside
+ * [COLLISION_MEMORY_MS]. Beats anchored past it compress onto the boundary,
+ * where seq keeps them distinct and ordered.
+ *
+ * This costs nothing real: reaching it needs intervals summing to 55 s in one
+ * notification, which is a strap reporting minutes of beats in a single packet,
+ * not a heart. What it buys is that the memory window's invariant holds by
+ * construction instead of by an assumption about how strap firmware behaves.
+ */
+internal const val MAX_ANCHOR_REACH_MS = 55_000L
+
+/**
+ * When the prune scan runs: once a device's memory holds more entries than
+ * this. It is a trigger, not a cap — nothing is evicted for being numerous,
+ * only for being older than [COLLISION_MEMORY_MS], so a burst of genuinely
+ * recent milliseconds can carry the map past this number and keep it there.
+ * The real bound on size is the window: beats per second times sixty, about
+ * 180 entries at a normal rate, and every one of them is a `Long` and an `Int`.
  */
 internal const val MAX_TRACKED_MILLIS = 1536
 
@@ -59,6 +75,11 @@ internal const val MAX_TRACKED_MILLIS = 1536
  * discontinuity ([HeartRateSample.isGapBefore], set by the connection on a
  * >3 s silence or a dropped notification) marks the first row of the group
  * only — it describes the boundary, not every beat behind it.
+ *
+ * The one addition to those rules is [MAX_ANCHOR_REACH_MS]: a notification may
+ * not date a beat further back than that, and anything beyond compresses onto
+ * the boundary. Pulse-bridge trusted the arithmetic, which is safe for every
+ * bundle a heart produces and unsafe for the ones the wire format permits.
  *
  * ## seq — the one deliberate change from pulse-bridge
  *
@@ -164,6 +185,12 @@ class IntervalBuffer(
      * intervals leave beats sharing a millisecond, and those are pushed
      * backward so the sequence stays strictly increasing without anything
      * landing past receipt.
+     *
+     * The result is then floored at [MAX_ANCHOR_REACH_MS] before receipt. Since
+     * the placements are strictly increasing, that affects a prefix of them and
+     * collapses it onto the boundary, where [nextSeq] keeps the beats distinct
+     * and in order — the same mechanism that handles two notifications sharing
+     * a receipt millisecond.
      */
     private fun anchorBackward(receivedAtMs: Long, rrs: List<Int>): LongArray {
         val timestamps = LongArray(rrs.size) { index ->
@@ -174,6 +201,11 @@ class IntervalBuffer(
             if (timestamps[i] >= timestamps[i + 1]) {
                 timestamps[i] = timestamps[i + 1] - 1
             }
+        }
+        val earliestAllowed = receivedAtMs - MAX_ANCHOR_REACH_MS
+        for (i in timestamps.indices) {
+            if (timestamps[i] >= earliestAllowed) break
+            timestamps[i] = earliestAllowed
         }
         return timestamps
     }

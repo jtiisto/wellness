@@ -17,11 +17,21 @@ import org.junit.jupiter.api.Test
 class BlePermissionsTest {
 
     @Test
-    @DisplayName("scan and connect are requested as a pair")
+    @DisplayName("exactly BLUETOOTH_SCAN and BLUETOOTH_CONNECT, by name")
     fun bothPermissionsAreRequired() {
-        assertEquals(2, BlePermissions.REQUIRED.size)
-        assertEquals(BlePermissions.REQUIRED.size, BlePermissions.REQUIRED.distinct().size)
-        assertTrue(BlePermissions.REQUIRED.all { it.isNotBlank() })
+        // The literal strings, not a shape. `REQUIRED` is what the launcher asks
+        // for and what `answerFrom` reads answers out of, and it has to stay in
+        // step with the two `uses-permission` lines in :core:ble's manifest —
+        // which nothing else checks. Asserting only "two distinct non-blank
+        // strings" would have stayed green through a swapped constant, and the
+        // failure would have surfaced as a SecurityException on a device.
+        assertEquals(
+            listOf(
+                "android.permission.BLUETOOTH_SCAN",
+                "android.permission.BLUETOOTH_CONNECT",
+            ),
+            BlePermissions.REQUIRED,
+        )
     }
 
     @Test

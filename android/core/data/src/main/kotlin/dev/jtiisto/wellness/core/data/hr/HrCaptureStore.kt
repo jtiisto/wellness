@@ -15,8 +15,9 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.getAndUpdate
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import java.util.UUID
@@ -90,6 +91,28 @@ class HrCaptureStore(
     private val _current = MutableStateFlow<CaptureSession?>(null)
 
     /**
+     * Serializes the session-lifecycle transitions: opening one, resuming one,
+     * ending one, and finishing a close that was deferred.
+     *
+     * Each of those is a read of [_current] followed by a decision followed by a
+     * write, with suspending database work in the middle — so without a lock
+     * they interleave, and the interleavings are not benign. The one that bit:
+     * a deferred close claimed its session, suspended for the write lease, and a
+     * resume reattached to that same session in the gap; the close then landed
+     * on a capture that was recording. `endedAtMs IS NULL` cannot catch that,
+     * because the session is legitimately open.
+     *
+     * **Deliberately does not cover the database reads or the final flush.** The
+     * flush re-enters this class through [store], which takes this lock to finish
+     * a deferred close — holding it across the flush would deadlock. And the
+     * resume's query stays outside so a start can still race it, which is what
+     * makes the compare-and-set in [resumeOpenSession] load-bearing rather than
+     * decorative. These transitions happen a handful of times per capture, so the
+     * lock costs nothing.
+     */
+    private val lifecycle = Mutex()
+
+    /**
      * A session whose final flush would not land, and the instant it must carry
      * once it does.
      *
@@ -104,7 +127,22 @@ class HrCaptureStore(
      */
     private data class PendingClose(val sessionId: String, val endedAtMs: Long)
 
-    private val _pendingClose = MutableStateFlow<PendingClose?>(null)
+    /**
+     * Deferred closes by session id, guarded by [lifecycle].
+     *
+     * A map rather than a single slot, because a single slot silently loses one.
+     * Two straps are enough: capture A strands its close, capture B on a
+     * different device starts — the stale-session backstop is per-device, so it
+     * does not touch A — and B then strands its own close, overwriting A's. A
+     * would stay open for ever, which is the exact failure the deferred close was
+     * built to prevent.
+     *
+     * Bounded by construction: an entry is added only by a failed final flush and
+     * removed on completion, on a resume reattaching to that session, or by the
+     * backstop force-closing it. There is one entry per stranded capture, and a
+     * capture cannot strand twice without a flush in between.
+     */
+    private val pendingCloses = mutableMapOf<String, PendingClose>()
 
     /**
      * The capture in progress — its id **and its workout anchor** — or null when
@@ -149,24 +187,26 @@ class HrCaptureStore(
         workoutDate: DateString? = null,
         workoutSessionId: Long? = null,
     ): String {
-        closeStaleSessions(deviceId)
         val id = newSessionId()
-        session.withWriteLease {
-            sessionDao.upsert(
-                HrSessionEntity(
-                    sessionId = id,
-                    deviceId = deviceId,
-                    startedAtMs = now(),
-                    workoutDate = workoutDate,
-                    workoutSessionId = workoutSessionId,
-                ),
+        lifecycle.withLock {
+            closeStaleSessions(deviceId)
+            session.withWriteLease {
+                sessionDao.upsert(
+                    HrSessionEntity(
+                        sessionId = id,
+                        deviceId = deviceId,
+                        startedAtMs = now(),
+                        workoutDate = workoutDate,
+                        workoutSessionId = workoutSessionId,
+                    ),
+                )
+            }
+            _current.value = CaptureSession(
+                sessionId = id,
+                workoutDate = workoutDate,
+                workoutSessionId = workoutSessionId,
             )
         }
-        _current.value = CaptureSession(
-            sessionId = id,
-            workoutDate = workoutDate,
-            workoutSessionId = workoutSessionId,
-        )
         debugLog?.log(
             TAG,
             "capture session started",
@@ -210,27 +250,54 @@ class HrCaptureStore(
      *   the two alike: in both cases this restart has no capture to run.
      */
     suspend fun resumeOpenSession(): HrSessionEntity? {
+        // Outside the lock on purpose: a start is allowed to race this read, and
+        // the compare-and-set below is what settles it.
         val open = sessionDao.newestOpen() ?: return null
         val resumed = CaptureSession(
             sessionId = open.sessionId,
             workoutDate = open.workoutDate,
             workoutSessionId = open.workoutSessionId,
         )
-        if (!_current.compareAndSet(null, resumed)) {
-            debugLog?.log(TAG, "resume skipped: a capture is already running")
-            return null
+        lifecycle.withLock {
+            if (!_current.compareAndSet(null, resumed)) {
+                debugLog?.log(TAG, "resume skipped: a capture is already running")
+                return null
+            }
+            // A session being captured into again must not be closed behind the
+            // capture's back by a deferred close it left behind earlier. The
+            // resume *is* the reattachment the deferred close was standing in
+            // for, and only one of them may finish the session.
+            pendingCloses.remove(open.sessionId)
         }
-        // A session being captured into again must not be closed behind the
-        // capture's back by a deferred close it left behind earlier. The resume
-        // *is* the reattachment the deferred close was standing in for, and only
-        // one of them may finish the session.
-        _pendingClose.update { pending -> pending?.takeIf { it.sessionId != open.sessionId } }
         debugLog?.log(
             TAG,
             "resumed open capture session",
             buildJsonObject { put("anchored", open.workoutDate != null) },
         )
         return open
+    }
+
+    /**
+     * Give up a session that was published but never recorded into.
+     *
+     * The resume path publishes before it knows whether a capture will actually
+     * start, and the start can still be refused — a permission revoked while the
+     * process was dead, a server that has not resolved — or fail outright. The
+     * published session would then stay current with nothing feeding it: set
+     * events would carry a dead session id, and the next sticky restart would
+     * reattach to a capture that ended during the failed resume.
+     *
+     * Compare-and-set on the id, so a session someone else has since started can
+     * never be cleared by a late abandon. No database write: this is a failure
+     * path, and the row is retired by [closeStaleSessions] on the next capture
+     * for that device.
+     */
+    suspend fun abandonSession(sessionId: String) {
+        lifecycle.withLock {
+            if (_current.value?.sessionId != sessionId) return
+            _current.value = null
+        }
+        debugLog?.log(TAG, "abandoned a session no capture started for")
     }
 
     /**
@@ -251,7 +318,9 @@ class HrCaptureStore(
      * on every capture start, which is a real cost for a field nothing measures.
      *
      * Scoped to one device on purpose: another strap's open session is not this
-     * capture's to end.
+     * capture's to end — and neither is its deferred close.
+     *
+     * Must be called with [lifecycle] held; [startSession] is its only caller.
      */
     private suspend fun closeStaleSessions(deviceId: String) {
         val stale = sessionDao.listAll().filter { it.endedAtMs == null && it.deviceId == deviceId }
@@ -260,8 +329,10 @@ class HrCaptureStore(
         session.withWriteLease {
             for (row in stale) sessionDao.closeSession(row.sessionId, closedAt)
         }
-        // Anything a deferred close was waiting to finish is finished now.
-        _pendingClose.update { pending -> pending?.takeIf { p -> stale.none { it.sessionId == p.sessionId } } }
+        // Anything a deferred close was waiting to finish is finished now —
+        // for these sessions only. Another strap's stranded close is not this
+        // capture's to retire.
+        for (row in stale) pendingCloses.remove(row.sessionId)
         debugLog?.log(
             TAG,
             "force-closed sessions left open by an earlier capture",
@@ -353,30 +424,50 @@ class HrCaptureStore(
      * stopped session's leftovers go out in the same batch as a newer capture's.
      *
      * A failure here must not read as a failed flush. The samples are durable and
-     * that is the whole of what [HrSampleSink] promises the buffer; the close is
-     * put back and the next landed batch tries it again.
+     * that is the whole of what [HrSampleSink] promises the buffer; the close
+     * stays in the map and the next landed batch tries it again.
+     *
+     * Drains **every** pending close, not one: two straps can each strand one,
+     * and the buffer they share drains for both at once.
      */
     private suspend fun completeDeferredClose() {
-        val pending = _pendingClose.getAndUpdate { null } ?: return
-        try {
-            val result = closeSessionRow(pending.sessionId, pending.endedAtMs)
-            debugLog?.log(
-                TAG,
-                "deferred close completed once the buffer drained",
-                buildJsonObject { put("result", result.name) },
-            )
-        } catch (cancellation: CancellationException) {
-            _pendingClose.compareAndSet(null, pending)
-            throw cancellation
-        } catch (error: Throwable) {
-            // compareAndSet, not a plain write: a newer deferred close set while
-            // this one was in flight is the one that should survive.
-            _pendingClose.compareAndSet(null, pending)
-            debugLog?.log(
-                TAG,
-                "deferred close failed, still pending",
-                buildJsonObject { put("error", error.javaClass.simpleName) },
-            )
+        lifecycle.withLock {
+            if (pendingCloses.isEmpty()) return
+            // The claim and the close happen together, under one lock. Claiming
+            // first and then suspending for the write lease is what let a resume
+            // reattach to the session in between — the close then landed on a
+            // capture that was recording, which `endedAtMs IS NULL` cannot catch
+            // because the session was legitimately open.
+            val live = _current.value?.sessionId
+            for (pending in pendingCloses.values.toList()) {
+                if (pending.sessionId == live) {
+                    // Recording again. The capture that owns it now will close
+                    // it; this one has been superseded, not delayed.
+                    pendingCloses.remove(pending.sessionId)
+                    debugLog?.log(TAG, "deferred close dropped: its session is recording again")
+                    continue
+                }
+                try {
+                    val result = closeSessionRow(pending.sessionId, pending.endedAtMs)
+                    pendingCloses.remove(pending.sessionId)
+                    debugLog?.log(
+                        TAG,
+                        "deferred close completed once the buffer drained",
+                        buildJsonObject { put("result", result.name) },
+                    )
+                } catch (cancellation: CancellationException) {
+                    throw cancellation
+                } catch (error: Throwable) {
+                    // Left in the map for the next landed batch. A failure here
+                    // must not read as a failed flush: the samples are durable,
+                    // and that is the whole of what [HrSampleSink] promises.
+                    debugLog?.log(
+                        TAG,
+                        "deferred close failed, still pending",
+                        buildJsonObject { put("error", error.javaClass.simpleName) },
+                    )
+                }
+            }
         }
     }
 
@@ -406,6 +497,10 @@ class HrCaptureStore(
         // ended, and it is what the row will carry however late the close lands.
         val endedAtMs = now()
         try {
+            // The flush runs **outside** the lifecycle lock: it re-enters this
+            // class through `store`, which takes that lock to finish a deferred
+            // close, and holding it here would deadlock the capture it is
+            // trying to end.
             var flushed = finalFlush()
             var attempts = 1
             while (!flushed && attempts < FINAL_FLUSH_ATTEMPTS) {
@@ -413,18 +508,25 @@ class HrCaptureStore(
                 flushed = finalFlush()
                 attempts++
             }
-            if (!flushed) {
-                _pendingClose.value = PendingClose(id, endedAtMs)
-                debugLog?.log(
-                    TAG,
-                    "final flush failed — close deferred until the buffer drains",
-                    buildJsonObject { put("attempts", attempts) },
-                )
-                return CaptureStopResult.LEFT_OPEN
+            return lifecycle.withLock {
+                if (!flushed) {
+                    pendingCloses[id] = PendingClose(id, endedAtMs)
+                    debugLog?.log(
+                        TAG,
+                        "final flush failed — close deferred until the buffer drains",
+                        buildJsonObject { put("attempts", attempts) },
+                    )
+                    CaptureStopResult.LEFT_OPEN
+                } else {
+                    closeSessionRow(id, endedAtMs)
+                }
             }
-            return closeSessionRow(id, endedAtMs)
         } finally {
-            _current.value = null
+            // Compare-and-set on the id: a capture that started while this one
+            // was flushing owns `current` now, and must not be cleared by it.
+            lifecycle.withLock {
+                if (_current.value?.sessionId == id) _current.value = null
+            }
         }
     }
 

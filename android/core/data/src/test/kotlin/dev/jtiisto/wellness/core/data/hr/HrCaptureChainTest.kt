@@ -102,6 +102,18 @@ class HrCaptureChainTest {
         assertEquals(1, chain.buffer.size)
     }
 
+    /**
+     * Also the deadlock guard, and the reason it is worth having here rather than
+     * only as a control.
+     *
+     * `stopSession` runs its final flush through the buffer, which sinks back
+     * into the store, which takes the store's lifecycle lock to finish any
+     * deferred close. Holding that lock across the flush — the obvious way to
+     * serialize the lifecycle — deadlocks exactly this path, and the only place
+     * the re-entrancy is visible is with the real buffer on both ends. A
+     * regression here hangs rather than fails, which `runTest` surfaces as a
+     * timeout.
+     */
     @Test
     @DisplayName("the same chain persists and closes normally while the gate is open")
     fun openGateStoresAndCloses() = runTest {

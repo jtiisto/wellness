@@ -76,6 +76,23 @@ class CaptureLifecycleTest {
     }
 
     @Test
+    @DisplayName("a second stop stays blocked for as long as the first teardown is unreleased")
+    fun secondStopBlockedUntilReleased() {
+        val lifecycle = CaptureLifecycle()
+        lifecycle.claimStart()
+        assertTrue(lifecycle.claimStop())
+
+        // Mid-teardown: the disconnect is in flight and released() has not run.
+        // Every stop that arrives in that window is a duplicate, not a retry.
+        assertFalse(lifecycle.claimStop())
+        assertFalse(lifecycle.claimStop())
+
+        lifecycle.released()
+        // And the moment teardown finishes, a genuine retry is accepted again.
+        assertTrue(lifecycle.claimStop())
+    }
+
+    @Test
     @DisplayName("a stop is claimable even when no start ever was")
     fun stopWithoutAStart() {
         // An ACTION_STOP for a capture that never got going still has to reach
@@ -172,6 +189,22 @@ class CaptureLifecycleTest {
         // Correct rather than merely safe: the newer value is the one on screen,
         // and it does its own painting.
         assertFalse(notificationFollows(committed = true, published = published, live = newer))
+    }
+
+    @Test
+    @DisplayName("a paint that outlived its capture is taken back down")
+    fun paintIsVerifiedAfterTheFact() {
+        // Teardown landed between the pre-check and notify(), so the call put
+        // back a notification nothing is left running to clear.
+        assertTrue(notificationOutlivedCapture(HrCaptureState()))
+    }
+
+    @Test
+    @DisplayName("a paint superseded by a newer one is left alone, not cancelled")
+    fun supersededPaintIsNotCancelled() {
+        // The question after painting is "is anything capturing", not "is my
+        // value still live" — cancelling here would remove a live notification.
+        assertFalse(notificationOutlivedCapture(HrCaptureState(isRunning = true, bpm = 143)))
     }
 
     @Test

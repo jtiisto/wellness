@@ -117,3 +117,19 @@ fun bufferTimerStops(result: CaptureStopResult): Boolean = when (result) {
  */
 fun notificationFollows(committed: Boolean, published: HrCaptureState, live: HrCaptureState): Boolean =
     committed && published.isRunning && live === published
+
+/**
+ * After painting: whether what was just drawn has outlived the capture it
+ * described, and has to be taken back down.
+ *
+ * [notificationFollows] is checked before `notify()`, and a teardown can still
+ * land in the gap between that check and the call — resetting the state and
+ * removing the notification, only for the call to put it back. The window is
+ * tiny and the artifact is permanent: an ongoing notification for a capture that
+ * has stopped, which nothing is left running to ever clear.
+ *
+ * So the paint is verified as well as guarded. The question afterwards is not
+ * "is my value still live" — a *newer* publisher superseding this one is fine and
+ * must not cancel anything — but the simpler "is anything capturing at all".
+ */
+fun notificationOutlivedCapture(live: HrCaptureState): Boolean = !live.isRunning

@@ -20,6 +20,7 @@ import org.junit.jupiter.api.Test
 
 private const val NOW = 1_800_000_000_000L
 private const val DEVICE = "AA:BB:CC:DD:EE:FF"
+private const val OTHER_DEVICE = "11:22:33:44:55:66"
 
 /**
  * A session DAO that lets a test drop another store call into the middle of a
@@ -40,12 +41,17 @@ private class HookedHrSessionDao : FakeHrSessionDao() {
     /** Runs *before* the next close statement — where a read-modify-write would have read. */
     var beforeClose: (suspend () -> Unit)? = null
 
-    /** Runs *before* the next open-session query returns — the sticky-resume suspension point. */
-    var beforeNewestOpen: (suspend () -> Unit)? = null
+    /**
+     * Runs *after* the next open-session query has read its row but before the
+     * caller sees it — so the caller comes back holding a genuinely stale answer,
+     * which is the sticky-resume race.
+     */
+    var afterNewestOpen: (suspend () -> Unit)? = null
 
     override suspend fun newestOpen(): HrSessionEntity? {
-        beforeNewestOpen?.let { beforeNewestOpen = null; it() }
-        return super.newestOpen()
+        val row = super.newestOpen()
+        afterNewestOpen?.let { afterNewestOpen = null; it() }
+        return row
     }
 
     override suspend fun anchorWorkout(
@@ -230,23 +236,55 @@ class HrCaptureStoreTest {
     }
 
     @Test
-    @DisplayName("a resume that raced a real start does not displace the live capture")
+    @DisplayName("a resume holding a stale row refuses to displace the capture that started under it")
     fun resumeNeverDisplacesARunningCapture() = runTest {
         val dao = HookedHrSessionDao()
         val world = World(dao)
+        // Left open by an earlier capture. The sticky query reads exactly this
+        // row and then, before the resume can act on it, a real start intent is
+        // served — on another strap, so the stale-session backstop does not
+        // retire it and the resume really is holding a live-looking stale row.
         world.sessionDao.upsert(HrSessionEntity("stale", DEVICE, startedAtMs = NOW - 100_000))
-        // The sticky query is a suspension point, and a real start intent can be
-        // served across it. Publishing unconditionally afterwards would point
-        // this store at the old session while the samples recorded under the new
-        // one — the old session would then be closed on the new one's behalf,
-        // and the new one never closed at all.
-        dao.beforeNewestOpen = { world.store.startSession(DEVICE) }
+        dao.afterNewestOpen = { world.store.startSession(OTHER_DEVICE) }
 
         val resumed = world.store.resumeOpenSession()
 
         assertNull(resumed)
+        // The published session is the live one, not the stale one the query
+        // returned. Publishing "stale" here would record samples under the new
+        // session while every stop read the old — closing the wrong one and
+        // leaving the right one open for ever.
         assertEquals("session-1", world.store.currentSessionId)
         assertEquals(CaptureSession("session-1"), world.store.current.value)
+        assertNull(world.session("stale").endedAtMs)
+    }
+
+    @Test
+    @DisplayName("a session published by a resume can be handed back when no capture follows")
+    fun abandonReleasesAResumedSession() = runTest {
+        val world = World()
+        world.sessionDao.upsert(HrSessionEntity("open", DEVICE, startedAtMs = NOW - 10_000))
+        assertEquals("open", world.store.resumeOpenSession()?.sessionId)
+
+        // The service's start was refused — a permission revoked while the
+        // process was dead, or an unresolved server.
+        world.store.abandonSession("open")
+
+        assertNull(world.store.currentSessionId)
+        // No write: the row stays open for the backstop to retire, because a
+        // refusal is the wrong moment to be closing anything.
+        assertNull(world.session("open").endedAtMs)
+    }
+
+    @Test
+    @DisplayName("abandoning a session someone else has since started is a no-op")
+    fun abandonCannotClobberANewerCapture() = runTest {
+        val world = World()
+        val live = world.store.startSession(DEVICE)
+
+        world.store.abandonSession("some-older-session")
+
+        assertEquals(live, world.store.currentSessionId)
     }
 
     @Test
@@ -647,6 +685,47 @@ class HrCaptureStoreTest {
         world.store.store(listOf(world.sample(sessionId = id)))
 
         assertNull(world.session(id).endedAtMs)
+    }
+
+    @Test
+    @DisplayName("a deferred close does not fire on a session that is recording again")
+    fun deferredCloseYieldsToAResume() = runTest {
+        val world = World()
+        val id = world.store.startSession(DEVICE)
+        world.store.stopSession { false }
+        // The service came back and reattached between the close being deferred
+        // and the buffer draining. Claiming the close first and only then taking
+        // the write lease is what used to let it land on the live capture — and
+        // `endedAtMs IS NULL` cannot catch that, because the session is
+        // legitimately open again.
+        assertEquals(id, world.store.resumeOpenSession()?.sessionId)
+
+        world.store.store(listOf(world.sample(sessionId = id)))
+
+        assertNull(world.session(id).endedAtMs)
+        assertEquals(id, world.store.currentSessionId)
+    }
+
+    @Test
+    @DisplayName("two straps each strand a close, and both complete")
+    fun everyStrandedCloseCompletes() = runTest {
+        val world = World()
+        val first = world.store.startSession(DEVICE)
+        world.store.stopSession { false }
+        world.clock = NOW + 30_000
+        // A different strap, so the per-device backstop leaves the first
+        // session's deferred close alone. A single slot would have lost it here.
+        val second = world.store.startSession(OTHER_DEVICE)
+        world.store.stopSession { false }
+        assertNull(world.session(first).endedAtMs)
+        assertNull(world.session(second).endedAtMs)
+
+        world.clock = NOW + 90_000
+        world.store.store(listOf(world.sample(sessionId = second)))
+
+        // Each carries the instant its own capture stopped.
+        assertEquals(NOW, world.session(first).endedAtMs)
+        assertEquals(NOW + 30_000, world.session(second).endedAtMs)
     }
 
     @Test
