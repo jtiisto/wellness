@@ -1,6 +1,7 @@
 package dev.jtiisto.wellness
 
 import android.app.Application
+import dev.jtiisto.wellness.core.ble.di.bleModule
 import dev.jtiisto.wellness.core.data.di.coreDataModule
 import dev.jtiisto.wellness.di.appModule
 import dev.jtiisto.wellness.feature.analysis.di.analysisModule
@@ -19,6 +20,9 @@ class WellnessApplication : Application() {
             androidContext(this@WellnessApplication)
             modules(
                 coreDataModule,
+                // After :core:data, which binds the sample sink and the BLE
+                // diagnostics bridge this module resolves.
+                bleModule,
                 appModule,
                 journalModule,
                 coachModule,

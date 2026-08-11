@@ -61,6 +61,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.jtiisto.wellness.core.data.coach.HookAction
 import dev.jtiisto.wellness.core.data.coach.WorkoutStatus
 import dev.jtiisto.wellness.core.ui.SyncStatusIndicator
+import dev.jtiisto.wellness.core.ui.hr.HrBpmChip
 import dev.jtiisto.wellness.core.ui.motion.WellnessMotion
 import dev.jtiisto.wellness.core.ui.theme.WellnessDefaults
 import dev.jtiisto.wellness.core.ui.theme.WellnessShape
@@ -90,6 +91,9 @@ class CoachActions(
     val onFeedback: (String, String) -> Unit,
     val onFireHook: (HookAction) -> Unit,
     val onUndoHook: (HookAction) -> Unit,
+    val onConnectStrap: () -> Unit,
+    val onSkipStrap: () -> Unit,
+    val onStopCapture: () -> Unit,
     val onSaveExtraSession: (ExtraSessionDraft) -> Unit,
     val onCommitExtraSessionField: (String, String) -> Unit,
     val onDeleteExtraSession: () -> Unit,
@@ -133,19 +137,37 @@ fun CoachScreen(viewModel: CoachViewModel = koinViewModel()) {
             onFeedback = viewModel::setFeedback,
             onFireHook = viewModel::fireHook,
             onUndoHook = viewModel::undoHook,
+            onConnectStrap = viewModel::connectStrap,
+            onSkipStrap = viewModel::skipStrap,
+            onStopCapture = viewModel::stopCapture,
             onSaveExtraSession = viewModel::saveExtraSession,
             onCommitExtraSessionField = viewModel::commitExtraSessionField,
             onDeleteExtraSession = viewModel::deleteExtraSession,
         )
     }
 
+    val strapPrompt by viewModel.strapPrompt.collectAsStateWithLifecycle()
+
     CoachContent(state = state, actions = actions)
+
+    strapPrompt?.let { prompt ->
+        ConnectStrapSheet(
+            prompt = prompt,
+            onConnect = actions.onConnectStrap,
+            onSkip = actions.onSkipStrap,
+        )
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun CoachContent(state: CoachUiState, actions: CoachActions) {
     val palette = WellnessTheme.palette
+    // Local because it is a view of state that already exists: the sheet can
+    // only be open while there is a capture to describe, and `state.hr` going
+    // null closes it on its own.
+    var captureSheetOpen by remember { mutableStateOf(false) }
+
     Column(modifier = Modifier.fillMaxSize()) {
         TopAppBar(
             title = { Text("Coach", style = WellnessTheme.type.headline) },
@@ -155,6 +177,10 @@ private fun CoachContent(state: CoachUiState, actions: CoachActions) {
             ),
             windowInsets = WindowInsets(0),
             actions = {
+                // No chip when idle — `state.hr` is null precisely then.
+                state.hr?.let { hr ->
+                    HrBpmChip(display = hr, onClick = { captureSheetOpen = true })
+                }
                 SyncStatusIndicator(
                     status = state.syncStatus,
                     syncing = state.isSyncing,
@@ -166,6 +192,22 @@ private fun CoachContent(state: CoachUiState, actions: CoachActions) {
         CalendarPicker(state = state, actions = actions)
 
         WorkoutDayView(day = state.day, actions = actions, modifier = Modifier.weight(1f))
+    }
+
+    // Read from the same nullable as the chip: a capture that ends while its
+    // sheet is open takes the sheet with it rather than leaving a panel
+    // describing a session that no longer exists.
+    val hr = state.hr
+    if (captureSheetOpen && hr != null) {
+        CaptureStatusSheet(
+            display = hr,
+            link = state.hrLink,
+            onStop = {
+                captureSheetOpen = false
+                actions.onStopCapture()
+            },
+            onDismiss = { captureSheetOpen = false },
+        )
     }
 }
 

@@ -1,5 +1,6 @@
 package dev.jtiisto.wellness.feature.coach
 
+import dev.jtiisto.wellness.core.ble.capture.HrCaptureState
 import dev.jtiisto.wellness.core.data.coach.EXTRA_SESSION_KEY
 import dev.jtiisto.wellness.core.data.coach.ExerciseGroup
 import dev.jtiisto.wellness.core.data.coach.ExerciseProgress
@@ -36,6 +37,8 @@ import dev.jtiisto.wellness.core.data.coach.shortDatePattern
 import dev.jtiisto.wellness.core.data.coach.supersetDisplayLabel
 import dev.jtiisto.wellness.core.data.network.DateString
 import dev.jtiisto.wellness.core.data.sync.SyncStatus
+import dev.jtiisto.wellness.core.ui.hr.HrCaptureDisplay
+import dev.jtiisto.wellness.core.ui.hr.hrCaptureDisplay
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -65,6 +68,20 @@ data class CoachUiState(
     val day: WorkoutDayState = WorkoutDayState.Rest(showEmptyState = true, extra = null),
     val syncStatus: SyncStatus = SyncStatus.GRAY,
     val isSyncing: Boolean = false,
+    /**
+     * The live BPM chip, or null when nothing is capturing.
+     *
+     * Null *is* the visibility rule — the spec says there is no chip when idle,
+     * and mapping "nothing to draw" onto "not drawn" leaves no second place for
+     * the two to disagree. It is a plain function of the capture state, so a
+     * screen opened halfway through a session renders it immediately.
+     */
+    val hr: HrCaptureDisplay? = null,
+    /**
+     * Whether the running capture is attached to the workout on screen. Null
+     * exactly when [hr] is, so the sheet never has one without the other.
+     */
+    val hrLink: CaptureLink? = null,
 )
 
 /**
@@ -245,6 +262,7 @@ fun buildCoachUiState(
     syncStatus: SyncStatus = SyncStatus.GRAY,
     isSyncing: Boolean = false,
     isLoading: Boolean = false,
+    capture: HrCaptureState = HrCaptureState(),
     locale: Locale = Locale.getDefault(),
 ): CoachUiState {
     val todayString = today.toString()
@@ -290,6 +308,15 @@ fun buildCoachUiState(
         },
         syncStatus = syncStatus,
         isSyncing = isSyncing,
+        hr = hrCaptureDisplay(capture),
+        hrLink = if (capture.isRunning) {
+            WorkoutCapturePolicy.linkFor(
+                anchor = capture.workoutAnchor(),
+                onScreen = WorkoutAnchor(selectedDate, hooks.sessionId),
+            )
+        } else {
+            null
+        },
     )
 }
 

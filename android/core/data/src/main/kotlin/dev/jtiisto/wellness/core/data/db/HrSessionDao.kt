@@ -4,11 +4,26 @@ import androidx.room.Dao
 import androidx.room.Query
 import androidx.room.Transaction
 import androidx.room.Upsert
+import dev.jtiisto.wellness.core.data.network.DateString
 
 /**
  * Capture sessions: a handful of rows, written three times each at most.
  *
- * No indices — the table is one row per capture and both reads are scans over a
+ * **Two ways to write, and the split is not stylistic.** [upsert] creates a row
+ * or re-states a resumed one, and it is the only write that may present a whole
+ * entity. Every mutation of a session that is already live goes through
+ * [anchorWorkout] or [closeSession], which are single `UPDATE` statements
+ * touching only their own columns.
+ *
+ * The reason is that `ServerSessionGate.withWriteLease` admits concurrent
+ * writers by design — it fences against a server switch, not against each other.
+ * A read-modify-write of the whole row therefore has a window in which another
+ * writer's committed change is read, discarded, and written back as it was: an
+ * anchor could reopen a closed session, a close could erase a fresh anchor.
+ * Narrowing each mutation to the columns it owns removes the window instead of
+ * racing inside it.
+ *
+ * No indices — the table is one row per capture and every read is a scan over a
  * set small enough that an index would cost more on write than it saves.
  *
  * An abstract class rather than an interface so [upsert] is real code a JVM fake
@@ -85,6 +100,56 @@ abstract class HrSessionDao {
 
     @Query("DELETE FROM hr_sessions WHERE sessionId = :sessionId")
     abstract suspend fun delete(sessionId: String)
+
+    /**
+     * Attach a **still-open** session to a workout, in one statement.
+     *
+     * `endedAtMs IS NULL` is the whole point. Read the row, copy the anchor onto
+     * it and upsert it back, and a close that commits in between is undone: the
+     * copy still carries the null `endedAtMs` it was read with, and a finished
+     * session silently reopens. Leases do not help — concurrent readers are
+     * allowed to hold one at the same time — so the window has to be closed in
+     * SQL rather than around it.
+     *
+     * Anchoring a session that has already ended is meaningless, so it no-ops
+     * and the caller is told: **0 means the session was not open**, either
+     * because it closed or because the row is gone.
+     *
+     * The generation bump and the flag clears are unconditional here, not
+     * content-compared as [upsert]'s are. A caller anchoring to values the row
+     * already holds therefore costs one redundant upload — the price of keeping
+     * a 0 return unambiguously "not open" rather than also meaning "no change".
+     */
+    @Query(
+        "UPDATE hr_sessions SET workoutDate = :workoutDate, workoutSessionId = :workoutSessionId, " +
+            "isSynced = 0, isQuarantined = 0, dirtyGeneration = dirtyGeneration + 1 " +
+            "WHERE sessionId = :sessionId AND endedAtMs IS NULL",
+    )
+    abstract suspend fun anchorWorkout(
+        sessionId: String,
+        workoutDate: DateString,
+        workoutSessionId: Long?,
+    ): Int
+
+    /**
+     * Close a **still-open** session, in one statement.
+     *
+     * The mirror of [anchorWorkout] and the other half of the same race: a stop
+     * that read the row before an anchor landed would write back the stale null
+     * `workoutDate` and erase it. Touching only `endedAtMs` leaves every other
+     * column exactly as whoever wrote it last left it.
+     *
+     * The same guard makes closing idempotent and makes reopening impossible:
+     * a second close matches nothing and returns **0, meaning the session was
+     * already closed** (or the row is gone), rather than moving `endedAtMs` to a
+     * later instant and claiming coverage of samples that were never stored.
+     */
+    @Query(
+        "UPDATE hr_sessions SET endedAtMs = :endedAtMs, " +
+            "isSynced = 0, isQuarantined = 0, dirtyGeneration = dirtyGeneration + 1 " +
+            "WHERE sessionId = :sessionId AND endedAtMs IS NULL",
+    )
+    abstract suspend fun closeSession(sessionId: String, endedAtMs: Long): Int
 
     /**
      * Write a session and derive **all three** pieces of upload state from what

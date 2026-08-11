@@ -24,6 +24,7 @@ dependencyResolutionManagement {
 rootProject.name = "wellness"
 
 include(":app")
+include(":core:ble")
 include(":core:data")
 include(":core:ui")
 include(":feature:journal")

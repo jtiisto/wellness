@@ -261,6 +261,88 @@ class HrDaoTest {
         assertTrue(sessions.find(session)!!.isQuarantined)
     }
 
+    // ---- atomic mutations of a live session -------------------------------
+
+    @Test
+    fun anchorAfterCloseCannotReopen() = runBlocking {
+        sessions.upsert(openSession())
+        sessions.closeSession(session, endedAtMs = 1_770_000_500_000)
+        val closed = sessions.find(session)!!
+
+        assertEquals(0, sessions.anchorWorkout(session, workoutDate = "2030-01-03", workoutSessionId = 42))
+
+        assertEquals(closed, sessions.find(session))
+        assertNull(sessions.find(session)!!.workoutDate)
+    }
+
+    @Test
+    fun closeAfterAnchorPreservesTheAnchor() = runBlocking {
+        sessions.upsert(openSession())
+
+        sessions.anchorWorkout(session, workoutDate = "2030-01-03", workoutSessionId = 42)
+        assertEquals(1, sessions.closeSession(session, endedAtMs = 1_770_000_500_000))
+
+        val row = sessions.find(session)!!
+        assertEquals("2030-01-03", row.workoutDate)
+        assertEquals(42L, row.workoutSessionId)
+        assertEquals(1_770_000_500_000L, row.endedAtMs)
+    }
+
+    @Test
+    fun doubleCloseNoOps() = runBlocking {
+        sessions.upsert(openSession())
+
+        assertEquals(1, sessions.closeSession(session, endedAtMs = 1_770_000_500_000))
+        val afterFirst = sessions.find(session)!!
+
+        assertEquals(0, sessions.closeSession(session, endedAtMs = 1_770_009_999_000))
+
+        assertEquals(afterFirst, sessions.find(session))
+    }
+
+    @Test
+    fun atomicMutationsCarryTheUploadSemantics() = runBlocking {
+        sessions.upsert(openSession())
+        markSyncedNow(session)
+        markQuarantinedNow(session)
+
+        assertEquals(1, sessions.anchorWorkout(session, workoutDate = "2030-01-03", workoutSessionId = 42))
+        var row = sessions.find(session)!!
+        assertEquals(2L, row.dirtyGeneration)
+        assertFalse(row.isSynced)
+        assertFalse(row.isQuarantined)
+
+        markSyncedNow(session)
+        assertEquals(1, sessions.closeSession(session, endedAtMs = 1_770_000_500_000))
+        row = sessions.find(session)!!
+        assertEquals(3L, row.dirtyGeneration)
+        assertFalse(row.isSynced)
+        assertEquals(listOf(session), sessions.needsUpload().map { it.sessionId })
+    }
+
+    @Test
+    fun mutationsOnAMissingRowReportZero() = runBlocking {
+        assertEquals(0, sessions.anchorWorkout(session, workoutDate = "2030-01-03", workoutSessionId = 42))
+        assertEquals(0, sessions.closeSession(session, endedAtMs = 1_770_000_500_000))
+
+        assertTrue(sessions.listAll().isEmpty())
+    }
+
+    /**
+     * The anchor sets `workoutSessionId` to null when capture was not started
+     * from the Start Workout sheet, and a bound null must reach the column
+     * rather than being dropped by the statement.
+     */
+    @Test
+    fun anchorWithoutAHookSessionWritesNull() = runBlocking {
+        sessions.upsert(openSession(workoutSessionId = 99))
+
+        assertEquals(1, sessions.anchorWorkout(session, workoutDate = "2030-01-03", workoutSessionId = null))
+
+        assertEquals("2030-01-03", sessions.find(session)!!.workoutDate)
+        assertNull(sessions.find(session)!!.workoutSessionId)
+    }
+
     // ---- samples ---------------------------------------------------------
 
     @Test

@@ -1,10 +1,16 @@
 package dev.jtiisto.wellness.feature.coach
 
+import dev.jtiisto.wellness.core.ble.capture.HrCaptureController
+import dev.jtiisto.wellness.core.ble.capture.HrCaptureState
+import dev.jtiisto.wellness.core.ble.device.KnownDeviceStorage
+import dev.jtiisto.wellness.core.ble.device.KnownDeviceStore
 import dev.jtiisto.wellness.core.data.coach.CoachSyncStore
 import dev.jtiisto.wellness.core.data.coach.CompletionToggle
 import dev.jtiisto.wellness.core.data.coach.EXTRA_SESSION_KEY
+import dev.jtiisto.wellness.core.data.coach.HookAction
 import dev.jtiisto.wellness.core.data.coach.PlanDto
 import dev.jtiisto.wellness.core.data.coach.WorkoutStatusDto
+import dev.jtiisto.wellness.core.data.hr.HrCaptureStore
 import dev.jtiisto.wellness.core.data.network.CoachApi
 import dev.jtiisto.wellness.core.data.network.DateString
 import dev.jtiisto.wellness.core.data.sync.SyncStatus
@@ -119,12 +125,98 @@ class CoachViewModelTest {
         Dispatchers.resetMain()
     }
 
-    private fun viewModel() = CoachViewModel(
+    // ---- heart-rate capture doubles -------------------------------------------
+    //
+    // Real KnownDeviceStore over an in-memory map: the ordering it publishes is
+    // what decides which strap the Start Workout sheet offers, and a mock would
+    // be asserting that decision away.
+
+    private val strapMap = linkedMapOf<String, String>()
+
+    private val knownStraps = KnownDeviceStore(
+        storage = object : KnownDeviceStorage {
+            override fun load(): Map<String, String> = strapMap
+            override fun put(address: String, name: String) {
+                strapMap[address] = name
+            }
+
+            override fun remove(address: String) {
+                strapMap.remove(address)
+            }
+        },
+        state = MutableStateFlow(emptyList()),
+    )
+
+    private val captureState = MutableStateFlow(HrCaptureState())
+
+    private val captureStore = mockk<HrCaptureStore>(relaxed = true)
+
+    /** Records what the UI asked of the capture service, in order. */
+    private class FakeCaptureController : HrCaptureController {
+        var permitted = true
+
+        /** What the platform makes of a start request. False = it refused. */
+        var startSucceeds = true
+        val calls = mutableListOf<String>()
+
+        override fun canStart(): Boolean = permitted
+
+        override fun start(
+            address: String,
+            name: String?,
+            workoutDate: String?,
+            workoutSessionId: Long?,
+        ): Boolean {
+            calls += "start:$address:$name:$workoutDate:$workoutSessionId"
+            return startSucceeds
+        }
+
+        override fun stop() {
+            calls += "stop"
+        }
+    }
+
+    private val capture = FakeCaptureController()
+
+    private fun kotlinx.coroutines.test.TestScope.viewModel() = CoachViewModel(
         store = store,
         scheduler = mockk(relaxed = true),
         api = api,
+        captureState = captureState,
+        knownStraps = knownStraps,
+        capture = capture,
+        captureStore = captureStore,
         today = { today },
+        // The strap refresh is a SharedPreferences read in production; here it
+        // has to land on the test's own clock like everything else.
+        io = StandardTestDispatcher(testScheduler),
     )
+
+    /**
+     * A capture as the service publishes it, anchor and all.
+     *
+     * The anchor lives here and nowhere else — that is the point of the service
+     * publishing it off the session row rather than the screen remembering it.
+     */
+    private fun givenRunningCapture(anchoredTo: WorkoutAnchor?) {
+        captureState.value = HrCaptureState(
+            isRunning = true,
+            deviceAddress = "AA:BB:CC:DD:EE:FF",
+            deviceName = "HRM-Pro",
+            sessionId = "session-1",
+            workoutDate = anchoredTo?.date,
+            workoutSessionId = anchoredTo?.sessionId,
+        )
+    }
+
+    /** A strap the app has connected to before, as the store would publish it. */
+    private fun kotlinx.coroutines.test.TestScope.givenKnownStrap(
+        address: String = "AA:BB:CC:DD:EE:FF",
+        name: String = "HRM-Pro",
+    ) {
+        strapMap[address] = name
+        knownStraps.refresh()
+    }
 
     /** Publish a window to the screen, the way a Room emission would. */
     private fun publish(
@@ -502,7 +594,17 @@ class CoachViewModelTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         var now = LocalDate.parse("2026-08-08")
         publish(plans = mapOf("2026-08-08" to plan(sessionId = 1)))
-        val viewModel = CoachViewModel(store, mockk(relaxed = true), api, today = { now })
+        val viewModel = CoachViewModel(
+            store = store,
+            scheduler = mockk(relaxed = true),
+            api = api,
+            captureState = captureState,
+            knownStraps = knownStraps,
+            capture = capture,
+            captureStore = captureStore,
+            today = { now },
+            io = StandardTestDispatcher(testScheduler),
+        )
         backgroundScope.launch { viewModel.uiState.collect { } }
         runCurrent()
 
@@ -522,6 +624,279 @@ class CoachViewModelTest {
         assertNull(day.controls)
         assertFalse(day.editable)
         coVerify(exactly = 1) { api.workoutStatus(1) }
+    }
+
+    // ---- heart-rate capture around a workout ---------------------------------------------
+
+    @Test
+    @DisplayName("Start Workout with a known strap asks first, and does not fire the hook yet")
+    fun startWorkoutAsksAboutTheStrap() = runVmTest { viewModel ->
+        givenPlan()
+        givenKnownStrap()
+
+        viewModel.fireHook(HookAction.START)
+        runCurrent()
+
+        assertEquals(StrapPrompt("AA:BB:CC:DD:EE:FF", "HRM-Pro"), viewModel.strapPrompt.value)
+        // The hook is the *answer's* job. Firing here as well would start the
+        // workout twice for anyone who then tapped Connect.
+        coVerify(exactly = 0) { api.fireWorkoutHook(any(), any()) }
+        assertTrue(capture.calls.isEmpty())
+    }
+
+    @Test
+    @DisplayName("Connect starts capture anchored to the date and the hook session, then fires")
+    fun connectStartsAnchoredCapture() = runVmTest { viewModel ->
+        givenPlan()
+        givenKnownStrap()
+        viewModel.fireHook(HookAction.START)
+        runCurrent()
+
+        viewModel.connectStrap()
+        runCurrent()
+
+        assertNull(viewModel.strapPrompt.value)
+        assertEquals(listOf("start:AA:BB:CC:DD:EE:FF:HRM-Pro:$todayString:1"), capture.calls)
+        coVerify(exactly = 1) { api.fireWorkoutHook(1, HookAction.START) }
+    }
+
+    @Test
+    @DisplayName("a start the platform refused still starts the workout")
+    fun refusedCaptureStartStillStartsTheWorkout() = runVmTest { viewModel ->
+        givenPlan()
+        givenKnownStrap()
+        viewModel.fireHook(HookAction.START)
+        runCurrent()
+        // The app was backgrounded between the tap and the dispatch, or the
+        // Bluetooth grant went away. A strap problem must not cost the workout.
+        capture.startSucceeds = false
+
+        viewModel.connectStrap()
+        runCurrent()
+
+        assertNull(viewModel.strapPrompt.value)
+        coVerify(exactly = 1) { api.fireWorkoutHook(1, HookAction.START) }
+    }
+
+    @Test
+    @DisplayName("Skip starts the workout and records nothing — the hook fires either way")
+    fun skipStartsTheWorkoutAnyway() = runVmTest { viewModel ->
+        givenPlan()
+        givenKnownStrap()
+        viewModel.fireHook(HookAction.START)
+        runCurrent()
+
+        viewModel.skipStrap()
+        runCurrent()
+
+        assertNull(viewModel.strapPrompt.value)
+        assertTrue(capture.calls.isEmpty())
+        coVerify(exactly = 1) { api.fireWorkoutHook(1, HookAction.START) }
+    }
+
+    @Test
+    @DisplayName("a second Skip cannot fire the hook again")
+    fun skipIsIdempotent() = runVmTest { viewModel ->
+        givenPlan()
+        givenKnownStrap()
+        viewModel.fireHook(HookAction.START)
+        runCurrent()
+
+        viewModel.skipStrap()
+        viewModel.skipStrap()
+        runCurrent()
+
+        coVerify(exactly = 1) { api.fireWorkoutHook(1, HookAction.START) }
+    }
+
+    @Test
+    @DisplayName("with no strap ever paired, Start Workout is exactly what it always was")
+    fun noStrapNoSheet() = runVmTest { viewModel ->
+        givenPlan()
+
+        viewModel.fireHook(HookAction.START)
+        runCurrent()
+
+        assertNull(viewModel.strapPrompt.value)
+        coVerify(exactly = 1) { api.fireWorkoutHook(1, HookAction.START) }
+    }
+
+    @Test
+    @DisplayName("a strap the app can no longer connect to is not offered")
+    fun revokedPermissionSuppressesTheSheet() = runVmTest { viewModel ->
+        givenPlan()
+        givenKnownStrap()
+        // Nearby devices turned off in Settings since the strap was paired: the
+        // service would refuse the start, so offering Connect would promise a
+        // recording that never happens.
+        capture.permitted = false
+
+        viewModel.fireHook(HookAction.START)
+        runCurrent()
+
+        assertNull(viewModel.strapPrompt.value)
+        coVerify(exactly = 1) { api.fireWorkoutHook(1, HookAction.START) }
+    }
+
+    @Test
+    @DisplayName("a capture already running is anchored to the workout instead of being asked about")
+    fun runningCaptureIsAnchoredNotAsked() = runVmTest { viewModel ->
+        givenPlan()
+        givenKnownStrap()
+        captureState.value = HrCaptureState(isRunning = true, deviceAddress = "AA:BB:CC:DD:EE:FF")
+        runCurrent()
+
+        viewModel.fireHook(HookAction.START)
+        runCurrent()
+
+        assertNull(viewModel.strapPrompt.value)
+        assertTrue(capture.calls.isEmpty())
+        coVerify(exactly = 1) { captureStore.anchorToWorkout(todayString, 1) }
+        coVerify(exactly = 1) { api.fireWorkoutHook(1, HookAction.START) }
+    }
+
+    @Test
+    @DisplayName("End Workout stops the capture this workout started")
+    fun endWorkoutStopsItsOwnCapture() = runVmTest { viewModel ->
+        givenPlan()
+        givenKnownStrap()
+        viewModel.fireHook(HookAction.START)
+        runCurrent()
+        viewModel.connectStrap()
+        // The service opened the session with the anchor it was handed and
+        // published it; nothing on this side remembers it.
+        givenRunningCapture(anchoredTo = WorkoutAnchor(todayString, sessionId = 1))
+        runCurrent()
+
+        viewModel.fireHook(HookAction.END)
+        runCurrent()
+
+        assertEquals("stop", capture.calls.last())
+        coVerify(exactly = 1) { api.fireWorkoutHook(1, HookAction.END) }
+    }
+
+    @Test
+    @DisplayName("End Workout still stops its capture after a process death took the ViewModel with it")
+    fun endWorkoutStopsItsCaptureAcrossAProcessDeath() = runVmTest { _ ->
+        givenPlan()
+        givenKnownStrap()
+        // START_STICKY restarted the service, which resumed the open session and
+        // republished its anchor off the row. This ViewModel never started that
+        // capture and has no memory of it — the state is the only witness.
+        givenRunningCapture(anchoredTo = WorkoutAnchor(todayString, sessionId = 1))
+        val rebuilt = viewModel()
+        backgroundScope.launch { rebuilt.uiState.collect { } }
+        runCurrent()
+
+        rebuilt.fireHook(HookAction.END)
+        runCurrent()
+
+        assertEquals(listOf("stop"), capture.calls)
+        coVerify(exactly = 1) { api.fireWorkoutHook(1, HookAction.END) }
+    }
+
+    @Test
+    @DisplayName("a capture anchored to another day survives this workout's End")
+    fun endWorkoutLeavesAnotherWorkoutsCapture() = runVmTest { viewModel ->
+        givenPlan()
+        // Yesterday's session, still open because its final flush never landed.
+        givenRunningCapture(anchoredTo = WorkoutAnchor("2026-08-07", sessionId = 4))
+        runCurrent()
+
+        viewModel.fireHook(HookAction.END)
+        runCurrent()
+
+        assertTrue(capture.calls.isEmpty())
+        coVerify(exactly = 1) { api.fireWorkoutHook(1, HookAction.END) }
+    }
+
+    @Test
+    @DisplayName("End Workout leaves a capture it never anchored alone")
+    fun endWorkoutLeavesAnUnanchoredCapture() = runVmTest { viewModel ->
+        givenPlan()
+        givenKnownStrap()
+        // Started from the strap section, so the session row carries no anchor:
+        // this workout has no claim on it.
+        givenRunningCapture(anchoredTo = null)
+        runCurrent()
+
+        viewModel.fireHook(HookAction.END)
+        runCurrent()
+
+        assertTrue(capture.calls.isEmpty())
+        coVerify(exactly = 1) { api.fireWorkoutHook(1, HookAction.END) }
+    }
+
+    @Test
+    @DisplayName("a capture that ended on its own is not stopped a second time")
+    fun endWorkoutAfterTheCaptureAlreadyStopped() = runVmTest { viewModel ->
+        givenPlan()
+        givenKnownStrap()
+        viewModel.fireHook(HookAction.START)
+        runCurrent()
+        viewModel.connectStrap()
+        givenRunningCapture(anchoredTo = WorkoutAnchor(todayString, sessionId = 1))
+        runCurrent()
+        // The five-minute inactivity net fired, or the strap died. Teardown
+        // resets the whole state, anchor included.
+        captureState.value = HrCaptureState()
+        runCurrent()
+        capture.calls.clear()
+
+        viewModel.fireHook(HookAction.END)
+        runCurrent()
+
+        assertTrue(capture.calls.isEmpty())
+        coVerify(exactly = 1) { api.fireWorkoutHook(1, HookAction.END) }
+    }
+
+    @Test
+    @DisplayName("the status sheet's Stop ends the recording and nothing else")
+    fun stopCaptureLeavesTheWorkoutAlone() = runVmTest { viewModel ->
+        givenPlan()
+        captureState.value = HrCaptureState(isRunning = true, deviceAddress = "AA:BB:CC:DD:EE:FF")
+        runCurrent()
+
+        viewModel.stopCapture()
+        runCurrent()
+
+        assertEquals(listOf("stop"), capture.calls)
+        coVerify(exactly = 0) { api.fireWorkoutHook(any(), any()) }
+    }
+
+    @Test
+    @DisplayName("the chip appears only while a capture is running")
+    fun chipFollowsTheCapture() = runVmTest { viewModel ->
+        givenPlan()
+        assertNull(viewModel.uiState.value.hr)
+
+        captureState.value = HrCaptureState(isRunning = true, bpm = 132, deviceName = "HRM-Pro")
+        runCurrent()
+        assertEquals("132", viewModel.uiState.value.hr?.bpmText)
+
+        captureState.value = HrCaptureState()
+        runCurrent()
+        assertNull(viewModel.uiState.value.hr)
+    }
+
+    @Test
+    @DisplayName("the remembered straps are re-read on every resume")
+    fun strapsAreRefreshedOnResume() = runVmTest { viewModel ->
+        givenPlan()
+        // Paired from the Tools tab while the coach tab sat in the back stack:
+        // without the resume refresh the sheet would never know about it.
+        strapMap["AA:BB:CC:DD:EE:FF"] = "HRM-Pro"
+
+        viewModel.fireHook(HookAction.START)
+        runCurrent()
+        assertNull(viewModel.strapPrompt.value)
+
+        viewModel.onScreenShown()
+        runCurrent()
+        viewModel.fireHook(HookAction.START)
+        runCurrent()
+
+        assertEquals("HRM-Pro", viewModel.strapPrompt.value?.name)
     }
 
     // ---- the two states that are not a rest day -----------------------------------------

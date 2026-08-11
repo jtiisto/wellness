@@ -39,6 +39,8 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import dev.jtiisto.wellness.bootWellness
+import dev.jtiisto.wellness.core.ble.capture.HrCaptureState
+import dev.jtiisto.wellness.core.ble.di.HrCaptureStateQualifier
 import dev.jtiisto.wellness.core.data.network.ServerBootstrap
 import dev.jtiisto.wellness.core.data.network.ServerResolution
 import dev.jtiisto.wellness.core.data.sync.SyncErrorEvents
@@ -51,8 +53,10 @@ import dev.jtiisto.wellness.feature.analysis.ui.AnalysisScreen
 import dev.jtiisto.wellness.feature.coach.CoachScreen
 import dev.jtiisto.wellness.feature.journal.JournalTab
 import dev.jtiisto.wellness.feature.trends.ui.TrendsScreen
+import dev.jtiisto.wellness.hr.CaptureNotices
 import dev.jtiisto.wellness.ui.tools.ToolsScreen
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.flow.MutableStateFlow
 import org.koin.compose.getKoin
 import org.koin.compose.koinInject
 
@@ -104,6 +108,18 @@ fun WellnessApp() {
         LaunchedEffect(syncErrors) {
             syncErrors.messages.collect { message ->
                 snackbarHostState.showSnackbar(message = message, duration = SnackbarDuration.Long)
+            }
+        }
+
+        // Capture faults onto the same channel. The service publishes state, not
+        // events, so a fault has to be noticed rather than received — that edge
+        // detection is [CaptureNotices], and this is the collector that feeds it.
+        // Pulse-bridge's equivalent wrote `state.error` and nothing ever read it.
+        val captureState = koin.get<MutableStateFlow<HrCaptureState>>(HrCaptureStateQualifier)
+        LaunchedEffect(captureState, syncErrors) {
+            val notices = CaptureNotices()
+            captureState.collect { state ->
+                notices.noticeFor(state)?.let(syncErrors::postMessage)
             }
         }
 

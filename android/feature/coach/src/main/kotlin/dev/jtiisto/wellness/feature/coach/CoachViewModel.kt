@@ -2,6 +2,9 @@ package dev.jtiisto.wellness.feature.coach
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import dev.jtiisto.wellness.core.ble.capture.HrCaptureController
+import dev.jtiisto.wellness.core.ble.capture.HrCaptureState
+import dev.jtiisto.wellness.core.ble.device.KnownDeviceStore
 import dev.jtiisto.wellness.core.data.coach.CoachSyncStore
 import dev.jtiisto.wellness.core.data.coach.CompletionToggle
 import dev.jtiisto.wellness.core.data.coach.EXTRA_SESSION_KEY
@@ -9,17 +12,22 @@ import dev.jtiisto.wellness.core.data.coach.HookAction
 import dev.jtiisto.wellness.core.data.coach.PlanDto
 import dev.jtiisto.wellness.core.data.coach.array
 import dev.jtiisto.wellness.core.data.coach.hasAnyProgress
+import dev.jtiisto.wellness.core.data.hr.HrCaptureStore
 import dev.jtiisto.wellness.core.data.network.CoachApi
 import dev.jtiisto.wellness.core.data.network.DateString
 import dev.jtiisto.wellness.core.data.sync.SyncScheduler
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -39,16 +47,31 @@ import java.time.LocalDate
  * screen can sit open across midnight — and which session the hook machine is
  * pointed at.
  */
+@Suppress("LongParameterList")
 class CoachViewModel(
     private val store: CoachSyncStore,
     private val scheduler: SyncScheduler,
     api: CoachApi,
+    private val captureState: StateFlow<HrCaptureState>,
+    private val knownStraps: KnownDeviceStore,
+    private val capture: HrCaptureController,
+    private val captureStore: HrCaptureStore,
     private val today: () -> LocalDate = LocalDate::now,
+    private val io: CoroutineDispatcher = Dispatchers.IO,
 ) : ViewModel() {
 
     private val selectedDate = MutableStateFlow(today().toString())
     private val viewMonth = MutableStateFlow(monthOf(selectedDate.value))
     private val expandedExercises = MutableStateFlow(emptySet<String>())
+
+    private val _strapPrompt = MutableStateFlow<StrapPrompt?>(null)
+
+    /**
+     * The "Connect HRM?" sheet, open only between a Start Workout tap and its
+     * answer. Deliberately not part of [uiState]: it is a transient question, not
+     * anything derived from the stores.
+     */
+    val strapPrompt: StateFlow<StrapPrompt?> = _strapPrompt.asStateFlow()
 
     /** Bumped on resume so a day rollover re-derives "is today". */
     private val refresh = MutableStateFlow(0)
@@ -73,8 +96,12 @@ class CoachViewModel(
         Triple(plansByDate, logsByDate, earliest)
     }
 
-    private val syncInputs = combine(store.syncStatus, store.isSyncingFlow) { status, syncing ->
-        status to syncing
+    private val syncInputs = combine(
+        store.syncStatus,
+        store.isSyncingFlow,
+        captureState,
+    ) { status, syncing, capture ->
+        Triple(status, syncing, capture)
     }
 
     val uiState: StateFlow<CoachUiState> = combine(
@@ -83,7 +110,7 @@ class CoachViewModel(
         syncInputs,
         hooks.state,
         expandedExercises,
-    ) { (date, month), (plansByDate, logsByDate, earliest), (status, syncing), hooksState, expanded ->
+    ) { (date, month), (plansByDate, logsByDate, earliest), (status, syncing, hrState), hooksState, expanded ->
         buildCoachUiState(
             selectedDate = date,
             viewMonth = month,
@@ -96,6 +123,7 @@ class CoachViewModel(
             syncStatus = status,
             isSyncing = syncing,
             isLoading = plansByDate == null || logsByDate == null,
+            capture = hrState,
         )
     }.stateIn(
         scope = viewModelScope,
@@ -153,9 +181,18 @@ class CoachViewModel(
         viewMonth.value = viewMonth.value.plusMonths(1)
     }
 
-    /** Re-read the clock: the app outlives midnight, and "today" gates entry. */
+    /**
+     * Re-read the clock: the app outlives midnight, and "today" gates entry.
+     *
+     * Also the moment the remembered straps are (re-)read. [KnownDeviceStore]
+     * does not load its map on construction, so without this the Start Workout
+     * sheet would never appear in a process where the strap section was not
+     * opened first — and the read is `SharedPreferences`, hence off the main
+     * thread.
+     */
     fun onScreenShown() {
         refresh.value += 1
+        viewModelScope.launch { withContext(io) { knownStraps.refresh() } }
     }
 
     fun syncNow() = scheduler.requestSync()
@@ -168,9 +205,116 @@ class CoachViewModel(
 
     // ---- workout hooks --------------------------------------------------------
 
-    fun fireHook(action: HookAction) = hooks.fire(action)
+    /**
+     * Fire a hook, settling the heart-rate question around it.
+     *
+     * The hook machine's own semantics are untouched: whatever happens here,
+     * [WorkoutHooks.fire] is called exactly once per tap — except on the one
+     * path that asks a question first, where it is called once per *answer*
+     * instead. Skipping the strap still starts the workout, which is the whole
+     * point of the sheet being a question and not a gate.
+     */
+    fun fireHook(action: HookAction) {
+        when (action) {
+            HookAction.START -> startWorkout()
+            HookAction.END -> endWorkout()
+        }
+    }
 
     fun undoHook(action: HookAction) = hooks.undo(action)
+
+    // ---- heart-rate capture around a workout ------------------------------------
+
+    private fun startWorkout() {
+        val strap = knownStraps.devices.value.firstOrNull()
+        when (
+            WorkoutCapturePolicy.startAction(
+                hasKnownStrap = strap != null,
+                captureRunning = captureState.value.isRunning,
+                connectPermitted = capture.canStart(),
+            )
+        ) {
+            // The hook waits for the answer — see [connectStrap] / [skipStrap].
+            StartCaptureAction.PROMPT -> {
+                _strapPrompt.value = StrapPrompt(requireNotNull(strap).address, strap.name)
+                return
+            }
+
+            StartCaptureAction.ANCHOR -> anchorRunningCapture()
+            StartCaptureAction.NONE -> Unit
+        }
+        hooks.fire(HookAction.START)
+    }
+
+    /**
+     * End the workout, and the recording it owns with it.
+     *
+     * The anchor is read off the capture state, which the service publishes from
+     * the session row — so this holds after a process death mid-workout, where a
+     * remembered anchor would have gone missing and left the capture running.
+     *
+     * The stop is requested before the hook fires so the session closes against
+     * the workout that is ending rather than a moment after it. The two are
+     * independent either way: a capture that cannot be stopped does not stop the
+     * hook, and vice versa.
+     */
+    private fun endWorkout() {
+        val live = captureState.value
+        if (WorkoutCapturePolicy.stopsCapture(live.workoutAnchor(), currentAnchor(), live.isRunning)) {
+            capture.stop()
+        }
+        hooks.fire(HookAction.END)
+    }
+
+    /**
+     * The sheet's [Connect]: record this workout, then start it.
+     *
+     * The anchor travels with the start intent and comes back on the published
+     * state once the session row exists; nothing is remembered here.
+     *
+     * A refused start is **deliberately ignored**. The workout starts either way
+     * — that is the sheet's whole contract, and the same reason Skip fires the
+     * hook — and the refusal has already put its own message on the snackbar.
+     * Abandoning the Start here would turn a strap problem into a lost workout.
+     */
+    fun connectStrap() {
+        val prompt = _strapPrompt.value ?: return
+        _strapPrompt.value = null
+        val anchor = currentAnchor()
+        capture.start(
+            address = prompt.address,
+            name = prompt.name,
+            workoutDate = anchor.date,
+            workoutSessionId = anchor.sessionId,
+        )
+        hooks.fire(HookAction.START)
+    }
+
+    /** The sheet's [Skip], and its dismissal. The workout starts either way. */
+    fun skipStrap() {
+        if (_strapPrompt.value == null) return
+        _strapPrompt.value = null
+        hooks.fire(HookAction.START)
+    }
+
+    /** The status sheet's Stop, which ends the recording but never the workout. */
+    fun stopCapture() = capture.stop()
+
+    /**
+     * Attach an already-running capture to this workout.
+     *
+     * The case the sheet cannot cover: the user started recording from the strap
+     * section and then started a workout, where the session would otherwise
+     * never learn which workout it belongs to. The store republishes the anchor
+     * onto the capture state, so End Workout will recognise it as its own.
+     */
+    private fun anchorRunningCapture() {
+        val anchor = currentAnchor()
+        viewModelScope.launch { captureStore.anchorToWorkout(anchor.date, anchor.sessionId) }
+    }
+
+    private fun currentAnchor(): WorkoutAnchor =
+        WorkoutAnchor(date = selectedDate.value, sessionId = hooks.state.value.sessionId)
 
     // ---- entry writes ----------------------------------------------------------
 

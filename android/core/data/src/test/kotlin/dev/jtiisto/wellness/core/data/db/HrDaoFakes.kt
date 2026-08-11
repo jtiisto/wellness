@@ -1,5 +1,7 @@
 package dev.jtiisto.wellness.core.data.db
 
+import dev.jtiisto.wellness.core.data.network.DateString
+
 /**
  * In-memory stand-ins for the three heart-rate DAOs.
  *
@@ -50,6 +52,34 @@ internal open class FakeHrSessionDao : HrSessionDao() {
 
     override suspend fun delete(sessionId: String) {
         sessions.remove(sessionId)
+    }
+
+    /** `endedAtMs IS NULL` guard and rows-affected, exactly as the statement has them. */
+    override suspend fun anchorWorkout(
+        sessionId: String,
+        workoutDate: DateString,
+        workoutSessionId: Long?,
+    ): Int {
+        val row = sessions[sessionId]?.takeIf { it.endedAtMs == null } ?: return 0
+        sessions[sessionId] = row.copy(
+            workoutDate = workoutDate,
+            workoutSessionId = workoutSessionId,
+            isSynced = false,
+            isQuarantined = false,
+            dirtyGeneration = row.dirtyGeneration + 1,
+        )
+        return 1
+    }
+
+    override suspend fun closeSession(sessionId: String, endedAtMs: Long): Int {
+        val row = sessions[sessionId]?.takeIf { it.endedAtMs == null } ?: return 0
+        sessions[sessionId] = row.copy(
+            endedAtMs = endedAtMs,
+            isSynced = false,
+            isQuarantined = false,
+            dirtyGeneration = row.dirtyGeneration + 1,
+        )
+        return 1
     }
 }
 

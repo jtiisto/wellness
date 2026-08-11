@@ -31,6 +31,9 @@ android {
 }
 
 dependencies {
+    // Declared even though :core:data exposes it transitively: the capture
+    // service is here, and it uses the BLE module directly.
+    implementation(project(":core:ble"))
     implementation(project(":core:data"))
     implementation(project(":core:ui"))
     implementation(project(":feature:journal"))

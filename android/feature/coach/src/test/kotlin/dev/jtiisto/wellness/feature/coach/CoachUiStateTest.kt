@@ -1,5 +1,6 @@
 package dev.jtiisto.wellness.feature.coach
 
+import dev.jtiisto.wellness.core.ble.capture.HrCaptureState
 import dev.jtiisto.wellness.core.data.coach.HookButtonState
 import dev.jtiisto.wellness.core.data.coach.PlanBlockDto
 import dev.jtiisto.wellness.core.data.coach.PlanDto
@@ -43,6 +44,7 @@ class CoachUiStateTest {
         hooks: WorkoutHooksState = WorkoutHooksState(),
         expanded: Set<String> = emptySet(),
         isLoading: Boolean = false,
+        capture: HrCaptureState = HrCaptureState(),
     ): CoachUiState = buildCoachUiState(
         selectedDate = selectedDate,
         viewMonth = viewMonth,
@@ -53,8 +55,58 @@ class CoachUiStateTest {
         hooks = hooks,
         expandedExercises = expanded,
         isLoading = isLoading,
+        capture = capture,
         locale = Locale.ENGLISH,
     )
+
+    // ---- the live BPM chip --------------------------------------------------
+
+    @Test
+    @DisplayName("no capture, no chip — on any day, loaded or not")
+    fun noChipWhenIdle() {
+        assertNull(state().hr)
+        assertNull(state(isLoading = true).hr)
+        assertNull(state(selectedDate = "2026-08-01").hr)
+    }
+
+    @Test
+    @DisplayName("a running capture puts the chip on the bar, whatever the day is showing")
+    fun chipFollowsTheCapture() {
+        // Deliberately on a past, read-only day: the recording is happening now,
+        // and which date the calendar is parked on has nothing to do with it.
+        val capture = HrCaptureState(isRunning = true, bpm = 132, deviceName = "HRM-Pro")
+
+        val hr = requireNotNull(state(selectedDate = "2026-08-01", capture = capture).hr)
+
+        assertEquals("132", hr.bpmText)
+        assertEquals("HRM-Pro", hr.deviceName)
+    }
+
+    @Test
+    @DisplayName("the sheet's link line says whether these beats belong to the workout on screen")
+    fun linkFollowsTheAnchor() {
+        fun linkFor(workoutDate: String?, sessionId: Long?) = state(
+            hooks = WorkoutHooksState(sessionId = 7),
+            capture = HrCaptureState(
+                isRunning = true,
+                workoutDate = workoutDate,
+                workoutSessionId = sessionId,
+            ),
+        ).hrLink
+
+        assertEquals(CaptureLink.THIS_WORKOUT, linkFor(today.toString(), 7))
+        assertEquals(CaptureLink.OTHER_WORKOUT, linkFor("2026-08-07", 4))
+        assertEquals(CaptureLink.UNANCHORED, linkFor(null, null))
+    }
+
+    @Test
+    @DisplayName("with no capture there is no link either — the sheet never has one without the other")
+    fun noLinkWithoutACapture() {
+        val plain = state()
+
+        assertNull(plain.hr)
+        assertNull(plain.hrLink)
+    }
 
     // ---- the calendar grid ------------------------------------------------
 

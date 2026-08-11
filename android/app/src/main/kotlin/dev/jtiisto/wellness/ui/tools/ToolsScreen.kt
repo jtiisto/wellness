@@ -127,6 +127,13 @@ private fun ToolsContent(state: ToolsUiState, actions: ToolsActions) {
             ServersCard(state = state, actions = actions, modifier = Modifier.padding(horizontal = WellnessSpace.md))
         }
 
+        // Its own ViewModel and its own permission launchers: pairing is the one
+        // thing on this tab that talks to hardware, and none of it belongs in
+        // ToolsViewModel.
+        item {
+            StrapSection(modifier = Modifier.padding(horizontal = WellnessSpace.md))
+        }
+
         item {
             HorizontalDivider(color = palette.line, modifier = Modifier.padding(top = WellnessSpace.sm))
             Row(
@@ -471,9 +478,14 @@ private fun androidx.compose.foundation.lazy.LazyListScope.debugLogItems(entries
     }
 }
 
-/** `inline` for the same reason Compose's own layout wrappers are. */
+/**
+ * `inline` for the same reason Compose's own layout wrappers are.
+ *
+ * `internal` so the strap section is the same card as every other one on this
+ * tab rather than a near-copy of it.
+ */
 @Composable
-private inline fun ToolsCard(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
+internal inline fun ToolsCard(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
     val palette = WellnessTheme.palette
     Column(
         modifier = modifier

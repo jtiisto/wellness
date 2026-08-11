@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The strap permissions are declared here rather than only in :app, for the
+     same reason :core:data declares INTERNET: the code that needs them lives in
+     this module, so the requirement travels with it and merges into whatever
+     consumes it.
+
+     `neverForLocation` is the assertion that this scan is not used to derive
+     physical position. Without it the platform treats a BLE scan as a location
+     capability and demands ACCESS_FINE_LOCATION on top — which this app has no
+     business holding to read a chest strap. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission
+        android:name="android.permission.BLUETOOTH_SCAN"
+        android:usesPermissionFlags="neverForLocation" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+
+    <!-- required=false on purpose: this app is a journal/coach/trends client
+         first and a heart-rate recorder second, so a device without BLE must
+         still be able to install it. The strap section degrades to "no adapter"
+         rather than the app becoming uninstallable. -->
+    <uses-feature
+        android:name="android.hardware.bluetooth_le"
+        android:required="false" />
+</manifest>

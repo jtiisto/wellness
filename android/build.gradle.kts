@@ -29,6 +29,29 @@ kover {
                     "*ModuleKt",
                     "dev.jtiisto.wellness.MainActivity",
                     "dev.jtiisto.wellness.WellnessApplication",
+                    // Heart-rate capture glue: a foreground service, a
+                    // notification builder, a GATT wrapper, a BLE scanner and a
+                    // SharedPreferences map. None of them can execute off a
+                    // device, and the emulator has no Bluetooth either — they
+                    // are verified on the physical device via the APK flow.
+                    // Everything in them that could be *wrong* was deliberately
+                    // moved out and is covered: CaptureStartGate,
+                    // HrCaptureNotificationText, InactivityPolicy,
+                    // ConnectDiagnostics, HrmAdvertisementFilter,
+                    // KnownDeviceStore and the whole of HrCaptureStore.
+                    "dev.jtiisto.wellness.hr.HrCaptureService",
+                    "dev.jtiisto.wellness.hr.HrCaptureService$*",
+                    "dev.jtiisto.wellness.hr.ServiceHrCaptureController",
+                    "dev.jtiisto.wellness.hr.ServiceHrCaptureController$*",
+                    "dev.jtiisto.wellness.ui.tools.StrapSectionKt",
+                    "dev.jtiisto.wellness.hr.HrCaptureNotification",
+                    "dev.jtiisto.wellness.hr.HrCaptureNotification$*",
+                    "dev.jtiisto.wellness.core.ble.scanner.BleScanner",
+                    "dev.jtiisto.wellness.core.ble.scanner.BleScanner$*",
+                    "dev.jtiisto.wellness.core.ble.connection.GarminHrmConnection",
+                    "dev.jtiisto.wellness.core.ble.connection.GarminHrmConnection$*",
+                    "dev.jtiisto.wellness.core.ble.device.PrefsKnownDeviceStorage",
+                    "dev.jtiisto.wellness.core.ble.device.PrefsKnownDeviceStorage$*",
                 )
                 packages(
                     "dev.jtiisto.wellness.core.ui.theme",

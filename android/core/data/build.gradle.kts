@@ -46,6 +46,12 @@ android {
 }
 
 dependencies {
+    // The one edge between the two core modules, and it points this way on
+    // purpose: :core:ble declares the sample sink, this module implements it
+    // over Room. `api` because HrCaptureStore's own signature is written in
+    // :core:ble types, so every consumer of this module already needs them.
+    api(project(":core:ble"))
+
     api(libs.kotlinx.serialization.json)
     api(libs.kotlinx.coroutines.core)
     implementation(libs.kotlinx.coroutines.android)

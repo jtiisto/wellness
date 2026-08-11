@@ -116,6 +116,42 @@ repo (authoritative until the server work lands it in `docs/ARCHITECTURE.md`). S
 - **MCP migration**: `mcp_servers/pulse_bridge_mcp/` moves across, read-only on `hr.db`.
 - If HR analysis needs exercise names from coach data, it uses the sanctioned **read-only cross-DB accessor** pattern (as trends does) — never coach's own accessor.
 
+### Phase 2 implementation notes (2026-08-11, as built)
+
+- **Module shape**: `core/ble` is the leaf it was spec'd to be, and `core/data` gained an `api`
+  dependency ON it (the sink/store wiring) — the dependency arrow points core/data → core/ble,
+  never the reverse. `HrCaptureController` (the start/stop seam both UI surfaces use) lives in
+  `core/ble` as the write half of the `HrCaptureState` contract; the service in `app/` implements it.
+- **FGS-36 open item resolved**: `connectedDevice` type + `FOREGROUND_SERVICE_CONNECTED_DEVICE`
+  is the compliant set (verified against the API-37 SDK jar); no `dataSync` type (uploads ride
+  WorkManager); the handled exception family is `ServiceStartNotAllowedException` (+`SecurityException`
+  for a revoked grant). Android 16's bond-loss re-pair dialog doesn't apply — pairing is a MAC→name
+  map (SharedPreferences), no OS bonding.
+- **Capture start is gated** (`CaptureStartGate`): refused without `BLUETOOTH_CONNECT` and also
+  while the server is unresolved — the upload nudge would otherwise kill the service on its first
+  flush while holding a wake lock. The strap is saved as known on first CONNECTED, not on attempt.
+- **Permission UX split**: all Bluetooth-permission UI lives in the strap section (blocking, with
+  distinct deny-once vs deny-permanently explanations); the coach sheet only ever offers a known
+  strap, so `feature/coach` never requests permissions. POST_NOTIFICATIONS is requested after
+  `start()`, fire-and-forget — a denial provably cannot block capture.
+- **Capture errors** surface through `SyncErrorEvents.postMessage` (plain-message sibling of the
+  sync-error channel, no "Sync Failed:" prefix), fed by a state-edge detector — fixing
+  pulse-bridge's invisible-`state.error` gap as spec'd.
+- **Tools shows the same live readout** as the coach chip via one shared `hrCaptureDisplay`
+  mapping, so a running capture cannot describe itself two ways.
+- **Samples flow**: `IntervalBuffer` (10 s / 200 rows; 60 s seq-collision window, MTU-derived) →
+  `HrCaptureStore` (every write leased) → `hr_samples` → the Phase 1 upload pipeline's
+  `scheduleFlush`. The buffer scope is Koin-owned and outlives the service.
+- **Session close semantics (refined 2026-08-11 after review)**: a failed final flush leaves the
+  session open, and the close then completes *retroactively* once a later flush proves the buffer
+  drained — carrying the stop instant, not the flush instant. Backstop: a fresh capture force-closes
+  any stale open session for the same device (`endedAtMs` = now, advisory — analysis reads sample
+  timestamps). Live-session mutations (`anchorWorkout`, `closeSession`) are atomic single-statement
+  DAO UPDATEs guarded `WHERE endedAtMs IS NULL` — reopening a closed session is structurally
+  impossible, and rows-affected (not the session id) is the publish discriminator. The sticky
+  resume publishes via compareAndSet so it can never displace a capture that started while its
+  query was suspended.
+
 ## Behavior details
 
 - Connection lifecycle, watchdogs, backoff, advertising-probe verdicts: as ported from pulse-bridge (see `core/ble` section).

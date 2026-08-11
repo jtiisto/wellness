@@ -1,6 +1,8 @@
 package dev.jtiisto.wellness.core.data.di
 
 import androidx.room.Room
+import dev.jtiisto.wellness.core.ble.BleLog
+import dev.jtiisto.wellness.core.ble.buffer.HrSampleSink
 import dev.jtiisto.wellness.core.data.BuildConfig
 import dev.jtiisto.wellness.core.data.WellnessJson
 import dev.jtiisto.wellness.core.data.analysis.AnalysisEvents
@@ -12,6 +14,7 @@ import dev.jtiisto.wellness.core.data.db.WELLNESS_MIGRATIONS
 import dev.jtiisto.wellness.core.data.db.WellnessDatabase
 import dev.jtiisto.wellness.core.data.export.DataExporter
 import dev.jtiisto.wellness.core.data.export.SharedFileStore
+import dev.jtiisto.wellness.core.data.hr.HrCaptureStore
 import dev.jtiisto.wellness.core.data.hr.HrSyncStore
 import dev.jtiisto.wellness.core.data.journal.JournalSyncStore
 import dev.jtiisto.wellness.core.data.journal.JournalUiPrefs
@@ -185,13 +188,14 @@ val coreDataModule = module {
         )
     }
 
-    // The coach → heart-rate seam. `captureSessionId` is null for the whole of
-    // Phase 1 (no BLE capture exists yet); Phase 2 points it at the live session
-    // and nothing else about the dual-write moves.
+    // The coach → heart-rate seam, now pointed at the live capture as Phase 1
+    // said it would be. Nothing else about the dual-write moved: a tick made
+    // while a strap is recording carries the session, one made without a strap
+    // carries nothing, and the coach blob write is untouched either way.
     single {
         val koinScope = this
         SetEventRecorder(
-            captureSessionId = { null },
+            captureSessionId = { koinScope.get<HrCaptureStore>().currentSessionId },
             scheduleUpload = { koinScope.get<HrSyncStore>().scheduleFlush() },
         )
     }
@@ -249,6 +253,30 @@ val coreDataModule = module {
             debugLog = get(),
             scheduleUpload = { koinScope.get<SyncScheduler>(HrScheduler).scheduleUpload() },
         )
+    }
+
+    // The capture side of the heart-rate module: session rows and RR intervals
+    // into Room, and nothing else. It is bound as `HrSampleSink` too, which is
+    // the whole of what `:core:ble`'s IntervalBuffer resolves — the BLE module
+    // never sees a DAO and this one never sees a GATT handle.
+    single {
+        val koinScope = this
+        HrCaptureStore(
+            sessionDao = get(),
+            sampleDao = get(),
+            session = get(),
+            scheduleUpload = { koinScope.get<HrSyncStore>().scheduleFlush() },
+            debugLog = get(),
+        )
+    }
+    single<HrSampleSink> { get<HrCaptureStore>() }
+
+    // `:core:ble` declares its diagnostics seam and cannot reach DebugLog, which
+    // lives here — so the bridge is wired on this side. Same privacy rule as
+    // everywhere else in the log: connection states and counts, never a body.
+    single<BleLog> {
+        val log = get<DebugLog>()
+        BleLog { message -> log.log("hr-ble", message) }
     }
 
     single<SyncScheduler>(HrScheduler) {

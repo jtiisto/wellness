@@ -36,4 +36,20 @@ class SyncErrorEvents {
             ?: "unknown error"
         channel.trySend("Sync Failed: $detail")
     }
+
+    /**
+     * Show [message] verbatim.
+     *
+     * Same channel, no prefix. Separate from [postServerError] because that one
+     * is a statement about a *sync* and says so: a heart-rate capture that lost
+     * its strap is not a sync and not a failure of one, and borrowing the prefix
+     * would have the snackbar name the wrong subsystem.
+     *
+     * The caller owns the wording, and with it the debug-log permitted-field
+     * policy — nothing derived from a `Throwable.message` (a Ktor response
+     * exception's message is the whole response body) may be passed here.
+     */
+    fun postMessage(message: String) {
+        channel.trySend(message)
+    }
 }

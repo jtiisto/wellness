@@ -293,6 +293,105 @@ class HrDaoLogicTest {
         assertNull(dao.newestOpen())
     }
 
+    // ---- atomic mutations of a live session -------------------------------
+
+    @Test
+    @DisplayName("anchoring a closed session no-ops rather than reopening it")
+    fun anchorAfterCloseCannotReopen() = runTest {
+        val dao = FakeHrSessionDao()
+        dao.upsert(openSession())
+        dao.closeSession(session, endedAtMs = 1_770_000_500_000)
+        val closed = dao.find(session)!!
+
+        // The read-copy-upsert this replaced would have written back the null
+        // endedAtMs it read before the close, resurrecting a finished session.
+        assertEquals(0, dao.anchorWorkout(session, workoutDate = "2030-01-03", workoutSessionId = 42))
+
+        assertEquals(closed, dao.find(session), "a no-op must leave every column alone")
+        assertNull(dao.find(session)!!.workoutDate)
+        assertEquals(1_770_000_500_000L, dao.find(session)!!.endedAtMs)
+    }
+
+    @Test
+    @DisplayName("closing a session keeps an anchor that landed while the stop was in flight")
+    fun closeAfterAnchorPreservesTheAnchor() = runTest {
+        val dao = FakeHrSessionDao()
+        dao.upsert(openSession())
+
+        dao.anchorWorkout(session, workoutDate = "2030-01-03", workoutSessionId = 42)
+        assertEquals(1, dao.closeSession(session, endedAtMs = 1_770_000_500_000))
+
+        // The stale full-row write erased exactly this.
+        val row = dao.find(session)!!
+        assertEquals("2030-01-03", row.workoutDate)
+        assertEquals(42L, row.workoutSessionId)
+        assertEquals(1_770_000_500_000L, row.endedAtMs)
+    }
+
+    @Test
+    @DisplayName("closing twice is idempotent — the second close cannot move endedAtMs")
+    fun doubleCloseNoOps() = runTest {
+        val dao = FakeHrSessionDao()
+        dao.upsert(openSession())
+
+        assertEquals(1, dao.closeSession(session, endedAtMs = 1_770_000_500_000))
+        val afterFirst = dao.find(session)!!
+
+        // A later endedAtMs would claim coverage of samples that were never
+        // stored, so the guard has to reject it rather than take the newer time.
+        assertEquals(0, dao.closeSession(session, endedAtMs = 1_770_009_999_000))
+
+        assertEquals(afterFirst, dao.find(session))
+    }
+
+    @Test
+    @DisplayName("both mutations bump the generation and clear the flags, as a content change must")
+    fun atomicMutationsCarryTheUploadSemantics() = runTest {
+        val dao = FakeHrSessionDao()
+        dao.upsert(openSession())
+        dao.markSyncedNow(session)
+        dao.markQuarantinedNow(session)
+        assertEquals(1L, dao.find(session)!!.dirtyGeneration)
+
+        assertEquals(1, dao.anchorWorkout(session, workoutDate = "2030-01-03", workoutSessionId = 42))
+        var row = dao.find(session)!!
+        assertEquals(2L, row.dirtyGeneration)
+        assertFalse(row.isSynced)
+        assertFalse(row.isQuarantined)
+        assertEquals(listOf(session), dao.needsUpload().map { it.sessionId })
+
+        dao.markSyncedNow(session)
+        assertEquals(1, dao.closeSession(session, endedAtMs = 1_770_000_500_000))
+        row = dao.find(session)!!
+        assertEquals(3L, row.dirtyGeneration)
+        assertFalse(row.isSynced)
+        assertEquals(listOf(session), dao.needsUpload().map { it.sessionId })
+    }
+
+    @Test
+    @DisplayName("a verdict for the pre-mutation row cannot land on either mutation's result")
+    fun atomicMutationsInvalidateAnInFlightVerdict() = runTest {
+        val dao = FakeHrSessionDao()
+        dao.upsert(openSession())
+        val uploaded = dao.needsUpload().single()
+
+        dao.anchorWorkout(session, workoutDate = "2030-01-03", workoutSessionId = 42)
+        dao.markSynced(uploaded.sessionId, uploaded.dirtyGeneration)
+
+        assertFalse(dao.find(session)!!.isSynced, "the anchor's bump must strand the old verdict")
+    }
+
+    @Test
+    @DisplayName("neither mutation resurrects a row the wipe removed")
+    fun mutationsOnAMissingRowReportZero() = runTest {
+        val dao = FakeHrSessionDao()
+
+        assertEquals(0, dao.anchorWorkout(session, workoutDate = "2030-01-03", workoutSessionId = 42))
+        assertEquals(0, dao.closeSession(session, endedAtMs = 1_770_000_500_000))
+
+        assertTrue(dao.listAll().isEmpty())
+    }
+
     // ---- samples ---------------------------------------------------------
 
     @Test

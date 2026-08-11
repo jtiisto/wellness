@@ -4,6 +4,23 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
+    <!-- Heart-rate capture. BLUETOOTH_SCAN/CONNECT are declared by :core:ble and
+         merge in from there, with the code that needs them.
+
+         The service type is connectedDevice and nothing else: the strap is the
+         connected device, and the uploads it produces ride WorkManager and the
+         ordinary sync schedulers rather than the service — so dataSync would be
+         claiming a capability this app does not use, on a type whose quotas
+         tightened in Android 15. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <!-- Requested at first pairing, and a denial never blocks capture: the
+         service still runs, its notification is simply not shown. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- PARTIAL_WAKE_LOCK for the length of a capture. No keepScreenOn anywhere:
+         this shows a number, not a live tachogram. -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
     <!-- usesCleartextTraffic: dev server is plain HTTP inside the tailnet
          (see plan.md "Transport"); revisit when pointing at tailscale serve. -->
     <application
@@ -24,6 +41,15 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Started only from a foreground user action (the strap section or the
+             Start Workout sheet), with BLUETOOTH_CONNECT already granted.
+             exported=false: nothing outside this app has any business starting a
+             capture, and the only intents it accepts come from its own UI. -->
+        <service
+            android:name=".hr.HrCaptureService"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice" />
 
         <!-- Exports and debug-log dumps reach a share sheet through here.
              exported=false with grantUriPermissions=true is the whole contract:
