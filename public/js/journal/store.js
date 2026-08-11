@@ -688,11 +688,14 @@ export async function triggerSync() {
         clearDirtyState(resolvedTrackerIds, resolvedEntryKeys,
                         snapshotTrackerGens, snapshotEntryGens);
 
-        // Sync time advances to the server's response timestamp
-        syncMetadata.value = {
-            ...syncMetadata.value,
-            lastServerSyncTime: result.serverTime || getUtcNow(),
-        };
+        // The upload's `serverTime` is deliberately NOT stored as the pull
+        // watermark (same rule as coach, and as the native client): only the
+        // DELTA's advances it. The delta's watermark is stamped a couple of
+        // seconds behind wall clock precisely so the next pull overlaps the
+        // writes that were in flight during this one; overwriting it with the
+        // POST's stamp threw that overlap away, and a row another client
+        // committed in those seconds was never delivered. Re-delivery is the
+        // cost, and it is idempotent — non-dirty rows apply verbatim.
 
         pruneOldLogs();
         pruneDeletedTrackers();
@@ -807,10 +810,8 @@ export async function forceSync() {
             clearDirtyState(resolvedTrackerIds, resolvedEntryKeys,
                             snapshotTrackerGens, snapshotEntryGens);
 
-            syncMetadata.value = {
-                ...syncMetadata.value,
-                lastServerSyncTime: result.serverTime || getUtcNow(),
-            };
+            // No watermark advance from the upload response — see triggerSync.
+            // Phase 1's full pull already set it from the delta's serverTime.
         }
 
         pruneDeletedTrackers();

@@ -16,6 +16,7 @@ from modules.db import (
     DbAccessor,
     get_utc_now,
     utc_days_ago,
+    apply_watermark_overlap,
     sync_watermark,
     read_transaction,
     immediate_transaction,
@@ -392,6 +393,10 @@ class SyncResponse(BaseModel):
     Each accepted item carries the new server-stamped `lastModifiedAt`. Each
     rejected item carries an `errorKind` and the current `serverRow` so the
     client can recover in the same sync cycle without waiting for a delta pull.
+
+    `serverTime` is NOT a pull watermark — only GET /sync/delta's is — and is
+    backdated by the same overlap so a client that stores it anyway stays
+    correct. The per-record stamps are the real write time, un-backdated.
     """
     serverTime: str
     acceptedTrackers: list[dict[str, Any]] = []
@@ -792,6 +797,17 @@ def _sync_update(get_db, payload):
     waiting for a delta pull.
     """
     now = get_utc_now()
+    # The response ENVELOPE's watermark — deliberately not `now`, and never the
+    # per-record stamps (those stay at `now`, the real write time). A client
+    # should treat only the delta's serverTime as its pull cursor, but a client
+    # generation that stores this one instead would throw away the delta's
+    # overlap and never be delivered a row another client committed in the
+    # window between its last delta and this upload. Backdating here keeps such a
+    # client correct; re-delivery is idempotent. Derived from the same `now` the
+    # records are stamped with, through the same overlap helper the delta path
+    # uses (sync_watermark() is that helper applied to a fresh clock read), so it
+    # is exactly one overlap behind this request's writes.
+    server_time = apply_watermark_overlap(now)
     client_id = payload.clientId
 
     accepted_trackers: list[dict] = []
@@ -842,7 +858,7 @@ def _sync_update(get_db, payload):
             _purge_old_archives(conn)
 
         return SyncResponse(
-            serverTime=now,
+            serverTime=server_time,
             acceptedTrackers=accepted_trackers,
             acceptedEntries=accepted_entries,
             rejectedTrackers=rejected_trackers,

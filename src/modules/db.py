@@ -126,6 +126,18 @@ def immediate_transaction(conn):
 SYNC_WATERMARK_OVERLAP_SECONDS = 2
 
 
+def apply_watermark_overlap(stamp: str) -> str:
+    """Back-date one Z-suffixed instant by the sync overlap.
+
+    The single authority for the subtraction — sync_watermark() is this applied
+    to `now`, and an endpoint that already stamped its own `now` (the journal
+    upload, whose record stamps must stay at the real write time) derives its
+    envelope watermark from that same instant instead of re-reading the clock.
+    """
+    parsed = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+    return _iso_z(parsed - timedelta(seconds=SYNC_WATERMARK_OVERLAP_SECONDS))
+
+
 def sync_watermark() -> str:
     """Return a 'changes-since' watermark: now minus a small overlap.
 
@@ -139,9 +151,7 @@ def sync_watermark() -> str:
     non-dirty rows idempotently and skips rows it has dirty locally — so the only
     cost is occasionally re-sending a row modified in the last couple of seconds.
     """
-    return _iso_z(
-        datetime.now(timezone.utc) - timedelta(seconds=SYNC_WATERMARK_OVERLAP_SECONDS)
-    )
+    return apply_watermark_overlap(get_utc_now())
 
 
 @contextmanager

@@ -8,9 +8,9 @@ in-cycle.
 """
 import pytest
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
-from modules.db import get_db
+from modules.db import SYNC_WATERMARK_OVERLAP_SECONDS, get_db
 
 
 def _upload(client, client_id, *, config=None, days=None):
@@ -384,6 +384,119 @@ class TestSyncUpdateMeta:
         data = _upload(client, journal_registered_client)
         assert data["serverTime"]
         assert data["serverTime"].endswith("Z")
+
+
+@pytest.mark.integration
+class TestUpdateWatermarkOverlap:
+    """The upload response's envelope `serverTime` carries the same backdating
+    as the delta's watermark (see TestDeltaWatermarkRace in test_sync_delta.py).
+
+    A client should advance its pull cursor only from the DELTA's serverTime,
+    but a client generation that stores the upload's instead used to discard the
+    delta's overlap: rows another client committed between this client's delta
+    and its upload fell into `<= since` and were never delivered. Backdating the
+    envelope keeps such a client correct. The per-record stamps in the same
+    response are the real write time and must NOT move.
+    """
+
+    @staticmethod
+    def _parse(ts):
+        return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+
+    def test_serverTime_is_backdated_by_the_overlap(self, client, journal_registered_client, sample_tracker):
+        """serverTime is at least the overlap behind the moment the response was
+        produced. (Pre-fix it was bare `now`, i.e. after `before`.)"""
+        before = datetime.now(timezone.utc)
+        data = _upload(client, journal_registered_client, config=[sample_tracker])
+        after = datetime.now(timezone.utc)
+        assert self._parse(data["serverTime"]) < before
+        assert self._parse(data["serverTime"]) <= after - timedelta(
+            seconds=SYNC_WATERMARK_OVERLAP_SECONDS
+        )
+
+    def test_record_stamps_are_not_backdated(self, client, journal_registered_client, sample_tracker):
+        """Only the envelope moves: the accepted rows' `lastModifiedAt` is the
+        real write time (the base token clients echo back), so it stays at or
+        after the request and well ahead of the envelope watermark."""
+        today = datetime.now().strftime("%Y-%m-%d")
+        before = datetime.now(timezone.utc)
+        data = _upload(
+            client, journal_registered_client,
+            config=[sample_tracker],
+            days={today: {sample_tracker["id"]: {"value": 3, "completed": True}}},
+        )
+        tracker_stamp = self._parse(data["acceptedTrackers"][0]["lastModifiedAt"])
+        entry_stamp = self._parse(data["acceptedEntries"][0]["lastModifiedAt"])
+        assert tracker_stamp >= before
+        assert entry_stamp >= before
+        assert tracker_stamp - self._parse(data["serverTime"]) >= timedelta(
+            seconds=SYNC_WATERMARK_OVERLAP_SECONDS
+        )
+
+    def test_accepted_stamp_is_a_usable_base_token(self, client, journal_registered_client, sample_tracker):
+        """The un-backdated stamp round-trips as the next upload's base token —
+        the check that would break if the envelope's value leaked into rows."""
+        data = _upload(client, journal_registered_client, config=[sample_tracker])
+        stamp = data["acceptedTrackers"][0]["lastModifiedAt"]
+        time.sleep(0.01)
+        data2 = _upload(client, journal_registered_client,
+                        config=[{**sample_tracker, "name": "Renamed", "_baseLastModifiedAt": stamp}])
+        assert len(data2["acceptedTrackers"]) == 1, data2["rejectedTrackers"]
+
+    def test_rejected_serverRow_keeps_its_stored_stamp(self, client, journal_registered_client, sample_tracker):
+        """A rejection echoes the stored row verbatim; its stamp is the stored
+        write time, not the envelope watermark."""
+        data = _upload(client, journal_registered_client, config=[sample_tracker])
+        stored_stamp = data["acceptedTrackers"][0]["lastModifiedAt"]
+        time.sleep(0.01)
+        stale = {**sample_tracker, "name": "Stale", "_baseLastModifiedAt": "2020-01-01T00:00:00Z"}
+        data2 = _upload(client, journal_registered_client, config=[stale])
+        rejected = data2["rejectedTrackers"][0]
+        assert rejected["errorKind"] == "stale"
+        assert rejected["serverRow"]["lastModifiedAt"] == stored_stamp
+
+    def test_status_lastModified_is_not_backdated(self, client, journal_registered_client, sample_tracker):
+        """meta_sync.last_server_sync_time records when the write happened, so it
+        matches the record stamps rather than the envelope watermark."""
+        data = _upload(client, journal_registered_client, config=[sample_tracker])
+        last_modified = client.get("/api/journal/sync/status").json()["lastModified"]
+        assert last_modified == data["acceptedTrackers"][0]["lastModifiedAt"]
+        assert last_modified > data["serverTime"]
+
+    def test_row_committed_before_the_upload_is_still_delivered(
+        self, client, journal_registered_client, sample_tracker
+    ):
+        """The end-to-end staleness scenario, for a client that (wrongly) stores
+        the upload's serverTime as its pull cursor.
+
+        A pulls a delta; B commits a row; A uploads its own change and stores the
+        response's serverTime; A pulls again. B's row must arrive. Pre-fix the
+        envelope was `now` — later than B's stamp — so `> since` skipped it
+        forever and A never saw B's tracker.
+        """
+        seeded = _upload(client, journal_registered_client, config=[sample_tracker])
+        stamp = seeded["acceptedTrackers"][0]["lastModifiedAt"]
+
+        # A: incremental pull, establishing its cursor.
+        client.get("/api/journal/sync/delta")
+
+        # B: a different client commits a row a moment later.
+        time.sleep(0.01)
+        _upload(client, "client-b", config=[{
+            "id": "tracker-from-b", "name": "B's tracker",
+            "category": "health", "type": "simple",
+        }])
+
+        # A: uploads its own edit and (buggily) keeps the response's serverTime.
+        time.sleep(0.01)
+        upload = _upload(client, journal_registered_client, config=[
+            {**sample_tracker, "name": "A's edit", "_baseLastModifiedAt": stamp},
+        ])
+
+        delivered = client.get(
+            f"/api/journal/sync/delta?since={upload['serverTime']}"
+        ).json()
+        assert "tracker-from-b" in [t["id"] for t in delivered["config"]]
 
 
 @pytest.mark.integration

@@ -6,11 +6,14 @@ import sqlite3
 
 import pytest
 from src.modules.db import (
+    SYNC_WATERMARK_OVERLAP_SECONDS,
     DbAccessor,
+    apply_watermark_overlap,
     get_db,
     get_utc_now,
     immediate_transaction,
     run_migrations,
+    sync_watermark,
     utc_days_ago,
 )
 
@@ -178,6 +181,31 @@ class TestUtcDaysAgo:
     def test_zero_days_is_now(self):
         delta = _parse_z(get_utc_now()) - _parse_z(utc_days_ago(0))
         assert abs(delta.total_seconds()) < 5
+
+
+class TestWatermarkOverlap:
+    """sync_watermark() and apply_watermark_overlap() are one subtraction with
+    one constant: pull endpoints back-date `now`, and an endpoint that already
+    holds its own write stamp (the journal upload) back-dates that same instant
+    so the envelope watermark is exactly one overlap behind its record stamps."""
+
+    def test_applies_the_overlap_exactly(self):
+        assert apply_watermark_overlap("2026-05-30T12:34:56.123456Z") == (
+            "2026-05-30T12:34:54.123456Z"
+        )
+
+    def test_output_is_the_shared_z_suffixed_format(self):
+        s = apply_watermark_overlap(get_utc_now())
+        assert s.endswith("Z")
+        assert "+00:00" not in s
+
+    def test_sync_watermark_is_the_helper_applied_to_now(self):
+        delta = _parse_z(get_utc_now()) - _parse_z(sync_watermark())
+        assert abs(delta.total_seconds() - SYNC_WATERMARK_OVERLAP_SECONDS) < 5
+
+    def test_watermark_is_strictly_behind_the_stamp_it_came_from(self):
+        now = get_utc_now()
+        assert apply_watermark_overlap(now) < now
 
 
 class TestInstantFormatContract:
