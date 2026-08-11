@@ -1,6 +1,6 @@
 # Coach Heart Rate Integration (pulse-bridge merge)
 
-**Status: DRAFT — awaiting approval.** Branch: `feature/coach-pulse`.
+**Status: APPROVED — Phase 1 (set-event log) implemented 2026-08-11; Phases 2–3 pending.** Branch: `feature/coach-pulse`. Instrumented tests await the next emulator session; device acceptance pending.
 
 ## Goal
 
@@ -59,26 +59,30 @@ First foreground service / notification channel / runtime-permission flow in the
 
 | Table | Key | Notes |
 |---|---|---|
-| `hr_sessions` | `sessionId` (client UUID) | `deviceId`, `startedAtMs`, `endedAtMs` (null while open), optional `workoutDate` (`YYYY-MM-DD`), optional `workoutSessionId` (coach hook session id — a `Long`, set when started via the Start Workout sheet), `isSynced` (cleared on every row change so the session re-upserts) |
+| `hr_sessions` | `sessionId` (client UUID) | `deviceId`, `startedAtMs`, `endedAtMs` (null while open), optional `workoutDate` (`YYYY-MM-DD`), optional `workoutSessionId` (coach hook session id — a `Long`, set when started via the Start Workout sheet), `isSynced` (cleared on every content change so the session re-upserts), `isQuarantined` (422-bisect isolation, also cleared on content change so a corrected row re-attempts), `dirtyGeneration` (bumped on every content change; `markSynced`/`markQuarantined` are generation-guarded so a response that raced a newer write can never claim the newer row — coach's proven pattern, added 2026-08-11 after review caught the stale-response race) |
 | `hr_samples` | PK (`deviceId`, `timestampMs`, `seq`) | one row per RR interval: `heartRateBpm`, `rrIntervalMs` (0 = artifact sentinel), `isGapBefore`, `sessionId`, `isSynced`, `syncedAt`, `isQuarantined` |
 | `set_events` | `eventId` (client UUID) | `date`, `exerciseKey`, `setNum` (omitted for non-set widgets), `itemKey` (checklist toggles), `action` (`check` \| `uncheck`), `clientTimestampMs`, optional `sessionId`, `isSynced`, `isQuarantined` (poison rows isolated by the 422 bisect, same as samples) |
 
 - **Sync model is append-only + `isSynced`** — deliberately *not* `isDirty`/`dirtyGeneration`. This is client-authored telemetry with no server arbitration: idempotent batch upload, mark synced on 2xx, retry safe by construction. Epoch-ms values here are *data*, not sync watermarks, so the opaque-timestamp rule doesn't apply.
 - The `seq` column replaces pulse-bridge's monotonic-bump hack in `IntervalBuffer.nextTimestamp()`: same-millisecond samples get seq 0,1,2… instead of artificially shifted timestamps. Anchoring rules are otherwise preserved (last beat of a notification lands at receipt time, earlier beats placed backward by their RR durations, zero-RR sentinels spread backward, >3 s gap marks `isGapBefore`).
 - Local retention: synced `hr_samples` pruned after 7 days; `set_events` after 60 (matches coach's prune horizon). Unsynced rows are never pruned.
-- Cross-cutting obligations (enumerated by name, so listed here as a checklist): `WELLNESS_MIGRATIONS` + exported schema; `ServerSwitchDao` wipe list += 3 tables; `ExportDao` snapshot += 3 tables; every write under `ServerSessionGate.withWriteLease`.
+- Cross-cutting obligations (enumerated by name, so listed here as a checklist): `WELLNESS_MIGRATIONS` + exported schema; `ServerSwitchDao` wipe list += 3 tables; `ExportDao` snapshot += 3 tables — `hr_samples` as per-session aggregates (counts + time bounds), not raw rows, so export size stays bounded by session count rather than capture length (blessed 2026-08-11; the export is diagnostic, not a recovery path); every write under `ServerSessionGate.withWriteLease`.
 
 ### Set-event dual-write
 
 Every completion toggle appends an event **in the same Room transaction** as the existing coach-blob mutation (same DB, so this is cheap and atomic); the blob path itself is unchanged. Uncheck appends `action: "uncheck"` — undo is data, not deletion. Correlation folds the event stream to derive final state; the coach blob remains the display truth.
 
-Covered toggles: per-set ticks (the priority), checklist items, and cardio completion — same mechanism, more correlation surface.
+Covered toggles: per-set ticks (the priority) and checklist items. **Cardio has no completion
+toggle to cover** (amended 2026-08-11 — implementation finding): cardio completion is *derived*
+from `duration_min` presence, and value edits never emit events. The exercise-level event shape
+(neither `setNum` nor `itemKey`) stays reserved in the protocol; wiring it is adding a
+`CompletionToggle.Exercise` variant if a cardio tick UI ever exists.
 
 ### Upload path
 
 `HrSyncStore` (in `core/data`): flush every 10 s or 200 buffered samples; a failed flush keeps the batch; the buffer runs on a Koin-owned `SupervisorJob` scope that outlives the service; a failed final flush leaves the session open rather than finalizing against stale data. Set events piggyback on the same cadence. `SyncFlushWorker` gains HR flushing so backgrounding drains it.
 
-Quarantine: on a 422 the batch is recursively bisected to isolate poison rows (only 422 — other 4xx are systemic and rethrown); circuit breakers at 10 quarantines/run and 3 before first success.
+Quarantine: on a 422 the batch is recursively bisected to isolate poison rows (only 422 — other 4xx are systemic and rethrown); circuit breakers at 10 quarantines/run and 3 before first success. A breaker trip **before any success in the run is classified do-not-retry** (like a systemic 4xx): rows quarantined before the trip stay quarantined, and background retry against a server that rejects everything would erode the backlog 3 rows per cycle. A trip after successes stays retryable — those quarantines were legitimate discriminations. Residual foreground-retry erosion under a persistently broken server is accepted and bounded by the capped backoff; quarantined rows are never deleted and remain visible in the export.
 
 ### UX
 

@@ -7,14 +7,17 @@ import dev.jtiisto.wellness.core.data.analysis.AnalysisEvents
 import dev.jtiisto.wellness.core.data.analysis.AnalysisRepository
 import dev.jtiisto.wellness.core.data.analysis.AnalysisStore
 import dev.jtiisto.wellness.core.data.coach.CoachSyncStore
+import dev.jtiisto.wellness.core.data.coach.SetEventRecorder
 import dev.jtiisto.wellness.core.data.db.WELLNESS_MIGRATIONS
 import dev.jtiisto.wellness.core.data.db.WellnessDatabase
 import dev.jtiisto.wellness.core.data.export.DataExporter
 import dev.jtiisto.wellness.core.data.export.SharedFileStore
+import dev.jtiisto.wellness.core.data.hr.HrSyncStore
 import dev.jtiisto.wellness.core.data.journal.JournalSyncStore
 import dev.jtiisto.wellness.core.data.journal.JournalUiPrefs
 import dev.jtiisto.wellness.core.data.network.AnalysisApi
 import dev.jtiisto.wellness.core.data.network.CoachApi
+import dev.jtiisto.wellness.core.data.network.HrApi
 import dev.jtiisto.wellness.core.data.network.JournalApi
 import dev.jtiisto.wellness.core.data.network.ServerBootstrap
 import dev.jtiisto.wellness.core.data.network.TrendsApi
@@ -59,6 +62,12 @@ val JournalScheduler = named("journalScheduler")
 /** The coach module's [SyncScheduler]. */
 val CoachScheduler = named("coachScheduler")
 
+/**
+ * The heart-rate module's [SyncScheduler] — upload-only, so it debounces and
+ * retries but never polls for anything.
+ */
+val HrScheduler = named("hrScheduler")
+
 private val DebugLogScope = named("debugLogScope")
 
 /**
@@ -98,6 +107,9 @@ val coreDataModule = module {
     single { get<WellnessDatabase>().serverProfilesDao() }
     single { get<WellnessDatabase>().serverSwitchDao() }
     single { get<WellnessDatabase>().exportDao() }
+    single { get<WellnessDatabase>().hrSessionDao() }
+    single { get<WellnessDatabase>().hrSampleDao() }
+    single { get<WellnessDatabase>().setEventDao() }
 
     single { ServerBootstrap(dao = get(), builtInUrl = BuildConfig.WELLNESS_BASE_URL) }
     // Resolved, never constructed from BuildConfig directly: which server this
@@ -116,6 +128,7 @@ val coreDataModule = module {
     single { CoachApi(client = get(), config = get()) }
     single { TrendsApi(client = get(), config = get()) }
     single { AnalysisApi(client = get(), config = get(), json = get()) }
+    single { HrApi(client = get(), config = get()) }
 
     single { ConnectivityMonitor(androidContext()) }
     single { SyncErrorEvents() }
@@ -172,6 +185,17 @@ val coreDataModule = module {
         )
     }
 
+    // The coach → heart-rate seam. `captureSessionId` is null for the whole of
+    // Phase 1 (no BLE capture exists yet); Phase 2 points it at the live session
+    // and nothing else about the dual-write moves.
+    single {
+        val koinScope = this
+        SetEventRecorder(
+            captureSessionId = { null },
+            scheduleUpload = { koinScope.get<HrSyncStore>().scheduleFlush() },
+        )
+    }
+
     single {
         val connectivity = get<ConnectivityMonitor>()
         val koinScope = this
@@ -183,6 +207,7 @@ val coreDataModule = module {
             json = get(),
             debugLog = get(),
             scheduleUpload = { koinScope.get<SyncScheduler>(CoachScheduler).scheduleUpload() },
+            setEvents = get(),
         )
     }
 
@@ -202,6 +227,47 @@ val coreDataModule = module {
             // not (plans are large and the window is 60 days).
             pollCheckFn = store::pollCheck,
             onServerError = errors::postServerError,
+            isNetworkError = ::isNetworkError,
+            debugLog = get(),
+        )
+    }
+
+    single {
+        val connectivity = get<ConnectivityMonitor>()
+        val koinScope = this
+        HrSyncStore(
+            sessionDao = get(),
+            sampleDao = get(),
+            eventDao = get(),
+            api = get(),
+            // Coach's identity, not a third one: `clientId` is a diagnostic in
+            // this protocol, the set events join back to coach data, and two
+            // ids for one device would read as two devices on the server.
+            clientId = { koinScope.get<CoachSyncStore>().clientId() },
+            isOnline = { connectivity.isOnline.value },
+            session = get(),
+            debugLog = get(),
+            scheduleUpload = { koinScope.get<SyncScheduler>(HrScheduler).scheduleUpload() },
+        )
+    }
+
+    single<SyncScheduler>(HrScheduler) {
+        val connectivity = get<ConnectivityMonitor>()
+        val store = get<HrSyncStore>()
+        SyncScheduler(
+            scope = get(AppScope),
+            name = "hr",
+            syncFn = store::flush,
+            isSyncing = { store.isFlushing },
+            hasDirtyData = store::hasPendingData,
+            isOnline = { connectivity.isOnline.value },
+            // The probe *is* the sync decision here: HR is upload-only, so
+            // there is never anything to pull and a poll tick with nothing
+            // pending should cost three counts and no request at all.
+            pollCheckFn = store::hasPendingData,
+            // Deliberately no onServerError: this is background telemetry, and
+            // a toast about a set-event batch would be noise about data the
+            // user cannot see, is not losing, and did not ask to send.
             isNetworkError = ::isNetworkError,
             debugLog = get(),
         )
@@ -232,10 +298,11 @@ val coreDataModule = module {
         val context = androidContext()
         ServerSwitcher(
             gate = get(),
-            schedulers = listOf(get(JournalScheduler), get(CoachScheduler)),
+            schedulers = listOf(get(JournalScheduler), get(CoachScheduler), get(HrScheduler)),
             drains = listOf(
                 get<JournalSyncStore>()::awaitQuiescence,
                 get<CoachSyncStore>()::awaitQuiescence,
+                get<HrSyncStore>()::awaitQuiescence,
             ),
             stopAnalysis = get<AnalysisStore>()::stopAndJoin,
             backgroundWork = SyncFlushWorker.canceller(context),
@@ -248,8 +315,11 @@ val coreDataModule = module {
         val context = androidContext()
         val journal = get<JournalSyncStore>()
         val coach = get<CoachSyncStore>()
+        val hr = get<HrSyncStore>()
         val flush = SyncFlushScheduler(
-            hasDirtyData = { journal.hasDirtyData() || coach.hasDirtyData() },
+            // HR counts as dirty data: a set tick made seconds before the app
+            // went away is exactly the row this Worker exists for.
+            hasDirtyData = { journal.hasDirtyData() || coach.hasDirtyData() || hr.hasPendingData() },
             enqueue = { SyncFlushWorker.enqueue(context) },
         )
         SyncOrchestrator(

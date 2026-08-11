@@ -10,7 +10,7 @@ wellness server's `hr` module (implemented in `~/dev/health/wellness`, planned i
 `plans/hr-module.md`). Parent feature spec: `specs/coach-heart-rate.md`.
 
 Golden fixtures pin the byte-level shapes in **both** repos — Android
-`testdata/golden/hr/` (pending its phase 1; copy the bytes from the server's
+`testdata/golden/hr/` (landed with Phase 1, 2026-08-11, sha256-identical to the server's
 `test/hr/golden/`), server pytest fixtures — and any protocol change updates both in the same
 breath. Fixtures are synthetic only, never copied from live data.
 

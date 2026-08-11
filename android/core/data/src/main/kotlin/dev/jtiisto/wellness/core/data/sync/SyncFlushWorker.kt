@@ -12,6 +12,7 @@ import androidx.work.WorkRequest
 import androidx.work.WorkerParameters
 import androidx.work.await
 import dev.jtiisto.wellness.core.data.coach.CoachSyncStore
+import dev.jtiisto.wellness.core.data.hr.HrSyncStore
 import dev.jtiisto.wellness.core.data.journal.JournalSyncStore
 import dev.jtiisto.wellness.core.data.network.ServerBootstrap
 import dev.jtiisto.wellness.core.data.network.ServerResolution
@@ -51,18 +52,19 @@ class SyncFlushScheduler(
 }
 
 /**
- * The durable half of sync: one flush of both modules after the app has gone
+ * The durable half of sync: one flush of every module after the app has gone
  * away, so an edit made just before the process dies is not stranded until the
  * next launch.
  *
  * This was in the plan from the beginning and was never built — process-lifetime
  * scheduling covered everything *except* the case it was written for.
  *
- * **One combined Worker, one unique name.** Two per-module Workers would double
- * the wakeups to halve the work each time, and the two modules are dirty at the
+ * **One combined Worker, one unique name.** Per-module Workers would multiply
+ * the wakeups to divide the work each time, and the modules are dirty at the
  * same moments in practice (a session logged in Coach usually comes with journal
- * entries). `ExistingWorkPolicy.KEEP` is the dedup: repeated backgroundings
- * while one is already pending change nothing.
+ * entries, and now with the set events of the same workout).
+ * `ExistingWorkPolicy.KEEP` is the dedup: repeated backgroundings while one is
+ * already pending change nothing.
  *
  * It runs the **ordinary** `triggerSync()`, never a force cycle: this is a
  * flush, not a reconciliation, and each store's `tryLock()` makes it safe
@@ -79,6 +81,7 @@ class SyncFlushWorker(
     private val gate: ServerSessionGate by inject()
     private val coach: CoachSyncStore by inject()
     private val journal: JournalSyncStore by inject()
+    private val hr: HrSyncStore by inject()
 
     override suspend fun doWork(): Result {
         // Neither is retryable by waiting. An unresolved server means the app is
@@ -92,7 +95,7 @@ class SyncFlushWorker(
         // Bounded by the HTTP client's timeouts; a nested lease taken after the
         // close is refused, which unwinds this one and fails the flush safely.
         val results = try {
-            gate.withWriteLease { listOf(coach.triggerSync(), journal.triggerSync()) }
+            gate.withWriteLease { listOf(coach.triggerSync(), journal.triggerSync(), hr.flush()) }
         } catch (_: ServerSessionClosedException) {
             return Result.failure()
         }
@@ -114,6 +117,15 @@ class SyncFlushWorker(
          * validated-internet check correctly reports offline — so the Worker
          * wakes, does nothing, and would report success while the dirty rows
          * sit waiting for the user to open the app again. That earns a backoff.
+         *
+         * HR adds a third answer that is neither: a failure carrying a *reason*
+         * and no error, which is how [HrSyncStore] reports a request the server
+         * refused on its merits (a 4xx that is not the 422 it knows how to
+         * bisect). Waking the process again to send the same request is the
+         * "backoff spin on a poison batch" the protocol names and rejects, so
+         * it does not retry here — the foreground scheduler still will, on its
+         * own capped backoff, which costs nothing and recovers by itself if the
+         * server is fixed.
          */
         fun needsRetry(results: List<SyncResult>): Boolean =
             results.any { it.error != null || it.reason == SyncSkipReason.OFFLINE }

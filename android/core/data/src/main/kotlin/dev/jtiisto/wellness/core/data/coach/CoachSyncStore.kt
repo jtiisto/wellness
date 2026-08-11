@@ -3,9 +3,11 @@ package dev.jtiisto.wellness.core.data.coach
 import dev.jtiisto.wellness.core.data.WellnessJson
 import dev.jtiisto.wellness.core.data.db.CoachDao
 import dev.jtiisto.wellness.core.data.db.CoachDirtyClear
+import dev.jtiisto.wellness.core.data.db.CoachLogEdit
 import dev.jtiisto.wellness.core.data.db.CoachLogEntity
 import dev.jtiisto.wellness.core.data.db.CoachPlanEntity
 import dev.jtiisto.wellness.core.data.db.PendingUpload
+import dev.jtiisto.wellness.core.data.db.SetEventEntity
 import dev.jtiisto.wellness.core.data.network.CoachApi
 import dev.jtiisto.wellness.core.data.network.DateString
 import dev.jtiisto.wellness.core.data.network.describeForLog
@@ -81,6 +83,10 @@ const val EXTRA_SESSION_TITLE: String = "Zone 2 — extra session"
  * @param scheduleUpload the scheduler's debounce hook, called after every local
  *   mutation. A lambda because the scheduler is built around this store and the
  *   two would otherwise be a construction cycle.
+ * @param setEvents the completion-event log's minting side. Defaulted to an
+ *   inert recorder so a caller that has no interest in the heart-rate half —
+ *   every existing test, and any future headless user of this store — writes
+ *   blobs exactly as before.
  */
 class CoachSyncStore(
     private val dao: CoachDao,
@@ -90,6 +96,7 @@ class CoachSyncStore(
     private val json: Json = WellnessJson,
     private val debugLog: DebugLog? = null,
     private val scheduleUpload: () -> Unit = {},
+    private val setEvents: SetEventRecorder = SetEventRecorder(),
     private val clock: () -> SyncStamp = { Instant.now().toString() },
     private val today: () -> LocalDate = LocalDate::now,
     private val newClientId: () -> String = { UUID.randomUUID().toString() },
@@ -269,15 +276,26 @@ class CoachSyncStore(
      * returns the content to merge, or null to write nothing at all. A pending
      * delete is presented as absent, matching what the screen shows for one; the
      * merge itself is still tombstone-aware and records the write as a re-add.
+     *
+     * [completion] marks the edit as a completion toggle, which appends a
+     * timestamped event beside the blob. It is judged against the same stored
+     * entry [transform] sees and inside the same transaction, so a toggle that
+     * asks for the state already stored writes the blob as it always did and
+     * says nothing about when the set was performed. Null for every other edit.
      */
     suspend fun transformLogEntry(
         date: DateString,
         exerciseKey: String,
+        completion: CompletionToggle? = null,
         transform: (JsonObject?) -> JsonObject?,
     ) {
-        mutateDay(date) { current ->
-            val existing = (current[exerciseKey] as? JsonObject)?.takeUnless(::isDeletedEntry)
-            val data = transform(existing) ?: return@mutateDay current
+        mutateDay(
+            date,
+            event = { current ->
+                completion?.let { setEvents.eventFor(date, exerciseKey, it, storedEntry(current, exerciseKey)) }
+            },
+        ) { current ->
+            val data = transform(storedEntry(current, exerciseKey)) ?: return@mutateDay current
             withEntryUpdated(current, exerciseKey, data)
         }
     }
@@ -318,16 +336,24 @@ class CoachSyncStore(
      * included — the PWA sets only `_lastModifiedAt` there, inconsistently with
      * its other two mutators. Neither field is arbitrated (the server ignores
      * both), so normalizing costs nothing and removes a trap.
+     *
+     * [event] is offered the day **as stored** once the transform has decided to
+     * write, and whatever it returns is inserted by the same transaction. It is
+     * never consulted on a path that writes nothing.
      */
     private suspend fun mutateDay(
         date: DateString,
         createIfAbsent: Boolean = true,
+        event: (JsonObject) -> SetEventEntity? = { null },
         transform: (JsonObject) -> JsonObject,
     ) {
+        var recorded = false
         // The lease opens BEFORE clientId(). That call is a DAO read and so a
         // suspension point: a mutation parked there while the switch closed
         // would otherwise resume and commit a dirty row into the wiped
-        // database, belonging to the server the user just left.
+        // database, belonging to the server the user just left. The event rides
+        // inside the same lease and the same transaction, so it is fenced by
+        // construction — there is no second write to guard.
         val changed = session.withWriteLease {
             val clientId = clientId()
             val stamp = clock()
@@ -339,12 +365,17 @@ class CoachSyncStore(
                 }
                 val next = transform(current)
                 if (next === current) return@updateLogAndMarkDirty null
-                encode(stamped(next, stamp, clientId))
+                val setEvent = event(current)
+                recorded = setEvent != null
+                CoachLogEdit(encode(stamped(next, stamp, clientId)), setEvent)
             }
         }
         if (!changed) return
         updateSyncStatus()
         scheduleUpload()
+        // After the commit, never inside it: the debounce arms an upload of rows
+        // that must already be readable by the flush it wakes.
+        if (recorded) setEvents.scheduleFlush()
     }
 
     // ---- the sync cycle --------------------------------------------------
@@ -669,6 +700,10 @@ class CoachSyncStore(
     private fun stamped(log: JsonObject, stamp: SyncStamp, clientId: String): JsonObject = JsonObject(
         log + ("_lastModifiedAt" to JsonPrimitive(stamp)) + ("_lastModifiedBy" to JsonPrimitive(clientId)),
     )
+
+    /** One entry of a stored day. A pending delete reads as absent, as it does on screen. */
+    private fun storedEntry(day: JsonObject, exerciseKey: String): JsonObject? =
+        (day[exerciseKey] as? JsonObject)?.takeUnless(::isDeletedEntry)
 
     private fun parseObject(text: String): JsonObject = json.parseToJsonElement(text).jsonObject
 

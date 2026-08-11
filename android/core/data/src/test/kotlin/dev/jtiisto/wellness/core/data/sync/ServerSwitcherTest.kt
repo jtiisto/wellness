@@ -53,6 +53,9 @@ class ServerSwitcherTest {
         override suspend fun clearCoachMeta() { calls += "coach_meta" }
         override suspend fun clearPayloadCache() { calls += "payload_cache" }
         override suspend fun clearTrendsMeta() { calls += "trends_meta" }
+        override suspend fun clearHrSessions() { calls += "hr_sessions" }
+        override suspend fun clearHrSamples() { calls += "hr_samples" }
+        override suspend fun clearSetEvents() { calls += "set_events" }
         override suspend fun activate(id: Long) { calls += "activate:$id" }
         override suspend fun clearActive() { calls += "clearActive" }
         override suspend fun deleteProfile(id: Long) { calls += "deleteProfile:$id" }
@@ -100,6 +103,9 @@ class ServerSwitcherTest {
                 override suspend fun clearCoachMeta() = dao.clearCoachMeta()
                 override suspend fun clearPayloadCache() = dao.clearPayloadCache()
                 override suspend fun clearTrendsMeta() = dao.clearTrendsMeta()
+                override suspend fun clearHrSessions() = dao.clearHrSessions()
+                override suspend fun clearHrSamples() = dao.clearHrSamples()
+                override suspend fun clearSetEvents() = dao.clearSetEvents()
                 override suspend fun activate(id: Long) = dao.activate(id)
                 override suspend fun clearActive() = dao.clearActive()
                 override suspend fun deleteProfile(id: Long) = dao.deleteProfile(id)
@@ -168,11 +174,14 @@ class ServerSwitcherTest {
     // ---- the wipe --------------------------------------------------------
 
     @Test
-    @DisplayName("exactly eight tables are cleared, and the two that carry the switch itself are spared")
-    fun wipeClearsExactlyEightTables() = switcherTest { harness ->
+    @DisplayName("exactly eleven tables are cleared, and the two that carry the switch itself are spared")
+    fun wipeClearsExactlyElevenTables() = switcherTest { harness ->
         harness.switcher.switchTo(profile(2, "B"), fromNickname = "A")
 
         val cleared = harness.dao.calls.filter { it !in setOf("insertLogLine") && !it.startsWith("activate") }
+        // Spelled out rather than counted: a new table that holds server data is
+        // added by editing this list, and a new table that does not belong here
+        // has to be argued for in the same edit.
         assertEquals(
             listOf(
                 "journal_trackers",
@@ -183,6 +192,9 @@ class ServerSwitcherTest {
                 "coach_meta",
                 "payload_cache",
                 "trends_meta",
+                "hr_sessions",
+                "hr_samples",
+                "set_events",
             ),
             cleared,
         )

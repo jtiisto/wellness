@@ -8,6 +8,7 @@ import dev.jtiisto.wellness.core.data.db.CoachLogEntity
 import dev.jtiisto.wellness.core.data.db.CoachMetaEntity
 import dev.jtiisto.wellness.core.data.db.CoachPlanEntity
 import dev.jtiisto.wellness.core.data.db.PendingUpload
+import dev.jtiisto.wellness.core.data.db.SetEventEntity
 import dev.jtiisto.wellness.core.data.network.CoachApi
 import dev.jtiisto.wellness.core.data.network.DateString
 import dev.jtiisto.wellness.core.data.network.ServerConfig
@@ -1246,6 +1247,9 @@ internal open class FakeCoachDao : CoachDao() {
     val logs = linkedMapOf<DateString, CoachLogEntity>()
     val meta = linkedMapOf<String, String>()
 
+    /** The completion log, in insert order. See `CoachSetEventTest`. */
+    val setEvents = mutableListOf<SetEventEntity>()
+
     /** Ordered write log, so tests can assert what happened *inside* a transaction. */
     val calls = mutableListOf<String>()
 
@@ -1281,6 +1285,13 @@ internal open class FakeCoachDao : CoachDao() {
         calls += "applyUploadResults:start"
         super.applyUploadResults(dates, clears, adopt)
         calls += "applyUploadResults:end"
+    }
+
+    /** Mirrors the plain `@Insert`: a reused id aborts rather than overwriting. */
+    override suspend fun insertSetEvent(event: SetEventEntity) {
+        calls += "insertSetEvent"
+        check(setEvents.none { it.eventId == event.eventId }) { "duplicate eventId ${event.eventId}" }
+        setEvents += event
     }
 
     override suspend fun clearDirty(clears: List<CoachDirtyClear>) {

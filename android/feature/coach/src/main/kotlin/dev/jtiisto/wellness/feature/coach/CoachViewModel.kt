@@ -3,6 +3,7 @@ package dev.jtiisto.wellness.feature.coach
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.jtiisto.wellness.core.data.coach.CoachSyncStore
+import dev.jtiisto.wellness.core.data.coach.CompletionToggle
 import dev.jtiisto.wellness.core.data.coach.EXTRA_SESSION_KEY
 import dev.jtiisto.wellness.core.data.coach.HookAction
 import dev.jtiisto.wellness.core.data.coach.PlanDto
@@ -192,10 +193,17 @@ class CoachViewModel(
         }
     }
 
-    /** The done tick, through the same pad-and-rewrite path as a value edit. */
+    /**
+     * The done tick, through the same pad-and-rewrite path as a value edit.
+     *
+     * The only difference is the [CompletionToggle], which appends a timestamped
+     * row to the set-event log in the same transaction. The blob write is
+     * unconditional as it always was; the event is not, and the store decides
+     * that against the set as stored.
+     */
     fun setSetCompleted(exerciseId: String, index: Int, completed: Boolean) {
         if (!isEntryEditable()) return
-        editEntry(exerciseId) { entry ->
+        editEntry(exerciseId, CompletionToggle.SetTick(setNum = index + 1, completed = completed)) { entry ->
             buildJsonObject {
                 put("sets", withSetCell(entry.setsArray(), index, "completed", JsonPrimitive(completed)))
             }
@@ -219,7 +227,7 @@ class CoachViewModel(
      */
     fun toggleChecklistItem(exerciseId: String, item: String) {
         if (!isEntryEditable()) return
-        editEntry(exerciseId) { entry ->
+        editEntry(exerciseId, CompletionToggle.ChecklistItem(item)) { entry ->
             val done = entry?.array("completed_items").orEmpty()
                 .mapNotNull { (it as? JsonPrimitive)?.content }
             val next = if (item in done) done - item else done + item
@@ -282,10 +290,17 @@ class CoachViewModel(
      * [mutate] is handed the entry as stored and returns the content to merge,
      * or null to write nothing — which is how an unusable or unchanged field
      * commit ends up costing nothing at all.
+     *
+     * [completion] is set only by the two toggles that record one; a value edit
+     * leaves it null and appends nothing to the set-event log.
      */
-    private fun editEntry(exerciseId: String, mutate: (JsonObject?) -> JsonObject?) {
+    private fun editEntry(
+        exerciseId: String,
+        completion: CompletionToggle? = null,
+        mutate: (JsonObject?) -> JsonObject?,
+    ) {
         val date = selectedDate.value
-        viewModelScope.launch { store.transformLogEntry(date, exerciseId, mutate) }
+        viewModelScope.launch { store.transformLogEntry(date, exerciseId, completion, mutate) }
     }
 
     private fun JsonObject?.setsArray(): JsonArray = this?.array("sets") ?: JsonArray(emptyList())

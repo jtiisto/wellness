@@ -119,5 +119,61 @@ val MIGRATION_4_5 = object : Migration(4, 5) {
     }
 }
 
+/**
+ * v5 → v6: the heart-rate tables (coach HR integration, phase 1).
+ *
+ * Additive, and everything said above about unsent edits holds unchanged. What
+ * is new here is that these three tables arrive empty and *stay* the only copy
+ * of what they later hold: HR samples and set events are client-authored
+ * telemetry that exists nowhere else until it uploads, so the ordinary rule
+ * against destructive migration applies to them with no server to fall back on
+ * at all.
+ *
+ * The two indices are part of the schema comparison and are not decoration —
+ * `hr_samples` is the one table here that grows on its own, and the uploader
+ * scans it every ten seconds.
+ *
+ * Transcribed verbatim from `schemas/…WellnessDatabase/6.json` with
+ * `${TABLE_NAME}` substituted; `Migration5to6Test` re-validates it against the
+ * real schema, and also runs the whole v1 → v6 chain.
+ */
+val MIGRATION_5_6 = object : Migration(5, 6) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `hr_sessions` (" +
+                "`sessionId` TEXT NOT NULL, `deviceId` TEXT NOT NULL, " +
+                "`startedAtMs` INTEGER NOT NULL, `endedAtMs` INTEGER, `workoutDate` TEXT, " +
+                "`workoutSessionId` INTEGER, `isSynced` INTEGER NOT NULL, " +
+                "`isQuarantined` INTEGER NOT NULL, `dirtyGeneration` INTEGER NOT NULL, " +
+                "PRIMARY KEY(`sessionId`))",
+        )
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `hr_samples` (" +
+                "`deviceId` TEXT NOT NULL, `timestampMs` INTEGER NOT NULL, `seq` INTEGER NOT NULL, " +
+                "`heartRateBpm` INTEGER NOT NULL, `rrIntervalMs` INTEGER NOT NULL, " +
+                "`isGapBefore` INTEGER NOT NULL, `sessionId` TEXT NOT NULL, " +
+                "`isSynced` INTEGER NOT NULL, `syncedAt` INTEGER, `isQuarantined` INTEGER NOT NULL, " +
+                "PRIMARY KEY(`deviceId`, `timestampMs`, `seq`))",
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_hr_samples_isSynced_isQuarantined_timestampMs` " +
+                "ON `hr_samples` (`isSynced`, `isQuarantined`, `timestampMs`)",
+        )
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `set_events` (" +
+                "`eventId` TEXT NOT NULL, `date` TEXT NOT NULL, `exerciseKey` TEXT NOT NULL, " +
+                "`setNum` INTEGER, `itemKey` TEXT, `action` TEXT NOT NULL, " +
+                "`clientTimestampMs` INTEGER NOT NULL, `sessionId` TEXT, " +
+                "`isSynced` INTEGER NOT NULL, `isQuarantined` INTEGER NOT NULL, " +
+                "PRIMARY KEY(`eventId`))",
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_set_events_isSynced_isQuarantined_clientTimestampMs` " +
+                "ON `set_events` (`isSynced`, `isQuarantined`, `clientTimestampMs`)",
+        )
+    }
+}
+
 /** Every migration the app ships, in order. Never add destructive fallbacks. */
-val WELLNESS_MIGRATIONS = arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+val WELLNESS_MIGRATIONS =
+    arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)

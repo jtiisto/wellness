@@ -2,6 +2,7 @@ package dev.jtiisto.wellness
 
 import dev.jtiisto.wellness.core.data.analysis.AnalysisStore
 import dev.jtiisto.wellness.core.data.di.CoachScheduler
+import dev.jtiisto.wellness.core.data.di.HrScheduler
 import dev.jtiisto.wellness.core.data.di.JournalScheduler
 import dev.jtiisto.wellness.core.data.network.ServerBootstrap
 import dev.jtiisto.wellness.core.data.network.ServerResolution
@@ -35,6 +36,10 @@ fun bootWellness(koin: Koin): ServerResolution {
     val orchestrator = koin.get<SyncOrchestrator>()
     orchestrator.register(koin.get<SyncScheduler>(JournalScheduler))
     orchestrator.register(koin.get<SyncScheduler>(CoachScheduler))
+    // HR registers for the same reason the other two do, even though nothing
+    // ever pulls: connectivity coming back is what re-arms a flush that failed
+    // while the strap was recording, and only the orchestrator knows.
+    orchestrator.register(koin.get<SyncScheduler>(HrScheduler))
     orchestrator.start()
 
     // Analysis owns a poll rather than a scheduler, so it observes the process

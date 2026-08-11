@@ -1,6 +1,7 @@
 package dev.jtiisto.wellness.core.data.db
 
 import androidx.room.Dao
+import androidx.room.Insert
 import androidx.room.Query
 import androidx.room.Transaction
 import androidx.room.Upsert
@@ -35,6 +36,17 @@ data class PendingUpload(
     val payload: Map<DateString, JsonObject> = emptyMap(),
     val unsatisfiableDates: List<DateString> = emptyList(),
 )
+
+/**
+ * A day's next JSON, and the completion event that day's edit earned.
+ *
+ * The two are one decision rather than two, and that is the whole point of the
+ * type: an event is a claim that a set was ticked at a moment, and a claim whose
+ * blob write then failed to land would be a set the correlation says was
+ * performed and the screen says never was. [setEvent] is null for every edit
+ * that is not a completion toggle, which is most of them.
+ */
+data class CoachLogEdit(val logJson: String, val setEvent: SetEventEntity? = null)
 
 /**
  * Coach storage: server-authoritative plans, whole-day log blobs, and the
@@ -169,32 +181,48 @@ abstract class CoachDao {
     // ---- composed writes -------------------------------------------------
 
     /**
+     * The completion log's insert.
+     *
+     * Declared here rather than reached through [SetEventDao] because Room
+     * cannot call across DAOs, and a completion event has to land in the same
+     * transaction as the blob write it describes. `SetEventDao.insert` remains
+     * the standalone path for the uploader's own callers.
+     */
+    @Insert
+    abstract suspend fun insertSetEvent(event: SetEventEntity)
+
+    /**
      * A local log edit. [transform] is handed the stored day's JSON (null when
-     * the day does not exist yet) and returns the next one, or **null to do
-     * nothing at all** — no write, no dirty mark, no upload.
+     * the day does not exist yet) and returns the next one plus any event it
+     * earned, or **null to do nothing at all** — no write, no dirty mark, no
+     * event, no upload.
      *
      * It runs inside the transaction so it always sees the day as stored; a
      * caller that read the day first and wrote it back would revert whatever a
      * pull delivered in between. `isDirty`/`dirtyGeneration` are read back from
      * storage rather than taken from the caller, so nothing can reset the
      * counter the mid-sync check depends on.
+     *
+     * [CoachLogEdit.setEvent] is inserted last and only on the writing path, so
+     * an event exists if and only if the mutation it describes was applied.
      */
     @Transaction
     open suspend fun updateLogAndMarkDirty(
         date: DateString,
-        transform: (String?) -> String?,
+        transform: (String?) -> CoachLogEdit?,
     ): Boolean {
         val existing = getLog(date)
-        val next = transform(existing?.logJson) ?: return false
+        val edit = transform(existing?.logJson) ?: return false
         upsertLog(
             CoachLogEntity(
                 date = date,
-                logJson = next,
+                logJson = edit.logJson,
                 isDirty = existing?.isDirty ?: false,
                 dirtyGeneration = existing?.dirtyGeneration ?: 0L,
             ),
         )
         markLogDirty(date)
+        edit.setEvent?.let { insertSetEvent(it) }
         return true
     }
 

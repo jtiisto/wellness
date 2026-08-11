@@ -4,11 +4,17 @@ import dev.jtiisto.wellness.core.data.WellnessJson
 import dev.jtiisto.wellness.core.data.coach.CoachSyncStore
 import dev.jtiisto.wellness.core.data.coach.FakeCoachDao
 import dev.jtiisto.wellness.core.data.db.DebugLogEntity
+import dev.jtiisto.wellness.core.data.db.FakeHrSampleDao
+import dev.jtiisto.wellness.core.data.db.FakeHrSessionDao
+import dev.jtiisto.wellness.core.data.db.FakeSetEventDao
+import dev.jtiisto.wellness.core.data.db.HrSampleEntity
+import dev.jtiisto.wellness.core.data.db.HrSessionEntity
 import dev.jtiisto.wellness.core.data.db.JournalTrackerEntity
 import dev.jtiisto.wellness.core.data.db.PayloadCacheDao
 import dev.jtiisto.wellness.core.data.db.PayloadCacheEntity
 import dev.jtiisto.wellness.core.data.db.ServerProfileEntity
 import dev.jtiisto.wellness.core.data.db.ServerSwitchDao
+import dev.jtiisto.wellness.core.data.db.SetEventEntity
 import dev.jtiisto.wellness.core.data.export.SharedFileStore
 import dev.jtiisto.wellness.core.data.journal.FakeJournalDao
 import dev.jtiisto.wellness.core.data.journal.JournalSyncStore
@@ -136,6 +142,9 @@ class ServerSwitchIntegrationTest {
         private val cache: BarrierCacheDao,
         private val trendsMeta: MutableMap<String, String>,
         private val profiles: MutableList<ServerProfileEntity>,
+        private val hrSessions: FakeHrSessionDao,
+        private val hrSamples: FakeHrSampleDao,
+        private val setEvents: FakeSetEventDao,
     ) : ServerSwitchDao() {
         val logLines = mutableListOf<String>()
 
@@ -147,6 +156,9 @@ class ServerSwitchIntegrationTest {
         override suspend fun clearCoachMeta() = coach.meta.clear()
         override suspend fun clearPayloadCache() = cache.rows.clear()
         override suspend fun clearTrendsMeta() = trendsMeta.clear()
+        override suspend fun clearHrSessions() = hrSessions.sessions.clear()
+        override suspend fun clearHrSamples() = hrSamples.samples.clear()
+        override suspend fun clearSetEvents() = setEvents.events.clear()
 
         override suspend fun activate(id: Long) {
             profiles.replaceAll { it.copy(isActive = it.id == id) }
@@ -175,7 +187,13 @@ class ServerSwitchIntegrationTest {
             ServerProfileEntity(id = 1, nickname = "Laptop", url = "https://laptop/wellness", isActive = true),
             ServerProfileEntity(id = 2, nickname = "Desk", url = "https://desk/wellness", isActive = false),
         )
-        val switchDao = WiringSwitchDao(journalDao, coachDao, cacheDao, trendsMeta, profiles)
+        val hrSessionDao = FakeHrSessionDao()
+        val hrSampleDao = FakeHrSampleDao()
+        val setEventDao = FakeSetEventDao()
+        val switchDao = WiringSwitchDao(
+            journalDao, coachDao, cacheDao, trendsMeta, profiles,
+            hrSessionDao, hrSampleDao, setEventDao,
+        )
         val config = ServerConfig("http://localhost:9001/wellness")
 
         private fun engine(body: String) = MockEngine {
@@ -229,7 +247,7 @@ class ServerSwitchIntegrationTest {
             now = { 1_786_285_805_000L },
         )
 
-        /** Populate all eight wiped tables, so emptiness afterwards means something. */
+        /** Populate all eleven wiped tables, so emptiness afterwards means something. */
         suspend fun seedEverything() {
             journalDao.upsertTracker(
                 JournalTrackerEntity(
@@ -252,12 +270,33 @@ class ServerSwitchIntegrationTest {
             coachDao.meta["lastServerSyncTime"] = "coach-watermark"
             cacheDao.rows["trends|overview"] = PayloadCacheEntity("trends", "overview", "{}", 1)
             trendsMeta["ui.range"] = "12w"
+            // Unsynced on purpose: HR rows are client-authored telemetry with no
+            // copy anywhere else, which is the strongest form of "belongs to the
+            // server we are leaving" this wipe has to handle.
+            hrSessionDao.upsert(
+                HrSessionEntity(
+                    sessionId = "hr-1", deviceId = "AA:BB:CC:DD:EE:FF",
+                    startedAtMs = 1_769_999_990_000, workoutDate = "2030-01-03",
+                ),
+            )
+            hrSampleDao.insertAll(
+                listOf(
+                    HrSampleEntity(
+                        deviceId = "AA:BB:CC:DD:EE:FF", timestampMs = 1_770_000_000_000, seq = 0,
+                        heartRateBpm = 142, rrIntervalMs = 423, sessionId = "hr-1",
+                    ),
+                ),
+            )
+            setEventDao.insert(
+                SetEventEntity(
+                    eventId = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee", date = "2030-01-03",
+                    exerciseKey = "fixture-adhoc-lift", setNum = 1,
+                    action = SetEventEntity.ACTION_CHECK, clientTimestampMs = 1_770_000_010_000,
+                ),
+            )
         }
 
-        fun everythingIsEmpty(): Boolean =
-            journalDao.trackers.isEmpty() && journalDao.entries.isEmpty() && journalDao.meta.isEmpty() &&
-                coachDao.plans.isEmpty() && coachDao.logs.isEmpty() && coachDao.meta.isEmpty() &&
-                cacheDao.rows.isEmpty() && trendsMeta.isEmpty()
+        fun everythingIsEmpty(): Boolean = populatedTables().isEmpty()
 
         fun populatedTables(): List<String> = buildList {
             if (journalDao.trackers.isNotEmpty()) add("journal_trackers")
@@ -268,6 +307,9 @@ class ServerSwitchIntegrationTest {
             if (coachDao.meta.isNotEmpty()) add("coach_meta")
             if (cacheDao.rows.isNotEmpty()) add("payload_cache")
             if (trendsMeta.isNotEmpty()) add("trends_meta")
+            if (hrSessionDao.sessions.isNotEmpty()) add("hr_sessions")
+            if (hrSampleDao.samples.isNotEmpty()) add("hr_samples")
+            if (setEventDao.events.isNotEmpty()) add("set_events")
         }
     }
 
@@ -361,10 +403,10 @@ class ServerSwitchIntegrationTest {
     }
 
     @Test
-    @DisplayName("every one of the eight tables is empty once the switch returns")
-    fun allEightTablesAreEmptied() = switchTest { world ->
+    @DisplayName("every one of the eleven tables is empty once the switch returns")
+    fun allElevenTablesAreEmptied() = switchTest { world ->
         world.seedEverything()
-        assertEquals(8, world.populatedTables().size + 0, "the seed must cover all eight wiped tables")
+        assertEquals(11, world.populatedTables().size, "the seed must cover all eleven wiped tables")
 
         world.switcher.switchTo(target(world), fromNickname = "Laptop")
 

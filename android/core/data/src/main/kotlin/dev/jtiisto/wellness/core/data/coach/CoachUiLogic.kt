@@ -454,7 +454,7 @@ fun JsonObject.array(key: String): JsonArray = this[key] as? JsonArray ?: JsonAr
  * JS `=== true`: only the JSON boolean counts. The string `"true"` and the
  * number `1` are not a ticked set.
  */
-private fun JsonElement?.isJsonTrue(): Boolean {
+internal fun JsonElement?.isJsonTrue(): Boolean {
     val primitive = this as? JsonPrimitive ?: return false
     return !primitive.isString && primitive.content == "true"
 }

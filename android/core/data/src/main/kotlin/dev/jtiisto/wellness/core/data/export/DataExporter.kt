@@ -47,6 +47,11 @@ import java.time.Instant
  *
  * The debug log is excluded too, as it is in the PWA, because it has its own
  * share action.
+ *
+ * The `hr` section has no PWA counterpart to be faithful to — the module is
+ * headless there — so it is written the way the wire protocol it feeds is
+ * written: camelCase row fields, optional fields omitted rather than null. Raw
+ * RR samples are the one thing summarized instead of dumped; see [hr].
  */
 class DataExporter(
     private val dao: ExportDao,
@@ -80,6 +85,7 @@ class DataExporter(
         }
         put("journal", journal(snapshot))
         put("coach", coach(snapshot))
+        put("hr", hr(snapshot))
         // Structural parity only: the PWA persists which module was last open,
         // and native navigation does not. An absent key would read as an older
         // export format; an invented value would read as a fact.
@@ -159,6 +165,70 @@ class DataExporter(
             put("earliestDate", nullable(snapshot.coachMeta[CoachDao.KEY_EARLIEST_DATE]))
         }
         put("coach_client_id", nullable(snapshot.coachMeta[CoachDao.KEY_CLIENT_ID]))
+    }
+
+    /**
+     * Capture sessions, the toggle log, and **counts** of the RR samples.
+     *
+     * The samples themselves are deliberately not here. An hour of capture is
+     * several thousand rows of raw interval data whose only reader is the
+     * server's analysis stage; dumping a week of them would multiply the file
+     * by an order of magnitude and bury the state someone opened it to check.
+     * What that reader actually wants from a device export is how much is held
+     * and whether it has left — which is what the counts say, and they are
+     * aggregated in SQL so the rows never reach memory either.
+     *
+     * `isSynced`, `isQuarantined` and `dirtyGeneration` are exported on every
+     * row rather than filtered on: "this session never uploaded, and here is
+     * whether the server rejected it or nobody tried" is the fact the file
+     * exists to record, and the generation is what distinguishes a session
+     * nobody has sent from one being rewritten faster than it can upload. The
+     * coach section exports its generations for the same reason.
+     */
+    private fun hr(snapshot: ExportSnapshot): JsonObject = buildJsonObject {
+        putJsonObject("sessions") {
+            for (row in snapshot.hrSessions) {
+                putJsonObject(row.sessionId) {
+                    put("deviceId", row.deviceId)
+                    put("startedAtMs", row.startedAtMs)
+                    row.endedAtMs?.let { put("endedAtMs", it) }
+                    row.workoutDate?.let { put("workoutDate", it) }
+                    row.workoutSessionId?.let { put("workoutSessionId", it) }
+                    put("isSynced", row.isSynced)
+                    put("isQuarantined", row.isQuarantined)
+                    put("dirtyGeneration", row.dirtyGeneration)
+                }
+            }
+        }
+        putJsonObject("sample_counts") {
+            for (row in snapshot.hrSampleSummaries) {
+                putJsonObject(row.sessionId) {
+                    put("total", row.total)
+                    put("pending", row.pending)
+                    put("quarantined", row.quarantined)
+                    put("firstTimestampMs", row.firstTimestampMs)
+                    put("lastTimestampMs", row.lastTimestampMs)
+                }
+            }
+        }
+        putJsonArray("set_events") {
+            for (row in snapshot.setEvents) {
+                add(
+                    buildJsonObject {
+                        put("eventId", row.eventId)
+                        put("date", row.date)
+                        put("exerciseKey", row.exerciseKey)
+                        row.setNum?.let { put("setNum", it) }
+                        row.itemKey?.let { put("itemKey", it) }
+                        put("action", row.action)
+                        put("clientTimestampMs", row.clientTimestampMs)
+                        row.sessionId?.let { put("sessionId", it) }
+                        put("isSynced", row.isSynced)
+                        put("isQuarantined", row.isQuarantined)
+                    },
+                )
+            }
+        }
     }
 
     private fun nullable(value: String?): JsonElement =

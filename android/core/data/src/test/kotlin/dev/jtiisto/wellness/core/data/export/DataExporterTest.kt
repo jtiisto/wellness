@@ -6,10 +6,13 @@ import dev.jtiisto.wellness.core.data.db.CoachLogEntity
 import dev.jtiisto.wellness.core.data.db.CoachMetaEntity
 import dev.jtiisto.wellness.core.data.db.CoachPlanEntity
 import dev.jtiisto.wellness.core.data.db.ExportDao
+import dev.jtiisto.wellness.core.data.db.HrSampleSummary
+import dev.jtiisto.wellness.core.data.db.HrSessionEntity
 import dev.jtiisto.wellness.core.data.db.JournalDao
 import dev.jtiisto.wellness.core.data.db.JournalEntryEntity
 import dev.jtiisto.wellness.core.data.db.JournalMetaEntity
 import dev.jtiisto.wellness.core.data.db.JournalTrackerEntity
+import dev.jtiisto.wellness.core.data.db.SetEventEntity
 import dev.jtiisto.wellness.core.data.journal.JournalUiPrefs
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonArray
@@ -47,6 +50,9 @@ class DataExporterTest {
         var plans = listOf<CoachPlanEntity>()
         var logs = listOf<CoachLogEntity>()
         var coachMeta = listOf<CoachMetaEntity>()
+        var hrSessions = listOf<HrSessionEntity>()
+        var hrSampleSummaries = listOf<HrSampleSummary>()
+        var setEvents = listOf<SetEventEntity>()
 
         /** Ordered read log — the atomicity assertion reads this. */
         val reads = mutableListOf<String>()
@@ -81,6 +87,21 @@ class DataExporterTest {
         override suspend fun coachMeta(): List<CoachMetaEntity> {
             reads += "coachMeta"
             return coachMeta
+        }
+
+        override suspend fun hrSessions(): List<HrSessionEntity> {
+            reads += "hrSessions"
+            return hrSessions
+        }
+
+        override suspend fun hrSampleSummaries(): List<HrSampleSummary> {
+            reads += "hrSampleSummaries"
+            return hrSampleSummaries
+        }
+
+        override suspend fun setEvents(): List<SetEventEntity> {
+            reads += "setEvents"
+            return setEvents
         }
     }
 
@@ -408,7 +429,7 @@ class DataExporterTest {
     // ---- snapshot and streaming ------------------------------------------
 
     @Test
-    @DisplayName("all six tables are read through one snapshot call")
+    @DisplayName("all nine tables are read through one snapshot call")
     fun snapshotReadsEverythingTogether() = runTest {
         val dao = FakeExportDao()
 
@@ -418,7 +439,10 @@ class DataExporterTest {
         // state the device was never in; the @Transaction is what prevents it,
         // and this pins that every table goes through it.
         assertEquals(
-            listOf("trackers", "entries", "journalMeta", "plans", "logs", "coachMeta"),
+            listOf(
+                "trackers", "entries", "journalMeta", "plans", "logs", "coachMeta",
+                "hrSessions", "hrSampleSummaries", "setEvents",
+            ),
             dao.reads,
         )
     }
@@ -457,13 +481,141 @@ class DataExporterTest {
     }
 
     @Test
-    @DisplayName("nothing in the envelope names a table that only exists natively")
+    @DisplayName("no native storage detail leaks into the two sections the PWA also writes")
     fun noNativeOnlyTablesLeak() = runTest {
-        val text = exportOf(FakeExportDao()).toString()
+        val model = exportOf(FakeExportDao())
 
+        // Scoped to journal and coach on purpose. Those two are reconstructions
+        // of what the PWA would have written, and a Room table name appearing
+        // inside them means the reconstruction leaked. `hr` has no PWA
+        // counterpart to be faithful to, so it names its own tables.
+        val text = listOf("journal", "coach").joinToString { model.getValue(it).toString() }
         assertNull(
             listOf("payload_cache", "trends_meta", "journal_trackers").firstOrNull { text.contains(it) },
             "a native storage detail reached the v2 envelope",
         )
+    }
+
+    // ---- hr --------------------------------------------------------------
+
+    @Test
+    @DisplayName("sessions are keyed by id, with the optional anchors omitted rather than null")
+    fun hrSessionsShape() = runTest {
+        val dao = FakeExportDao().apply {
+            hrSessions = listOf(
+                HrSessionEntity(
+                    sessionId = "s-anchored", deviceId = "AA:BB:CC:DD:EE:FF",
+                    startedAtMs = 1_769_999_990_000, endedAtMs = 1_770_000_500_000,
+                    workoutDate = "2030-01-03", workoutSessionId = 42, isSynced = true,
+                ),
+                HrSessionEntity(
+                    sessionId = "s-rejected", deviceId = "AA:BB:CC:DD:EE:FF",
+                    startedAtMs = 1_770_000_900_000, isQuarantined = true, dirtyGeneration = 4,
+                ),
+                HrSessionEntity(
+                    sessionId = "s-loose", deviceId = "AA:BB:CC:DD:EE:FF",
+                    startedAtMs = 1_770_001_000_000,
+                ),
+            )
+        }
+
+        val sessions = exportOf(dao).getValue("hr").jsonObject.getValue("sessions").jsonObject
+
+        val anchored = sessions.getValue("s-anchored").jsonObject
+        assertEquals("2030-01-03", anchored.getValue("workoutDate").jsonPrimitive.content)
+        assertEquals(42, anchored.getValue("workoutSessionId").jsonPrimitive.content.toInt())
+        assertTrue(anchored.getValue("isSynced").jsonPrimitive.content.toBoolean())
+
+        // Omitted, never null — the same rule the wire protocol these rows feed
+        // is written under.
+        val loose = sessions.getValue("s-loose").jsonObject
+        assertFalse(loose.containsKey("endedAtMs"))
+        assertFalse(loose.containsKey("workoutDate"))
+        assertFalse(loose.containsKey("workoutSessionId"))
+        // And "never uploaded" is exactly the fact this file exists to record —
+        // with the two flags apart, so "the server rejected it" reads
+        // differently from "nobody has tried yet".
+        assertFalse(loose.getValue("isSynced").jsonPrimitive.content.toBoolean())
+        assertFalse(loose.getValue("isQuarantined").jsonPrimitive.content.toBoolean())
+        val rejected = sessions.getValue("s-rejected").jsonObject
+        assertTrue(rejected.getValue("isQuarantined").jsonPrimitive.content.toBoolean())
+        // The generation is what separates "nobody sent this" from "it is being
+        // rewritten faster than it uploads"; the coach section exports its own
+        // for the same reason.
+        assertEquals(4, rejected.getValue("dirtyGeneration").jsonPrimitive.content.toInt())
+    }
+
+    @Test
+    @DisplayName("RR samples are counted per session, never dumped row by row")
+    fun hrSamplesAreSummarized() = runTest {
+        val dao = FakeExportDao().apply {
+            hrSampleSummaries = listOf(
+                HrSampleSummary(
+                    sessionId = "s-anchored", total = 3, pending = 1, quarantined = 1,
+                    firstTimestampMs = 1_770_000_000_000, lastTimestampMs = 1_770_000_004_100,
+                ),
+            )
+        }
+
+        val model = exportOf(dao)
+
+        val counts = model.getValue("hr").jsonObject.getValue("sample_counts").jsonObject
+            .getValue("s-anchored").jsonObject
+        assertEquals(3, counts.getValue("total").jsonPrimitive.content.toInt())
+        assertEquals(1, counts.getValue("pending").jsonPrimitive.content.toInt())
+        assertEquals(1, counts.getValue("quarantined").jsonPrimitive.content.toInt())
+        assertEquals(1_770_000_000_000L, counts.getValue("firstTimestampMs").jsonPrimitive.content.toLong())
+        assertEquals(1_770_000_004_100L, counts.getValue("lastTimestampMs").jsonPrimitive.content.toLong())
+        // An hour of capture is thousands of RR rows and the export holds the
+        // whole model in memory; a key named for them would mean it stopped
+        // being bounded by anything a user cannot make bigger.
+        assertFalse(model.getValue("hr").jsonObject.containsKey("samples"))
+    }
+
+    @Test
+    @DisplayName("set events are an ordered array carrying the toggle that produced each one")
+    fun hrSetEventsShape() = runTest {
+        val dao = FakeExportDao().apply {
+            setEvents = listOf(
+                SetEventEntity(
+                    eventId = "e-set", date = "2030-01-03", exerciseKey = "fixture-adhoc-lift",
+                    setNum = 1, action = SetEventEntity.ACTION_CHECK,
+                    clientTimestampMs = 1_770_000_010_000, sessionId = "s-anchored", isSynced = true,
+                ),
+                SetEventEntity(
+                    eventId = "e-item", date = "2030-01-04", exerciseKey = "fixture-adhoc-checklist",
+                    itemKey = "fixture-item-a", action = SetEventEntity.ACTION_UNCHECK,
+                    clientTimestampMs = 1_770_000_020_000, isQuarantined = true,
+                ),
+            )
+        }
+
+        val events = exportOf(dao).getValue("hr").jsonObject.getValue("set_events").jsonArray
+
+        assertEquals(listOf("e-set", "e-item"), events.map { it.jsonObject.getValue("eventId").jsonPrimitive.content })
+        val set = events[0].jsonObject
+        assertEquals(1, set.getValue("setNum").jsonPrimitive.content.toInt())
+        assertFalse(set.containsKey("itemKey"))
+        assertEquals("s-anchored", set.getValue("sessionId").jsonPrimitive.content)
+
+        val item = events[1].jsonObject
+        assertEquals("fixture-item-a", item.getValue("itemKey").jsonPrimitive.content)
+        assertFalse(item.containsKey("setNum"))
+        // No capture was running, so there is nothing to correlate against.
+        assertFalse(item.containsKey("sessionId"))
+        assertEquals("uncheck", item.getValue("action").jsonPrimitive.content)
+        assertTrue(item.getValue("isQuarantined").jsonPrimitive.content.toBoolean())
+    }
+
+    @Test
+    @DisplayName("a device that has never captured still writes the hr section, empty")
+    fun hrSectionExistsWhenEmpty() = runTest {
+        val hr = exportOf(FakeExportDao()).getValue("hr").jsonObject
+
+        // An absent section would read as an older export format rather than as
+        // "no captures", which is the same reason `app.activeModule` is a null.
+        assertTrue(hr.getValue("sessions").jsonObject.isEmpty())
+        assertTrue(hr.getValue("sample_counts").jsonObject.isEmpty())
+        assertTrue(hr.getValue("set_events").jsonArray.isEmpty())
     }
 }

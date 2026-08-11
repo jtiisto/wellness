@@ -1,6 +1,7 @@
 package dev.jtiisto.wellness.feature.coach
 
 import dev.jtiisto.wellness.core.data.coach.CoachSyncStore
+import dev.jtiisto.wellness.core.data.coach.CompletionToggle
 import dev.jtiisto.wellness.core.data.coach.EXTRA_SESSION_KEY
 import dev.jtiisto.wellness.core.data.coach.PlanDto
 import dev.jtiisto.wellness.core.data.coach.WorkoutStatusDto
@@ -76,6 +77,13 @@ class CoachViewModelTest {
      */
     private var storedDay: JsonObject = buildJsonObject { }
 
+    /**
+     * Every completion descriptor handed to the store, in call order — null for
+     * an edit that is not a toggle. What the store then does with one is
+     * `CoachSetEventTest`'s subject; what reaches it is this file's.
+     */
+    private val completions = mutableListOf<CompletionToggle?>()
+
     @BeforeEach
     fun installMainDispatcher() {
         every { store.observeAllPlans() } returns plansFlow
@@ -87,10 +95,11 @@ class CoachViewModelTest {
 
         // Stand in for the real transaction: hand the transform the entry as
         // stored right now, then merge what it returns.
-        coEvery { store.transformLogEntry(any(), any(), any()) } answers {
+        coEvery { store.transformLogEntry(any(), any(), any(), any()) } answers {
             val key = secondArg<String>()
+            completions += arg<CompletionToggle?>(2)
             @Suppress("UNCHECKED_CAST")
-            val transform = thirdArg<(JsonObject?) -> JsonObject?>()
+            val transform = arg<(JsonObject?) -> JsonObject?>(3)
             val data = transform(storedDay[key] as? JsonObject)
             if (data != null) {
                 val merged = buildJsonObject {
@@ -239,6 +248,49 @@ class CoachViewModelTest {
         assertEquals("true", sets[1].jsonObject.getValue("completed").jsonPrimitive.content)
     }
 
+    // ---- what the set-event log is told --------------------------------------------
+
+    @Test
+    @DisplayName("a set tick carries a one-based set number and the state it is asking for")
+    fun setTickCarriesItsToggle() = runVmTest { viewModel ->
+        givenPlan()
+
+        viewModel.setSetCompleted("ex_1", index = 1, completed = true)
+        viewModel.setSetCompleted("ex_1", index = 1, completed = false)
+        runCurrent()
+
+        assertEquals(
+            listOf(
+                CompletionToggle.SetTick(setNum = 2, completed = true),
+                CompletionToggle.SetTick(setNum = 2, completed = false),
+            ),
+            completions,
+        )
+    }
+
+    @Test
+    @DisplayName("a checklist toggle carries the item string, which is the item's identity")
+    fun checklistToggleCarriesItsItem() = runVmTest { viewModel ->
+        givenPlan()
+
+        viewModel.toggleChecklistItem("ex_1", "Foam roll")
+        runCurrent()
+
+        assertEquals(listOf(CompletionToggle.ChecklistItem("Foam roll")), completions)
+    }
+
+    @Test
+    @DisplayName("value edits carry no toggle at all, so they can never be read as work performed")
+    fun valueEditsCarryNoToggle() = runVmTest { viewModel ->
+        givenPlan()
+
+        viewModel.commitSetCell("ex_1", index = 0, field = "weight", input = "60")
+        viewModel.commitCardioField("ex_1", field = "duration_min", input = "30")
+        runCurrent()
+
+        assertEquals(listOf(null, null), completions)
+    }
+
     // ---- the other widgets --------------------------------------------------------
 
     @Test
@@ -325,7 +377,7 @@ class CoachViewModelTest {
         runCurrent()
 
         coVerify(exactly = 0) { store.updateLog(any(), any(), any()) }
-        coVerify(exactly = 0) { store.transformLogEntry(any(), any(), any()) }
+        coVerify(exactly = 0) { store.transformLogEntry(any(), any(), any(), any()) }
         coVerify(exactly = 0) { store.updateSessionFeedback(any(), any()) }
         coVerify(exactly = 0) { store.deleteLogEntry(any(), any()) }
     }
@@ -344,7 +396,7 @@ class CoachViewModelTest {
         viewModel.commitSetCell("ex_1", 0, "weight", "60")
         runCurrent()
 
-        coVerify(exactly = 0) { store.transformLogEntry(any(), any(), any()) }
+        coVerify(exactly = 0) { store.transformLogEntry(any(), any(), any(), any()) }
     }
 
     // ---- navigation -------------------------------------------------------------------------
@@ -484,7 +536,7 @@ class CoachViewModelTest {
         viewModel.commitSetCell("ex_1", 0, "weight", "60")
         runCurrent()
         coVerify(exactly = 0) { store.updateLog(any(), any(), any()) }
-        coVerify(exactly = 0) { store.transformLogEntry(any(), any(), any()) }
+        coVerify(exactly = 0) { store.transformLogEntry(any(), any(), any(), any()) }
 
         publish()
         runCurrent()
@@ -507,7 +559,7 @@ class CoachViewModelTest {
         runCurrent()
 
         coVerify(exactly = 0) { store.updateLog(any(), any(), any()) }
-        coVerify(exactly = 0) { store.transformLogEntry(any(), any(), any()) }
+        coVerify(exactly = 0) { store.transformLogEntry(any(), any(), any(), any()) }
         coVerify(exactly = 0) { store.deleteLogEntry(any(), any()) }
     }
 

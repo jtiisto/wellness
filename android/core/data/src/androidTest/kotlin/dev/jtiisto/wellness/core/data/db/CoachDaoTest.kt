@@ -107,14 +107,14 @@ class CoachDaoTest {
     fun updateLogAndMarkDirtyCreatesTheDayAndPreservesTheCounter() = runBlocking {
         val created = dao.updateLogAndMarkDirty("2026-08-06") { stored ->
             assertNull(stored)
-            """{"ex_1":{"reps":5}}"""
+            CoachLogEdit("""{"ex_1":{"reps":5}}""")
         }
 
         assertTrue(created)
         assertEquals(1L, dao.getLog("2026-08-06")!!.dirtyGeneration)
 
         // A caller cannot reset the counter the mid-sync check depends on.
-        dao.updateLogAndMarkDirty("2026-08-06") { """{"ex_1":{"reps":6}}""" }
+        dao.updateLogAndMarkDirty("2026-08-06") { CoachLogEdit("""{"ex_1":{"reps":6}}""") }
         assertEquals(2L, dao.getLog("2026-08-06")!!.dirtyGeneration)
     }
 
@@ -327,6 +327,51 @@ class CoachDaoTest {
         assertEquals("""{"ex_1":{"reps":5}}""", dao.observeLog("2026-08-06").first()!!.logJson)
         assertEquals(1, dao.observeDirtyCount().first())
     }
+
+    // ---- the completion-event dual-write ---------------------------------
+
+    @Test
+    fun aCompletionEventLandsWithTheBlobThatEarnedIt() = runBlocking {
+        val event = setEvent("event-1")
+
+        val changed = dao.updateLogAndMarkDirty("2026-08-06") {
+            CoachLogEdit("""{"ex_1":{"sets":[{"set_num":1,"completed":true}]}}""", event)
+        }
+
+        assertTrue(changed)
+        assertEquals(listOf(event), db.setEventDao().listAll())
+        assertTrue(dao.getLog("2026-08-06")!!.isDirty)
+    }
+
+    @Test
+    fun aFailedEventInsertTakesTheBlobWriteDownWithIt() = runBlocking {
+        dao.upsertLog(log("2026-08-06", """{"ex_1":{"sets":[]}}"""))
+        db.setEventDao().insert(setEvent("event-1"))
+
+        // A reused id is the one way this insert can fail, and the point is
+        // what it does to the write beside it: an event that describes a
+        // mutation must never outlive the mutation, and a mutation must never
+        // land claiming an event that was refused.
+        runCatching {
+            dao.updateLogAndMarkDirty("2026-08-06") {
+                CoachLogEdit("""{"ex_1":{"sets":[{"set_num":1,"completed":true}]}}""", setEvent("event-1"))
+            }
+        }
+
+        val row = dao.getLog("2026-08-06")!!
+        assertEquals("""{"ex_1":{"sets":[]}}""", row.logJson)
+        assertFalse(row.isDirty)
+        assertEquals(1, db.setEventDao().listAll().size)
+    }
+
+    private fun setEvent(eventId: String) = SetEventEntity(
+        eventId = eventId,
+        date = "2026-08-06",
+        exerciseKey = "ex_1",
+        setNum = 1,
+        action = SetEventEntity.ACTION_CHECK,
+        clientTimestampMs = 1_770_000_000_000L,
+    )
 
     @Test
     fun theStoredDaySurvivesArbitraryKeysVerbatim() = runBlocking {

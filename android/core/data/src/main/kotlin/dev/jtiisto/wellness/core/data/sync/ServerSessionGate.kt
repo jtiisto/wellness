@@ -57,6 +57,15 @@ class ServerSessionGate {
      * write it protects — including any read the write depends on, such as
      * `clientId()` — or the gap in front of it is the same check-then-act race
      * this exists to close.
+     *
+     * What counts as "the write" depends on its shape. A read-modify-write
+     * (coach's day mutation) must hold the lease from its first dependent read.
+     * A self-contained mark keyed by values already in hand (HR's post-response
+     * `markSynced`) needs only the write itself fenced: the network await
+     * stays outside the lease deliberately, because a switch confirmed during
+     * it must not wait on a server round-trip — the late mark then finds the
+     * gate closed and is refused, and the row it would have marked is wiped
+     * with its table. Both shapes are load-bearing and unit-tested.
      */
     suspend fun <T> withWriteLease(block: suspend () -> T): T {
         acquire()

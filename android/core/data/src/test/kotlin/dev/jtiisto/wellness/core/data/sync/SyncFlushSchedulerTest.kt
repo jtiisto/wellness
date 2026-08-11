@@ -126,4 +126,25 @@ class SyncFlushSchedulerTest {
         assertEquals(1, enqueued)
         journalDirty = true
     }
+
+    @Test
+    @DisplayName("pending heart-rate rows are dirty data too, on their own")
+    fun heartRateAloneIsEnough() = runTest {
+        var enqueued = 0
+        // The composition Koin builds. A set tick made seconds before the app
+        // went away is exactly the row the Worker exists for, and it belongs to
+        // neither of the two modules that used to be the whole of this check.
+        SyncFlushScheduler(
+            hasDirtyData = { journalDirty() || coachDirty() || hrPending() },
+            enqueue = { enqueued++ },
+        ).onBackgrounded()
+
+        assertEquals(1, enqueued)
+    }
+
+    private suspend fun journalDirty(): Boolean = false
+
+    private suspend fun coachDirty(): Boolean = false
+
+    private suspend fun hrPending(): Boolean = true
 }
