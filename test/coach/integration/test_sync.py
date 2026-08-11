@@ -122,6 +122,34 @@ class TestSyncResponse:
         assert "serverTime" in data
         assert data["serverTime"].endswith("Z")
 
+    def test_post_server_time_is_backdated_and_stamps_are_not(
+            self, client, sample_log, coach_registered_client):
+        """The POST's serverTime is never the pull watermark (only the GET's
+        is), but it carries the same overlap backdating as journal's upload
+        envelope so a client generation that ever stores it cannot discard the
+        GET's overlap. The RECORD stamps must stay at the real write time —
+        backdating those would corrupt the arbitration tokens."""
+        from datetime import datetime, timedelta, timezone
+
+        before = datetime.now(timezone.utc)
+        today = datetime.now().strftime("%Y-%m-%d")
+        response = client.post(
+            "/api/coach/sync",
+            json={"clientId": coach_registered_client, "logs": {today: sample_log}}
+        )
+        data = response.json()
+        after = datetime.now(timezone.utc)
+
+        envelope = datetime.fromisoformat(data["serverTime"].replace("Z", "+00:00"))
+        record = datetime.fromisoformat(
+            data["results"][today]["_lastModified"].replace("Z", "+00:00"))
+        # Envelope sits exactly one overlap behind the write it describes...
+        assert record - envelope == timedelta(seconds=2)
+        # ...the record stamp is the real write time...
+        assert before - timedelta(seconds=1) <= record <= after + timedelta(seconds=1)
+        # ...so the envelope is strictly behind every stamp in the response.
+        assert data["serverTime"] < data["results"][today]["_lastModified"]
+
 
 @pytest.mark.integration
 class TestLogDataIntegrity:

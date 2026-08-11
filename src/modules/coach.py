@@ -24,6 +24,7 @@ from modules.db import (
     DbAccessor,
     get_utc_now,
     utc_days_ago,
+    apply_watermark_overlap,
     sync_watermark,
     register_client as _db_register_client,
     run_migrations,
@@ -1100,7 +1101,13 @@ def _workout_sync_post(get_db, payload):
 
             _purge_old_archives(cursor)
 
-        return {"success": True, "results": results, "serverTime": now}
+        # The POST's serverTime is never the pull watermark — only the GET's is
+        # (already overlap-backdated via sync_watermark) — and neither client
+        # stores this one. Backdated anyway, exactly like the journal upload's
+        # envelope, so a client generation that ever stores it cannot throw the
+        # GET's overlap away. Record stamps above stay at the real `now`.
+        return {"success": True, "results": results,
+                "serverTime": apply_watermark_overlap(now)}
 
 
 # Hook scripts shell out to external services (e.g. Garmin); a hung script must

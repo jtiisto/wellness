@@ -75,7 +75,10 @@ The Journal tracks fine-grained daily data (supplements taken, habits checked) f
 **Sync status:** green (clean), red (dirty data), gray (offline / never synced).
 
 **Key design choices:**
-- Single-client deployment — no multi-client conflict surface, no user-visible conflict UI
+- No user-visible conflict UI: conflicts resolve silently, server-side. (Originally a
+  single-client deployment; the native Android client made it two-client in 2026-08,
+  which is what motivated the per-record arbitration, watermark-overlap and
+  missing-rejection hardening documented below)
 - Server is the only arbiter; the client never compares two client-generated timestamps
 - Soft deletes via `deleted` flag — entries persist server-side even after their tracker is soft-deleted, so MCP queries can analyze historical data
 - Tracker IDs are UUIDs (`crypto.randomUUID()`), so creating a new tracker with the same name as a deleted one mints a distinct row — old and new histories stay structurally separate
