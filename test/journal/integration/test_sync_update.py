@@ -500,6 +500,183 @@ class TestUpdateWatermarkOverlap:
 
 
 @pytest.mark.integration
+class TestMissingRejectionDeletionInstruction:
+    """A `missing` rejection instructs the client to drop the row locally.
+
+    The server has no row to mirror, so `serverRow` stays None and the rejection
+    carries `deleted: True`. Without it the client cleared the record's dirty
+    flag (rejections are resolved) and kept a phantom the server did not have —
+    never re-uploaded, undeliverable by any delta.
+
+    `missing` arises when the server's rows are replaced out from under a client
+    that still holds tokens (a restore from backup, a re-created DB, or a client
+    pointed at a different instance): nothing in the app hard-deletes a tracker
+    or an entry. The tests below reproduce that with a direct DELETE.
+    """
+
+    def test_missing_tracker_rejection_carries_the_instruction(
+        self, client, journal_registered_client, sample_tracker
+    ):
+        item = {**sample_tracker, "_baseLastModifiedAt": "2026-01-01T00:00:00Z"}
+        data = _upload(client, journal_registered_client, config=[item])
+        rejected = data["rejectedTrackers"][0]
+        assert rejected["errorKind"] == "missing"
+        assert rejected["serverRow"] is None
+        assert rejected["deleted"] is True
+        assert rejected["id"] == sample_tracker["id"]
+
+    def test_missing_entry_rejection_carries_the_instruction(
+        self, client, journal_registered_client, sample_tracker
+    ):
+        _upload(client, journal_registered_client, config=[sample_tracker])
+        today = datetime.now().strftime("%Y-%m-%d")
+        data = _upload(
+            client, journal_registered_client,
+            days={today: {sample_tracker["id"]: {
+                "value": 5, "_baseLastModifiedAt": "2026-01-01T00:00:00Z",
+            }}},
+        )
+        rejected = data["rejectedEntries"][0]
+        assert rejected["errorKind"] == "missing"
+        assert rejected["serverRow"] is None
+        assert rejected["deleted"] is True
+        assert rejected["date"] == today
+        assert rejected["trackerId"] == sample_tracker["id"]
+
+    def test_vanished_tracker_is_the_realistic_path(
+        self, client, journal_registered_client, sample_tracker, tmp_journal_db
+    ):
+        """The phantom as it actually happens: the client holds a legitimate
+        token for a row that has since disappeared from the server."""
+        data = _upload(client, journal_registered_client, config=[sample_tracker])
+        stamp = data["acceptedTrackers"][0]["lastModifiedAt"]
+
+        with get_db(tmp_journal_db) as conn:
+            conn.execute("DELETE FROM trackers WHERE id = ?", (sample_tracker["id"],))
+            conn.commit()
+
+        data2 = _upload(client, journal_registered_client, config=[
+            {**sample_tracker, "name": "Edited", "_baseLastModifiedAt": stamp},
+        ])
+        rejected = data2["rejectedTrackers"][0]
+        assert rejected["errorKind"] == "missing"
+        assert rejected["deleted"] is True
+        # The rejection resurrected nothing: the server is still empty, which is
+        # exactly why the client has to converge downward.
+        with get_db(tmp_journal_db) as conn:
+            count = conn.execute(
+                "SELECT COUNT(*) FROM trackers WHERE id = ?", (sample_tracker["id"],)
+            ).fetchone()[0]
+        assert count == 0
+
+    def test_vanished_entry_whose_tracker_survives(
+        self, client, journal_registered_client, sample_tracker, tmp_journal_db
+    ):
+        """The entry half: the tracker is fine, only the entry row is gone — so
+        the client must drop that one entry, not the whole tracker."""
+        _upload(client, journal_registered_client, config=[sample_tracker])
+        today = datetime.now().strftime("%Y-%m-%d")
+        data = _upload(
+            client, journal_registered_client,
+            days={today: {sample_tracker["id"]: {"value": 3, "completed": False}}},
+        )
+        stamp = data["acceptedEntries"][0]["lastModifiedAt"]
+
+        with get_db(tmp_journal_db) as conn:
+            conn.execute(
+                "DELETE FROM entries WHERE date = ? AND tracker_id = ?",
+                (today, sample_tracker["id"]),
+            )
+            conn.commit()
+
+        data2 = _upload(
+            client, journal_registered_client,
+            days={today: {sample_tracker["id"]: {
+                "value": 9, "_baseLastModifiedAt": stamp,
+            }}},
+        )
+        assert data2["rejectedEntries"][0]["deleted"] is True
+        assert data2["rejectedTrackers"] == []
+
+    def test_stale_rejections_never_carry_the_instruction(
+        self, client, journal_registered_client, sample_tracker
+    ):
+        """The flag means "absent", not "rejected" — a stale verdict must never
+        tell a client to delete a row that is alive on the server."""
+        data = _upload(client, journal_registered_client, config=[sample_tracker])
+        today = datetime.now().strftime("%Y-%m-%d")
+        entry = _upload(
+            client, journal_registered_client,
+            days={today: {sample_tracker["id"]: {"value": 3}}},
+        )
+        assert entry["acceptedEntries"]
+
+        time.sleep(0.01)
+        stale = {**sample_tracker, "name": "Stale", "_baseLastModifiedAt": "2020-01-01T00:00:00Z"}
+        data2 = _upload(
+            client, journal_registered_client,
+            config=[stale],
+            days={today: {sample_tracker["id"]: {
+                "value": 7, "_baseLastModifiedAt": "2020-01-01T00:00:00Z",
+            }}},
+        )
+        rejected_tracker = data2["rejectedTrackers"][0]
+        rejected_entry = data2["rejectedEntries"][0]
+        assert rejected_tracker["errorKind"] == "stale"
+        assert rejected_entry["errorKind"] == "stale"
+        assert "deleted" not in rejected_tracker
+        assert "deleted" not in rejected_entry
+        # The stale rejections still carry the live rows to adopt.
+        assert rejected_tracker["serverRow"]["name"] == sample_tracker["name"]
+        assert rejected_entry["serverRow"]["value"] == 3
+
+    def test_soft_deleted_tracker_signals_through_serverRow_not_the_flag(
+        self, client, journal_registered_client, sample_tracker
+    ):
+        """Two distinct levels: a soft-deleted tracker is a real row, so its
+        stale rejection carries `serverRow.deleted` (the client's existing
+        tombstone path). The rejection-level flag stays absent — it is reserved
+        for "there is no row here at all"."""
+        data = _upload(client, journal_registered_client, config=[sample_tracker])
+        stamp = data["acceptedTrackers"][0]["lastModifiedAt"]
+        time.sleep(0.01)
+        _upload(client, journal_registered_client, config=[
+            {**sample_tracker, "_deleted": True, "_baseLastModifiedAt": stamp},
+        ])
+
+        time.sleep(0.01)
+        data3 = _upload(client, journal_registered_client, config=[
+            {**sample_tracker, "name": "Edit against the deleted row",
+             "_baseLastModifiedAt": stamp},
+        ])
+        rejected = data3["rejectedTrackers"][0]
+        assert rejected["errorKind"] == "stale"
+        assert rejected["serverRow"]["deleted"] is True
+        assert "deleted" not in rejected
+
+    def test_accepted_records_never_carry_the_instruction(
+        self, client, journal_registered_client, sample_tracker
+    ):
+        today = datetime.now().strftime("%Y-%m-%d")
+        data = _upload(
+            client, journal_registered_client,
+            config=[sample_tracker],
+            days={today: {sample_tracker["id"]: {"value": 1, "completed": True}}},
+        )
+        assert "deleted" not in data["acceptedTrackers"][0]
+        assert "deleted" not in data["acceptedEntries"][0]
+
+    def test_token_less_create_is_accepted_not_reported_missing(
+        self, client, journal_registered_client, sample_tracker
+    ):
+        """The guard on the instruction: absent row + absent base token is a
+        legitimate create, and must never come back as a deletion order."""
+        data = _upload(client, journal_registered_client, config=[sample_tracker])
+        assert data["rejectedTrackers"] == []
+        assert len(data["acceptedTrackers"]) == 1
+
+
+@pytest.mark.integration
 class TestSyncUpdateTransaction:
     """The upload's check-then-write arbitration runs inside one BEGIN IMMEDIATE
     transaction (matching coach), and internal errors are not converted into

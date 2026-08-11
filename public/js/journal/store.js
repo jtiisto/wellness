@@ -24,6 +24,7 @@ import {
     computeAcceptedApply,
     computeRejectedApply,
     computeDropDeletedTrackers,
+    computeDropDeletedEntries,
     computePruneDeletedTrackers,
     computeNormalizedConfig,
 } from './sync-logic.js';
@@ -392,6 +393,27 @@ function dropDeletedTrackerIds(deletedIds) {
     }
 }
 
+// Apply a server-side entry disappearance locally: drop the entries from
+// dailyLogs and purge their dirty state so the client doesn't sit red on a row
+// it can never upload. The entry twin of dropDeletedTrackerIds.
+// Thin wrapper: pure compute in sync-logic.js, conditional signal assigns here.
+// No save — callers (triggerSync / forceSync) persist logs, and the dirty purge
+// rides the clearDirtyState metadata write that follows.
+function dropDeletedEntryKeys(entryKeys) {
+    if (!entryKeys || entryKeys.length === 0) {
+        return;
+    }
+    const next = computeDropDeletedEntries(
+        entryKeys, dailyLogs.value, syncMetadata.value,
+    );
+    if (next.logsChanged) {
+        dailyLogs.value = next.dailyLogs;
+    }
+    if (next.dirtyChanged) {
+        syncMetadata.value = next.meta;
+    }
+}
+
 // ==================== Daily Log Actions ====================
 
 export function updateEntry(date, trackerId, data) {
@@ -589,11 +611,13 @@ function applyAccepted(acceptedTrackers, acceptedEntries) {
 
 // Apply the `serverRow` from rejected uploads so the client recovers in-cycle
 // without needing a follow-up delta pull. If the server's row is itself a
-// soft-deleted tracker, route through the full delete cleanup so we drop the
-// tracker, its entries, and any associated dirty state.
+// soft-deleted tracker — or the server reports it has no such row at all
+// (`missing`, which carries `deleted` and no serverRow) — route through the
+// full delete cleanup so we drop the tracker/entry and any associated dirty
+// state, instead of stranding a phantom the server does not have.
 // Thin wrapper: pure upsert in sync-logic.js, batched signal assigns here; the
-// soft-deleted ids it returns are routed through dropDeletedTrackerIds AFTER
-// the batch (the delete cleanup touches syncMetadata, not just config/logs).
+// ids/keys to delete are routed through the drop helpers AFTER the batch (the
+// delete cleanup touches syncMetadata, not just config/logs).
 function applyRejected(rejectedTrackers, rejectedEntries) {
     const next = computeRejectedApply(
         rejectedTrackers, rejectedEntries, trackerConfig.value, dailyLogs.value,
@@ -604,6 +628,13 @@ function applyRejected(rejectedTrackers, rejectedEntries) {
     });
     if (next.trackerIdsToDelete.length > 0) {
         dropDeletedTrackerIds(next.trackerIdsToDelete);
+    }
+    // After the tracker drop: that cleanup already removes the entries of a
+    // dropped tracker, so this pass usually handles entries whose tracker
+    // stayed — and safely no-ops on a key the tracker pass already removed
+    // (an entry independently reported missing alongside its own tracker).
+    if (next.entryKeysToDelete.length > 0) {
+        dropDeletedEntryKeys(next.entryKeysToDelete);
     }
 }
 

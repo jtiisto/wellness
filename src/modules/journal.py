@@ -393,6 +393,9 @@ class SyncResponse(BaseModel):
     Each accepted item carries the new server-stamped `lastModifiedAt`. Each
     rejected item carries an `errorKind` and the current `serverRow` so the
     client can recover in the same sync cycle without waiting for a delta pull.
+    A rejection for a row the server does not have (`errorKind: "missing"`)
+    has no row to mirror: `serverRow` is None and `deleted: True` instructs the
+    client to converge by dropping the row locally (see `_missing_rejection`).
 
     `serverTime` is NOT a pull watermark — only GET /sync/delta's is — and is
     backdated by the same overlap so a client that stores it anyway stays
@@ -501,6 +504,28 @@ def _entry_server_row(row, date_str: str, tracker_id: str) -> dict:
         "completed": bool(row["completed"]) if row["completed"] is not None else None,
         "lastModifiedAt": row["last_modified_at"],
     }
+
+
+def _missing_rejection(identity: dict) -> dict:
+    """Build the rejection for an upload whose row does not exist server-side.
+
+    `serverRow` stays None — there is genuinely no row to mirror, and a
+    synthetic one would be indistinguishable from a `stale` rejection whose
+    stored row is a real soft-deleted tracker. The instruction rides alongside
+    it instead: `deleted` tells the client "this row does not exist here —
+    converge by dropping it locally".
+
+    Without that instruction a `missing` rejection stranded a phantom: the
+    record is in the resolved set, so the client cleared its dirty flag and
+    kept a row the server does not have, permanently and invisibly. It never
+    re-uploaded (no longer dirty) and no delta could deliver a row that does
+    not exist.
+
+    This is the ONLY producer of the flag. A `stale` rejection carries a real
+    `serverRow` and never this field, so it cannot become a general deletion
+    channel: the flag means "absent", not "deleted by someone".
+    """
+    return {**identity, "errorKind": "missing", "serverRow": None, "deleted": True}
 
 
 def _completed_to_int(completed):
@@ -642,11 +667,7 @@ def _apply_tracker_upload(
 
     if row is None:
         if base_ts is not None:
-            return None, {
-                "id": tracker_id,
-                "errorKind": "missing",
-                "serverRow": None,
-            }
+            return None, _missing_rejection({"id": tracker_id})
         cursor.execute(
             "INSERT INTO trackers "
             "(id, name, category, type, meta_json, schedule_json, polarity, "
@@ -735,12 +756,9 @@ def _apply_entry_upload(
 
     if row is None:
         if base_ts is not None:
-            return None, {
-                "date": date_str,
-                "trackerId": tracker_id,
-                "errorKind": "missing",
-                "serverRow": None,
-            }
+            return None, _missing_rejection(
+                {"date": date_str, "trackerId": tracker_id},
+            )
         cursor.execute(
             "INSERT INTO entries (date, tracker_id, value, completed, last_modified_at) "
             "VALUES (?, ?, ?, ?, ?)",

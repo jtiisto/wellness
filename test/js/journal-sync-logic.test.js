@@ -9,6 +9,7 @@ import {
     computeAcceptedApply,
     computeRejectedApply,
     computeDropDeletedTrackers,
+    computeDropDeletedEntries,
     computePruneDeletedTrackers,
     computeNormalizedConfig,
 } from '../../public/js/journal/sync-logic.js';
@@ -182,6 +183,144 @@ test('computeRejectedApply: rejection with no serverRow is skipped', () => {
     );
     assert.equal(next.trackerConfig.find(t => t.id === 't1').name, 'orig');
     assert.deepEqual(next.trackerIdsToDelete, []);
+    assert.deepEqual(next.entryKeysToDelete, []);
+});
+
+// ---- computeRejectedApply: the `missing` deletion instruction --------------
+// The server has no such row (`errorKind: "missing"`), so there is no serverRow
+// to adopt: `deleted` says "converge by dropping it locally". Without it the
+// record was merely resolved — dirty cleared, phantom row kept forever.
+
+test('computeRejectedApply: missing tracker (deleted, no serverRow) routes to delete', () => {
+    const config = [{ id: 't1', name: 'phantom', lastModifiedAt: 'gone' }];
+    const next = computeRejectedApply(
+        [{ id: 't1', errorKind: 'missing', serverRow: null, deleted: true }],
+        [], config, {},
+    );
+    assert.deepEqual(next.trackerIdsToDelete, ['t1']);
+    // Config is untouched here — the caller's drop cleanup removes it, so the
+    // dirty/entry purge happens in one place for both deletion causes.
+    assert.equal(next.trackerConfig, config);
+});
+
+test('computeRejectedApply: missing entry (deleted, no serverRow) routes to delete', () => {
+    const logs = { '2026-05-01': { t1: { value: 9, lastModifiedAt: 'gone' } } };
+    const next = computeRejectedApply(
+        [],
+        [{ date: '2026-05-01', trackerId: 't1', errorKind: 'missing', serverRow: null, deleted: true }],
+        [], logs,
+    );
+    assert.deepEqual(next.entryKeysToDelete, ['2026-05-01|t1']);
+    assert.equal(next.dailyLogs, logs); // untouched; the drop helper removes it
+});
+
+test('computeRejectedApply: deletions and adoptions in one response both land', () => {
+    const config = [{ id: 't1', name: 'phantom' }, { id: 't2', name: 'stale' }];
+    const logs = {
+        '2026-05-01': { e1: { value: 1 }, e2: { value: 2 } },
+    };
+    const next = computeRejectedApply(
+        [
+            { id: 't1', errorKind: 'missing', serverRow: null, deleted: true },
+            { id: 't2', errorKind: 'stale', serverRow: { id: 't2', name: 'server-wins' } },
+        ],
+        [
+            { date: '2026-05-01', trackerId: 'e1', errorKind: 'missing', serverRow: null, deleted: true },
+            { date: '2026-05-01', trackerId: 'e2', errorKind: 'stale', serverRow: { value: 7, completed: null, lastModifiedAt: 's' } },
+        ],
+        config, logs,
+    );
+    assert.deepEqual(next.trackerIdsToDelete, ['t1']);
+    assert.deepEqual(next.entryKeysToDelete, ['2026-05-01|e1']);
+    assert.equal(next.trackerConfig.find(t => t.id === 't2').name, 'server-wins');
+    assert.equal(next.dailyLogs['2026-05-01'].e2.value, 7);
+    // The phantom entry is still present in the returned logs — only the drop
+    // helper removes it, so this function stays a pure "adopt verdicts" pass.
+    assert.equal(next.dailyLogs['2026-05-01'].e1.value, 1);
+});
+
+test('computeRejectedApply: a deletions-only response returns the same references', () => {
+    const config = [{ id: 't1' }];
+    const logs = { '2026-05-01': { e1: { value: 1 } } };
+    const next = computeRejectedApply(
+        [{ id: 't1', errorKind: 'missing', serverRow: null, deleted: true }],
+        [{ date: '2026-05-01', trackerId: 'e1', errorKind: 'missing', serverRow: null, deleted: true }],
+        config, logs,
+    );
+    assert.equal(next.trackerConfig, config); // no spurious signal write
+    assert.equal(next.dailyLogs, logs);
+});
+
+test('computeRejectedApply: no `deleted` flag (old server) leaves the row alone', () => {
+    // Pre-fix wire: `missing` arrived as serverRow null with no instruction.
+    // Today's behavior for that response must not change.
+    const config = [{ id: 't1', name: 'phantom' }];
+    const logs = { '2026-05-01': { e1: { value: 1 } } };
+    const next = computeRejectedApply(
+        [{ id: 't1', errorKind: 'missing', serverRow: null }],
+        [{ date: '2026-05-01', trackerId: 'e1', errorKind: 'missing', serverRow: null }],
+        config, logs,
+    );
+    assert.deepEqual(next.trackerIdsToDelete, []);
+    assert.deepEqual(next.entryKeysToDelete, []);
+    assert.equal(next.trackerConfig, config);
+    assert.equal(next.dailyLogs, logs);
+});
+
+// ---- computeDropDeletedEntries (server-side entry disappearance) ----------
+
+test('computeDropDeletedEntries: drops the entry and purges its dirty key + gen', () => {
+    const logs = {
+        '2026-05-01': { t1: { value: 1 }, t2: { value: 2 } },
+        '2026-05-02': { t1: { value: 3 } },
+    };
+    const meta = {
+        dirtyEntries: ['2026-05-01|t1', '2026-05-01|t2'],
+        dirtyEntryGenerations: { '2026-05-01|t1': 1, '2026-05-01|t2': 1 },
+    };
+    const next = computeDropDeletedEntries(['2026-05-01|t1'], logs, meta);
+
+    assert.ok(!('t1' in next.dailyLogs['2026-05-01']));
+    assert.equal(next.dailyLogs['2026-05-01'].t2.value, 2);   // sibling kept
+    assert.equal(next.dailyLogs['2026-05-02'].t1.value, 3);   // other date kept
+    assert.equal(next.logsChanged, true);
+    assert.equal(next.dirtyChanged, true);
+    assert.deepEqual(next.meta.dirtyEntries, ['2026-05-01|t2']);
+    assert.deepEqual(next.meta.dirtyEntryGenerations, { '2026-05-01|t2': 1 });
+});
+
+test('computeDropDeletedEntries: purges dirty even when re-modified mid-sync', () => {
+    // The generation advanced (the user re-edited during the upload), but the
+    // row is gone server-side. Keeping it dirty would strand it: the upload
+    // payload skips entries absent from dailyLogs, so it could never clear.
+    const logs = { '2026-05-01': { t1: { value: 1 } } };
+    const meta = {
+        dirtyEntries: ['2026-05-01|t1'],
+        dirtyEntryGenerations: { '2026-05-01|t1': 4 },
+    };
+    const next = computeDropDeletedEntries(['2026-05-01|t1'], logs, meta);
+    assert.deepEqual(next.meta.dirtyEntries, []);
+    assert.deepEqual(next.meta.dirtyEntryGenerations, {});
+});
+
+test('computeDropDeletedEntries: absent entry / no dirty state reports no change', () => {
+    const logs = { '2026-05-01': { t2: { value: 2 } } };
+    const meta = {
+        dirtyEntries: ['2026-05-01|t2'],
+        dirtyEntryGenerations: { '2026-05-01|t2': 1 },
+    };
+    const next = computeDropDeletedEntries(['2026-05-01|t1'], logs, meta);
+    assert.equal(next.logsChanged, false);
+    assert.equal(next.dirtyChanged, false);
+    assert.deepEqual(next.meta.dirtyEntries, ['2026-05-01|t2']);
+    assert.deepEqual(next.meta.dirtyEntryGenerations, { '2026-05-01|t2': 1 });
+});
+
+test('computeDropDeletedEntries: dropping the only entry leaves the date key empty, not missing', () => {
+    const logs = { '2026-05-01': { t1: { value: 1 } } };
+    const meta = { dirtyEntries: [], dirtyEntryGenerations: {} };
+    const next = computeDropDeletedEntries(['2026-05-01|t1'], logs, meta);
+    assert.deepEqual(next.dailyLogs['2026-05-01'], {});
 });
 
 // ---- computeDropDeletedTrackers (server-side delete cleanup) --------------

@@ -1,4 +1,7 @@
 """E2E tests for sync indicator and auto-sync behavior."""
+import sqlite3
+from datetime import datetime, timedelta
+
 import pytest
 import requests as http_requests
 from pages.app_shell import AppShellPage
@@ -158,3 +161,74 @@ def test_online_recovery_triggers_sync(journal_page, app_server):
             if entry.get("value") == 88:
                 found = True
     assert found, f"Value 88 not found after online recovery sync"
+
+
+def _read_daily_logs(page):
+    """Read the journal store's persisted daily logs straight out of
+    LocalForage's IndexedDB, which is where a phantom row would hide: the
+    UI renders an entry the server does not have exactly like one it does."""
+    return page.evaluate("""() => new Promise((resolve, reject) => {
+        const req = indexedDB.open('JournalApp');
+        req.onerror = () => reject(req.error);
+        req.onsuccess = () => {
+            const store = req.result
+                .transaction('journal_data', 'readonly')
+                .objectStore('journal_data');
+            const get = store.get('daily_logs');
+            get.onsuccess = () => resolve(get.result || {});
+            get.onerror = () => reject(get.error);
+        };
+    })""")
+
+
+def test_missing_rejection_drops_the_phantom_entry(journal_page, app_server):
+    """A row the server does not have must not survive on the client.
+
+    The client holds a legitimate server token for today's entry, then the row
+    disappears server-side (a restore, a re-created DB, a client pointed at
+    another instance — nothing in the app hard-deletes journal rows, which is
+    why this is the only way `missing` arises). The next edit uploads against
+    that token and is rejected as `missing`; the rejection's `deleted` flag is
+    the instruction to converge downward. Before the flag existed the record was
+    merely resolved — dirty cleared, row kept — and the phantom was permanent
+    and invisible: never re-uploaded, and undeliverable by any delta.
+    """
+    page = journal_page.page
+    page.wait_for_selector(".sync-dot.green", timeout=10000)
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    conn = sqlite3.connect(app_server["db_dir"] / "journal.db", timeout=10)
+    try:
+        with conn:
+            conn.execute(
+                "DELETE FROM entries WHERE date = ? AND tracker_id = ?",
+                (today, "tracker-e2e"),
+            )
+    finally:
+        conn.close()
+
+    logs_before = _read_daily_logs(page)
+    assert "tracker-e2e" in logs_before.get(today, {}), (
+        "precondition: the client should still hold today's entry (and its token)"
+    )
+
+    journal_page.set_tracker_value("Water Intake", 42)
+    page.wait_for_selector(".sync-dot.red", timeout=5000)   # dirty, pre-upload
+    page.wait_for_selector(".sync-dot.green", timeout=20000)  # cycle settled
+
+    logs_after = _read_daily_logs(page)
+    assert "tracker-e2e" not in logs_after.get(today, {}), (
+        f"phantom entry survived the missing rejection: {logs_after.get(today)}"
+    )
+    # The instruction is per-record: the tracker never went anywhere, and the
+    # other seeded days keep their entries.
+    assert "Water Intake" in journal_page.get_tracker_names()
+    yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+    assert "tracker-e2e" in logs_after.get(yesterday, {}), (
+        "an untouched day lost its entry — the drop is not scoped to the record"
+    )
+
+    delta = http_requests.get(f"{app_server['url']}/api/journal/sync/delta").json()
+    assert "tracker-e2e" not in delta.get("days", {}).get(today, {}), (
+        "the rejected upload must not have resurrected the row server-side"
+    )

@@ -170,23 +170,40 @@ export function computeAcceptedApply(acceptedTrackers, acceptedEntries, trackerC
  * a soft-deleted serverRow is NOT upserted — its id is collected into
  * `trackerIdsToDelete` so the caller can route it through the full delete
  * cleanup (drop tracker + entries + dirty state). Rejected entries are
- * overwritten with the server's value/completed/lastModifiedAt. Returns the
- * SAME references when a section has nothing to apply.
+ * overwritten with the server's value/completed/lastModifiedAt.
  *
- * @returns {{trackerConfig: Array, dailyLogs: Object, trackerIdsToDelete: string[]}}
+ * A rejection carrying `deleted: true` (the server's `missing` verdict: it has
+ * no such row, so there is no `serverRow` to send) is the instruction to drop
+ * the row locally. Trackers join `trackerIdsToDelete`; entries are collected
+ * into `entryKeysToDelete` for the same treatment. Without this the record was
+ * merely resolved — dirty cleared, row kept — and the client held a phantom the
+ * server did not have, forever: never re-uploaded, and undeliverable by a delta.
+ *
+ * Returns the SAME references when a section has nothing to apply — the
+ * deletion instructions are collected, not applied here, so a rejection set of
+ * nothing but deletions leaves both untouched.
+ *
+ * @returns {{trackerConfig: Array, dailyLogs: Object, trackerIdsToDelete: string[], entryKeysToDelete: string[]}}
  */
 export function computeRejectedApply(rejectedTrackers, rejectedEntries, trackerConfig, dailyLogs) {
     const trackerIdsToDelete = [];
+    const entryKeysToDelete = [];
 
     let nextConfig = trackerConfig;
     if (rejectedTrackers.length > 0) {
-        const updated = [...trackerConfig];
+        let updated = null;
         for (const rej of rejectedTrackers) {
+            // Checked before the serverRow guard: a `missing` rejection has none.
+            if (rej.deleted) {
+                trackerIdsToDelete.push(rej.id);
+                continue;
+            }
             if (!rej.serverRow) continue;
             if (rej.serverRow.deleted) {
                 trackerIdsToDelete.push(rej.id);
                 continue;
             }
+            if (updated === null) updated = [...trackerConfig];
             const idx = updated.findIndex(t => t.id === rej.id);
             if (idx >= 0) {
                 updated[idx] = { ...rej.serverRow };
@@ -194,14 +211,19 @@ export function computeRejectedApply(rejectedTrackers, rejectedEntries, trackerC
                 updated.push({ ...rej.serverRow });
             }
         }
-        nextConfig = updated;
+        if (updated !== null) nextConfig = updated;
     }
 
     let nextLogs = dailyLogs;
     if (rejectedEntries.length > 0) {
-        const logs = { ...dailyLogs };
+        let logs = null;
         for (const rej of rejectedEntries) {
+            if (rej.deleted) {
+                entryKeysToDelete.push(`${rej.date}|${rej.trackerId}`);
+                continue;
+            }
             if (!rej.serverRow) continue;
+            if (logs === null) logs = { ...dailyLogs };
             if (!logs[rej.date]) logs[rej.date] = {};
             logs[rej.date] = {
                 ...logs[rej.date],
@@ -212,10 +234,15 @@ export function computeRejectedApply(rejectedTrackers, rejectedEntries, trackerC
                 },
             };
         }
-        nextLogs = logs;
+        if (logs !== null) nextLogs = logs;
     }
 
-    return { trackerConfig: nextConfig, dailyLogs: nextLogs, trackerIdsToDelete };
+    return {
+        trackerConfig: nextConfig,
+        dailyLogs: nextLogs,
+        trackerIdsToDelete,
+        entryKeysToDelete,
+    };
 }
 
 /**
@@ -281,6 +308,56 @@ export function computeDropDeletedTrackers(deletedIds, trackerConfig, dailyLogs,
     }
 
     return { trackerConfig: nextConfig, dailyLogs: logs, meta: nextMeta, logsChanged, dirtyChanged };
+}
+
+/**
+ * Apply a server-side entry disappearance locally: drop the entries from
+ * dailyLogs and purge their dirty state (key + generation counter). The entry
+ * half of `computeDropDeletedTrackers`, for rows the server reports as absent
+ * without their tracker having gone anywhere.
+ *
+ * The dirty purge is unconditional — deliberately, and it is why this cannot be
+ * folded into the caller's ordinary dirty-clearing. That path keeps a record
+ * dirty when its generation advanced mid-sync (a re-edit), but a re-edited
+ * entry we have just removed from `dailyLogs` would be skipped by
+ * `computeUploadPayload`'s orphan guard on every future cycle: dirty forever,
+ * uploadable never, the sync indicator stuck red. Dropping the edit matches the
+ * module's standing rule that a server-side disappearance beats a local edit
+ * (see `pullServerChanges`, where server deletes win over locally dirty rows).
+ *
+ * `logsChanged` / `dirtyChanged` report whether each half actually changed, so
+ * the store can skip the signal writes when nothing did.
+ *
+ * @param {string[]} entryKeys `date|trackerId`
+ * @returns {{dailyLogs: Object, meta: Object, logsChanged: boolean, dirtyChanged: boolean}}
+ */
+export function computeDropDeletedEntries(entryKeys, dailyLogs, meta) {
+    const keySet = new Set(entryKeys);
+
+    const logs = { ...dailyLogs };
+    let logsChanged = false;
+    for (const key of entryKeys) {
+        const [date, trackerId] = key.split('|');
+        if (!logs[date] || !(trackerId in logs[date])) continue;
+        const day = { ...logs[date] };
+        delete day[trackerId];
+        logs[date] = day;
+        logsChanged = true;
+    }
+
+    const nextMeta = { ...meta };
+    const before = nextMeta.dirtyEntries.length;
+    nextMeta.dirtyEntries = nextMeta.dirtyEntries.filter(key => !keySet.has(key));
+
+    let dirtyChanged = false;
+    if (nextMeta.dirtyEntries.length !== before) {
+        dirtyChanged = true;
+        const gens = { ...nextMeta.dirtyEntryGenerations };
+        for (const key of entryKeys) delete gens[key];
+        nextMeta.dirtyEntryGenerations = gens;
+    }
+
+    return { dailyLogs: logs, meta: nextMeta, logsChanged, dirtyChanged };
 }
 
 /**
