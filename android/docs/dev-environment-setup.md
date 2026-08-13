@@ -276,6 +276,17 @@ Then `adb connect` from Linux works immediately. After a reboot or emulator rest
 shift back to 5554/5555 — retarget accordingly. Red herrings that do NOT fix this: `adb tcpip`,
 `adb kill-server` on either side, reconnect loops.
 
+**Root cause and the ordering rule (resolved 2026-08-12):** the proxy's wildcard bind existing
+BEFORE the emulator starts is what causes every variant of this. Either the emulator sees 5555
+busy and shifts to 5556/5557 (the mismatch above), or — when the proxy targets its own listen
+port with no emulator behind it — the proxy self-loops and the local ADB server sees the loop as
+a ghost `emulator-5554  offline` that `emu kill` cannot kill (no console behind it). The fix is
+ordering, not retargeting: **delete the proxy, start the emulator, re-add the proxy after boot**
+(`start-emulator.ps1` v4 automates this when run as admin). Ghost cleanup: delete the proxy,
+`adb kill-server`, confirm `adb devices` is empty, then proceed in order. After the Windows side
+is correct, the Linux side may still need its own `adb kill-server` before the handshake reads
+`device` — a stale local server that has failed many handshakes keeps failing good ones.
+
 ### ADB unauthorized
 - Check the emulator screen for an "Allow USB debugging?" prompt and accept it
 
