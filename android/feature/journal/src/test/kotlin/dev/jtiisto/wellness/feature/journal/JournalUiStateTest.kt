@@ -223,6 +223,14 @@ class JournalUiStateTest {
         assertEquals("7", stored.valueText)
         assertEquals(7.0, stored.displayedNumber)
 
+        // The server's REAL column returns integers as Python floats: a
+        // delta-delivered 7.0 must still display as 7. A genuine decimal keeps
+        // its fraction untouched.
+        val serverFloat = row(build(listOf(quantifiable), mapOf(todayStr to mapOf("q" to EntryDto(value = JsonPrimitive(7.0))))), "q")
+        assertEquals("7", serverFloat.valueText, "integral doubles render without a trailing .0")
+        val fractional = row(build(listOf(quantifiable), mapOf(todayStr to mapOf("q" to EntryDto(value = JsonPrimitive(7.5))))), "q")
+        assertEquals("7.5", fractional.valueText)
+
         val fromDefault = row(build(listOf(quantifiable)), "q")
         assertEquals("30", fromDefault.valueText, "integers render without a trailing .0")
         assertEquals(30.0, fromDefault.displayedNumber)

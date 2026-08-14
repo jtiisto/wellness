@@ -12,6 +12,7 @@ import dev.jtiisto.wellness.core.data.journal.dayStatus
 import dev.jtiisto.wellness.core.data.journal.defaultValueOrNull
 import dev.jtiisto.wellness.core.data.journal.entryKey
 import dev.jtiisto.wellness.core.data.journal.formatCategorySummary
+import dev.jtiisto.wellness.core.data.journal.formatJournalNumber
 import dev.jtiisto.wellness.core.data.journal.formatLastUpdated
 import dev.jtiisto.wellness.core.data.journal.formatTargetProgress
 import dev.jtiisto.wellness.core.data.journal.getLastNDays
@@ -29,6 +30,7 @@ import dev.jtiisto.wellness.core.data.sync.SyncStatus
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.doubleOrNull
 import java.time.LocalDate
 import java.time.ZoneId
 import java.util.Locale
@@ -229,9 +231,17 @@ private fun displayedValue(tracker: TrackerDto, entry: EntryDto?, type: TrackerT
     return if (type == TrackerType.EVALUATION) journalNumberJson(EVALUATION_DEFAULT) else null
 }
 
-/** A text field shows nothing for "no value" — an em dash belongs on a label. */
+/**
+ * A text field shows nothing for "no value" — an em dash belongs on a label.
+ *
+ * Numeric primitives render through [formatJournalNumber] so an integral value
+ * shows as `5`, never `5.0` — the server's REAL column round-trips integers as
+ * Python floats, so a delta-delivered value arrives as `5.0` even though every
+ * local write integer-collapses via `journalNumberJson`.
+ */
 private fun JsonElement?.asFieldText(): String = when {
     this == null || this is JsonNull -> ""
+    this is JsonPrimitive && !isString -> doubleOrNull?.let(::formatJournalNumber) ?: content
     this is JsonPrimitive -> content
     else -> toString()
 }
