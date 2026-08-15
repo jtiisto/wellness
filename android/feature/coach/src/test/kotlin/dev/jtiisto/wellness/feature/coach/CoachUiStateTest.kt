@@ -162,14 +162,14 @@ class CoachUiStateTest {
     @Test
     @DisplayName("cells below the window start are disabled and selection is refused")
     fun floorDisablesCells() {
-        val calendar = state(earliestDate = "2026-08-05").calendar
+        val calendar = state(earliestDate = "2026-08-06").calendar
         val cells = calendar.cells.associateBy { it.date }
 
-        assertFalse(cells.getValue("2030-01-04").enabled)
-        assertTrue(cells.getValue("2026-08-05").enabled)
-        assertFalse(canSelectDate("2030-01-04", "2026-08-05"))
-        assertTrue(canSelectDate("2026-08-05", "2026-08-05"))
-        assertTrue(canSelectDate("2030-01-04", null))
+        assertFalse(cells.getValue("2026-08-05").enabled)
+        assertTrue(cells.getValue("2026-08-06").enabled)
+        assertFalse(canSelectDate("2026-08-05", "2026-08-06"))
+        assertTrue(canSelectDate("2026-08-06", "2026-08-06"))
+        assertTrue(canSelectDate("2026-08-05", null))
     }
 
     @Test
