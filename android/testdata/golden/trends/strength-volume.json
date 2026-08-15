@@ -1,0 +1,70 @@
+{
+  "weeks": [
+    {
+      "week_start": "2026-07-06",
+      "partial": false,
+      "tonnage_kg": 9200,
+      "hard_sets": 22,
+      "by_exercise": [
+        {
+          "slug": "fixture-press",
+          "name": "Fixture Press",
+          "tonnage_kg": 4000,
+          "hard_sets": 10
+        },
+        {
+          "slug": "fixture-squat",
+          "name": "Fixture Squat",
+          "tonnage_kg": 3200,
+          "hard_sets": 8
+        },
+        {
+          "slug": "fixture-row",
+          "name": "Fixture Row",
+          "tonnage_kg": 1500,
+          "hard_sets": 3
+        },
+        {
+          "slug": "fixture-curl",
+          "name": "Fixture Curl",
+          "tonnage_kg": 500,
+          "hard_sets": 1
+        }
+      ]
+    },
+    {
+      "week_start": "2026-07-13",
+      "partial": false,
+      "tonnage_kg": 7000,
+      "hard_sets": 18,
+      "by_exercise": [
+        {
+          "slug": "fixture-press",
+          "name": "Fixture Press",
+          "tonnage_kg": 4200,
+          "hard_sets": 10
+        },
+        {
+          "slug": "fixture-squat",
+          "name": "Fixture Squat",
+          "tonnage_kg": 2800,
+          "hard_sets": 8
+        }
+      ]
+    },
+    {
+      "week_start": "2026-07-20",
+      "partial": true,
+      "tonnage_kg": 1200.5,
+      "hard_sets": 4,
+      "by_exercise": [
+        {
+          "slug": "fixture-press",
+          "name": "Fixture Press",
+          "tonnage_kg": 1200.5,
+          "hard_sets": 4
+        }
+      ]
+    }
+  ]
+}

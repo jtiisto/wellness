@@ -1,0 +1,20 @@
+[
+  {
+    "id": "fixture-post-workout",
+    "label": "Fixture Post-Workout",
+    "description": "Fixture analysis of the most recent session.",
+    "icon": "dumbbell"
+  },
+  {
+    "id": "fixture-weekly-review",
+    "label": "Fixture Weekly Review",
+    "description": "Fixture week-over-week summary.",
+    "icon": "calendar",
+    "accepts_location": true
+  },
+  {
+    "id": "fixture-bare",
+    "label": "Fixture Bare Query",
+    "description": "Fixture query registered without an icon or a location."
+  }
+]

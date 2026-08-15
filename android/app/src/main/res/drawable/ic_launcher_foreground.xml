@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Graphite Signal's mark: a rising trace ending in the signal point, in the
+  Journal amber. Geometric on purpose — the considered icon is still Phase 8.
+  Everything sits inside the 72dp safe circle, so no mask crops the endpoint.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:pathData="M32,70 L45,57 L56,64 L74,43"
+        android:strokeColor="#F59E0B"
+        android:strokeWidth="7"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:fillColor="#F59E0B"
+        android:pathData="M74,43 m-9,0 a9,9 0 1,0 18,0 a9,9 0 1,0 -18,0" />
+</vector>

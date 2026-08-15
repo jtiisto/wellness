@@ -1,0 +1,38 @@
+{
+  "available": true,
+  "scans": [
+    {
+      "date": "2026-01-14",
+      "lean_kg": 58.2,
+      "fat_kg": 20.4,
+      "total_kg": 80.1,
+      "body_fat_pct": 25.5,
+      "vat_kg": 0.5,
+      "ag_ratio": 1.02,
+      "bmd_total": 1.24,
+      "t_score_total": 0.7
+    },
+    {
+      "date": "2026-04-18",
+      "lean_kg": 59,
+      "fat_kg": 19.1,
+      "total_kg": 79.4,
+      "body_fat_pct": 24,
+      "vat_kg": 0.44,
+      "ag_ratio": 0.98,
+      "bmd_total": 1.26,
+      "t_score_total": null
+    },
+    {
+      "date": "2026-07-11",
+      "lean_kg": 59.6,
+      "fat_kg": 18.5,
+      "total_kg": 79,
+      "body_fat_pct": 23.4,
+      "vat_kg": null,
+      "ag_ratio": null,
+      "bmd_total": null,
+      "t_score_total": null
+    }
+  ]
+}

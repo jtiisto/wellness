@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      The launch window, painted before Compose has a frame. It is the light
+      theme's canvas token; values-night carries the dark one, so the handoff
+      into WellnessTheme is invisible in both.
+    -->
+    <color name="window_background">#FAFBFC</color>
+</resources>

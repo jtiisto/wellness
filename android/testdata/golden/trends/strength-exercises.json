@@ -1,0 +1,93 @@
+{
+  "exercises": [
+    {
+      "slug": "fixture-press",
+      "name": "Fixture Press",
+      "equipment": "barbell",
+      "last_used": "2026-07-30",
+      "session_count": 12,
+      "unit": "kg",
+      "all_time": {
+        "best_weight": {
+          "weight": 70,
+          "reps": 3,
+          "date": "2026-07-30",
+          "assistance": null
+        },
+        "best_e1rm": {
+          "value": 76.5,
+          "weight": 70,
+          "reps": 3,
+          "date": "2026-07-30",
+          "assistance": null
+        }
+      },
+      "in_range": null,
+      "plateau": false
+    },
+    {
+      "slug": "fixture-pulldown-assisted",
+      "name": "Fixture Pulldown",
+      "equipment": "assisted",
+      "last_used": "2026-07-28",
+      "session_count": 9,
+      "unit": "kg",
+      "all_time": {
+        "best_weight": {
+          "weight": 62.5,
+          "reps": 6,
+          "date": "2026-07-28",
+          "assistance": 20
+        },
+        "best_e1rm": {
+          "value": 74.4,
+          "weight": 62.5,
+          "reps": 6,
+          "date": "2026-07-28",
+          "assistance": 20
+        }
+      },
+      "in_range": {
+        "best_weight": {
+          "weight": 60,
+          "reps": 6,
+          "date": "2026-07-20",
+          "assistance": 22.5
+        },
+        "best_e1rm": {
+          "value": 71.4,
+          "weight": 60,
+          "reps": 6,
+          "date": "2026-07-20",
+          "assistance": 22.5
+        }
+      },
+      "plateau": true
+    },
+    {
+      "slug": "fixture-pulldown-cable",
+      "name": "Fixture Pulldown",
+      "equipment": null,
+      "last_used": "2026-07-12",
+      "session_count": 3,
+      "unit": "kg",
+      "all_time": {
+        "best_weight": {
+          "weight": 45,
+          "reps": 10,
+          "date": "2026-07-12",
+          "assistance": null
+        },
+        "best_e1rm": {
+          "value": 60,
+          "weight": 45,
+          "reps": 10,
+          "date": "2026-07-12",
+          "assistance": null
+        }
+      },
+      "in_range": null,
+      "plateau": false
+    }
+  ]
+}

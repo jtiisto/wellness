@@ -1,0 +1,9 @@
+# Copy this to local.properties and set your Android SDK path
+sdk.dir=/home/YOUR_USER/android-sdk
+
+# Optional: override the Wellness server base URL compiled into
+# BuildConfig.WELLNESS_BASE_URL (:core:data). Must include the /wellness path
+# prefix — endpoint paths are appended to it.
+# Default (unset, tailscale serve prod): https://pop-os.tailexample.ts.net:9443/wellness
+# Dev server (disposable data, plain HTTP over the tailnet):
+# wellness.baseUrl=http://pop-os.tailexample.ts.net:9001/wellness

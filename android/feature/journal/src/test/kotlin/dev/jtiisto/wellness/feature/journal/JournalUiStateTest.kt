@@ -1,0 +1,534 @@
+package dev.jtiisto.wellness.feature.journal
+
+import dev.jtiisto.wellness.core.data.journal.CategoryRollup
+import dev.jtiisto.wellness.core.data.journal.DotState
+import dev.jtiisto.wellness.core.data.journal.defaultValueOrNull
+import dev.jtiisto.wellness.core.data.journal.EntryDto
+import dev.jtiisto.wellness.core.data.journal.EntryField
+import dev.jtiisto.wellness.core.data.journal.EntryPatch
+import dev.jtiisto.wellness.core.data.journal.ProgressTone
+import dev.jtiisto.wellness.core.data.journal.SCHEDULE_GENESIS_DATE
+import dev.jtiisto.wellness.core.data.journal.ScheduleSegmentDto
+import dev.jtiisto.wellness.core.data.journal.TargetDto
+import dev.jtiisto.wellness.core.data.journal.TargetSegmentDto
+import dev.jtiisto.wellness.core.data.journal.TrackerDto
+import dev.jtiisto.wellness.core.data.journal.TrackerType
+import dev.jtiisto.wellness.core.data.network.DateString
+import dev.jtiisto.wellness.core.data.sync.SyncStatus
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNotNull
+import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.DisplayName
+import org.junit.jupiter.api.Test
+import java.time.LocalDate
+import java.time.ZoneId
+import java.util.Locale
+
+/**
+ * [buildJournalUiState] and the widget action builders.
+ *
+ * These are the day view's real rules — visibility, the strip lock, which value
+ * a field shows when nothing is stored, and what each widget writes. Everything
+ * downstream of here just draws.
+ */
+class JournalUiStateTest {
+
+    // 2026-08-06 is a Thursday (weekday 4).
+    private val today = LocalDate.parse("2026-08-06")
+    private val todayStr = "2026-08-06"
+    private val yesterday = "2026-08-05"
+    private val utc = ZoneId.of("UTC")
+
+    private fun build(
+        trackers: List<TrackerDto>,
+        entriesByDate: Map<DateString, Map<String, EntryDto>> = emptyMap(),
+        dirtyTrackerCount: Int = 0,
+        selectedDate: DateString = todayStr,
+        expandedCategories: Set<String> = emptySet(),
+        valueUpdatedTimes: Map<String, String> = emptyMap(),
+        syncStatus: SyncStatus = SyncStatus.GREEN,
+    ) = buildJournalUiState(
+        trackers = trackers,
+        entriesByDate = entriesByDate,
+        dirtyTrackerCount = dirtyTrackerCount,
+        selectedDate = selectedDate,
+        today = today,
+        expandedCategories = expandedCategories,
+        valueUpdatedTimes = valueUpdatedTimes,
+        syncStatus = syncStatus,
+        zone = utc,
+        locale = Locale.US,
+    )
+
+    // ---- the date strip and its lock ---------------------------------------
+
+    @Test
+    @DisplayName("the strip is the trailing seven days, ending today")
+    fun stripShape() {
+        val state = build(listOf(simple("t")))
+        assertEquals(7, state.dateStrip.size)
+        assertEquals("2026-07-31", state.dateStrip.first().date)
+        assertEquals(todayStr, state.dateStrip.last().date)
+        assertTrue(state.dateStrip.last().isToday)
+        assertTrue(state.dateStrip.last().isSelected)
+    }
+
+    @Test
+    @DisplayName("a dirty tracker locks every day but today")
+    fun dirtyTrackerLocksTheStrip() {
+        val state = build(listOf(simple("t")), dirtyTrackerCount = 1)
+        val byDate = state.dateStrip.associateBy { it.date }
+        assertTrue(byDate.getValue(todayStr).enabled, "today is always tappable")
+        assertTrue(state.dateStrip.filterNot { it.isToday }.none { it.enabled })
+        assertTrue(row(state, "t").editable, "today's rows stay editable")
+
+        // A day already selected when the tracker went dirty locks its rows too.
+        val onOlderDay = build(listOf(simple("t")), dirtyTrackerCount = 1, selectedDate = yesterday)
+        assertFalse(row(onOlderDay, "t").editable)
+    }
+
+    @Test
+    @DisplayName("with no dirty trackers every day is editable")
+    fun cleanStripIsFullyEditable() {
+        val state = build(listOf(simple("t")), selectedDate = yesterday, expandedCategories = setOf("Habits"))
+        assertTrue(state.dateStrip.all { it.enabled })
+        assertTrue(state.groups.first().trackers.first().editable)
+    }
+
+    @Test
+    @DisplayName("a selected date outside the strip is clamped to today")
+    fun staleSelectionIsClamped() {
+        val state = build(listOf(simple("t")), selectedDate = "2020-01-01")
+        assertEquals(todayStr, state.selectedDate)
+        assertTrue(state.dateStrip.last().isSelected)
+    }
+
+    // ---- visibility and empty states ----------------------------------------
+
+    @Test
+    @DisplayName("no trackers at all and none scheduled today are different empty states")
+    fun twoEmptyStates() {
+        assertEquals(JournalEmptyState.NO_TRACKERS, build(emptyList()).emptyState)
+
+        val weekendOnly = simple("w").copy(
+            scheduleHistory = listOf(ScheduleSegmentDto(SCHEDULE_GENESIS_DATE, listOf(0, 6))),
+        )
+        assertEquals(JournalEmptyState.NONE_SCHEDULED, build(listOf(weekendOnly)).emptyState)
+    }
+
+    @Test
+    @DisplayName("the date strip renders even when there is nothing to show")
+    fun stripSurvivesEmptyStates() {
+        assertEquals(7, build(emptyList()).dateStrip.size)
+    }
+
+    @Test
+    @DisplayName("an off-schedule tracker stays visible while it has an entry that day")
+    fun offScheduleWithEntryStaysVisible() {
+        val weekendOnly = simple("w").copy(
+            scheduleHistory = listOf(ScheduleSegmentDto(SCHEDULE_GENESIS_DATE, listOf(0, 6))),
+        )
+        val state = build(
+            trackers = listOf(weekendOnly),
+            entriesByDate = mapOf(todayStr to mapOf("w" to EntryDto(completed = false))),
+            expandedCategories = setOf("Habits"),
+        )
+        assertNull(state.emptyState)
+        assertEquals(listOf("w"), state.groups.single().trackers.map { it.id })
+    }
+
+    @Test
+    @DisplayName("an entry with only an explicit null value still keeps the row visible")
+    fun explicitNullEntryKeepsTheRow() {
+        val weekendOnly = simple("w").copy(
+            scheduleHistory = listOf(ScheduleSegmentDto(SCHEDULE_GENESIS_DATE, listOf(0, 6))),
+        )
+        val state = build(
+            trackers = listOf(weekendOnly),
+            entriesByDate = mapOf(todayStr to mapOf("w" to EntryDto(value = JsonNull))),
+            expandedCategories = setOf("Habits"),
+        )
+        assertNull(state.emptyState, "visibility keys off row existence, not on the value")
+    }
+
+    // ---- groups and summaries -------------------------------------------------
+
+    @Test
+    @DisplayName("categories are collapsed by default and the rollup rides both band states")
+    fun collapsedByDefault() {
+        val trackers = listOf(
+            simple("a", category = "Habits", polarity = "positive"),
+            simple("b", category = "Habits", polarity = "positive"),
+        )
+        val entries = mapOf(todayStr to mapOf("a" to EntryDto(completed = true)))
+        val expectedRollup = CategoryRollup(habitsMet = 1, habitsNotYet = 1)
+
+        val collapsed = build(trackers, entries)
+        assertFalse(collapsed.groups.single().expanded)
+        assertEquals(expectedRollup, collapsed.groups.single().rollup)
+
+        val expanded = build(trackers, entries, expandedCategories = setOf("Habits"))
+        assertTrue(expanded.groups.single().expanded)
+        assertEquals(expectedRollup, expanded.groups.single().rollup, "the ring costs no width")
+    }
+
+    @Test
+    @DisplayName("a category the day expects nothing of leaves its band bare")
+    fun rollupAbsentWhenNothingExpected() {
+        // Visible only because it was logged off-schedule — nothing was asked.
+        val weekendOnly = TrackerDto(
+            id = "w",
+            name = "w",
+            category = "Habits",
+            type = "simple",
+            polarity = "positive",
+            scheduleHistory = listOf(ScheduleSegmentDto(SCHEDULE_GENESIS_DATE, listOf(0, 6))),
+        )
+        val state = build(
+            trackers = listOf(weekendOnly),
+            entriesByDate = mapOf(todayStr to mapOf("w" to EntryDto(completed = true))),
+        )
+        assertEquals(1, state.groups.single().trackers.size, "the row is still shown")
+        assertNull(state.groups.single().rollup)
+    }
+
+    @Test
+    @DisplayName("rows are derived whether the group is open or not")
+    fun rowsAlwaysDerived() {
+        val state = build(listOf(simple("a", category = "Habits")))
+        assertEquals(1, state.groups.single().trackers.size)
+    }
+
+    @Test
+    @DisplayName("categories sort by name, and so do trackers within them")
+    fun sorting() {
+        val trackers = listOf(
+            simple("z", name = "Zinc", category = "Supplements"),
+            simple("a", name = "Ashwagandha", category = "Supplements"),
+            simple("e", name = "Éclair", category = "Supplements"),
+            simple("h", name = "Walk", category = "Habits"),
+        )
+        val state = build(trackers)
+        assertEquals(listOf("Habits", "Supplements"), state.groups.map { it.name })
+        // Plain compareTo at both levels: an accented name sorts by code unit,
+        // which is where this deliberately departs from the PWA's localeCompare.
+        assertEquals(
+            listOf("Ashwagandha", "Zinc", "Éclair"),
+            state.groups.last().trackers.map { it.name },
+        )
+    }
+
+    @Test
+    @DisplayName("a tracker with no category lands under Uncategorized")
+    fun uncategorized() {
+        val state = build(listOf(simple("t").copy(category = null)))
+        assertEquals(listOf("Uncategorized"), state.groups.map { it.name })
+    }
+
+    // ---- row derivation --------------------------------------------------------
+
+    @Test
+    @DisplayName("the displayed value falls back stored → default → 50 for an evaluation")
+    fun displayedValueFallbackChain() {
+        val quantifiable = quantifiable("q", defaultValue = 30)
+        val evaluation = simple("e", type = "evaluation")
+
+        val stored = row(build(listOf(quantifiable), mapOf(todayStr to mapOf("q" to EntryDto(value = JsonPrimitive(7))))), "q")
+        assertEquals("7", stored.valueText)
+        assertEquals(7.0, stored.displayedNumber)
+
+        // The server's REAL column returns integers as Python floats: a
+        // delta-delivered 7.0 must still display as 7. A genuine decimal keeps
+        // its fraction untouched.
+        val serverFloat = row(build(listOf(quantifiable), mapOf(todayStr to mapOf("q" to EntryDto(value = JsonPrimitive(7.0))))), "q")
+        assertEquals("7", serverFloat.valueText, "integral doubles render without a trailing .0")
+        val fractional = row(build(listOf(quantifiable), mapOf(todayStr to mapOf("q" to EntryDto(value = JsonPrimitive(7.5))))), "q")
+        assertEquals("7.5", fractional.valueText)
+
+        val fromDefault = row(build(listOf(quantifiable)), "q")
+        assertEquals("30", fromDefault.valueText, "integers render without a trailing .0")
+        assertEquals(30.0, fromDefault.displayedNumber)
+
+        val evaluationDefault = row(build(listOf(evaluation)), "e")
+        assertEquals(50f, evaluationDefault.sliderValue)
+
+        val noDefault = row(build(listOf(quantifiable("n"))), "n")
+        assertEquals("", noDefault.valueText)
+        assertNull(noDefault.displayedNumber)
+    }
+
+    @Test
+    @DisplayName("an explicitly-null stored value falls through to the default, as absent does")
+    fun explicitNullFallsBackToDefault() {
+        val state = build(
+            listOf(quantifiable("q", defaultValue = 30)),
+            mapOf(todayStr to mapOf("q" to EntryDto(value = JsonNull))),
+        )
+        assertEquals("30", row(state, "q").valueText)
+    }
+
+    @Test
+    @DisplayName("committed is the checkbox being genuinely true; checked can differ")
+    fun committedVersusChecked() {
+        val entries = mapOf(
+            todayStr to mapOf(
+                "a" to EntryDto(completed = true),
+                "b" to EntryDto(completed = false),
+                "c" to EntryDto(value = JsonPrimitive(1)),
+            ),
+        )
+        val state = build(listOf(simple("a"), simple("b"), simple("c")), entries)
+        assertTrue(row(state, "a").committed)
+        assertTrue(row(state, "a").checked)
+        assertFalse(row(state, "b").committed)
+        assertFalse(row(state, "c").committed, "a value with no checkbox is not committed")
+    }
+
+    @Test
+    @DisplayName("the target line is quantifiable-only, and the fill bar at-least-only")
+    fun targetLine() {
+        val atLeast = quantifiable("q", target = TargetDto(min = 150.0))
+        val atMost = quantifiable("m", target = TargetDto(max = 2.0))
+        val entries = mapOf(
+            todayStr to mapOf(
+                "q" to EntryDto(value = JsonPrimitive(75)),
+                "m" to EntryDto(value = JsonPrimitive(1)),
+            ),
+        )
+        val state = build(listOf(atLeast, atMost), entries)
+
+        val progress = requireNotNull(row(state, "q").targetProgress)
+        assertEquals(ProgressTone.PARTIAL, progress.tone)
+        assertEquals(50.0, progress.fillPct)
+        assertNull(row(state, "m").targetProgress?.fillPct, "at-most targets show headroom, not a bar")
+
+        val simpleRow = row(build(listOf(simple("s"))), "s")
+        assertNull(simpleRow.targetProgress)
+    }
+
+    @Test
+    @DisplayName("the last-updated caption is quantifiable-only and formatted against the selected day")
+    fun lastUpdatedCaption() {
+        val stamps = mapOf(
+            "$todayStr|q" to "2026-08-06T15:42:07Z",
+            "$todayStr|s" to "2026-08-06T15:42:07Z",
+        )
+        val state = build(listOf(quantifiable("q"), simple("s")), valueUpdatedTimes = stamps)
+        assertEquals("3:42 PM", row(state, "q").lastUpdatedCaption)
+        assertNull(row(state, "s").lastUpdatedCaption, "only a quantifiable value carries a caption")
+
+        val older = build(
+            listOf(quantifiable("q")),
+            valueUpdatedTimes = mapOf("$yesterday|q" to "2026-07-03T15:42:07Z"),
+            selectedDate = yesterday,
+        )
+        assertEquals("Jul 3, 3:42 PM", row(older, "q").lastUpdatedCaption)
+    }
+
+    @Test
+    @DisplayName("the dot row ends on the SELECTED date and mutes days before the local window")
+    fun dotRowWiring() {
+        val tracker = simple("t", polarity = "positive")
+        val state = build(listOf(tracker), selectedDate = yesterday, expandedCategories = setOf("Habits"))
+        val dots = row(state, "t").dots
+
+        assertEquals(7, dots.size)
+        assertEquals(yesterday, dots.last().date, "the row shows the selected day's week")
+        // The window starts at today − 7 = 2026-07-30, so the two oldest dots
+        // reach into pruned data and are muted rather than judged.
+        assertEquals("2026-07-30", dots.first().date)
+        assertEquals(DotState.MISSED, dots.first().state)
+
+        val furtherBack = build(listOf(tracker), selectedDate = "2026-07-31")
+        assertEquals(DotState.OFF, furtherBack.groups.single().trackers.single().dots.first().state)
+    }
+
+    @Test
+    @DisplayName("negative polarity is flagged so the dots can avoid celebrating avoidance")
+    fun avoidPolarityFlag() {
+        val state = build(listOf(simple("v", polarity = "negative")))
+        assertTrue(row(state, "v").avoidPolarity)
+        assertFalse(row(build(listOf(simple("p", polarity = "positive"))), "p").avoidPolarity)
+    }
+
+    @Test
+    @DisplayName("widget fields come off extras: unit and the accumulator button")
+    fun widgetFields() {
+        val tracker = quantifiable("q", unit = "g", accumulator = true)
+        val state = build(listOf(tracker))
+        assertEquals("g", row(state, "q").unit)
+        assertTrue(row(state, "q").isAccumulator)
+        assertEquals(TrackerType.QUANTIFIABLE, row(state, "q").type)
+    }
+
+    // ---- widget actions ----------------------------------------------------------
+
+    @Test
+    @DisplayName("checking a quantifiable tracker with no value writes the default in the same patch")
+    fun checkboxSeedsTheDefault() {
+        val tracker = quantifiable("q", defaultValue = 30)
+        val patch = checkboxPatch(tracker, entry = null, checked = true)
+        assertEquals(EntryField.Set<JsonElement?>(JsonPrimitive(30)), patch.value)
+        assertEquals(EntryField.Set(true), patch.completed)
+    }
+
+    @Test
+    @DisplayName("checking an evaluation tracker with no default seeds 50")
+    fun checkboxSeedsEvaluationMidpoint() {
+        val patch = checkboxPatch(simple("e", type = "evaluation"), entry = null, checked = true)
+        assertEquals(EntryField.Set<JsonElement?>(JsonPrimitive(50)), patch.value)
+    }
+
+    @Test
+    @DisplayName("checking does not overwrite a value that is already there")
+    fun checkboxKeepsAnExistingValue() {
+        val tracker = quantifiable("q", defaultValue = 30)
+        val patch = checkboxPatch(tracker, EntryDto(value = JsonPrimitive(7)), checked = true)
+        assertEquals(EntryField.Unchanged, patch.value)
+        assertEquals(EntryField.Set(true), patch.completed)
+    }
+
+    @Test
+    @DisplayName("an explicitly-null value is a value: checking does not seed over it")
+    fun checkboxRespectsAnExplicitNull() {
+        val tracker = quantifiable("q", defaultValue = 30)
+        val patch = checkboxPatch(tracker, EntryDto(value = JsonNull), checked = true)
+        assertEquals(EntryField.Unchanged, patch.value, "only an ABSENT value gets the default")
+    }
+
+    @Test
+    @DisplayName("a tracker whose stored defaultValue is JSON null has no default to seed")
+    fun checkboxWithANullDefaultValueInExtras() {
+        // The config form writes `defaultValue: null` for a blank field, so this
+        // is the shape a real tracker takes — not a hypothetical. It must read
+        // as "no default" all the way through to the patch, not just in the
+        // accessor: seeding JsonNull as a value would create an entry holding
+        // nothing and flip the day's judgment.
+        val tracker = TrackerDto(
+            id = "q",
+            name = "q",
+            category = "Habits",
+            type = "quantifiable",
+            extras = JsonObject(mapOf("defaultValue" to JsonNull)),
+        )
+        assertNull(tracker.defaultValueOrNull())
+
+        val patch = checkboxPatch(tracker, entry = null, checked = true)
+        assertEquals(EntryField.Unchanged, patch.value)
+        assertEquals(EntryField.Set(true), patch.completed)
+    }
+
+    @Test
+    @DisplayName("an evaluation tracker with a null default still falls back to 50")
+    fun evaluationNullDefaultStillSeedsMidpoint() {
+        val tracker = TrackerDto(
+            id = "e",
+            name = "e",
+            category = "Habits",
+            type = "evaluation",
+            extras = JsonObject(mapOf("defaultValue" to JsonNull)),
+        )
+        assertEquals(EntryField.Set<JsonElement?>(JsonPrimitive(50)), checkboxPatch(tracker, null, true).value)
+    }
+
+    @Test
+    @DisplayName("unchecking, and checking a type with no default, write the checkbox alone")
+    fun checkboxWithoutADefault() {
+        val tracker = quantifiable("q", defaultValue = 30)
+        assertEquals(EntryField.Unchanged, checkboxPatch(tracker, null, checked = false).value)
+        assertEquals(EntryField.Unchanged, checkboxPatch(simple("s"), null, checked = true).value)
+        assertEquals(EntryField.Unchanged, checkboxPatch(quantifiable("n"), null, checked = true).value)
+    }
+
+    @Test
+    @DisplayName("a numeric commit writes only the value, and only on a real change")
+    fun numericCommit() {
+        assertEquals(EntryPatch.numeric(12.0), numericCommitPatch(7.0, "12"))
+        assertEquals(EntryField.Unchanged, numericCommitPatch(7.0, "12")!!.completed)
+
+        assertNull(numericCommitPatch(1.0, "1"), "the same number in a different spelling")
+        assertNull(numericCommitPatch(30.0, "30"), "echoing back a displayed default")
+        assertNull(numericCommitPatch(7.0, "abc"), "unparseable input restores the display")
+        assertNull(numericCommitPatch(7.0, "1e"), "half-typed input restores the display")
+        assertEquals(EntryPatch.numeric(1.5), numericCommitPatch(7.0, " 1.5 "))
+    }
+
+    @Test
+    @DisplayName("emptying a numeric field clears the value back to absent")
+    fun numericCommitClear() {
+        assertEquals(EntryField.Set<JsonElement?>(null), numericCommitPatch(7.0, "")!!.value)
+        assertNull(numericCommitPatch(null, ""), "nothing to clear")
+    }
+
+    @Test
+    @DisplayName("the accumulator adds to what is displayed, allows negatives, ignores zero and junk")
+    fun accumulator() {
+        assertEquals(EntryPatch.numeric(32.0), accumulatorPatch(7.0, "25"))
+        assertEquals(EntryPatch.numeric(25.0), accumulatorPatch(null, "25"), "a missing value counts as zero")
+        assertEquals(EntryPatch.numeric(-3.0), accumulatorPatch(7.0, "-10"), "negatives take a mis-entry back")
+        assertNull(accumulatorPatch(7.0, "0"), "zero just closes the sheet")
+        assertNull(accumulatorPatch(7.0, ""))
+        assertNull(accumulatorPatch(7.0, "lots"))
+    }
+
+    @Test
+    @DisplayName("the slider writes the value alone; a note writes text and checkbox together")
+    fun sliderAndNote() {
+        val slider = sliderPatch(75f)
+        assertEquals(EntryField.Set<JsonElement?>(JsonPrimitive(75)), slider.value)
+        assertEquals(EntryField.Unchanged, slider.completed)
+
+        assertEquals(EntryField.Set(true), EntryPatch.note("felt good").completed)
+        assertEquals(EntryField.Set<JsonElement?>(JsonPrimitive("felt good")), EntryPatch.note("felt good").value)
+        assertEquals(EntryField.Set(false), EntryPatch.note("   ").completed, "clearing uncommits")
+    }
+
+    @Test
+    @DisplayName("only quantifiable values are stamped")
+    fun stampingRules() {
+        assertTrue(stampsLastUpdated(TrackerType.QUANTIFIABLE))
+        assertFalse(stampsLastUpdated(TrackerType.EVALUATION))
+        assertFalse(stampsLastUpdated(TrackerType.NOTE))
+        assertFalse(stampsLastUpdated(TrackerType.SIMPLE))
+    }
+
+    // ---- fixtures --------------------------------------------------------------
+
+    private fun row(state: JournalUiState, id: String): TrackerRowState =
+        state.groups.flatMap { it.trackers }.first { it.id == id }
+
+    private fun simple(
+        id: String,
+        name: String = id,
+        category: String = "Habits",
+        type: String = "simple",
+        polarity: String? = null,
+    ) = TrackerDto(id = id, name = name, category = category, type = type, polarity = polarity)
+
+    private fun quantifiable(
+        id: String,
+        unit: String? = null,
+        defaultValue: Number? = null,
+        accumulator: Boolean = false,
+        target: TargetDto? = null,
+    ) = TrackerDto(
+        id = id,
+        name = id,
+        category = "Habits",
+        type = "quantifiable",
+        targetHistory = target?.let { listOf(TargetSegmentDto(SCHEDULE_GENESIS_DATE, it)) },
+        extras = JsonObject(
+            buildMap {
+                unit?.let { put("unit", JsonPrimitive(it)) }
+                defaultValue?.let { put("defaultValue", JsonPrimitive(it)) }
+                if (accumulator) put("accumulator", JsonPrimitive(true))
+            },
+        ),
+    )
+}

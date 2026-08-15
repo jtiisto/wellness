@@ -1,0 +1,45 @@
+{
+  "weeks": [
+    {
+      "week_start": "2026-07-06",
+      "partial": false,
+      "zone2_planned_min": 120,
+      "zone2_extra_min": 30.5,
+      "interval_sessions": 1
+    },
+    {
+      "week_start": "2026-07-13",
+      "partial": false,
+      "zone2_planned_min": 90,
+      "zone2_extra_min": 0,
+      "interval_sessions": 0
+    },
+    {
+      "week_start": "2026-07-20",
+      "partial": true,
+      "zone2_planned_min": 45,
+      "zone2_extra_min": 0,
+      "interval_sessions": 2
+    }
+  ],
+  "steady_sessions": [
+    {
+      "date": "2026-07-07",
+      "avg_hr": 132,
+      "duration_min": 45,
+      "off_plan": false
+    },
+    {
+      "date": "2026-07-11",
+      "avg_hr": 128.5,
+      "duration_min": 62.5,
+      "off_plan": true
+    },
+    {
+      "date": "2026-07-18",
+      "avg_hr": 130,
+      "duration_min": 30,
+      "off_plan": false
+    }
+  ]
+}

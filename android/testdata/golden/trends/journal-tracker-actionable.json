@@ -1,0 +1,93 @@
+{
+  "tracker": {
+    "id": "fixture-tracker-alpha",
+    "name": "Fixture Tracker Alpha",
+    "type": "quantifiable",
+    "unit": "ml",
+    "polarity": "positive",
+    "actionable": true,
+    "has_target": true,
+    "first_entry": "2026-05-01",
+    "last_entry": "2026-07-30"
+  },
+  "values": [
+    {
+      "date": "2026-07-06",
+      "value": 2000,
+      "completed": 1
+    },
+    {
+      "date": "2026-07-07",
+      "value": 1750.5,
+      "completed": 0
+    },
+    {
+      "date": "2026-07-08",
+      "value": null,
+      "completed": null
+    },
+    {
+      "date": "2026-07-09",
+      "value": "2100",
+      "completed": 1
+    },
+    {
+      "date": "2026-07-10",
+      "value": "felt fine, forgot the bottle",
+      "completed": null
+    }
+  ],
+  "target_segments": [
+    {
+      "start": "2026-07-06",
+      "end": "2026-07-08",
+      "min": 1800,
+      "max": 2400
+    },
+    {
+      "start": "2026-07-09",
+      "end": "2026-07-10",
+      "min": 2000,
+      "max": null
+    }
+  ],
+  "weekly_adherence": [
+    {
+      "week_start": "2026-07-06",
+      "partial": false,
+      "paused": false,
+      "scheduled_days": 7,
+      "met": 4,
+      "partial_days": 1,
+      "missed": 2,
+      "rate": 0.571,
+      "metric_kind": "adherence"
+    },
+    {
+      "week_start": "2026-07-13",
+      "partial": false,
+      "paused": true,
+      "scheduled_days": 0,
+      "met": 0,
+      "partial_days": 0,
+      "missed": 0,
+      "rate": null,
+      "metric_kind": "adherence"
+    },
+    {
+      "week_start": "2026-07-20",
+      "partial": true,
+      "paused": false,
+      "scheduled_days": 3,
+      "met": 3,
+      "partial_days": 0,
+      "missed": 0,
+      "rate": 1,
+      "metric_kind": "adherence"
+    }
+  ],
+  "streaks": {
+    "current": 3,
+    "best": 11
+  }
+}

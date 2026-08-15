@@ -1,0 +1,48 @@
+{
+  "tracker": {
+    "id": "fixture-tracker-beta",
+    "name": "Fixture Tracker Beta",
+    "type": "simple",
+    "unit": null,
+    "polarity": "neutral",
+    "actionable": false,
+    "has_target": false,
+    "first_entry": "2026-06-01",
+    "last_entry": "2026-07-29"
+  },
+  "values": [
+    {
+      "date": "2026-07-07",
+      "value": 1,
+      "completed": 1
+    },
+    {
+      "date": "2026-07-21",
+      "value": 1,
+      "completed": 1
+    }
+  ],
+  "target_segments": [],
+  "weekly_adherence": [],
+  "streaks": {
+    "current": 0,
+    "best": 2
+  },
+  "weekly_usage": [
+    {
+      "week_start": "2026-07-06",
+      "partial": false,
+      "count": 1
+    },
+    {
+      "week_start": "2026-07-13",
+      "partial": false,
+      "count": 0
+    },
+    {
+      "week_start": "2026-07-20",
+      "partial": true,
+      "count": 1
+    }
+  ]
+}

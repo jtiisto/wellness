@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    The only path the FileProvider will ever hand out: cache/shared/.
+
+    Deliberately not the whole cache directory and certainly not files/ — a
+    share grant is a read permission handed to another app, and it should reach
+    exactly the staging area SharedFileStore writes into and nothing else. The
+    database, the exported schemas and every other cached payload sit outside it.
+-->
+<paths>
+    <cache-path
+        name="shared"
+        path="shared/" />
+</paths>

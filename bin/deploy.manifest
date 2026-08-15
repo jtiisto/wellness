@@ -34,6 +34,9 @@ ship-bin   backup-databases.sh
 ship-bin   reverse_backfill_schedule_polarity.py
 
 # ---- Intentionally NOT shipped (dev/test/docs/config) ----
+# The native Android client (full app: Gradle tree, specs, golden fixtures).
+# Client source ships to devices via APK, never to the server deploy.
+exclude    android
 exclude    docs
 exclude    test
 exclude    githooks

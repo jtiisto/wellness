@@ -1,0 +1,104 @@
+{
+  "zone2": {
+    "this_week_min": 42,
+    "last_week_min": 150.5,
+    "four_week_avg_min": 120,
+    "sparkline": [
+      {
+        "week_start": "2026-06-08",
+        "planned_min": 90,
+        "extra_min": 30.5
+      },
+      {
+        "week_start": "2026-06-15",
+        "planned_min": 120,
+        "extra_min": 0
+      },
+      {
+        "week_start": "2026-06-22",
+        "planned_min": 60,
+        "extra_min": 45
+      },
+      {
+        "week_start": "2026-06-29",
+        "planned_min": 105.5,
+        "extra_min": 45
+      }
+    ]
+  },
+  "tonnage": {
+    "this_week_kg": 3200,
+    "last_week_kg": 11800.5,
+    "four_week_avg_kg": 10000,
+    "sparkline": [
+      {
+        "week_start": "2026-06-08",
+        "tonnage_kg": 9500
+      },
+      {
+        "week_start": "2026-06-15",
+        "tonnage_kg": 10250.75
+      },
+      {
+        "week_start": "2026-06-22",
+        "tonnage_kg": 8400
+      },
+      {
+        "week_start": "2026-06-29",
+        "tonnage_kg": 11800.5
+      }
+    ]
+  },
+  "adherence_focus": [
+    {
+      "tracker_id": "fixture-tracker-alpha",
+      "name": "Fixture Tracker Alpha",
+      "metric_kind": "adherence",
+      "rate": 0.42,
+      "dropping": true,
+      "ribbon": [
+        {
+          "date": "2026-07-27",
+          "status": "met"
+        },
+        {
+          "date": "2026-07-28",
+          "status": "partial"
+        },
+        {
+          "date": "2026-07-29",
+          "status": "missed"
+        },
+        {
+          "date": "2026-07-30",
+          "status": "off"
+        }
+      ]
+    },
+    {
+      "tracker_id": "fixture-tracker-beta",
+      "name": "Fixture Tracker Beta",
+      "metric_kind": "avoidance",
+      "rate": 0.6,
+      "dropping": false,
+      "ribbon": [
+        {
+          "date": "2026-07-30",
+          "status": "met"
+        }
+      ]
+    }
+  ],
+  "prs": {
+    "count_30d": 2,
+    "latest": {
+      "slug": "fixture-press",
+      "name": "Fixture Press",
+      "date": "2026-07-30",
+      "e1rm": 72.5,
+      "weight": 65,
+      "reps": 5,
+      "unit": "kg"
+    }
+  }
+}
