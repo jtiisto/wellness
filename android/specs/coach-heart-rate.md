@@ -1,11 +1,11 @@
 # Coach Heart Rate Integration (pulse-bridge merge)
 
-**Status: APPROVED — all three phases implemented (P1+P2 2026-08-11 this repo; P3 server-side by
-the server session's plans/hr-module.md phases 3–5, parity note repointed 2026-08-11).**
-Branch: `feature/coach-pulse`. Outstanding before checkoff: device acceptance of the end-to-end
-flow (strap → capture → hr.db → analysis), the instrumented-test run next emulator session, and
-the deferred items (ForceSync HR arm; hr_mcp client registration; pulse-bridge retirement — an
-explicit later call).
+**Status: COMPLETE — checked off 2026-08-15.** All three phases implemented (P1+P2 2026-08-11
+this repo; P3 server-side via the server session's plans/hr-module.md phases 3–5); instrumented
+suite green on-device 2026-08-12 (79/79); **device acceptance passed 2026-08-15** — a live workout
+captured end-to-end (8,839 RR samples, 21 set events, 1 anchored session in hr.db). Merged to
+main. Deferred by explicit choice, tracked outside this spec: ForceSync HR arm, hr_mcp client
+registration, pulse-bridge retirement.
 
 ## Goal
 
