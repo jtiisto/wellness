@@ -7,10 +7,10 @@ Status: **approved 2026-08-06** (v2 after Codex review; open questions resolved 
 Stand up the headless foundation every feature builds on: the HTTP client, the Room database scaffold, the debug log, and the sync engine's module-agnostic machinery (dirty tracking, scheduling, orchestration) — ported from the PWA where the PWA has pinned behavior. Ends with a demonstrable slice: the Tools screen pings `GET /api/journal/sync/status` against the real server and shows the debug log.
 
 Porting sources (behavior is theirs, not ours to redesign):
-- `~/dev/health/wellness/public/js/shared/dirty-set.js` (+ `test/js/dirty-set.test.js`)
-- `~/dev/health/wellness/public/js/shared/sync-scheduler-logic.js` (+ `test/js/sync-scheduler-logic.test.js`)
-- `~/dev/health/wellness/public/js/shared/sync-scheduler.js`
-- `~/dev/health/wellness/public/js/shared/debug-log.js`
+- `../../public/js/shared/dirty-set.js` (+ `test/js/dirty-set.test.js`)
+- `../../public/js/shared/sync-scheduler-logic.js` (+ `test/js/sync-scheduler-logic.test.js`)
+- `../../public/js/shared/sync-scheduler.js`
+- `../../public/js/shared/debug-log.js`
 
 ### Declared deviations from the PWA (intentional, all else is 1:1)
 1. **Sequential poll loop** — `while { delay(30 s); pollOnce() }` between *completed* cycles instead of `setInterval`'s fixed-rate ticks. No overlapping poll checks; cadence may drift by cycle duration. (JS could overlap a slow `pollCheckFn` with the next tick; we forbid it.)

@@ -8,9 +8,9 @@ Status: **approved 2026-08-07** (v2 after Codex review; user-approved incl. dev-
 Coach joins the sync engine: workout plans (client-read-only) and day logs stored in Room as whole-day JSON blobs, synced upload-first with per-record server-token arbitration, tombstones with the re-add/resurrection machinery, the 60-day window, and the cheap `plans-version` poll pre-check. Ends demonstrable: a debug Coach screen renders today's plan from the dev server and a set logged on the phone lands server-side.
 
 Porting sources (behavior is theirs):
-- `~/dev/health/wellness/public/js/coach/sync-logic.js` (273 lines, pure) + `test/js/coach-sync-logic.test.js` (**27 cases — transcribe 1:1**)
-- `~/dev/health/wellness/public/js/coach/store.js` — mutators (`updateLog`, `deleteLogEntry`, `updateSessionFeedback`), `triggerSync` (upload-first, lines 304-472), pollCheck (274-289), dirty tracking, `updateSyncStatus`
-- Server truth: `~/dev/health/wellness/src/modules/coach.py` (`_store_log` 550-727, arbitration + tombstone lifecycle + resurrection guard), `coach_logs.py` (`assemble_log` lean shape, `AD_HOC_LOG_SLUGS`), `coach_plans.py` (`assemble_plan`), `sync_arbitration.py`
+- `../../public/js/coach/sync-logic.js` (273 lines, pure) + `test/js/coach-sync-logic.test.js` (**27 cases — transcribe 1:1**)
+- `../../public/js/coach/store.js` — mutators (`updateLog`, `deleteLogEntry`, `updateSessionFeedback`), `triggerSync` (upload-first, lines 304-472), pollCheck (274-289), dirty tracking, `updateSyncStatus`
+- Server truth: `../../src/modules/coach.py` (`_store_log` 550-727, arbitration + tombstone lifecycle + resurrection guard), `coach_logs.py` (`assemble_log` lean shape, `AD_HOC_LOG_SLUGS`), `coach_plans.py` (`assemble_plan`), `sync_arbitration.py`
 - `docs/ARCHITECTURE.md` coach section (edge-case checklist; note its "30 days" is stale — code says `SYNC_WINDOW_DAYS = 60`)
 - `public/js/coach/utils.js`: ONLY `EXTRA_SESSION_KEY = "extra_zone2"` (rest is Phase 5)
 

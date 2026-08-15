@@ -7,8 +7,8 @@ Status: **approved 2026-08-07** (v2 after Codex review; user-approved with bound
 Replace the Phase 4 debug screen with the full Coach feature at PWA parity: calendar-driven day selection with status dots, the workout day view (blocks, supersets, exercise accordions with prescriptions and ghost values, four entry-widget shapes, session feedback, extra Zone-2 sessions), and the workout Start/End hook machinery with its four-escape entry gate. Pure logic ported and pinned; ~43 transcribed JS/e2e-embedded cases plus new tests for previously-unpinned helpers.
 
 Porting sources (behavior is theirs):
-- `~/dev/health/wellness/public/js/coach/utils.js` — everything except the already-ported `EXTRA_SESSION_KEY` (add `EXTRA_SESSION_TITLE`)
-- `~/dev/health/wellness/public/js/coach/last-performance.js` — the whole ghost-value mechanism
+- `../../public/js/coach/utils.js` — everything except the already-ported `EXTRA_SESSION_KEY` (add `EXTRA_SESSION_TITLE`)
+- `../../public/js/coach/last-performance.js` — the whole ghost-value mechanism
 - Components: `public/js/coach/{CoachView,components/{CalendarPicker,WorkoutView,BlockView,SupersetGroup,ExerciseItem,SetEntry,CardioEntry,ChecklistEntry,SessionFeedback,ExtraSessionCard}}.js`. **`DateSelector.js` is dead code — do not port** (its two util consumers `formatDateShort`/`getDateRange` are ported for tests but unused by UI).
 - Transcription authorities: `test/js/last-performance.test.js` (17), `test/js/prescription.test.js` (4), the pure-function cases embedded in `test/e2e_browser/test_coach_interval.py:104-243` (**19**: formatTarget 8, formatInterval 3, getExerciseProgress 3, isExerciseCompleted 5), and `test_coach_superset.py:68-131` (3 groupExercises cases) — **43 transcribed cases total**
 - Behavioral checklists (read, don't port): `test_coach.py`, `test_coach_extra_session.py`, `test/e2e_browser/pages/coach.py`

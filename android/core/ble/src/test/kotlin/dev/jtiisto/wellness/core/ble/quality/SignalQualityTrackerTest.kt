@@ -204,10 +204,10 @@ class SignalQualityTrackerTest {
     }
 
     // ---- ⚠ PARITY tripwires ------------------------------------------------
-    // The Python side of this pair is ~/dev/health/wellness
+    // The Python side of this pair is the repo root's
     // test/hr/analysis/test_parity_constants.py, which pins the same numbers
-    // against src/hr_analysis/quality.py. If one of these fails, the other
-    // repo's copy of the rule has to move with it — see the class KDoc.
+    // against src/hr_analysis/quality.py. If one of these fails, the server
+    // side's copy of the rule has to move with it — see the class KDoc.
 
     @Test
     fun `the DFA window matches pipeline WINDOW_MS`() {

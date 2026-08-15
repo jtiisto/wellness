@@ -11,8 +11,8 @@ import kotlin.math.roundToInt
  *
  * ⚠ PARITY: the thresholds and rules below (coverage band, artifact ceiling,
  * ectopic threshold, omission factor, longest-contiguous-run coverage, gap
- * veto) MUST match the offline analysis in the wellness server repo
- * (`~/dev/health/wellness`): `src/hr_analysis/quality.py` and
+ * veto) MUST match the offline analysis in the server tree at this repo's
+ * root: `src/hr_analysis/quality.py` and
  * `src/hr_analysis/pipeline.py` `_window_alpha1`. "GOOD" here promises the
  * server will trust the window — if the two drift, that promise breaks. No
  * shared test can enforce cross-language parity; what exists on each side is a

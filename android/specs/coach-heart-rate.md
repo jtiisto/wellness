@@ -34,7 +34,7 @@ set checkbox ──▶ coach blob write (unchanged)                             
 ```
 
 - **Android**: new `core/ble` module (ported pure logic + BLE primitives), a BLE capture foreground service, three new tables in the single Room DB, an append-only uploader, coach UI additions.
-- **Server** (implemented in `~/dev/health/wellness` — this repo is Android-only): new `hr` module registered in `MODULES` config, `data/hr.db`, two batch-ingest endpoints, migrated analysis + MCP.
+- **Server** (implemented at the repo root — this tree is Android-only): new `hr` module registered in `MODULES` config, `data/hr.db`, two batch-ingest endpoints, migrated analysis + MCP.
 
 ## Android
 
@@ -103,7 +103,7 @@ Quarantine: on a 422 the batch is recursively bisected to isolate poison rows (o
 - Golden fixtures for the new wire payloads in `testdata/golden/hr/` — synthetic only.
 - Emulator has no BLE: BLE paths verified on the physical device via the APK-to-gdrive flow; everything below the BLE boundary (buffer, sync, events, UI state) is unit-tested headless.
 
-## Server (planned and implemented in `~/dev/health/wellness`)
+## Server (planned and implemented at the repo root)
 
 **Split out per cross-repo decision (2026-08-09):** the server-side plan lives in the server repo at
 `plans/hr-module.md`; the wire contract both repos implement is **`specs/hr-protocol.md`** in this
@@ -165,7 +165,7 @@ repo (authoritative until the server work lands it in `docs/ARCHITECTURE.md`). S
 
 ## Dependencies
 
-- **Ordering decision (2026-08-09): the server side is implemented first** (`~/dev/health/wellness`, `plans/hr-module.md`), so all four `hr` endpoints exist before Android Phase 1 starts and every Android phase can verify end-to-end from day one.
+- **Ordering decision (2026-08-09): the server side is implemented first** (the repo root, its local `plans/hr-module.md`), so all four `hr` endpoints exist before Android Phase 1 starts and every Android phase can verify end-to-end from day one.
 - Physical-device sessions needed for BLE verification (emulator has no Bluetooth).
 
 ## Phases

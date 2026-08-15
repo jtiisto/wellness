@@ -36,6 +36,8 @@ plans/
 # Claude Code
 CLAUDE.md
 .claude/
+# Agent skills mirror (machine-specific: carries emulator host addresses)
+.agents/
 
 # OS
 .DS_Store

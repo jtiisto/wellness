@@ -1,12 +1,12 @@
 # HR Wire Protocol v1 (cross-repo contract)
 
 **Status: SUPERSEDED (2026-08-10).** The server side is implemented; the protocol's
-authoritative home is now the server repo's `~/dev/health/wellness/docs/ARCHITECTURE.md`
+authoritative home is now the server repo's `../../docs/ARCHITECTURE.md`
 ("HR: Idempotent Batch Ingestion"). This file stays as the Android-side working reference,
 but on any disagreement ARCHITECTURE.md wins.
 
 The wire contract between the wellness Android client (this repo, `feature/coach-pulse`) and the
-wellness server's `hr` module (implemented in `~/dev/health/wellness`, planned in that repo's
+wellness server's `hr` module (implemented at the repo root, planned in its local
 `plans/hr-module.md`). Parent feature spec: `specs/coach-heart-rate.md`.
 
 Golden fixtures pin the byte-level shapes in **both** repos — Android
@@ -142,7 +142,7 @@ finalizing against stale data.
 
 Columns are snake_case mirrors of the wire fields. `intervals` PK
 (`device_id`, `timestamp_ms`, `seq`); `set_events` PK `event_id`; `sessions` PK `session_id`.
-DDL and migrations live in the server plan (`~/dev/health/wellness/plans/hr-module.md`).
+DDL and migrations live in the server plan (`../../plans/hr-module.md`).
 
 ## Canonical example payloads
 

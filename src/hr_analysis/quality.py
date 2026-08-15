@@ -18,9 +18,9 @@ import numpy as np
 # hand; test/hr/analysis/test_parity_constants.py at least fails loudly when a
 # value below is edited, so the edit cannot pass unnoticed.
 #
-# The live Kotlin implementation (landed 2026-08-11, Android phase 2 of the
-# wellness app's specs/coach-heart-rate.md) is
-#   ~/dev/native/wellness/core/ble/src/main/kotlin/dev/jtiisto/wellness/
+# The live Kotlin implementation (landed 2026-08-11, Android phase 2 of
+# android/specs/coach-heart-rate.md) is
+#   android/core/ble/src/main/kotlin/dev/jtiisto/wellness/
 #       core/ble/quality/SignalQualityTracker.kt
 # whose own PARITY comment points back at this file, pipeline.py's
 # `_window_alpha1`, and test_parity_constants.py. It mirrors the values

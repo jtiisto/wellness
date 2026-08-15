@@ -1,31 +1,39 @@
 #!/usr/bin/env bash
 # Pre-push hook — scale the checks to what's actually being pushed.
+# One repo, two toolchains: the net diff vs the remote picks the gates.
 #
-#   * code/other changes  -> full pytest + coverage (--cov-fail-under=88) + JS
-#                            node:test suite   (the default; unchanged)
-#   * docs-only push      -> run ONLY the fast structural guard
-#     (every changed file   (test/test_deploy_manifest.py); skip pytest/cov/e2e/JS
-#      is *.md or docs/**)   — nothing in the heavy suite depends on doc contents,
-#                            and the guard still catches a stray new top-level file
-#   * no-op push          -> skip everything (empty net diff vs the remote, e.g. a
-#     (no file changes)      no-change fast-forward or merge — nothing to test)
+#   * server/PWA code changes -> full pytest + coverage (--cov-fail-under=88)
+#                                + JS node:test suite
+#   * android/** code changes -> full Gradle unit suite + koverVerifyAggregated
+#                                (instrumented tests need the emulator and are
+#                                never run from hooks — /adb-* sessions only)
+#   * both touched            -> both suites, by design (protocol commits)
+#   * docs-only push          -> run ONLY the fast structural guard
+#     (every changed file       (test/test_deploy_manifest.py); nothing in the
+#      is *.md, docs/**,         heavy suites depends on doc contents, and the
+#      or android specs/docs)    guard still catches a stray new top-level file
+#   * no-op push              -> skip everything (empty net diff vs the remote)
 #
 # "Net change" is the endpoint diff remote_sha..local_sha, so a merge whose result
 # matches the remote is a no-op. New branches diff against the origin/main
 # merge-base. Branch deletions are skipped. When a safe baseline can't be
-# determined, it falls back to the FULL suite.
+# determined, it falls back to BOTH full suites.
 #
 # Overrides:
-#   WELLNESS_FULL_PUSH=1   force the full suite regardless of the diff
+#   WELLNESS_FULL_PUSH=1   force both full suites regardless of the diff
 #   PREPUSH_DRYRUN=1       print the decision + changed files, run nothing
 #
 # Tracked in githooks/ and activated per-clone with
 #   git config core.hooksPath githooks
 set -uo pipefail
 
+cd "$(git rev-parse --show-toplevel)" || exit 1
+
 ZERO="0000000000000000000000000000000000000000"
 BASELINE_REF="origin/main"
 
+run_server=0
+run_android=0
 decision="full"
 reason="code/other changes present"
 changed=""
@@ -44,9 +52,9 @@ classify() {
             # New branch on the remote: compare against the integration baseline.
             if git rev-parse --verify --quiet "$BASELINE_REF" >/dev/null; then
                 base="$(git merge-base "$BASELINE_REF" "$local_sha" 2>/dev/null || true)"
-                [[ -n "$base" ]] || { decision="full"; reason="new branch with no merge-base vs $BASELINE_REF"; return; }
+                [[ -n "$base" ]] || { decision="full"; reason="new branch with no merge-base vs $BASELINE_REF"; run_server=1; run_android=1; return; }
             else
-                decision="full"; reason="new branch and $BASELINE_REF not present locally"; return
+                decision="full"; reason="new branch and $BASELINE_REF not present locally"; run_server=1; run_android=1; return
             fi
         else
             base="$remote_sha"
@@ -54,7 +62,7 @@ classify() {
 
         local files
         files="$(git diff --name-only "$base" "$local_sha" 2>/dev/null)" \
-            || { decision="full"; reason="could not diff $base..$local_sha"; return; }
+            || { decision="full"; reason="could not diff $base..$local_sha"; run_server=1; run_android=1; return; }
         changed+="$files"$'\n'
     done
 
@@ -62,15 +70,28 @@ classify() {
     if [[ "$saw_update" == "0" ]]; then decision="skip"; reason="no content updates (deletions only)"; return; fi
     if [[ -z "$changed" ]]; then decision="skip"; reason="no-op: empty net diff vs the remote"; return; fi
 
-    local non_docs
-    non_docs="$(printf '%s\n' "$changed" | grep -vE '(\.md$|^docs/)' || true)"
-    if [[ -z "$non_docs" ]]; then decision="docs"; reason="docs-only (*.md / docs/**)"; return; fi
+    # Docs on either side: *.md anywhere, docs/**, and android's specs/ tree.
+    local server_code android_code
+    server_code="$(printf '%s\n' "$changed" | grep -v '^android/' | grep -vE '(\.md$|^docs/)' || true)"
+    android_code="$(printf '%s\n' "$changed" | grep '^android/' | grep -vE '(\.md$|^android/specs/|^android/docs/)' || true)"
 
-    decision="full"; reason="code/other changes present"
+    [[ -n "$server_code"  ]] && run_server=1
+    [[ -n "$android_code" ]] && run_android=1
+
+    if [[ "$run_server" == "0" && "$run_android" == "0" ]]; then
+        decision="docs"; reason="docs-only (*.md / docs/** / android specs+docs)"; return
+    fi
+
+    decision="full"
+    case "$run_server$run_android" in
+        10) reason="server/PWA code changes" ;;
+        01) reason="android code changes" ;;
+        11) reason="server AND android code changes — both suites" ;;
+    esac
 }
 
 if [[ "${WELLNESS_FULL_PUSH:-}" == "1" ]]; then
-    decision="full"; reason="WELLNESS_FULL_PUSH=1 override"
+    decision="full"; reason="WELLNESS_FULL_PUSH=1 override"; run_server=1; run_android=1
 else
     classify
 fi
@@ -91,15 +112,21 @@ case "$decision" in
         echo "Nothing to test for this push. Proceeding."
         ;;
     docs)
-        echo "Docs-only push — running the fast structural guard (skipping full suite/coverage/e2e/JS)..."
+        echo "Docs-only push — running the fast structural guard (skipping full suites/coverage/e2e/JS)..."
         python3 -m pytest test/test_deploy_manifest.py -q 2>&1 || exit $?
         echo "Structural guard passed. Pushing."
         ;;
     full)
-        echo "Running full test suite with coverage before push..."
-        python3 -m pytest --cov=src --cov=mcp_servers --cov-report=term-missing --cov-fail-under=88 2>&1 || exit $?
-        echo "Running JS unit tests (node:test)..."
-        node --test test/js/*.test.js || exit $?
+        if [[ "$run_server" == "1" ]]; then
+            echo "Running full server/PWA test suite with coverage before push..."
+            python3 -m pytest --cov=src --cov=mcp_servers --cov-report=term-missing --cov-fail-under=88 2>&1 || exit $?
+            echo "Running JS unit tests (node:test)..."
+            node --test test/js/*.test.js || exit $?
+        fi
+        if [[ "$run_android" == "1" ]]; then
+            echo "Running full Android unit suite with coverage gate..."
+            (cd android && ./gradlew testDebugUnitTest koverVerifyAggregated) || exit $?
+        fi
         echo "All tests passed with sufficient coverage. Pushing..."
         ;;
 esac

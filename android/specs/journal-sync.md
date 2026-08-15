@@ -13,11 +13,11 @@ Status: **v3 — implemented, device-verified 2026-08-07 (user). Sync-dot decisi
 The first real bidirectional sync: journal trackers and entries stored in Room with dirty-generation tracking, synced against the dev server (`http://pop-os.tailexample.ts.net:9001/wellness`, synthetic data — user-confirmed) via the PWA's exact protocol. Ends demonstrable: the Journal tab lists live trackers and an entry toggle round-trips to the server.
 
 Porting sources (behavior is theirs):
-- `~/dev/health/wellness/public/js/journal/sync-logic.js` (+ `test/js/journal-sync-logic.test.js` — transcribe 1:1)
-- `~/dev/health/wellness/public/js/journal/store.js` — mutators (`addTracker`/`updateTracker`/`deleteTracker`/`updateEntry`), `pullServerChanges`, `triggerSync` (lines 610-719: the canonical order), `pruneOldLogs`, `dropDeletedTrackerIds`, `updateSyncStatus`
-- `~/dev/health/wellness/public/js/journal/utils.js` — `normalizeTrackerSchedule` only (legacy `frequency`/`weeklyDay` → `scheduleHistory`); the rest of utils is Phase 3
-- `~/dev/health/wellness/docs/ARCHITECTURE.md` — journal sync protocol section
-- Server truth: `~/dev/health/wellness/src/modules/journal.py` (`_TRACKER_RESERVED_KEYS`, wire shapes, `sync_arbitration.py`)
+- `../../public/js/journal/sync-logic.js` (+ `test/js/journal-sync-logic.test.js` — transcribe 1:1)
+- `../../public/js/journal/store.js` — mutators (`addTracker`/`updateTracker`/`deleteTracker`/`updateEntry`), `pullServerChanges`, `triggerSync` (lines 610-719: the canonical order), `pruneOldLogs`, `dropDeletedTrackerIds`, `updateSyncStatus`
+- `../../public/js/journal/utils.js` — `normalizeTrackerSchedule` only (legacy `frequency`/`weeklyDay` → `scheduleHistory`); the rest of utils is Phase 3
+- `../../docs/ARCHITECTURE.md` — journal sync protocol section
+- Server truth: `../../src/modules/journal.py` (`_TRACKER_RESERVED_KEYS`, wire shapes, `sync_arbitration.py`)
 
 Out of scope (deferred): `forceSync` (Phase 8 Tools), full journal UI (Phase 3), WorkManager background flush (revisit at Phase 2 close — see Open Points).
 

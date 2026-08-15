@@ -597,11 +597,11 @@ no bidirectional sync. The client pushes; the server stores; nothing flows back
 but counts. Everything that *reads* the data does so out of band, through the
 `hr_analysis` CLI and the HR MCP server (both below).
 
-**This section is the protocol's home.** The contract was drafted cross-repo, in
-the Android client's `~/dev/native/wellness/specs/hr-protocol.md`, while the
-server side was built; that file now defers here, matching how every other
-protocol is documented. The golden fixtures below are what keep the two repos
-honest about it.
+**This section is the protocol's home.** The contract was drafted in the
+Android client's `android/specs/hr-protocol.md` (a separate repo at the time)
+while the server side was built; that file now defers here, matching how every
+other protocol is documented. The golden fixtures below are what keep the two
+test suites honest about it.
 
 **Headless modules.** The `config.MODULES` entry carries `"headless": True` and
 no `name`/`icon`/`color`. `create_app`'s mount loop is untouched — a headless

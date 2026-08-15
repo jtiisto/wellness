@@ -1,6 +1,6 @@
 # Wellness
 
-A personal health and fitness dashboard that unifies daily habit tracking, workout planning, and AI-powered analysis into a single self-hosted application.
+A personal health and fitness dashboard that unifies daily habit tracking, workout planning, and AI-powered analysis into a single self-hosted application. Two clients share the server: the offline-capable PWA served from `public/`, and a native Android app living in `android/` with its full history (a former sibling repo, grafted in 2026-08 so protocol changes land as one atomic commit across server, PWA, and Android).
 
 ## Modules
 
@@ -28,6 +28,7 @@ Heart-rate ingestion from the native Android client: RR intervals off a Garmin c
 | State | Preact Signals + LocalForage (IndexedDB) |
 | AI | Claude Code CLI with MCP tool access |
 | MCP | FastMCP (Journal read-only, Coach read/write, HR read-only) |
+| Android client | Kotlin, Jetpack Compose, Room, Ktor — `android/` (see `android/CLAUDE.md`) |
 
 ## Quick Start
 
@@ -73,7 +74,8 @@ wellness/
 ├── bin/                    # Server control, deployment, and hook scripts
 │   ├── deploy.manifest     # Single source of truth for what ships to prod
 │   └── scan_personal_data.py  # Personal-data guard (this repo is public)
-├── githooks/               # Shared git hooks (enable: git config core.hooksPath githooks)
+├── githooks/               # Shared git hooks, path-scoped per toolchain (enable: git config core.hooksPath githooks)
+├── android/                # Native Android client — Kotlin/Compose, own Gradle tree, specs/, testdata/golden/
 ├── data/                   # SQLite databases (runtime)
 └── requirements.txt
 ```

@@ -74,7 +74,7 @@ sdkmanager --list_installed
 
 Once the project skeleton exists:
 ```bash
-cd ~/dev/native/wellness
+cd ~/dev/health/wellness/android
 ./gradlew assembleDebug
 ```
 
@@ -175,7 +175,7 @@ adb devices
 
 ```bash
 # Build the project
-cd ~/dev/native/wellness
+cd ~/dev/health/wellness/android
 ./gradlew assembleDebug
 
 # Install on the remote emulator

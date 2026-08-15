@@ -1,8 +1,8 @@
 """The protocol spec's canonical payloads, POSTed at the real endpoints.
 
 `test/hr/golden/` holds the example payloads from
-`~/dev/native/wellness/specs/hr-protocol.md` copied byte-for-byte; the Android
-client keeps the same bytes under `testdata/golden/hr/`. Any protocol change
+`android/specs/hr-protocol.md` copied byte-for-byte; the Android client keeps
+the same bytes under `android/testdata/golden/hr/`. Any protocol change
 regenerates both sides in one change set, and these tests are what stops the
 spec's examples from quietly drifting into fiction on this side.
 """

@@ -1,18 +1,44 @@
 #!/usr/bin/env bash
-# Pre-commit hook: run fast unit tests, then stamp version file
+# Pre-commit hook: personal-data scan first, then the tests relevant to what
+# is staged. One repo, two toolchains — staged paths pick the suite:
+#
+#   * android/** sources/build/goldens -> change-scoped ./gradlew testDebugUnitTest
+#                                         (Gradle skips up-to-date modules)
+#   * server/PWA non-docs paths        -> fast pytest slice + coverage + JS units
+#   * docs-only commit                 -> doc-lint only
+#   * EVERY commit                     -> personal-data scan (repo is PUBLIC),
+#                                         doc-lint, version.json stamp
 set -e
+
+cd "$(git rev-parse --show-toplevel)" || exit 1
 
 echo "Running personal-data scan..."
 # Provenance guard (~0.3s): fails if staged content was copied out of the real
 # personal databases. This repo is PUBLIC and history is not retractable, so
-# this runs FIRST — before the slow suites — to fail fast.
+# this runs FIRST — before the slow suites — to fail fast. Covers android/**
+# like everything else: the scan is path-agnostic by design.
 python3 bin/scan_personal_data.py --staged
 
-echo "Running unit tests..."
-python3 -m pytest test/ -m "unit or not (integration or e2e)" --ignore=test/integration --cov=src --cov=mcp_servers --cov-report=term-missing 2>&1
+staged="$(git diff --cached --name-only --diff-filter=ACMR)"
 
-echo "Running JS unit tests (node:test)..."
-node --test test/js/*.test.js
+# --- Android: mirror of the retired android/githooks/pre-commit rule -------
+if printf '%s\n' "$staged" | grep -qE '^android/(app|core|feature|build-logic)/|^android/build\.gradle|^android/settings\.gradle|^android/gradle(/|\.properties)|^android/testdata/golden/'; then
+    echo "Android files staged — running Gradle unit tests..."
+    (cd android && ./gradlew testDebugUnitTest -q) || {
+        echo "pre-commit: ANDROID UNIT TESTS FAILED — commit aborted." >&2
+        exit 1
+    }
+fi
+
+# --- Server/PWA: anything outside android/ that isn't markdown -------------
+server_changed="$(printf '%s\n' "$staged" | grep -v '^android/' | grep -vE '\.md$' || true)"
+if [[ -n "$server_changed" ]]; then
+    echo "Running unit tests..."
+    python3 -m pytest test/ -m "unit or not (integration or e2e)" --ignore=test/integration --cov=src --cov=mcp_servers --cov-report=term-missing 2>&1
+
+    echo "Running JS unit tests (node:test)..."
+    node --test test/js/*.test.js
+fi
 
 echo "Running doc-lint..."
 # Pure file-greps (~0.1s): catches doc drift (dead paths, stale protocol

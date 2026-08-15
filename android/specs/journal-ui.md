@@ -7,9 +7,9 @@ Status: **approved 2026-08-07** (v2 after Codex review; user-approved, pipeline 
 Replace the Phase 2 debug screen with the full Journal feature at PWA parity: the daily tracker view (7-day date strip, category grouping with collapsible summary pills, four entry-widget types, target status lines, 7-day dot rows) and the tracker config screen (full CRUD form with weekday picker, pause, polarity, free-text targets). Plus the global snackbar host (deferred here from Phase 1) and the Kover gate baseline. All UI logic that the PWA keeps pure gets ported pure and pinned by the transcribed JS suites (~124 cases across 5 files).
 
 Porting sources (behavior is theirs):
-- `~/dev/health/wellness/public/js/journal/utils.js` (925 lines, 29 exports) — the entire pure layer
-- `~/dev/health/wellness/public/js/journal/components/{TrackerList,TrackerItem,ConfigScreen,Header}.js`, `JournalView.js`
-- `~/dev/health/wellness/public/js/journal/store.js` — UI-facing surface (`isDayEditable`, `updateEntry` merge semantics, `toggleCategoryExpanded`, `markValueUpdated`)
+- `../../public/js/journal/utils.js` (925 lines, 29 exports) — the entire pure layer
+- `../../public/js/journal/components/{TrackerList,TrackerItem,ConfigScreen,Header}.js`, `JournalView.js`
+- `../../public/js/journal/store.js` — UI-facing surface (`isDayEditable`, `updateEntry` merge semantics, `toggleCategoryExpanded`, `markValueUpdated`)
 - Test suites to transcribe 1:1: `test/js/journal-schedule.test.js` (44), `journal-targets.test.js` (35), `journal-summary.test.js` (11), `journal-recent.test.js` (10), `journal-config-mapping.test.js` (24)
 - Behavioral checklist (not ported code): `test/e2e_browser/test_journal.py`
 

@@ -7,8 +7,8 @@ plugins {
     alias(libs.plugins.kover)
 }
 
-// Merged coverage across all modules; gated by githooks/pre-push via
-// koverVerifyAggregated. Composables and framework glue are excluded so the
+// Merged coverage across all modules; gated by the repo root's
+// githooks/pre-push via koverVerifyAggregated. Composables and framework glue are excluded so the
 // metric tracks unit-testable logic (no Compose UI test rig in this project).
 kover {
     merge {

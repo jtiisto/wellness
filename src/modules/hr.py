@@ -4,8 +4,8 @@ HR API Router - heart-rate ingestion from the native (Android) client.
 A headless module: it owns `data/hr.db` like every other module but has no PWA
 tab, so its config entry carries `"headless": True` and `/api/modules` filters it
 out. The wire contract (camelCase throughout, epoch-ms integers as data values)
-lives in `~/dev/native/wellness/specs/hr-protocol.md` until it moves into
-docs/ARCHITECTURE.md.
+is documented in docs/ARCHITECTURE.md (its home); the Android client's
+android/specs/hr-protocol.md defers to it.
 
 Ingestion is three batch POSTs, all idempotent so a client that retries an
 unacknowledged flush cannot double-count: samples and set-events INSERT OR
