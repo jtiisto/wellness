@@ -35,7 +35,40 @@ Direct ports, JS names kept (grouped into files by topic; all operate on `Tracke
 - Schedule: `normalizeDays`, `selectSegmentForDate` (greatest `effectiveFrom <= date` by string compare; earliest as pre-history fallback; order-independent), `getScheduleDaysForDate` (segment → legacy weekly → ALL_DAYS; empty segment days = paused), `lastActiveScheduleDays`, `isExpectedOn`, `shouldShowTracker(tracker, date, dayEntries?)` (visible if expected OR an entry key exists — even a `completed=false` entry).
 - Effective-dated writes: `applySegmentEdit` core (no-op on equal-and-no-future; genesis split on first edit; filter `< today` + append = same-day replace AND future-segment supersede), `computeScheduleHistoryUpdate`, `computeTargetHistoryUpdate`.
 - Targets: `targetForDate`, `parseTarget(str, polarity)` → `ParsedTarget(target?, error?)` (range regex, min>max error, single number → min unless negative polarity → max, negatives rejected), `formatTarget` (en-dash ranges, ≥/≤, unit suffix), `formatTargetInput` (inverse, ASCII hyphen), `targetStatus` (**no-entry polarity gate FIRST**, then coercion, range/at-least/at-most rules — at-most never partial), `coerceNumericValue` (twin of server `_coerce_numeric`), `dayStatus` (entry nullability matters: pass null, not `{}`), `formatTargetProgress` → `TargetProgress(text, tone, fillPct?)`.
-- Rollups: `categorySummary` (actionable = polarity-non-neutral OR has target; off-schedule excluded; observations counted separately), `formatCategorySummary` → `(text, tone)?` ("All on track" / "N of M on track" / "N logged" / null), `recentDayStates(tracker, endDate, logs, n=7, earliestKnownDate)` → states `met|partial|missed|off|noted|quiet` (before-window and off-schedule = `off`), `groupByCategory` (missing category → "Uncategorized"), `getCategories`.
+- Rollups: `categoryRollup` (successor of `categorySummary`; actionable = polarity-non-neutral OR has target; off-schedule excluded) → `CategoryRollup(habitsMet, habitsPartial, habitsNotYet, avoidances, avoidancesBroken, observationsExpected, observationsNoted)` — habits are actionables with polarity ≠ `"negative"`, avoidances are the negatives (no partial: at-most never partial), observations are the non-actionables (expected = on schedule; noted = has entry); null when nothing is expected today. `recentDayStates(tracker, endDate, logs, n=7, earliestKnownDate)` → states `met|partial|missed|off|noted|quiet` (before-window and off-schedule = `off`), `groupByCategory` (missing category → "Uncategorized"), `getCategories`. The old `formatCategorySummary` text badge is retired.
+
+#### The signal ring (category band rollup — approved 2026-08-14, artifact `category-rollup-proposal`)
+
+Replaces the text badge in the category band, both collapsed pill and expanded header. Grammar:
+**ring = things to do, hoop = things to hold, diamond = things to notice**; classes degrade by
+subtraction and the footprint is constant regardless of tracker count (the width problem: Medication
+has 2, Supplements 8 — per-mark rows make big categories loud about list length, not the day).
+
+- **Ring** (habits > 0): 18dp, 2.5dp stroke, one slice per habit, 6° gaps between slices (a single
+  slice is a full circle), drawn from 12 o'clock clockwise, **state-sorted** met → partial → not-yet
+  (slices aren't individually identifiable, so a contiguous success arc reads the day's shape
+  fastest). Colors: met = success; partial = journal accent (on-light variant on light); not-yet =
+  ink-18% track. Arc math is a pure function `ringSlices(met, partial, notYet) → List<Slice(startDeg,
+  sweepDeg, role)>`, unit-tested; the composable only draws.
+- **Center** (avoidances > 0 only — no hoop when the category has none): all held → 6dp hoop,
+  1.5dp stroke, ink-42% (restraint is the empty space; honesty mapping — never success-colored);
+  any broken → 6dp warning fill (worst-state collapse; detail lives in the rows; warning, never
+  error — a slip is not a failure state). No ring (habits == 0) → the mark stands alone at 8dp.
+- **Observations** (expected > 0 only): 7dp diamond (rotated square, radius 1) + `micro` tabular
+  count in textFaint; filled when noted ≥ 1, 1dp outline otherwise. With a ring or solo mark
+  present: `◆ n` (noted count). Observations-only category: `◆ n of m`.
+- Cluster spacing 6dp, right-aligned at the band's trailing edge, where the text badge sat (the
+  chevron leads the row in the implemented band, not trails it). Nothing expected today → band bare
+  (as before) — including a category whose only rows are off-schedule-but-logged. All-good day → no
+  text; the calm cluster is the statement.
+- a11y: one `contentDescription` composed from the present classes only — e.g. "2 of 3 done,
+  avoidances held, 1 noted" — built by the pure `describeCategoryRollup(rollup)`. It mirrors the
+  marks: observations name their denominator (`"0 of 2 noted"`) only when they are the whole
+  cluster, and avoidances read "avoidance(s) held" / "avoidance(s) broken" / "1 of 3 avoidances
+  broken" (broken is stated, never as an error).
+- The centre is two-state by construction: `avoidancesBroken` counts any avoidance whose
+  `dayStatus` is not `MET`. A negative tracker carrying a *range* target can return `PARTIAL`, and
+  the mark has no third state to spend on it.
 - Form assembly: `buildTrackerSaveFields(existing?, FormSelections, today)` → a presence-aware patch (keys written only when they must be). ALL tri-state fields use the same sealed shape: `TargetField { Unchanged | Set(TargetDto?) }` AND `PolarityField { Unchanged | Set(String?) }` — a plain `String?` cannot express "unspecified, leave existing" vs "clear existing to undefined" (the PWA writes `polarity: undefined` as an explicit merge-clear only when the existing tracker had one). Core rules IN THIS SPEC, not just in ported tests: chosen days = `paused ? [] : normalizeDays(days.ifEmpty { ALL_DAYS })` (empty selection coerces to Daily unless paused); new tracker writes a genesis segment only when chosen ≠ ALL_DAYS (Daily writes nothing, paused writes genesis `[]`); type-change away from quantifiable with a live target → `TargetField.Set(null)` (clears), distinct from `Unchanged`.
 
 ### Store additions (`JournalSyncStore` + a new thin `JournalUiPrefs`)
@@ -64,7 +97,7 @@ After the phase is green: run `koverHtmlReportAggregated`, read the aggregated l
 
 1. **Date strip**: fixed trailing 7 days ending today, today always tappable; other days disabled + lock badge while ANY tracker is dirty. Selection is UI state only (survives via ViewModel, not persisted).
 2. **Row visibility**: `!deleted && shouldShowTracker(...)`; two distinct empty states (no trackers at all vs none scheduled today), date strip always rendered.
-3. **Categories collapsed by default**; expanded set persisted by name; summary pill only when collapsed; chevron rotates, no height animation.
+3. **Categories collapsed by default**; expanded set persisted by name; the signal-ring cluster shows in **both** band states (superseding the text badge's collapsed-only rule — the ring's footprint is constant, so it costs nothing once the rows are showing); chevron rotates, no height animation.
 4. **Widgets**: checkbox for all types except note; checking writes the default value **only when the entry's value is ABSENT** (`valueJson` SQL NULL or no row — an explicit stored null does not trigger it; PWA: `entry.value === undefined`), as one atomic `mergeEntry` (quantifiable: `defaultValue`; evaluation: `defaultValue ?? 50`). Quantifiable numeric field: commit on focus-loss or IME Done; parse the string — invalid input restores the displayed value (no write, no error state); numeric equality after parse (`"1"` == `1.0` == displayed default) is a no-op with no stamp; a real change writes `{value: Set}` only (never touches `completed`) + stamps. Accumulator adds to `(coerced displayed value || 0)`, allows negatives, silently closes on 0/invalid, writes `{value: Set}` + stamps. Evaluation slider: writes on every `onValueChange` step (live, PWA `onInput` parity — the 2.5 s scheduler debounce absorbs the burst; single-flight already guards overlap), `{value: Set}` only. Note textarea: each edit writes `{value: Set(text), completed: Set(text.isNotBlank())}` atomically — typing commits, clearing uncommits.
 5. **Uncommitted styling** (`completed !== true`): value controls ghosted, dot row NOT ghosted. Non-editable days: whole row disabled — every control gets `enabled=false` explicitly (no pointer-events analog in Compose).
 6. **Target line** only for quantifiable-with-target; fill bar only when `fillPct != null` (at-least targets). Last-updated caption only for quantifiable with a stamp: same-day → time only, else short date + time.
@@ -80,7 +113,8 @@ After the phase is green: run `koverHtmlReportAggregated`, read the aggregated l
 |---|---|
 | `JournalScheduleLogicTest` | `journal-schedule.test.js` 44 cases 1:1 (incl. the TZ-pinned weekday regression as fixed-date assertions) |
 | `JournalTargetLogicTest` | `journal-targets.test.js` 35 cases 1:1 |
-| `JournalSummaryLogicTest` | `journal-summary.test.js` 11 cases 1:1 |
+| `JournalSummaryLogicTest` | `journal-summary.test.js`, transcribed onto `categoryRollup`: the class split (habits/avoidances/observations), every habit bucket against its own `dayStatus` verdict, off-schedule exclusion, null-when-nothing-expected |
+| `SignalRingTest` | `ringSlices` (empty, lone slice = full circle, two slices, state sort, contiguity, sweeps + gaps == 360°, the >60-slice gap clamp) + `describeCategoryRollup` degradation cases |
 | `JournalRecentLogicTest` | `journal-recent.test.js` 10 cases 1:1 |
 | `TrackerSaveFieldsTest` | `journal-config-mapping.test.js` 24 cases 1:1 |
 | `JournalUiStateTest` (:feature:journal) | `buildJournalUiState`: strip lock rule, visibility + empty states, group/summary assembly, row state derivation (displayed-value fallback chain, committed flag, caption formatting), dot-row wiring |

@@ -1,5 +1,6 @@
 package dev.jtiisto.wellness.feature.journal
 
+import dev.jtiisto.wellness.core.data.journal.CategoryRollup
 import dev.jtiisto.wellness.core.data.journal.DotState
 import dev.jtiisto.wellness.core.data.journal.defaultValueOrNull
 import dev.jtiisto.wellness.core.data.journal.EntryDto
@@ -8,7 +9,6 @@ import dev.jtiisto.wellness.core.data.journal.EntryPatch
 import dev.jtiisto.wellness.core.data.journal.ProgressTone
 import dev.jtiisto.wellness.core.data.journal.SCHEDULE_GENESIS_DATE
 import dev.jtiisto.wellness.core.data.journal.ScheduleSegmentDto
-import dev.jtiisto.wellness.core.data.journal.SummaryTone
 import dev.jtiisto.wellness.core.data.journal.TargetDto
 import dev.jtiisto.wellness.core.data.journal.TargetSegmentDto
 import dev.jtiisto.wellness.core.data.journal.TrackerDto
@@ -160,22 +160,42 @@ class JournalUiStateTest {
     // ---- groups and summaries -------------------------------------------------
 
     @Test
-    @DisplayName("categories are collapsed by default and carry the summary pill only then")
+    @DisplayName("categories are collapsed by default and the rollup rides both band states")
     fun collapsedByDefault() {
         val trackers = listOf(
             simple("a", category = "Habits", polarity = "positive"),
             simple("b", category = "Habits", polarity = "positive"),
         )
         val entries = mapOf(todayStr to mapOf("a" to EntryDto(completed = true)))
+        val expectedRollup = CategoryRollup(habitsMet = 1, habitsNotYet = 1)
 
         val collapsed = build(trackers, entries)
         assertFalse(collapsed.groups.single().expanded)
-        assertEquals("1 of 2 on track", collapsed.groups.single().summary?.text)
-        assertEquals(SummaryTone.NEUTRAL, collapsed.groups.single().summary?.tone)
+        assertEquals(expectedRollup, collapsed.groups.single().rollup)
 
         val expanded = build(trackers, entries, expandedCategories = setOf("Habits"))
         assertTrue(expanded.groups.single().expanded)
-        assertNull(expanded.groups.single().summary, "the rows themselves are showing")
+        assertEquals(expectedRollup, expanded.groups.single().rollup, "the ring costs no width")
+    }
+
+    @Test
+    @DisplayName("a category the day expects nothing of leaves its band bare")
+    fun rollupAbsentWhenNothingExpected() {
+        // Visible only because it was logged off-schedule — nothing was asked.
+        val weekendOnly = TrackerDto(
+            id = "w",
+            name = "w",
+            category = "Habits",
+            type = "simple",
+            polarity = "positive",
+            scheduleHistory = listOf(ScheduleSegmentDto(SCHEDULE_GENESIS_DATE, listOf(0, 6))),
+        )
+        val state = build(
+            trackers = listOf(weekendOnly),
+            entriesByDate = mapOf(todayStr to mapOf("w" to EntryDto(completed = true))),
+        )
+        assertEquals(1, state.groups.single().trackers.size, "the row is still shown")
+        assertNull(state.groups.single().rollup)
     }
 
     @Test

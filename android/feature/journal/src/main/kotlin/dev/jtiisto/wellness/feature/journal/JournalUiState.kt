@@ -1,17 +1,16 @@
 package dev.jtiisto.wellness.feature.journal
 
-import dev.jtiisto.wellness.core.data.journal.CategoryBadge
+import dev.jtiisto.wellness.core.data.journal.CategoryRollup
 import dev.jtiisto.wellness.core.data.journal.DayDot
 import dev.jtiisto.wellness.core.data.journal.EntryDto
 import dev.jtiisto.wellness.core.data.journal.TargetProgress
 import dev.jtiisto.wellness.core.data.journal.TrackerDto
 import dev.jtiisto.wellness.core.data.journal.TrackerType
-import dev.jtiisto.wellness.core.data.journal.categorySummary
+import dev.jtiisto.wellness.core.data.journal.categoryRollup
 import dev.jtiisto.wellness.core.data.journal.coerceNumericValue
 import dev.jtiisto.wellness.core.data.journal.dayStatus
 import dev.jtiisto.wellness.core.data.journal.defaultValueOrNull
 import dev.jtiisto.wellness.core.data.journal.entryKey
-import dev.jtiisto.wellness.core.data.journal.formatCategorySummary
 import dev.jtiisto.wellness.core.data.journal.formatJournalNumber
 import dev.jtiisto.wellness.core.data.journal.formatLastUpdated
 import dev.jtiisto.wellness.core.data.journal.formatTargetProgress
@@ -67,7 +66,7 @@ data class DateCellState(
 data class CategoryGroupState(
     val name: String,
     val expanded: Boolean,
-    val summary: CategoryBadge?,
+    val rollup: CategoryRollup?,
     val trackers: List<TrackerRowState>,
 )
 
@@ -146,8 +145,10 @@ fun buildJournalUiState(
         CategoryGroupState(
             name = category,
             expanded = expanded,
-            // Only worth showing while the rows themselves are hidden.
-            summary = if (expanded) null else formatCategorySummary(categorySummary(categoryTrackers, date, dayLog)),
+            // Rides both band states: the ring is a constant-width glance at
+            // the day, so unlike the text badge it costs nothing to keep once
+            // the rows are showing.
+            rollup = categoryRollup(categoryTrackers, date, dayLog),
             trackers = categoryTrackers.map { tracker ->
                 buildTrackerRowState(
                     tracker = tracker,

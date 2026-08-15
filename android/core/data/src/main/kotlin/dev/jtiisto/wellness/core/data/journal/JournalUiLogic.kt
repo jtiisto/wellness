@@ -4,8 +4,8 @@ import dev.jtiisto.wellness.core.data.network.DateString
 import java.time.LocalDate
 
 /**
- * The rollup and grouping half of `public/js/journal/utils.js`: the collapsed
- * category badge, the 7-day dot row, and category grouping.
+ * The rollup and grouping half of `public/js/journal/utils.js`: the category
+ * band's rollup, the 7-day dot row, and category grouping.
  *
  * The observation re-framing lives here, in the presentation helpers, and never
  * in [dayStatus] / [targetStatus] — those are the MCP parity pins.
@@ -14,85 +14,80 @@ import java.time.LocalDate
 /** A dot-row day. Not [TargetState]: observations are logged-vs-quiet, not judged. */
 enum class DotState { MET, PARTIAL, MISSED, OFF, NOTED, QUIET }
 
-/** Colour of the collapsed-category badge. */
-enum class SummaryTone { MET, NEUTRAL }
-
 /**
- * A category's day rollup.
+ * A category's day, split by what each tracker asks of you.
  *
- * [onTrack], [partial] and [notYet] sum to [actionable]; [observed] is counted
- * separately and has no denominator.
+ * The three classes are the signal ring's three marks: **habits** are things to
+ * do (the ring, one slice each), **avoidances** are things to hold (the centre),
+ * **observations** are things to notice (the diamond) — logged, never judged.
+ *
+ * Habits carry all three verdicts; avoidances only two, because the centre mark
+ * collapses to its worst state and an at-most target never returns partial.
+ * Observations count what was *expected* as well as what was noted: an unnoted
+ * observation is not a miss, but it is still something the day asked about.
  */
-data class CategorySummary(
-    val actionable: Int = 0,
-    val onTrack: Int = 0,
-    val partial: Int = 0,
-    val notYet: Int = 0,
-    val observed: Int = 0,
-)
-
-/** The collapsed-header badge. */
-data class CategoryBadge(val text: String, val tone: SummaryTone)
+data class CategoryRollup(
+    val habitsMet: Int = 0,
+    val habitsPartial: Int = 0,
+    val habitsNotYet: Int = 0,
+    val avoidances: Int = 0,
+    val avoidancesBroken: Int = 0,
+    val observationsExpected: Int = 0,
+    val observationsNoted: Int = 0,
+) {
+    /** The ring's slice count. */
+    val habits: Int get() = habitsMet + habitsPartial + habitsNotYet
+}
 
 /** One dot of the recent-texture row. */
 data class DayDot(val date: DateString, val state: DotState)
 
 /**
- * Roll a category's trackers up for [dateStr]. Only trackers *expected* that day
- * count, so an off-schedule day is never a miss.
+ * Roll a category's trackers up for [dateStr], or null when the day asked
+ * nothing of it. Only trackers *expected* that day count, so an off-schedule
+ * day is never a miss — and a category holding nothing but off-schedule rows
+ * leaves the band bare rather than claiming a perfect day.
  *
  * A tracker is **actionable** when there is a goal to be on track against: a
  * non-neutral polarity, or a target in effect. Untargeted neutral trackers are
- * **observations** — judging a "Headache" log by its checkbox is noise, so they
- * are excluded from the fraction and tallied as [CategorySummary.observed]
- * instead.
+ * observations — judging a "Headache" log by its checkbox is noise.
  */
-fun categorySummary(
+fun categoryRollup(
     trackers: List<TrackerDto>?,
     dateStr: DateString,
     dayLog: Map<String, EntryDto>? = null,
-): CategorySummary {
-    var actionable = 0
-    var onTrack = 0
+): CategoryRollup? {
+    var met = 0
     var partial = 0
     var notYet = 0
+    var avoidances = 0
+    var broken = 0
     var observed = 0
+    var noted = 0
     for (tracker in trackers.orEmpty()) {
         if (!isExpectedOn(tracker, dateStr)) continue
         val status = dayStatus(tracker, dateStr, dayLog?.get(tracker.id))
-        if (isActionable(tracker, status)) {
-            actionable += 1
-            when (status.state) {
-                TargetState.MET -> onTrack += 1
+        when {
+            !isActionable(tracker, status) -> {
+                observed += 1
+                if (status.hasEntry) noted += 1
+            }
+            // Held or not, never partly: a negative tracker carrying a range
+            // target can still return PARTIAL, and the centre mark has no third
+            // state to spend on it.
+            tracker.polarity == "negative" -> {
+                avoidances += 1
+                if (status.state != TargetState.MET) broken += 1
+            }
+            else -> when (status.state) {
+                TargetState.MET -> met += 1
                 TargetState.PARTIAL -> partial += 1
                 TargetState.MISSED -> notYet += 1
             }
-        } else if (status.hasEntry) {
-            observed += 1
         }
     }
-    return CategorySummary(actionable, onTrack, partial, notYet, observed)
-}
-
-/**
- * The badge model, or null when there is nothing worth saying.
- *
- * With anything actionable the badge is the on-track fraction and observation
- * activity is deliberately dropped, so a mixed category stays compact. A
- * pure-observation category gets a denominator-free "K logged" — there is no
- * expectation to be a fraction of. An empty day is suppressed entirely.
- */
-fun formatCategorySummary(summary: CategorySummary?): CategoryBadge? {
-    if (summary == null) return null
-    if (summary.actionable > 0) {
-        val allMet = summary.onTrack == summary.actionable
-        return CategoryBadge(
-            text = if (allMet) "All on track" else "${summary.onTrack} of ${summary.actionable} on track",
-            tone = if (allMet) SummaryTone.MET else SummaryTone.NEUTRAL,
-        )
-    }
-    if (summary.observed > 0) return CategoryBadge("${summary.observed} logged", SummaryTone.NEUTRAL)
-    return null
+    if (met + partial + notYet + avoidances + observed == 0) return null
+    return CategoryRollup(met, partial, notYet, avoidances, broken, observed, noted)
 }
 
 /**

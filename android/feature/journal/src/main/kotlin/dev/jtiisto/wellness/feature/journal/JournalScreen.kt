@@ -72,11 +72,9 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import dev.jtiisto.wellness.core.data.journal.CategoryBadge
 import dev.jtiisto.wellness.core.data.journal.DayDot
 import dev.jtiisto.wellness.core.data.journal.DotState
 import dev.jtiisto.wellness.core.data.journal.ProgressTone
-import dev.jtiisto.wellness.core.data.journal.SummaryTone
 import dev.jtiisto.wellness.core.data.journal.TargetProgress
 import dev.jtiisto.wellness.core.data.journal.TrackerType
 import dev.jtiisto.wellness.core.ui.SyncStatusDot
@@ -391,21 +389,8 @@ private fun CategoryHeader(group: CategoryGroupState, onClick: () -> Unit, modif
             color = palette.textPrimary,
             modifier = Modifier.weight(1f),
         )
-        group.summary?.let { CategorySummaryPill(it) }
+        group.rollup?.let { CategoryRollupIndicator(it) }
     }
-}
-
-@Composable
-private fun CategorySummaryPill(badge: CategoryBadge) {
-    val palette = WellnessTheme.palette
-    Text(
-        text = badge.text,
-        style = WellnessTheme.type.label,
-        color = when (badge.tone) {
-            SummaryTone.MET -> palette.success
-            SummaryTone.NEUTRAL -> palette.textSecondary
-        },
-    )
 }
 
 // ---- tracker row --------------------------------------------------------------
