@@ -34,6 +34,10 @@ Deliberate gaps (a miss here is not a bug, it is the design)
 * Free text must appear verbatim. A reworded or re-wrapped paste is a miss.
 * Journal/coach entry DATES are not matchable either — the user logs most days,
   so nearly every date is "real" and the class would flag the whole test suite.
+* `fixture-` prefixed tracker names are excluded at the query. The golden
+  generators (testdata/golden/*/generate.py) create fixture- rows on the dev
+  server, and data/journal.db IS that server's store — without the exclusion
+  the scan flags the very fixtures the generator wrote as "personal data".
 
 Usage
 -----
@@ -125,7 +129,10 @@ SOURCES = [
         "journal.db",
         ROOT / "data" / "journal.db",
         [
-            ("SELECT name FROM trackers WHERE COALESCE(deleted, 0) = 0",
+            # fixture-% is golden-generator content living in the dev DB,
+            # not personal data — see the module docstring.
+            ("SELECT name FROM trackers WHERE COALESCE(deleted, 0) = 0 "
+             "AND name NOT LIKE 'fixture-%'",
              IDENT, "trackers.name"),
         ],
     ),

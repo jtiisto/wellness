@@ -975,7 +975,11 @@ Contracts worth preserving:
 - **Absent databases degrade to a skip**, so a fresh clone or another machine
   is not blocked; the gate test is then vacuous by design, not broken.
 - Deliberate gaps: values under 3 decimals (they collide with everything), the
-  445k-row `timeseries` table (skipped for speed), and re-worded text.
+  445k-row `timeseries` table (skipped for speed), re-worded text, and
+  `fixture-`-prefixed tracker names (the golden generators under
+  `android/testdata/golden/` write fixture rows to the dev server, and
+  `data/journal.db` *is* that server's store — matching them would flag the
+  very fixtures the generator wrote).
 
 Runs in two places: `githooks/pre-commit` scans the staged diff (~0.3s, first
 so it fails fast), and `test/test_personal_data_scan.py` re-scans **all** tracked

@@ -159,6 +159,26 @@ class TestAgainstSyntheticSource:
         floats, dates, strings, present, missing = scan.build_tokens()
         assert (present, missing) == ([], ["gone.db"])
 
+    def test_fixture_prefixed_tracker_names_are_not_tokens(self, tmp_path):
+        # The golden generators create `fixture-` trackers on the dev server,
+        # and data/journal.db IS that server's store — without the exclusion
+        # the scan flags the very fixtures the generator wrote. Pins the REAL
+        # query from SOURCES, not a monkeypatched copy, so the two can't drift.
+        db = tmp_path / "journal.db"
+        conn = sqlite3.connect(db)
+        conn.execute("CREATE TABLE trackers (name TEXT, deleted INTEGER)")
+        conn.executemany(
+            "INSERT INTO trackers VALUES (?, 0)",
+            [("fixture-Quantifiable",), ("moonleaf extract",)])
+        conn.commit()
+        conn.close()
+
+        _label, _path, queries = next(
+            s for s in scan.SOURCES if s[0] == "journal.db")
+        sql = queries[0][0]
+        rows = [r[0] for r in sqlite3.connect(db).execute(sql)]
+        assert rows == ["moonleaf extract"]
+
     def test_schema_drift_does_not_break_the_scan(self, tmp_path, monkeypatch):
         db = tmp_path / "drifted.db"
         sqlite3.connect(db).close()          # exists, but has no tables
