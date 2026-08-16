@@ -1,9 +1,10 @@
 # Journal golden fixtures
 
 Real payloads from the **dev** server (`localhost:9001/wellness`, synthetic
-data), captured 2026-08-07 by `generate.py`. Pinned by
-`JournalGoldenFixtureTest` in `:core:data`, which loads them off the unit-test
-classpath as `/golden/journal/<name>.json`.
+data), captured by `generate.py` (last regenerated 2026-08-15, against the
+watermark-backdating server — the envelope `serverTime` sits strictly behind
+the per-record stamps). Pinned by `JournalGoldenFixtureTest` in `:core:data`,
+which loads them off the unit-test classpath as `/golden/journal/<name>.json`.
 
 Hand-written test JSON pins what we think the protocol is; these pin what it is.
 
@@ -15,6 +16,7 @@ Hand-written test JSON pins what we think the protocol is; these pin what it is.
 | `update-request.json` | the exact body of an accepted `POST /sync/update` |
 | `update-response-accepted.json` | that upload's response |
 | `update-response-rejected.json` | the same body replayed, so every base token is stale |
+| `update-response-missing.json` | a phantom upload (base tokens for rows the server never had) — `missing` rejections: `deleted` true, `serverRow` null |
 | `sync-status-value.json` | `GET /sync/status` with a watermark present |
 | `sync-status-null.json` | the same endpoint with **no** journal rows yet |
 

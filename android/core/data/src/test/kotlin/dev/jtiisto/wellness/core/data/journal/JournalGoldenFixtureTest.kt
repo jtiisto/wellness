@@ -11,6 +11,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
@@ -71,11 +72,11 @@ class JournalGoldenFixtureTest {
         // JsonNull, not to absence — folding the two together would make the
         // day view treat a server-set null as "never logged" and let the
         // checkbox overwrite it with the tracker's default.
-        val fifth = response.days.getValue("2026-08-05")
+        val fifth = response.days.getValue("2030-01-03")
         assertEquals(JsonNull, fifth.getValue("fixture-simple").value)
         assertEquals(true, fifth.getValue("fixture-simple").completed)
         assertEquals(750.0, fifth.getValue("fixture-quant").value?.jsonPrimitive?.content?.toDouble())
-        val sixth = response.days.getValue("2026-08-06")
+        val sixth = response.days.getValue("2030-01-04")
         assertEquals("fixture-note-text", sixth.getValue("fixture-note").value?.jsonPrimitive?.content)
         assertEquals(null, sixth.getValue("fixture-note").completed)
     }
@@ -116,42 +117,24 @@ class JournalGoldenFixtureTest {
         assertTrue(response.rejectedTrackers.isEmpty())
         assertTrue(response.rejectedEntries.isEmpty())
         val serverTime = requireNotNull(response.serverTime)
-        // The envelope is never AHEAD of the tokens it answers for.
-        //
-        // This asserted equality until 2026-08-11, which is now a false claim
-        // about the protocol: `/sync/update` backdates its envelope `serverTime`
-        // by the same two-second overlap `/sync/delta` uses, while the
-        // per-record `lastModifiedAt` tokens stay at the real write time. The
-        // live server therefore answers strictly greater — and the trap was that
-        // this fixture, captured 2026-08-07, still satisfied the old assertion.
-        //
-        // `>=` rather than `>` deliberately: these files pin what the protocol
-        // IS, captured from the dev server, so the committed copy still shows
-        // the pre-fix equality and must not be hand-edited into agreement.
-        // TIGHTEN THIS TO `>` when `testdata/golden/journal/` is regenerated
-        // against the fixed server — the same regeneration that will finally
-        // produce a `missing` rejection (see `rejectedResponseDecodes`).
+        // The envelope is STRICTLY BEHIND every token it answers for:
+        // `/sync/update` backdates its envelope `serverTime` by the same
+        // two-second overlap `/sync/delta` uses, while the per-record
+        // `lastModifiedAt` tokens stay at the real write time. The pre-fix
+        // capture (2026-08-07) showed equality; this fixture is from the
+        // fixed server (regenerated 2026-08-15), so `>` is now the protocol
+        // claim and a regression to equality fails here.
         //
         // Lexical, not parsed: server stamps are opaque strings by protocol
         // rule, and a client reaching for Instant.parse to order them has
         // already broken it.
         assertTrue(
-            response.acceptedTrackers.all { it.lastModifiedAt >= serverTime },
-            "accepted tokens must not predate the backdated envelope: " +
+            response.acceptedTrackers.all { it.lastModifiedAt > serverTime },
+            "accepted tokens must be strictly ahead of the backdated envelope: " +
                 "${response.acceptedTrackers.map { it.lastModifiedAt }} vs $serverTime",
         )
     }
 
-    /**
-     * **Coverage gap, not an omission here:** this fixture is every rejection
-     * the generator can currently produce, and all of them are `stale`. The
-     * `missing` case — `serverRow` absent, rejection-level `deleted` true, the
-     * instruction to drop a phantom row — has no golden at all, because
-     * `testdata/golden/journal/generate.py` has no way to provoke one. Its
-     * decoding and its effect are pinned by hand-written tests
-     * (`JournalSyncLogicTest`, `JournalSyncStoreTest`) until a server-side
-     * regeneration supplies the real payload.
-     */
     @Test
     @DisplayName("the rejected upload response carries a full serverRow the client can adopt")
     fun rejectedResponseDecodes() {
@@ -175,6 +158,35 @@ class JournalGoldenFixtureTest {
 
         val entry = requireNotNull(response.rejectedEntries.first().serverRow)
         assertNotNull(entry.lastModifiedAt)
+    }
+
+    @Test
+    @DisplayName("a missing rejection is a deletion instruction: deleted true, serverRow null")
+    fun missingResponseDecodes() {
+        val response = update("update-response-missing.json")
+
+        // The phantom upload carried base tokens for rows the server never
+        // had: one never-created tracker, one entry at a date nothing wrote.
+        assertTrue(response.acceptedTrackers.isEmpty())
+        assertTrue(response.acceptedEntries.isEmpty())
+        assertEquals(1, response.rejectedTrackers.size)
+        assertEquals(1, response.rejectedEntries.size)
+
+        val tracker = response.rejectedTrackers.single()
+        assertEquals("fixture-phantom", tracker.id)
+        assertEquals("missing", tracker.errorKind)
+        // The two levels must never blur: `deleted` is the rejection-level
+        // drop-this-row instruction, and serverRow stays truthfully null —
+        // a synthetic tombstone row here would be indistinguishable from the
+        // real soft-deleted rows stale rejections carry.
+        assertTrue(tracker.deleted)
+        assertNull(tracker.serverRow)
+
+        val entry = response.rejectedEntries.single()
+        assertEquals("fixture-simple", entry.trackerId)
+        assertEquals("missing", entry.errorKind)
+        assertTrue(entry.deleted)
+        assertNull(entry.serverRow)
     }
 
     // ---- the round-trip law ----------------------------------------------
@@ -240,10 +252,10 @@ class JournalGoldenFixtureTest {
             )
         }
         val entries = listOf(
-            Triple("2026-08-05", "fixture-simple", EntryDto(null, true, baseToken)),
-            Triple("2026-08-05", "fixture-quant", EntryDto(JsonPrimitive(750), true, baseToken)),
-            Triple("2026-08-06", "fixture-note", EntryDto(JsonPrimitive("fixture-note-text"), null, baseToken)),
-            Triple("2026-08-06", "fixture-eval", EntryDto(JsonPrimitive(2), false, baseToken)),
+            Triple("2030-01-03", "fixture-simple", EntryDto(null, true, baseToken)),
+            Triple("2030-01-03", "fixture-quant", EntryDto(JsonPrimitive(750), true, baseToken)),
+            Triple("2030-01-04", "fixture-note", EntryDto(JsonPrimitive("fixture-note-text"), null, baseToken)),
+            Triple("2030-01-04", "fixture-eval", EntryDto(JsonPrimitive(2), false, baseToken)),
         )
 
         val result = computeUploadPayload(

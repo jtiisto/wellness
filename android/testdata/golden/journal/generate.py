@@ -64,11 +64,11 @@ create = {
          "type": "simple", "frequency": "weekly", "weeklyDay": 3},
     ],
     "days": {
-        "2026-08-05": {
+        "2030-01-03": {
             "fixture-simple": {"value": None, "completed": True},
             "fixture-quant": {"value": 750, "completed": True},
         },
-        "2026-08-06": {
+        "2030-01-04": {
             "fixture-note": {"value": "fixture-note-text", "completed": None},
             "fixture-eval": {"value": 2, "completed": False},
         },
@@ -110,17 +110,17 @@ update = {
          "_baseLastModifiedAt": tok_t["fixture-legacy"]},
     ],
     "days": {
-        "2026-08-05": {
+        "2030-01-03": {
             "fixture-simple": {"value": None, "completed": True,
-                               "_baseLastModifiedAt": tok_e[("2026-08-05", "fixture-simple")]},
+                               "_baseLastModifiedAt": tok_e[("2030-01-03", "fixture-simple")]},
             "fixture-quant": {"value": 750, "completed": True,
-                              "_baseLastModifiedAt": tok_e[("2026-08-05", "fixture-quant")]},
+                              "_baseLastModifiedAt": tok_e[("2030-01-03", "fixture-quant")]},
         },
-        "2026-08-06": {
+        "2030-01-04": {
             "fixture-note": {"value": "fixture-note-text", "completed": None,
-                             "_baseLastModifiedAt": tok_e[("2026-08-06", "fixture-note")]},
+                             "_baseLastModifiedAt": tok_e[("2030-01-04", "fixture-note")]},
             "fixture-eval": {"value": 2, "completed": False,
-                             "_baseLastModifiedAt": tok_e[("2026-08-06", "fixture-eval")]},
+                             "_baseLastModifiedAt": tok_e[("2030-01-04", "fixture-eval")]},
         },
     },
 }
@@ -139,6 +139,35 @@ rejected = post("/update", update_text)
 print("rejected:", len(rejected["rejectedTrackers"]), len(rejected["rejectedEntries"]),
       "accepted:", len(rejected["acceptedTrackers"]), len(rejected["acceptedEntries"]))
 write("update-response-rejected.json", rejected)
+
+# --- 3b. phantom upload: base tokens for rows the server never had --------
+# A `_baseLastModifiedAt` claims "I have seen a server copy of this row"; on a
+# row the server does not have, that is the out-of-band `missing` case
+# (restored backup, re-created DB, wrong instance) and the rejection is a
+# deletion instruction: errorKind "missing", deleted true, serverRow null.
+# One tracker case (a never-created id) and one entry case (an existing
+# tracker at a date nothing wrote) pin both shapes. Nothing is stored, so
+# this cannot leak into the deltas below.
+phantom = {
+    "clientId": CLIENT,
+    "config": [
+        {"id": "fixture-phantom", "name": "fixture-Phantom",
+         "category": "fixture-Habits", "type": "simple",
+         "_baseLastModifiedAt": t0},
+    ],
+    "days": {
+        "2030-01-05": {
+            "fixture-simple": {"value": None, "completed": True,
+                               "_baseLastModifiedAt": t0},
+        },
+    },
+}
+missing = post("/update", compact(phantom))
+assert not missing["acceptedTrackers"] and not missing["acceptedEntries"], \
+    "phantom upload must accept nothing"
+assert [r["errorKind"] for r in missing["rejectedTrackers"]] == ["missing"], missing
+assert [r["errorKind"] for r in missing["rejectedEntries"]] == ["missing"], missing
+write("update-response-missing.json", missing)
 
 # --- 4. deltas -----------------------------------------------------------
 PREFIX = "fixture-"
