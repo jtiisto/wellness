@@ -744,12 +744,13 @@ never read by a query or a protocol rule. The ignore-on-conflict tables keep the
 first stamp and the sessions upsert takes the latest, which in each case is the
 honest answer to "when did we last hear this row".
 
-**Golden fixtures.** `test/hr/golden/` holds the protocol's canonical payloads,
-and the Android repo holds the same bytes under `testdata/golden/hr/` (pending
-its own phase-1 work). The server tests POST them raw at the real endpoints and
-compare responses byte-for-byte — key order and separators, not merely parsed
-equality — so the documented examples cannot quietly drift into fiction on this
-side; a protocol change regenerates both repos' fixtures in one change set.
+**Golden fixtures.** `test/hr/golden/` holds the protocol's canonical payloads
+— ONE directory read by both test suites: the server tests POST the files raw
+at the real endpoints and compare responses byte-for-byte — key order and
+separators, not merely parsed equality — while the Android `HrGoldenFixtureTest`
+reads the same files off its unit-test classpath (a Gradle Sync task in
+`android/core/data` stages them there). A protocol change edits one file both
+suites see in the same commit; the pre-merge two-copy pact is retired.
 **Every calendar date in them is far-future (2030+)**, and that is a convention
 to keep: this repo is public and its pre-commit personal-data guard scans staged
 literals against the live health databases, where any plausible *past* date can

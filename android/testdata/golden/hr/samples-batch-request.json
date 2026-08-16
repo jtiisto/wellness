@@ -1,4 +1,0 @@
-{"clientId":"fixture-client-hr-0001","samples":[
-  {"deviceId":"AA:BB:CC:DD:EE:FF","timestampMs":1770000000000,"seq":0,"heartRateBpm":142,"rrIntervalMs":423,"sessionId":"11111111-2222-3333-4444-555555555555"},
-  {"deviceId":"AA:BB:CC:DD:EE:FF","timestampMs":1770000000000,"seq":1,"heartRateBpm":142,"rrIntervalMs":0,"sessionId":"11111111-2222-3333-4444-555555555555"},
-  {"deviceId":"AA:BB:CC:DD:EE:FF","timestampMs":1770000004100,"seq":0,"heartRateBpm":141,"rrIntervalMs":431,"isGapBefore":true,"sessionId":"11111111-2222-3333-4444-555555555555"}]}

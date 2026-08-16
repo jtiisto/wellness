@@ -1,10 +1,10 @@
 """The protocol spec's canonical payloads, POSTed at the real endpoints.
 
-`test/hr/golden/` holds the example payloads from
-`android/specs/hr-protocol.md` copied byte-for-byte; the Android client keeps
-the same bytes under `android/testdata/golden/hr/`. Any protocol change
-regenerates both sides in one change set, and these tests are what stops the
-spec's examples from quietly drifting into fiction on this side.
+`test/hr/golden/` holds the protocol's canonical payloads — ONE directory
+shared with the Android client, whose HrGoldenFixtureTest reads the same files
+off its unit-test classpath (a Gradle Sync task stages them there). A protocol
+change edits one file both suites see in the same commit, and these tests are
+what stops the spec's examples from quietly drifting into fiction on this side.
 """
 import json
 import re

@@ -9,10 +9,10 @@ The wire contract between the wellness Android client (this repo, `feature/coach
 wellness server's `hr` module (implemented at the repo root, planned in its local
 `plans/hr-module.md`). Parent feature spec: `specs/coach-heart-rate.md`.
 
-Golden fixtures pin the byte-level shapes in **both** repos — Android
-`testdata/golden/hr/` (landed with Phase 1, 2026-08-11, sha256-identical to the server's
-`test/hr/golden/`), server pytest fixtures — and any protocol change updates both in the same
-breath. Fixtures are synthetic only, never copied from live data.
+Golden fixtures pin the byte-level shapes for **both** suites from ONE shared directory,
+the repo root's `test/hr/golden/` (originally landed as two sha256-identical copies,
+2026-08-11; unified after the monorepo merge — the Android test reads the same files off
+its unit-test classpath). Fixtures are synthetic only, never copied from live data.
 
 ## Conventions
 

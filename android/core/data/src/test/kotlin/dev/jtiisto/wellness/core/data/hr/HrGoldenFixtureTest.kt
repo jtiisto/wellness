@@ -27,14 +27,15 @@ import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 
 /**
- * The HR wire contract, against the fixtures the server repo holds byte for byte
- * (`testdata/golden/hr/` — see the README there).
+ * The HR wire contract, against the SHARED fixtures at the repo root's
+ * `test/hr/golden/` (see the README there) — the same files the server's
+ * pytest suite POSTs at the real endpoints, staged onto this module's
+ * unit-test classpath by the Sync task in its build script.
  *
- * These payloads exist twice on purpose, and this is the client half of what
- * keeps the copies honest: the requests are built from **Room rows**, not from
- * hand-written DTOs, so the mappers, the property order, the camelCase spelling
- * and the omit-never-null rule are all pinned by the same assertion. The server
- * repo POSTs the same bytes at the real endpoints.
+ * This is the client half of the contract: the requests are built from
+ * **Room rows**, not from hand-written DTOs, so the mappers, the property
+ * order, the camelCase spelling and the omit-never-null rule are all pinned
+ * by the same assertion, against the same bytes the server validates.
  */
 class HrGoldenFixtureTest {
 

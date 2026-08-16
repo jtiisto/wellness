@@ -31,11 +31,17 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     sourceSets {
-        // Golden server payloads live at the repo root, shared across modules;
-        // putting them on the unit-test classpath is what lets the contract
-        // tests load them as `/golden/<module>/<name>.json`.
+        // Golden payloads land on the unit-test classpath as
+        // `/golden/<module>/<name>.json`. Two roots feed it: the android tree's
+        // own goldens (coach/journal — generated against the dev server), and
+        // the staged copy of the SHARED HR contract fixtures (see the Sync
+        // task below) — one repo-root directory both test suites read, so the
+        // server and client halves of the wire contract cannot drift.
         getByName("test") {
             resources.directories.add(layout.settingsDirectory.dir("testdata").asFile.path)
+            resources.directories.add(
+                layout.buildDirectory.dir("sharedGoldens").get().asFile.path
+            )
         }
         // MigrationTestHelper reads the exported schemas from the test APK's
         // assets — that is what makes runMigrationsAndValidate an assertion.
@@ -43,6 +49,20 @@ android {
             assets.directories.add(layout.projectDirectory.dir("schemas").asFile.path)
         }
     }
+}
+
+// The HR wire-contract fixtures are SHARED with the server's pytest suite:
+// one directory at the repo root, read byte-for-byte by both sides (this
+// replaced the two-copy "regenerate both in one change set" pact when the
+// repos merged). Staged under golden/hr/ so the classpath keeps the
+// `/golden/<module>/` shape the contract tests load.
+val stageSharedHrGoldens by tasks.registering(Sync::class) {
+    from(layout.settingsDirectory.dir("../test/hr/golden"))
+    exclude("README.md")
+    into(layout.buildDirectory.dir("sharedGoldens/golden/hr"))
+}
+tasks.matching { it.name.endsWith("UnitTestJavaRes") }.configureEach {
+    dependsOn(stageSharedHrGoldens)
 }
 
 dependencies {

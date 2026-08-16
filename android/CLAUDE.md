@@ -32,7 +32,7 @@ Native Android client for the Wellness system (Journal, Coach, Trends, Analysis)
 - Calendar dates are local `YYYY-MM-DD` strings; weekdays 0=Sun…6=Sat.
 - Optional wire fields are **omitted, never null**; shared `Json { ignoreUnknownKeys; explicitNulls=false; encodeDefaults=false }`.
 - Journal tracker unknown fields must round-trip verbatim (meta_json passthrough).
-- Golden fixtures in `testdata/golden/` are **synthetic only** — never copied from live databases; fixture dates use the far-future `2030-01-*` convention. The HR goldens are a byte-identical sha256 pact with the server's `../test/hr/golden/`.
+- Golden fixtures are **synthetic only** — never copied from live databases; fixture dates use the far-future `2030-01-*` convention. Coach/journal goldens live in `testdata/golden/`; the HR goldens are SHARED with the server at the repo root's `../test/hr/golden/` — one directory both suites read (a Sync task in `core/data` stages it onto the test classpath), so never create a second copy.
 
 ## Spec-Driven Development
 

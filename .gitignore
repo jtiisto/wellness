@@ -12,7 +12,10 @@ htmlcov/
 
 # Databases — the whole dir: nothing tracked lives here, and the WAL/SHM
 # sidecars carry the same personal data as the .db files (review F19).
-data/
+# Root-anchored: the unanchored form shadows android/core/data/ (the Room/
+# sync module) — new files there would be silently ignored and git add of
+# its tracked files refused. Same rationale for the other /-anchored dirs.
+/data/
 
 # Runtime
 server.log
@@ -24,17 +27,17 @@ server.log
 src/modules/user_queries.py
 
 # Personal medical retrospectives — belong in the private health repo
-retrospectives/
+/retrospectives/
 
 # IDE
 .vscode/
 .idea/
 
 # Planning docs
-plans/
+/plans/
 
-# Claude Code
-CLAUDE.md
+# Claude Code (root file only — android/CLAUDE.md is tracked)
+/CLAUDE.md
 .claude/
 # Agent skills mirror (machine-specific: carries emulator host addresses)
 .agents/

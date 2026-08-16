@@ -1,4 +1,0 @@
-{"clientId":"fixture-client-hr-0001","events":[
-  {"eventId":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","date":"2030-01-03","exerciseKey":"fixture-adhoc-lift","setNum":1,"action":"check","clientTimestampMs":1770000010000,"sessionId":"11111111-2222-3333-4444-555555555555"},
-  {"eventId":"ffffffff-0000-1111-2222-333333333333","date":"2030-01-03","exerciseKey":"fixture-adhoc-lift","setNum":1,"action":"uncheck","clientTimestampMs":1770000015000,"sessionId":"11111111-2222-3333-4444-555555555555"},
-  {"eventId":"44444444-5555-6666-7777-888888888888","date":"2030-01-04","exerciseKey":"fixture-adhoc-checklist","itemKey":"fixture-item-a","action":"check","clientTimestampMs":1770000020000}]}
