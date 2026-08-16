@@ -132,6 +132,35 @@ def list_sessions(
     return [_session_dict(session) for session in sessions]
 
 
+def _set_event_markers(
+    db: DatabaseManager,
+    session_id: str,
+    t0_ms: int,
+    start_ms: int,
+    end_ms: int,
+) -> list[dict[str, Any]]:
+    """The exercise ground truth next to the HR curve: set ticks and checklist
+    toggles as offsets from the same t0 the rows/windows use, cropped to the
+    analysis window. Wire style matches the sync protocol — optional fields
+    (set_num, item_key) are omitted, never null."""
+    markers = []
+    for event in db.load_set_events(session_id):
+        ts = event["client_timestamp_ms"]
+        if ts < start_ms or ts > end_ms:
+            continue
+        marker: dict[str, Any] = {
+            "offset_s": round((ts - t0_ms) / 1000.0, 1),
+            "exercise_key": event["exercise_key"],
+            "action": event["action"],
+        }
+        if event["set_num"] is not None:
+            marker["set_num"] = event["set_num"]
+        if event["item_key"] is not None:
+            marker["item_key"] = event["item_key"]
+        markers.append(marker)
+    return markers
+
+
 def _build_report(
     db: DatabaseManager,
     session_id: str,
@@ -139,6 +168,7 @@ def _build_report(
     beats: list[Beat],
     hrmax: int | None,
     cropped: bool,
+    include_windows: bool,
 ) -> dict[str, Any]:
     report = analyze(beats, hrmax=hrmax)
     raw_start_ms = raw_beats[0].ts_ms
@@ -176,7 +206,16 @@ def _build_report(
         "rmssd_ms": report["rmssd_ms"],
         "alpha1": report["alpha1"],
         "bouts": report["bouts"],
-        "windows": report["windows"],
+        # The per-window DFA/quality detail is ~85% of the report's bytes and
+        # is summarized by the quality block's trusted/total counts — opt in
+        # when the window-by-window evidence is actually needed.
+        **({"windows": report["windows"]} if include_windows else {}),
+        "set_events": _set_event_markers(
+            db, session_id,
+            t0_ms=beats[0].ts_ms,
+            start_ms=beats[0].ts_ms,
+            end_ms=beats[-1].ts_ms,
+        ),
         "flags": {
             "analysis_window_uncertain": False,
             "rr_quality_insufficient": report["alpha1"]["windows_trusted"] == 0,
@@ -190,6 +229,7 @@ def get_session_report(
     hrmax: int | None = None,
     start_ms: int | str | None = None,
     end_ms: int | str | None = None,
+    include_windows: bool = False,
 ) -> dict[str, Any]:
     """Analyze one session, optionally cropped to an explicit time window."""
     raw_beats, beats = _load_window(db, session_id, start_ms, end_ms)
@@ -200,24 +240,30 @@ def get_session_report(
         beats,
         hrmax,
         cropped=start_ms is not None or end_ms is not None,
+        include_windows=include_windows,
     )
 
 
 def get_latest_session_report(
     db: DatabaseManager,
     hrmax: int | None = None,
+    include_windows: bool = False,
 ) -> dict[str, Any]:
     """Analyze the most recently started session."""
     sessions = db.list_sessions(limit=1)
     if not sessions:
         raise ValueError("No sessions found")
-    return get_session_report(db, sessions[0].session_id, hrmax=hrmax)
+    return get_session_report(
+        db, sessions[0].session_id, hrmax=hrmax, include_windows=include_windows,
+    )
 
 
 def _build_timeseries(
+    db: DatabaseManager,
     session_id: str,
     beats: list[Beat],
     resolution_s: int,
+    include_quality: bool,
 ) -> dict[str, Any]:
     t0 = beats[0].ts_ms
     bucket_ms = resolution_s * 1000
@@ -237,17 +283,33 @@ def _build_timeseries(
         flags = classify(bucket)
         valid_hr = [beat.hr_bpm for beat in bucket if beat.hr_bpm > 0]
         hr_weighted = time_weighted_mean_hr(bucket)
-        out_rows.append({
-            "timestamp_ms": int(start),
-            "offset_s": round((start - t0) / 1000.0, 1),
-            "duration_s": resolution_s,
-            "hr_mean": None if hr_weighted is None else round(hr_weighted, 1),
-            "hr_max": max(valid_hr) if valid_hr else None,
-            "rr_coverage": round(rr_coverage(bucket), 3),
-            "artifact_frac": round(flags.artifact_fraction, 3),
-            "gap": bool(flags.gap.any()),
-            "beats": len(bucket),
-        })
+        if include_quality:
+            # The full row, unchanged shape — the pre-2026-08 default.
+            out_rows.append({
+                "timestamp_ms": int(start),
+                "offset_s": round((start - t0) / 1000.0, 1),
+                "duration_s": resolution_s,
+                "hr_mean": None if hr_weighted is None else round(hr_weighted, 1),
+                "hr_max": max(valid_hr) if valid_hr else None,
+                "rr_coverage": round(rr_coverage(bucket), 3),
+                "artifact_frac": round(flags.artifact_fraction, 3),
+                "gap": bool(flags.gap.any()),
+                "beats": len(bucket),
+            })
+        else:
+            # Lean row: the curve itself. The RR-quality detail is ~2/3 of
+            # every row's bytes and pushed hour-long sessions past the tool
+            # result limit. timestamp_ms/duration_s reconstruct from the
+            # envelope (start_ms + offset_s, resolution_s); `gap` appears only
+            # when true so an honest hole still shows.
+            row: dict[str, Any] = {
+                "offset_s": round((start - t0) / 1000.0, 1),
+                "hr_mean": None if hr_weighted is None else round(hr_weighted, 1),
+                "hr_max": max(valid_hr) if valid_hr else None,
+            }
+            if bool(flags.gap.any()):
+                row["gap"] = True
+            out_rows.append(row)
 
     return {
         "session_id": session_id,
@@ -257,6 +319,12 @@ def _build_timeseries(
             "end_ms": beats[-1].ts_ms,
             "duration_s": round((beats[-1].ts_ms - beats[0].ts_ms) / 1000.0, 1),
         },
+        "set_events": _set_event_markers(
+            db, session_id,
+            t0_ms=t0,
+            start_ms=beats[0].ts_ms,
+            end_ms=beats[-1].ts_ms,
+        ),
         "rows": out_rows,
     }
 
@@ -267,11 +335,14 @@ def get_aligned_timeseries(
     resolution_s: int = 5,
     start_ms: int | str | None = None,
     end_ms: int | str | None = None,
+    include_quality: bool = False,
 ) -> dict[str, Any]:
-    """Return compact HR/quality buckets for one session."""
+    """Return compact HR buckets (+ set markers) for one session."""
     _check_resolution(resolution_s)
     _, beats = _load_window(db, session_id, start_ms, end_ms)
-    return _build_timeseries(session_id, beats, resolution_s)
+    return _build_timeseries(
+        db, session_id, beats, resolution_s, include_quality=include_quality,
+    )
 
 
 def get_vo2_summary(
@@ -296,6 +367,7 @@ def get_vo2_summary(
         beats,
         hrmax,
         cropped=start_ms is not None or end_ms is not None,
+        include_windows=False,
     )
     vo2 = summarize_vo2(beats, detected, interval_intent, hrmax=hrmax)
 
@@ -305,5 +377,10 @@ def get_vo2_summary(
         "quality": base_report["quality"],
         "hr": base_report["hr"],
         "vo2": vo2,
-        "timeseries": _build_timeseries(session_id, beats, resolution_s),
+        # The embedded fallback series is always lean — an hour at 5s in full
+        # form is what blew the tool result limit; get_aligned_timeseries with
+        # include_quality=true is the escape hatch for the RR detail.
+        "timeseries": _build_timeseries(
+            db, session_id, beats, resolution_s, include_quality=False,
+        ),
     }

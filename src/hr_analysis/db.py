@@ -162,6 +162,37 @@ def load_beats(session_id=None, start_ms=None, end_ms=None, db_path=None):
     ]
 
 
+def load_set_events(session_id, db_path=None):
+    """Ordered set-completion markers for one session.
+
+    These are the exercise ground truth next to the HR curve: each row is a
+    set tick (`set_num`) or a checklist toggle (`item_key`) the client stamped
+    during capture, with `action` 'check' or 'uncheck' (an undo is a real
+    event, not an erasure). Ordered by client stamp — the capture-side clock
+    the offsets in a report are computed against.
+    """
+    rows = _query(
+        """
+        SELECT client_timestamp_ms, exercise_key, set_num, item_key, action
+        FROM set_events
+        WHERE session_id = ?
+        ORDER BY client_timestamp_ms, event_id
+        """,
+        [session_id],
+        db_path,
+    )
+    return [
+        {
+            "client_timestamp_ms": r[0],
+            "exercise_key": r[1],
+            "set_num": r[2],
+            "item_key": r[3],
+            "action": r[4],
+        }
+        for r in rows
+    ]
+
+
 def latest_session(db_path=None):
     """Most recently started session id, or None when nothing is captured."""
     sessions = list_sessions(limit=1, db_path=db_path)

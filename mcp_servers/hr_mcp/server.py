@@ -68,6 +68,7 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
         hrmax: int | None = None,
         start_ms: int | str | None = None,
         end_ms: int | str | None = None,
+        include_windows: bool = False,
     ) -> dict[str, Any]:
         """WHEN TO USE: Analyze one captured heart-rate session.
 
@@ -76,12 +77,16 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
             hrmax: Max HR, enables the zone breakdown
             start_ms: Optional crop start, epoch milliseconds or ISO-8601
             end_ms: Optional crop end, epoch milliseconds or ISO-8601
+            include_windows: Also return the per-window DFA/quality array
+                (large; the quality block's trusted/total counts summarize it)
 
         Returns:
             Duration-weighted HR (and zones when hrmax is given), RMSSD, DFA
-            alpha1 windows, detected work/rest bouts, and a quality block.
-            Check quality first: rr_quality_insufficient means the RR signal
-            never met the trust rule, so the HRV numbers are not usable.
+            alpha1, detected work/rest bouts, set-completion markers
+            (set_events, offsets from the analysis-window start), and a
+            quality block. Check quality first: rr_quality_insufficient means
+            the RR signal never met the trust rule, so the HRV numbers are
+            not usable.
         """
         return tools.get_session_report(
             db,
@@ -89,19 +94,26 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
             hrmax=hrmax,
             start_ms=start_ms,
             end_ms=end_ms,
+            include_windows=include_windows,
         )
 
     @mcp.tool()
-    def get_latest_session_report(hrmax: int | None = None) -> dict[str, Any]:
+    def get_latest_session_report(
+        hrmax: int | None = None,
+        include_windows: bool = False,
+    ) -> dict[str, Any]:
         """WHEN TO USE: Analyze the most recent capture without looking up its id.
 
         Args:
             hrmax: Max HR, enables the zone breakdown
+            include_windows: Also return the per-window DFA/quality array
 
         Returns:
             The same report shape as get_session_report.
         """
-        return tools.get_latest_session_report(db, hrmax=hrmax)
+        return tools.get_latest_session_report(
+            db, hrmax=hrmax, include_windows=include_windows,
+        )
 
     @mcp.tool()
     def get_aligned_timeseries(
@@ -109,22 +121,30 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
         resolution_s: int = 5,
         start_ms: int | str | None = None,
         end_ms: int | str | None = None,
+        include_quality: bool = False,
     ) -> dict[str, Any]:
         """WHEN TO USE: Get compact time buckets when bout matching is uncertain.
 
         The fallback for reading a session's shape yourself — what the HR was
-        doing minute by minute — when the automatic work/rest detection in
-        get_session_report disagrees with what you expected.
+        doing minute by minute, with the set-completion markers alongside —
+        when the automatic work/rest detection in get_session_report
+        disagrees with what you expected.
 
         Args:
             session_id: Session to bucket (from list_sessions)
             resolution_s: Bucket width in seconds (minimum 1)
             start_ms: Optional crop start, epoch milliseconds or ISO-8601
             end_ms: Optional crop end, epoch milliseconds or ISO-8601
+            include_quality: Full rows with RR coverage, artifact fraction,
+                beat counts, and per-row timestamps (roughly triples the
+                size; an hour-long session in full form exceeds the tool
+                result limit)
 
         Returns:
-            One row per non-empty bucket with mean/max HR, RR coverage,
-            artifact fraction, and a gap flag.
+            set_events (offset-aligned completion markers) and one row per
+            non-empty bucket: offset_s, mean/max HR, and gap=true only where
+            the signal has a hole. Absolute time reconstructs from
+            analysis_window.start_ms + offset_s.
         """
         return tools.get_aligned_timeseries(
             db,
@@ -132,6 +152,7 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
             resolution_s=resolution_s,
             start_ms=start_ms,
             end_ms=end_ms,
+            include_quality=include_quality,
         )
 
     @mcp.tool()

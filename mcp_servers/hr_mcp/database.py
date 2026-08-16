@@ -82,6 +82,10 @@ class DatabaseManager:
         """
         return hr_db.load_beats(session_id=session_id, db_path=self.config.db_path)
 
+    def load_set_events(self, session_id: str) -> list[dict]:
+        """Ordered set-completion markers for one session (see hr_analysis.db)."""
+        return hr_db.load_set_events(session_id, db_path=self.config.db_path)
+
     def session_devices(self, session_id: str) -> tuple[list[str], list[str]]:
         """(device_ids, sensor_types) that contributed beats to one session."""
         rows = hr_db.session_devices(session_id, db_path=self.config.db_path)

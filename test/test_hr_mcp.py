@@ -327,8 +327,10 @@ def _naive_timeseries_rows(beats, resolution_s):
 @pytest.mark.integration
 class TestAlignedTimeseries:
     def test_returns_quality_buckets(self, db):
-        """PORTED: test_get_aligned_timeseries."""
-        series = get_aligned_timeseries(db, "session-1", resolution_s=10)
+        """PORTED: test_get_aligned_timeseries — the full row shape now lives
+        behind include_quality (the lean curve is the default)."""
+        series = get_aligned_timeseries(
+            db, "session-1", resolution_s=10, include_quality=True)
         assert series["session_id"] == "session-1"
         assert series["resolution_s"] == 10
         assert series["rows"]
@@ -336,8 +338,28 @@ class TestAlignedTimeseries:
 
     @pytest.mark.parametrize("resolution_s", [1, 5, 37])
     def test_matches_the_original_bucketing(self, db, resolution_s):
-        rows = get_aligned_timeseries(db, "session-1", resolution_s=resolution_s)["rows"]
+        rows = get_aligned_timeseries(
+            db, "session-1", resolution_s=resolution_s, include_quality=True)["rows"]
         assert rows == _naive_timeseries_rows(db.load_beats("session-1"), resolution_s)
+
+    def test_lean_default_is_the_curve_only(self, db):
+        """The default row is offset + HR — the RR-quality detail was ~2/3 of
+        every row's bytes and pushed hour-long sessions past the tool result
+        limit. Values must agree with the full shape, only the keys differ."""
+        lean = get_aligned_timeseries(db, "session-1", resolution_s=10)
+        full = get_aligned_timeseries(
+            db, "session-1", resolution_s=10, include_quality=True)
+        assert len(lean["rows"]) == len(full["rows"])
+        for slim, fat in zip(lean["rows"], full["rows"]):
+            assert set(slim) <= {"offset_s", "hr_mean", "hr_max", "gap"}
+            assert slim["offset_s"] == fat["offset_s"]
+            assert slim["hr_mean"] == fat["hr_mean"]
+            assert slim["hr_max"] == fat["hr_max"]
+            # gap appears ONLY when true — an honest hole still shows, a
+            # clean bucket doesn't pay for the key.
+            assert slim.get("gap", False) == fat["gap"]
+        # The envelope still reconstructs absolute time.
+        assert lean["analysis_window"]["start_ms"] == full["analysis_window"]["start_ms"]
 
     def test_buckets_are_anchored_at_the_window_start(self, db):
         rows = get_aligned_timeseries(db, "session-1", resolution_s=10)["rows"]
@@ -347,6 +369,79 @@ class TestAlignedTimeseries:
     def test_rejects_a_sub_second_resolution(self, db):
         with pytest.raises(ValueError, match="resolution_s must be at least 1"):
             get_aligned_timeseries(db, "session-1", resolution_s=0)
+
+
+def _write_set_events(db_path, events):
+    """(event_id, ts_ms, exercise_key, set_num, item_key, action) rows for
+    session-1, dated with the fixture's far-future convention."""
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.executemany(
+            "INSERT INTO set_events (event_id, date, exercise_key, set_num, "
+            "item_key, action, client_timestamp_ms, session_id, received_at) "
+            "VALUES (?, '2030-01-01', ?, ?, ?, ?, ?, 'session-1', ?)",
+            [(e[0], e[2], e[3], e[4], e[5], e[1], _RECEIVED_AT) for e in events],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+@pytest.mark.integration
+class TestSetEventMarkers:
+    """The exercise ground truth next to the HR curve: set-completion markers
+    ride along in both the report and the timeseries, offset-aligned to the
+    analysis window and cropped with it."""
+
+    @pytest.fixture(autouse=True)
+    def seed_events(self, hr_db_path):
+        _write_set_events(hr_db_path, [
+            ("ev-1", T0 + 10_000, "ex_squat", 1, None, "check"),
+            ("ev-2", T0 + 60_000, "ex_squat", 2, None, "check"),
+            ("ev-3", T0 + 62_000, "ex_squat", 2, None, "uncheck"),
+            ("ev-4", T0 + 90_000, "fixture_mobility", None, "item-a", "check"),
+        ])
+        self.db_path = hr_db_path
+
+    def test_timeseries_carries_offset_aligned_markers(self, db):
+        series = get_aligned_timeseries(db, "session-1", resolution_s=10)
+        markers = series["set_events"]
+        # Offsets share the rows' t0 — the first BEAT, not the session row —
+        # so a marker and a bucket at the same offset are the same instant.
+        t0 = series["analysis_window"]["start_ms"]
+        expected = [round((T0 + ms - t0) / 1000.0, 1)
+                    for ms in (10_000, 60_000, 62_000, 90_000)]
+        assert [m["offset_s"] for m in markers] == expected
+        # Wire style matches the sync protocol: optional identity fields are
+        # omitted, never null — a set tick has set_num, a toggle has item_key.
+        tick, undo, toggle = markers[0], markers[2], markers[3]
+        assert tick == {"offset_s": expected[0], "exercise_key": "ex_squat",
+                        "action": "check", "set_num": 1}
+        assert undo["action"] == "uncheck"          # an undo is a real event
+        assert "item_key" not in tick
+        assert toggle["item_key"] == "item-a" and "set_num" not in toggle
+
+    def test_report_carries_the_same_markers(self, db):
+        report = get_session_report(db, "session-1")
+        assert [m["exercise_key"] for m in report["set_events"]] == \
+            ["ex_squat", "ex_squat", "ex_squat", "fixture_mobility"]
+
+    def test_markers_crop_with_the_analysis_window(self, db):
+        series = get_aligned_timeseries(
+            db, "session-1", start_ms=T0 + 30_000, end_ms=T0 + 80_000)
+        # Only ev-2 and ev-3 fall inside the window; offsets re-anchor to the
+        # cropped window's first beat, same t0 the rows use.
+        assert [m["exercise_key"] for m in series["set_events"]] == ["ex_squat"] * 2
+        assert all(0 <= m["offset_s"] <= 50 for m in series["set_events"])
+
+    def test_report_windows_are_opt_in(self, db):
+        """The per-window DFA array is ~85% of a report's bytes; the quality
+        block's trusted/total counts summarize it by default."""
+        lean = get_session_report(db, "session-1")
+        full = get_session_report(db, "session-1", include_windows=True)
+        assert "windows" not in lean
+        assert isinstance(full["windows"], list)
+        assert lean["quality"]["total_dfa_windows"] == len(full["windows"])
 
 
 # ==================== Integration: VO2 plan vs actual ====================
