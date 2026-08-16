@@ -2320,3 +2320,192 @@ class TestRemoveLoggedExercise:
         assert row is not None
         assert row["exercise_id"] is None
         assert row["exercise_key"] == "ex_logged"
+
+
+# ==================== move_workout_plan ====================
+
+
+@pytest.mark.integration
+class TestMoveWorkoutPlan:
+    """The one-call reschedule: identity-preserving date move, swap, and the
+    guards that keep worked history pinned to the day it happened."""
+
+    SRC, DST, THIRD = "2099-04-01", "2099-04-03", "2099-04-05"
+
+    @pytest.fixture(autouse=True)
+    def setup_mcp(self, test_app, coach_seeded_database, tmp_coach_db):
+        self.db_path = tmp_coach_db
+        config = MCPConfig(db_path=tmp_coach_db)
+        mcp = create_mcp_server(config)
+        self.tools = _extract_tools(mcp)
+
+    def _plan(self, day_name="Push"):
+        return {
+            "day_name": day_name,
+            "location": "Gym",
+            "phase": "Foundation",
+            "blocks": [{
+                "block_type": "strength",
+                "title": "Main",
+                "exercises": [
+                    {"id": "m1", "name": "Move Bench", "type": "strength",
+                     "target_sets": 3, "target_reps": "10"},
+                ],
+            }],
+        }
+
+    def _q(self, sql, *params):
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        try:
+            return [dict(r) for r in conn.execute(sql, params).fetchall()]
+        finally:
+            conn.close()
+
+    def _x(self, sql, *params):
+        conn = sqlite3.connect(self.db_path)
+        try:
+            conn.execute(sql, params)
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _session(self, date):
+        rows = self._q(
+            "SELECT id, day_name, last_modified, modified_by "
+            "FROM workout_sessions WHERE date = ?", date)
+        return rows[0] if rows else None
+
+    # ---- the move itself -------------------------------------------------
+
+    def test_move_relocates_plan_preserving_identity(self):
+        self.tools["set_workout_plan"](date=self.SRC, plan=self._plan())
+        before = self._session(self.SRC)
+        child_ids = self._q(
+            "SELECT b.id AS block_id, pe.id AS exercise_id FROM session_blocks b "
+            "JOIN planned_exercises pe ON pe.block_id = b.id "
+            "WHERE b.session_id = ?", before["id"])
+
+        result = self.tools["move_workout_plan"](
+            from_date=self.SRC, to_date=self.DST)
+
+        assert result["success"] is True and result["swapped"] is False
+        assert self._session(self.SRC) is None
+        after = self._session(self.DST)
+        # Same row moved — not a delete/recreate under a fresh id.
+        assert after["id"] == before["id"]
+        assert after["day_name"] == "Push"
+        assert after["last_modified"] > before["last_modified"]
+        assert after["modified_by"] == "mcp"
+        assert self._q(
+            "SELECT b.id AS block_id, pe.id AS exercise_id FROM session_blocks b "
+            "JOIN planned_exercises pe ON pe.block_id = b.id "
+            "WHERE b.session_id = ?", after["id"]) == child_ids
+
+    def test_move_tombstones_source_and_clears_target(self):
+        self.tools["set_workout_plan"](date=self.SRC, plan=self._plan())
+        # The destination was deleted once: a stale tombstone sits there.
+        self.tools["set_workout_plan"](date=self.DST, plan=self._plan("Doomed"))
+        self.tools["delete_workout_plan"](date=self.DST)
+        assert self._q("SELECT date FROM deleted_plans WHERE date = ?", self.DST)
+
+        self.tools["move_workout_plan"](from_date=self.SRC, to_date=self.DST)
+
+        # Vacated day tombstoned so incremental sync drops it on clients;
+        # destination tombstone cleared so the arriving plan is not deleted
+        # by its own history (store_plan's resurrection rule).
+        assert self._q("SELECT date FROM deleted_plans WHERE date = ?", self.SRC)
+        assert not self._q("SELECT date FROM deleted_plans WHERE date = ?", self.DST)
+
+    # ---- guards ----------------------------------------------------------
+
+    def test_move_refuses_missing_source(self):
+        with pytest.raises(ValueError, match="No plan found"):
+            self.tools["move_workout_plan"](from_date=self.SRC, to_date=self.DST)
+
+    def test_move_refuses_worked_source(self):
+        self.tools["set_workout_plan"](date=self.SRC, plan=self._plan())
+        sid = self._session(self.SRC)["id"]
+        self._x("INSERT INTO workout_session_logs (session_id, date, last_modified) "
+                "VALUES (?, ?, ?)", sid, self.SRC, "2099-01-01T00:00:00Z")
+        with pytest.raises(ValueError, match="workout log"):
+            self.tools["move_workout_plan"](from_date=self.SRC, to_date=self.DST)
+
+    def test_off_plan_logs_never_block(self):
+        """An extra Zone 2 session is a resident of the DATE, not a child of
+        the plan: session_id NULL, exercise rows unlinked. It must not pin the
+        plan — unlike delete_workout_plan's deliberately broader date guard."""
+        self.tools["set_workout_plan"](date=self.SRC, plan=self._plan())
+        for date in (self.SRC, self.DST):
+            self._x("INSERT INTO workout_session_logs (session_id, date, last_modified) "
+                    "VALUES (NULL, ?, ?)", date, "2099-01-01T00:00:00Z")
+        log_id = self._q("SELECT id FROM workout_session_logs WHERE date = ?",
+                         self.SRC)[0]["id"]
+        self._x("INSERT INTO exercise_logs (session_log_id, exercise_id, exercise_key) "
+                "VALUES (?, NULL, 'extra_zone2')", log_id)
+
+        result = self.tools["move_workout_plan"](
+            from_date=self.SRC, to_date=self.DST)
+        assert result["success"] is True
+        assert self._session(self.DST)["day_name"] == "Push"
+
+    def test_move_refuses_occupied_target_and_names_swap(self):
+        self.tools["set_workout_plan"](date=self.SRC, plan=self._plan())
+        self.tools["set_workout_plan"](date=self.DST, plan=self._plan("Legs"))
+        with pytest.raises(ValueError, match="swap"):
+            self.tools["move_workout_plan"](from_date=self.SRC, to_date=self.DST)
+
+    def test_rejects_malformed_and_same_dates(self):
+        with pytest.raises(ValueError, match="YYYY-MM-DD"):
+            self.tools["move_workout_plan"](from_date="04/01/2099", to_date=self.DST)
+        with pytest.raises(ValueError, match="same day"):
+            self.tools["move_workout_plan"](from_date=self.SRC, to_date=self.SRC)
+
+    # ---- swap ------------------------------------------------------------
+
+    def test_swap_exchanges_days_without_tombstones(self):
+        self.tools["set_workout_plan"](date=self.SRC, plan=self._plan())
+        self.tools["set_workout_plan"](date=self.DST, plan=self._plan("Legs"))
+        push_id = self._session(self.SRC)["id"]
+        legs_id = self._session(self.DST)["id"]
+
+        result = self.tools["move_workout_plan"](
+            from_date=self.SRC, to_date=self.DST, swap=True)
+
+        assert result["swapped"] is True
+        assert self._session(self.SRC)["id"] == legs_id
+        assert self._session(self.DST)["id"] == push_id
+        assert self._session(self.SRC)["modified_by"] == "mcp"
+        assert self._session(self.DST)["modified_by"] == "mcp"
+        # Neither day became empty: a tombstone on either would tell a
+        # syncing client to drop a live plan.
+        assert not self._q("SELECT date FROM deleted_plans WHERE date IN (?, ?)",
+                           self.SRC, self.DST)
+
+    def test_swap_clears_stale_tombstones_on_both_days(self):
+        self.tools["set_workout_plan"](date=self.SRC, plan=self._plan())
+        self.tools["set_workout_plan"](date=self.DST, plan=self._plan("Legs"))
+        self._x("INSERT OR REPLACE INTO deleted_plans (date, deleted_at) VALUES (?, ?)",
+                self.SRC, "2099-01-01T00:00:00Z")
+
+        self.tools["move_workout_plan"](
+            from_date=self.SRC, to_date=self.DST, swap=True)
+
+        assert not self._q("SELECT date FROM deleted_plans WHERE date IN (?, ?)",
+                           self.SRC, self.DST)
+
+    def test_swap_refuses_empty_target(self):
+        self.tools["set_workout_plan"](date=self.SRC, plan=self._plan())
+        with pytest.raises(ValueError, match="no plan"):
+            self.tools["move_workout_plan"](
+                from_date=self.SRC, to_date=self.DST, swap=True)
+
+    def test_swap_refuses_worked_target(self):
+        self.tools["set_workout_plan"](date=self.SRC, plan=self._plan())
+        self.tools["set_workout_plan"](date=self.DST, plan=self._plan("Legs"))
+        sid = self._session(self.DST)["id"]
+        self._x("INSERT INTO workout_session_logs (session_id, date, last_modified) "
+                "VALUES (?, ?, ?)", sid, self.DST, "2099-01-01T00:00:00Z")
+        with pytest.raises(ValueError, match="workout log"):
+            self.tools["move_workout_plan"](
+                from_date=self.SRC, to_date=self.DST, swap=True)

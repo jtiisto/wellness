@@ -197,6 +197,22 @@ use the in-place editors instead (they don't rebuild the plan):
   (blocks are addressed by 0-indexed position; `update_block` is also how you
   change a block's circuit/interval timing)
 
+## Rescheduling (moving a workout to another day)
+
+`move_workout_plan(from_date, to_date)` — one atomic call. Never choreograph a
+move as get + set + delete: that rebuilds the plan under a new identity and is
+where multi-step rescheduling attempts go wrong.
+
+- The plan moves intact (blocks, exercises, checklist items, identity).
+- If the target day already has a plan, the move is refused — pass
+  `swap=true` to exchange the two days' plans instead (the common "shift the
+  week around" case).
+- A worked plan never moves: a workout log tied to it pins it to the day it
+  happened. An off-plan log (an extra Zone 2 session) on either day never
+  blocks a move — those belong to the date, not the plan.
+- Sync is handled for you: tombstone on the vacated day, fresh stamps, and
+  clients pick the change up on their next poll.
+
 ## Exercise Registry
 
 Exercises are automatically registered with canonical slugs (e.g., `kb_goblet_squat`)

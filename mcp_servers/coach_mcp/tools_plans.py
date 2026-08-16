@@ -1,7 +1,7 @@
 """Plan-family MCP tools for the Coach server.
 
 get_workout_plan, set_workout_plan, ingest_training_program,
-delete_workout_plan, update_plan_metadata.
+delete_workout_plan, move_workout_plan, update_plan_metadata.
 
 Bodies moved verbatim from `server.py`; the only change is
 rebinding the captured `db_manager`/`registry`/`config` to `self.*`.
@@ -298,6 +298,165 @@ class PlanTools:
         except Exception as e:
             raise ValueError(f"Failed to delete workout plan: {str(e)}")
 
+    def move_workout_plan(
+        self,
+        from_date: str,
+        to_date: str,
+        swap: bool = False
+    ) -> Dict[str, Any]:
+        """WHEN TO USE: When rescheduling a planned workout to a different day
+        (or exchanging two days' plans with swap=true). One atomic call — do
+        NOT choreograph this as get + set + delete, which creates a new plan
+        identity and loses the original session row.
+
+        The plan keeps its identity: the session row and all of its blocks,
+        exercises, and checklist items move untouched — only the date, sync
+        stamp, and tombstones change.
+
+        Guards: the source plan must exist and must not have been worked
+        (a workout log tied to it). An off-plan log on either date — an extra
+        Zone 2 session — never blocks a move; those belong to the date, not
+        the plan. If the target date already has a plan, the move is refused
+        unless swap=true, which exchanges the two plans atomically (both must
+        then be unworked).
+
+        Args:
+            from_date: Date of the plan to move (YYYY-MM-DD)
+            to_date: Destination date (YYYY-MM-DD)
+            swap: Exchange the two days' plans when the target is occupied
+                  (error if the target has no plan)
+
+        Returns:
+            Confirmation with the moved/swapped day names
+        """
+        try:
+            for label, value in (("from_date", from_date), ("to_date", to_date)):
+                try:
+                    datetime.strptime(value, "%Y-%m-%d")
+                except ValueError:
+                    raise ValueError(f"{label} must be YYYY-MM-DD, got: {value!r}")
+            if from_date == to_date:
+                raise ValueError("from_date and to_date are the same day — nothing to move")
+
+            def _worked_by_plan(cursor, session_id, date_str):
+                """A log that belongs to THIS plan (not an off-plan extra
+                session): linked by session_id, or carrying exercise rows that
+                reference the plan's exercises. Off-plan logs have neither."""
+                row = cursor.execute(
+                    "SELECT 1 FROM workout_session_logs WHERE date = ? AND session_id = ? "
+                    "UNION "
+                    "SELECT 1 FROM exercise_logs el "
+                    "JOIN workout_session_logs sl ON el.session_log_id = sl.id "
+                    "JOIN planned_exercises pe ON el.exercise_id = pe.id "
+                    "WHERE sl.date = ? AND pe.session_id = ?",
+                    [date_str, session_id, date_str, session_id],
+                ).fetchone()
+                return row is not None
+
+            # All checks and writes inside BEGIN IMMEDIATE, atomic against the
+            # FastAPI sync writer in the other process — same discipline as
+            # delete_workout_plan.
+            with self.db_manager.transaction() as cursor:
+                source = cursor.execute(
+                    "SELECT id, day_name FROM workout_sessions WHERE date = ?",
+                    [from_date],
+                ).fetchone()
+                if not source:
+                    raise ValueError(f"No plan found for from_date: {from_date}")
+                if _worked_by_plan(cursor, source["id"], from_date):
+                    raise ValueError(
+                        f"Cannot move the plan for {from_date}: it has a workout log. "
+                        f"Logs are the user's completed training history and stay on "
+                        f"the day they happened — a worked plan is not reschedulable."
+                    )
+
+                target = cursor.execute(
+                    "SELECT id, day_name FROM workout_sessions WHERE date = ?",
+                    [to_date],
+                ).fetchone()
+                now = get_utc_now()
+
+                if swap:
+                    if not target:
+                        raise ValueError(
+                            f"swap=true but {to_date} has no plan. Call without "
+                            f"swap to move onto an empty day."
+                        )
+                    if _worked_by_plan(cursor, target["id"], to_date):
+                        raise ValueError(
+                            f"Cannot swap with {to_date}: its plan has a workout "
+                            f"log and stays on the day it was worked."
+                        )
+                    # Two-step through a sentinel to dodge the UNIQUE(date)
+                    # constraint; invisible outside the transaction. Both rows
+                    # get fresh stamps so the delta sync delivers both moves,
+                    # and NO tombstone is written — neither day becomes empty.
+                    sentinel = f"{from_date}#swap"
+                    cursor.execute(
+                        "UPDATE workout_sessions SET date = ? WHERE id = ?",
+                        [sentinel, source["id"]],
+                    )
+                    cursor.execute(
+                        "UPDATE workout_sessions SET date = ?, last_modified = ?, "
+                        "modified_by = 'mcp' WHERE id = ?",
+                        [from_date, now, target["id"]],
+                    )
+                    cursor.execute(
+                        "UPDATE workout_sessions SET date = ?, last_modified = ?, "
+                        "modified_by = 'mcp' WHERE id = ?",
+                        [to_date, now, source["id"]],
+                    )
+                    # Neither day is deleted now; stale tombstones on either
+                    # date would tell a syncing client to drop a live plan.
+                    cursor.execute(
+                        "DELETE FROM deleted_plans WHERE date IN (?, ?)",
+                        [from_date, to_date],
+                    )
+                    return {
+                        "success": True,
+                        "swapped": True,
+                        "from_date": from_date,
+                        "to_date": to_date,
+                        "message": (
+                            f"Swapped plans: '{source['day_name']}' is now on {to_date}, "
+                            f"'{target['day_name']}' is now on {from_date}"
+                        ),
+                    }
+
+                if target:
+                    raise ValueError(
+                        f"Cannot move to {to_date}: a plan ('{target['day_name']}') "
+                        f"already exists there. Pass swap=true to exchange the two "
+                        f"days, move that plan first, or delete it."
+                    )
+
+                cursor.execute(
+                    "UPDATE workout_sessions SET date = ?, last_modified = ?, "
+                    "modified_by = 'mcp' WHERE id = ?",
+                    [to_date, now, source["id"]],
+                )
+                # The vacated day gets a tombstone so incremental sync drops it
+                # on the clients; the destination sheds any old tombstone so a
+                # previously-deleted date can host a plan again (same
+                # resurrection rule as store_plan).
+                cursor.execute(
+                    "INSERT OR REPLACE INTO deleted_plans (date, deleted_at) VALUES (?, ?)",
+                    [from_date, now],
+                )
+                cursor.execute(
+                    "DELETE FROM deleted_plans WHERE date = ?", [to_date]
+                )
+
+            return {
+                "success": True,
+                "swapped": False,
+                "from_date": from_date,
+                "to_date": to_date,
+                "message": f"Moved '{source['day_name']}' from {from_date} to {to_date}",
+            }
+        except Exception as e:
+            raise ValueError(f"Failed to move workout plan: {str(e)}")
+
     def update_plan_metadata(
         self,
         date: str,
@@ -389,4 +548,5 @@ def register(mcp, db_manager, registry, config):
     mcp.tool()(t.set_workout_plan)
     mcp.tool()(t.ingest_training_program)
     mcp.tool()(t.delete_workout_plan)
+    mcp.tool()(t.move_workout_plan)
     mcp.tool()(t.update_plan_metadata)
