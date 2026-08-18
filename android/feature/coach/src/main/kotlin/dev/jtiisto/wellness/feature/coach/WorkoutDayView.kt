@@ -1511,6 +1511,11 @@ internal fun InkButton(
     skin: HookButtonSkin = PLAIN_SKIN,
 ) {
     val palette = LogbookTheme.palette
+    // A settled hook (fired/locked — the check glyph) is disabled only in the
+    // sense that pressing it does nothing: it is a record now, and a record
+    // keeps full ink (device-found 2026-08-17: rule-on-paper with ink-faint
+    // text read as mush). Only a button that is genuinely unavailable recedes.
+    val settled = skin.glyph == HookGlyph.CHECK
     Button(
         modifier = modifier,
         onClick = onClick,
@@ -1521,8 +1526,8 @@ internal fun InkButton(
         colors = ButtonDefaults.buttonColors(
             containerColor = palette.ink,
             contentColor = palette.paper,
-            disabledContainerColor = palette.rule,
-            disabledContentColor = palette.inkFaint,
+            disabledContainerColor = if (settled) palette.ink else palette.rule,
+            disabledContentColor = if (settled) palette.paper else palette.inkFaint,
         ),
     ) { InkButtonLabel(label = label, skin = skin) }
 }
@@ -1537,6 +1542,9 @@ internal fun InkOutlineButton(
     skin: HookButtonSkin = PLAIN_SKIN,
 ) {
     val palette = LogbookTheme.palette
+    // Same settled rule as InkButton: a fired End that cannot be pressed is a
+    // record in full ink, not a faded control.
+    val settled = skin.glyph == HookGlyph.CHECK
     OutlinedButton(
         modifier = modifier,
         onClick = onClick,
@@ -1545,7 +1553,7 @@ internal fun InkOutlineButton(
         border = BorderStroke(LogbookSpace.hairline, palette.ink),
         colors = ButtonDefaults.outlinedButtonColors(
             contentColor = palette.ink,
-            disabledContentColor = palette.inkFaint,
+            disabledContentColor = if (settled) palette.ink else palette.inkFaint,
         ),
     ) { InkButtonLabel(label = label, skin = skin) }
 }
