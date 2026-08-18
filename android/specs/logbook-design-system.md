@@ -1,7 +1,9 @@
 # Spec: Logbook Design System (Round 1: shell + Coach)
 
-Status: **draft 2026-08-17 — awaiting user approval** (spec-first gate; no
-implementation before approval)
+Status: **approved 2026-08-17** (user directed implementation the same day) —
+**in implementation**: Phase 1 (core/ui foundation: fonts, palette, type,
+theme, palette test) landed with the token table below finalized by
+measurement; the shell and coach phases follow.
 
 ## Goal
 
@@ -69,23 +71,39 @@ module-by-module; the Graphite spec shrinks as modules leave it.
 |---|---|---|---|
 | `paper` | `#FBFAF7` | `#141517` | screen background — the only surface |
 | `ink` | `#17191B` | `#EDECE7` | primary text, tally marks, strong rules |
-| `inkSoft` | `#71757B` | (light value holds; verify contrast) | secondary text, schemes, meta labels |
-| `inkFaint` | `#A6A9AD` | (˝) | ghost values, empty states, table headers, unfilled marks |
+| `inkSoft` | `#6A6D73` | `#7D8288` | secondary text, schemes, meta labels |
+| `inkFaint` | `#A6A9AD` | `#55585D` | ghost values, empty states, table headers, unfilled marks |
 | `rule` | `#E7E5DE` | `#2A2C2F` | hairline dividers between rows |
 | `ruleStrong` | `#C7C5BB` | `#3A3C40` | group boundaries, marginalia rails, popup border |
 | `plateRed` | `#B92D3A` | `#B92D3A` | tier dot, 1st distinct exposure |
-| `plateBlue` | `#2A5FA8` | *lighten minimally* | tier dot, 2nd |
-| `plateYellow` | *darken ≈`#A87C1F`* | `#C99A2A` | tier dot, 3rd |
+| `plateBlue` | `#2A5FA8` | `#2F6BBC` | tier dot, 2nd |
+| `plateYellow` | `#A87C1F` | `#C99A2A` | tier dot, 3rd |
 | `plateGreen` | `#2E7D4F` | `#2E7D4F` | tier dot, 4th |
 
-Contrast resolutions (dots are non-text UI: 3:1 floor on their paper):
-- Design-doc light `plateYellow` `#C99A2A` measures ≈2.5:1 on light paper —
-  darken toward `#A87C1F` (≈3.5:1), same hue family.
-- Dark `plateBlue` `#2A5FA8` measures ≈2.9:1 on dark paper — lighten minimally.
-- Final values are whatever passes `LogbookPaletteTest`, which pins them.
+Contrast resolutions (dots are non-text UI: 3:1 floor on their paper). All
+values below are measured in Phase 1 and pinned by `LogbookPaletteTest`:
+
+- Light `plateYellow`: the design doc's `#C99A2A` measures 2.47:1 on light
+  paper. Darkened within the hue family to `#A87C1F` — **3.61:1**.
+- Dark `plateBlue`: the design doc's `#2A5FA8` measures 2.87:1 on dark paper.
+  Lightened along its own hue to `#2F6BBC` — **3.44:1**, in the same band as
+  the other dark plates rather than scraping the floor.
+- Dark `plateRed` keeps `#B92D3A` at **3.045:1** — it passes, but it is the
+  thinnest margin in the palette; treat it as pinned, not as headroom.
+- Remaining plates: light red 5.75, light blue 6.10, light green 4.83; dark
+  yellow 7.08, dark green 3.62.
+- **`inkSoft` and `inkFaint` are cut per mode** — "the light value holds" did
+  not survive measurement, and this is what the table's original *verify
+  contrast* note was for. `#71757B` misses 4.5:1 in *both* modes (4.44 light,
+  3.94 dark), so light darkens to `#6A6D73` (**4.97:1**) and dark lightens to
+  `#7D8288` (**4.72:1**). Reusing light `inkFaint` `#A6A9AD` in dark measures
+  7.74:1 — *brighter than the soft tier above it*, inverting the ramp — so dark
+  gets `#55585D` (**2.56:1**). The palette test asserts the ordering
+  ink > inkSoft > inkFaint on paper so the inversion cannot come back.
 - **`inkFaint` is a documented WCAG exemption**: ghost values on paper measure
-  ≈2.3:1 — *by design intent* ("not yet yours" must recede). The palette test
-  asserts a ≥2:1 floor with the rationale in KDoc, not the 3:1 text floor.
+  ≈2.3:1 light / ≈2.6:1 dark — *by design intent* ("not yet yours" must
+  recede). The palette test asserts a ≥2:1 floor with the rationale in KDoc,
+  not the 3:1 text floor.
 
 **No semantic success/warning/error tokens exist in Logbook.** Coach's current
 semantic-color usages are re-expressed in ink (see Components). Two documented
@@ -287,5 +305,8 @@ else new.
 ## Open Questions
 
 1. Today-not-started eyebrow wording — `TODAY · READY TO LOG` proposed above.
-2. Exact adjusted plate token values (light yellow, dark blue) — computed in
-   Phase 1, pinned by `LogbookPaletteTest`, recorded back into this spec.
+2. ~~Exact adjusted plate token values (light yellow, dark blue)~~ — **resolved
+   in Phase 1**: light `plateYellow` `#A87C1F` (3.61:1), dark `plateBlue`
+   `#2F6BBC` (3.44:1). Measurement also forced two tokens the table had not
+   flagged: `inkSoft` and `inkFaint` are now cut per mode (see Contrast
+   resolutions). All four are pinned by `LogbookPaletteTest`.
