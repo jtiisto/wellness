@@ -5,6 +5,7 @@ import dev.jtiisto.wellness.core.data.journal.EntryField
 import dev.jtiisto.wellness.core.data.journal.EntryPatch
 import dev.jtiisto.wellness.core.data.journal.TrackerDto
 import dev.jtiisto.wellness.core.data.journal.TrackerType
+import dev.jtiisto.wellness.core.data.journal.coerceNumericValue
 import dev.jtiisto.wellness.core.data.journal.defaultValueOrNull
 import dev.jtiisto.wellness.core.data.journal.isValueAbsent
 import dev.jtiisto.wellness.core.data.journal.journalNumberJson
@@ -27,18 +28,38 @@ import dev.jtiisto.wellness.core.data.journal.trackerType
  * showing a value nothing had stored. "No value yet" means genuinely absent —
  * an explicitly stored null is a value the user (or the server) put there, and
  * overwriting it would undo that.
+ *
+ * Unticking **retracts what ticking seeded**. A stored value still numerically
+ * equal to the seed is the checkbox's own leftover, and under the emptiness
+ * rule a value counts as logged all by itself — keeping it would leave the row
+ * asserting something the user just took back, which is exactly how an
+ * unticked medication kept reading "noted" on the device. A value that differs
+ * from the seed was typed or accumulated and survives: the value is the user's
+ * assertion, and blanking the field is its retraction. The comparison is
+ * numeric because the server round-trips integers as floats.
  */
 fun checkboxPatch(tracker: TrackerDto, entry: EntryDto?, checked: Boolean): EntryPatch {
-    if (!checked || !entry.isValueAbsent()) return EntryPatch.completed(checked)
-    val default = when (tracker.trackerType()) {
-        TrackerType.QUANTIFIABLE -> tracker.defaultValueOrNull()
-        TrackerType.EVALUATION -> tracker.defaultValueOrNull() ?: EVALUATION_DEFAULT
-        else -> null
-    } ?: return EntryPatch.completed(checked)
+    if (!checked) {
+        val seed = seededDefault(tracker)
+        return if (seed != null && seed == coerceNumericValue(entry?.value)) {
+            EntryPatch(value = EntryField.Set(null), completed = EntryField.Set(false))
+        } else {
+            EntryPatch.completed(false)
+        }
+    }
+    if (!entry.isValueAbsent()) return EntryPatch.completed(true)
+    val default = seededDefault(tracker) ?: return EntryPatch.completed(true)
     return EntryPatch(
         value = EntryField.Set(journalNumberJson(default)),
         completed = EntryField.Set(true),
     )
+}
+
+/** The value a tick would seed: quantifiable's default, evaluation's default-or-midpoint. */
+private fun seededDefault(tracker: TrackerDto): Double? = when (tracker.trackerType()) {
+    TrackerType.QUANTIFIABLE -> tracker.defaultValueOrNull()
+    TrackerType.EVALUATION -> tracker.defaultValueOrNull() ?: EVALUATION_DEFAULT
+    else -> null
 }
 
 /**

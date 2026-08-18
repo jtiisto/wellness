@@ -500,7 +500,12 @@ Everything the section above did not settle, decided while building it.
    unchanged. The rule **composes with the today-open honesty rule**: emptying
    today's row makes `hasEntry` false again, so today's mark returns to the
    open dot rather than a judged one — the retraction restores "no verdict
-   yet", which is the point. Full rule in docs/ARCHITECTURE.md.
+   yet", which is the point. Second device pass: **the uncheck also retracts
+   the checkbox's own seeded default** — the seed outliving the uncheck kept
+   every quantifiable-with-default tracker (most medications and supplements)
+   reading noted/broken, the exact symptom the rule was built to fix; a value
+   that differs from the seed still survives the uncheck. Full rule in
+   docs/ARCHITECTURE.md.
 10. **The day lock retires; every day in the strip is editable** *(user
    decision, device pass — both clients)*. Past days locked on the device. The
    cause was the dirty-tracker rule doing exactly what it was designed to do —

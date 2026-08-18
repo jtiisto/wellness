@@ -531,6 +531,50 @@ class JournalUiStateTest {
     }
 
     @Test
+    @DisplayName("unchecking retracts the seeded default — the checkbox takes back what it wrote")
+    fun uncheckRetractsTheSeed() {
+        // The device finding behind the rule: check seeds 30, uncheck kept it,
+        // and a value counts as logged all by itself — so the row (and the
+        // cluster above it) read "noted" forever.
+        val tracker = quantifiable("q", defaultValue = 30)
+        val seeded = checkboxPatch(tracker, EntryDto(value = JsonPrimitive(30), completed = false), checked = false)
+        assertEquals(EntryField.Set<JsonElement?>(null), seeded.value)
+        assertEquals(EntryField.Set(false), seeded.completed)
+
+        // The server round-trips integers as floats; the comparison is numeric.
+        val floated = checkboxPatch(tracker, EntryDto(value = JsonPrimitive(30.0), completed = false), checked = false)
+        assertEquals(EntryField.Set<JsonElement?>(null), floated.value)
+    }
+
+    @Test
+    @DisplayName("unchecking keeps a value that differs from the seed — a typed number is an assertion")
+    fun uncheckKeepsATypedValue() {
+        val tracker = quantifiable("q", defaultValue = 30)
+        val patch = checkboxPatch(tracker, EntryDto(value = JsonPrimitive(22), completed = true), checked = false)
+        assertEquals(EntryField.Unchanged, patch.value)
+        assertEquals(EntryField.Set(false), patch.completed)
+    }
+
+    @Test
+    @DisplayName("unchecking a plain checkbox writes completed only — there was never a seed")
+    fun uncheckSimpleTracker() {
+        val patch = checkboxPatch(simple("s"), EntryDto(completed = true), checked = false)
+        assertEquals(EntryField.Unchanged, patch.value)
+        assertEquals(EntryField.Set(false), patch.completed)
+    }
+
+    @Test
+    @DisplayName("unchecking an evaluation still at its seed clears it back to the midpoint ghost")
+    fun uncheckRetractsTheEvaluationSeed() {
+        val patch = checkboxPatch(
+            simple("e", type = "evaluation"),
+            EntryDto(value = JsonPrimitive(50), completed = false),
+            checked = false,
+        )
+        assertEquals(EntryField.Set<JsonElement?>(null), patch.value)
+    }
+
+    @Test
     @DisplayName("checking does not overwrite a value that is already there")
     fun checkboxKeepsAnExistingValue() {
         val tracker = quantifiable("q", defaultValue = 30)

@@ -277,7 +277,7 @@ export function formatTarget(target, unit) {
  * range (NaN comparisons are all false, which read as in-range). Twin of
  * adherence.py's _coerce_numeric — keep in lockstep.
  */
-function coerceNumericValue(value) {
+export function coerceNumericValue(value) {
     if (typeof value === 'number') return Number.isFinite(value) ? value : null;
     if (typeof value === 'string' && value.trim() !== '') {
         const n = Number(value);

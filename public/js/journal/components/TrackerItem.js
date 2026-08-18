@@ -13,7 +13,7 @@ import {
     markValueUpdated,
 } from '../store.js';
 import { NumericInput } from '../../shared/numeric-input.js';
-import { dayStatus, formatTargetProgress, recentDayStates, localDataWindowStart } from '../utils.js';
+import { dayStatus, formatTargetProgress, recentDayStates, localDataWindowStart, coerceNumericValue } from '../utils.js';
 
 const html = htm.bind(h);
 
@@ -98,6 +98,24 @@ export function TrackerItem({ tracker }) {
                 updateData.value = tracker.defaultValue;
             } else if (tracker.type === 'evaluation') {
                 updateData.value = tracker.defaultValue ?? 50;
+            }
+        } else if (!newCompleted) {
+            // Unchecking retracts what checking seeded: a stored value still
+            // numerically equal to the seed is the checkbox's own leftover, and
+            // under the emptiness rule a value counts as logged by itself —
+            // keeping it would leave the row asserting something the user just
+            // took back. A value that differs was typed or accumulated and
+            // survives (blanking the field is how a number is retracted).
+            // Cleared to null per this client's clear convention; judgment
+            // reads an explicit null as no value.
+            let seed = null;
+            if (tracker.type === 'quantifiable') {
+                seed = coerceNumericValue(tracker.defaultValue);
+            } else if (tracker.type === 'evaluation') {
+                seed = coerceNumericValue(tracker.defaultValue) ?? 50;
+            }
+            if (seed !== null && coerceNumericValue(entry.value) === seed) {
+                updateData.value = null;
             }
         }
 
