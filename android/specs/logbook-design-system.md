@@ -291,11 +291,19 @@ error rail).
   ink ≥4.5:1 and inkSoft ≥4.5:1 on paper; inkFaint ≥2:1 (documented ghost
   exemption); every plate dot ≥3:1 on its paper (final token values pinned
   here); all tokens fully opaque.
-- **`CoachUiStateTest` extensions**: positional plate assignment (order of
-  first appearance, repeat exposures share a dot, 5th+ → ink, legend order/
-  uppercasing), eyebrow state matrix (past/future/today-ready/in-progress ×
-  hook-time present/absent), tally-mark counts per widget type, calendar
-  ink-mark mapping, ghost-footer provenance strings by state.
+- **Coach state pins** (implemented across `CoachNotationTest`,
+  `CoachUiStateTest`, `WorkoutHooksTest` and `:core:data`'s
+  `CoachProgressTest`): positional plate assignment (order of first
+  appearance, repeat exposures share a dot, 5th+ → ink, legend order with
+  **verbatim strings** — all uppercasing happens at render, one casing
+  convention for eyebrow and legend alike, per `CoachNotation`'s KDoc),
+  eyebrow state matrix (past/future/today-ready/in-progress × hook state —
+  only FIRED/LOCKED or logged data count as started — × hook-time
+  present/absent/unparseable), tally-mark counts per widget type, calendar
+  ink-mark mapping, ghost-footer provenance strings keyed on whether any
+  ghost is still showing (so a half-logged past table still names its faint
+  values), start-time bookkeeping (adopted only with the state it arrived
+  with; cleared on retry, undo, session change).
 - Gate: `./gradlew testDebugUnitTest koverVerifyAggregated` (≥85);
   `./gradlew build assembleDebugAndroidTest` separately. Never module-scoped
   or `--tests`-filtered runs.

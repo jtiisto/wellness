@@ -269,34 +269,69 @@ fun buildPrescription(exercise: PlanExerciseDto): List<RxToken> = buildList {
 data class ExerciseProgress(val display: String, val complete: Boolean)
 
 /**
- * The progress pill, or null when the type has no meaningful "N of M".
+ * The tally a collapsed row draws: [filled] marks inked of [total] drawn, one
+ * per unit of work the plan asks for.
  *
- * Set-based types count **ticked** sets (`completed === true`), which is the
- * documented divergence from [isExerciseCompleted] — that one counts set
- * ROWS. Both are ported as they are; the pair is pinned by name in the tests.
+ * Logbook renders completion as notation rather than as an `N/M` pill, so the
+ * count has to be structural — and it is the same count [getExerciseProgress]
+ * formats, which is what keeps the marks and the pill from ever disagreeing
+ * about a log they are both looking at.
  *
- * Cardio needs a `duration_min` that is neither absent nor the empty string:
- * an emptied field leaves `""` behind and must not read as logged.
+ * Cardio is the one type this expresses and the pill cannot: a duration exercise
+ * has no target to count against, so it draws a single mark, filled once a
+ * usable `duration_min` exists. The pill states that same fact as
+ * tick-or-nothing, which is why a tally exists where the pill is null.
+ * Everywhere else null means the same in both — there is nothing to count.
  */
-fun getExerciseProgress(exercise: PlanExerciseDto, log: JsonObject?): ExerciseProgress? {
+data class TallyMarks(val filled: Int, val total: Int)
+
+/**
+ * The tally for one exercise, or null when its type has nothing countable.
+ *
+ * The single counting authority: set types count **ticked** sets
+ * (`completed === true`), which is the documented divergence from
+ * [isExerciseCompleted] — that one counts set ROWS. Both are ported as they
+ * are; the pair is pinned by name in the tests.
+ */
+fun exerciseTally(exercise: PlanExerciseDto, log: JsonObject?): TallyMarks? {
     val data = log ?: JsonObject(emptyMap())
     return when (exercise.type) {
         TYPE_STRENGTH, TYPE_CIRCUIT, TYPE_WEIGHTED_TIME -> {
-            val target = exercise.targetSets.truthy() ?: return null
-            val done = data.array("sets").count { (it as? JsonObject)?.get("completed").isJsonTrue() }
-            ExerciseProgress("$done/$target", done >= target)
+            val total = exercise.targetSets.truthy() ?: return null
+            TallyMarks(
+                filled = data.array("sets").count { (it as? JsonObject)?.get("completed").isJsonTrue() },
+                total = total,
+            )
         }
 
         TYPE_CHECKLIST -> {
-            val target = exercise.items?.size?.takeIf { it != 0 } ?: return null
-            val done = data.array("completed_items").size
-            ExerciseProgress("$done/$target", done >= target)
+            val total = exercise.items?.size?.takeIf { it != 0 } ?: return null
+            TallyMarks(filled = data.array("completed_items").size, total = total)
         }
 
         TYPE_DURATION, TYPE_INTERVAL ->
-            if (data.hasNonEmptyDuration()) ExerciseProgress(CHECK, complete = true) else null
+            TallyMarks(filled = if (data.hasNonEmptyDuration()) 1 else 0, total = 1)
 
         else -> null
+    }
+}
+
+/**
+ * The progress pill, or null when the type has no meaningful "N of M".
+ *
+ * The counts come from [exerciseTally], so exactly one function decides what
+ * "done" means per type.
+ *
+ * Cardio needs a `duration_min` that is neither absent nor the empty string:
+ * an emptied field leaves `""` behind and must not read as logged. It shows a
+ * tick rather than a count, and nothing at all when unlogged — where the tally
+ * still draws its one empty mark.
+ */
+fun getExerciseProgress(exercise: PlanExerciseDto, log: JsonObject?): ExerciseProgress? {
+    val tally = exerciseTally(exercise, log) ?: return null
+    return when (exercise.type) {
+        TYPE_DURATION, TYPE_INTERVAL -> if (tally.filled > 0) ExerciseProgress(CHECK, complete = true) else null
+        else -> ExerciseProgress("${tally.filled}/${tally.total}", complete = tally.filled >= tally.total)
     }
 }
 

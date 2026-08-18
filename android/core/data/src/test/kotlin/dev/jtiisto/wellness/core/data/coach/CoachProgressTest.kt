@@ -102,6 +102,62 @@ class CoachProgressTest {
         )
     }
 
+    // ---- the tally marks the pill is formatted from ---------------------------------
+
+    @Test
+    @DisplayName("set tallies count ticks against the target, exactly as the pill reads")
+    fun setTally() {
+        val strength = exercise(type = TYPE_STRENGTH, targetSets = 3)
+        val log = entryWithSets(
+            loggedSet(setNum = 1, completed = true),
+            loggedSet(setNum = 2, weight = 60.0),
+            loggedSet(setNum = 3, completed = true),
+        )
+
+        assertEquals(TallyMarks(filled = 2, total = 3), exerciseTally(strength, log))
+        assertEquals(ExerciseProgress("2/3", complete = false), getExerciseProgress(strength, log))
+        assertEquals(TallyMarks(filled = 0, total = 3), exerciseTally(strength, null))
+    }
+
+    @Test
+    @DisplayName("checklist tallies count checked items against the item list")
+    fun checklistTally() {
+        val checklist = exercise(type = TYPE_CHECKLIST, items = listOf("a", "b"))
+
+        assertEquals(
+            TallyMarks(filled = 1, total = 2),
+            exerciseTally(checklist, buildJsonObject { put("completed_items", JsonArray(listOf(jsonText("a")))) }),
+        )
+        assertEquals(TallyMarks(filled = 0, total = 2), exerciseTally(checklist, buildJsonObject { }))
+    }
+
+    @Test
+    @DisplayName("cardio draws one mark: the tally exists where the pill does not")
+    fun cardioTally() {
+        val cardio = exercise(type = TYPE_DURATION, targetDurationMin = 30)
+
+        assertEquals(
+            TallyMarks(filled = 1, total = 1),
+            exerciseTally(cardio, buildJsonObject { put("duration_min", 32) }),
+        )
+        assertEquals(TallyMarks(filled = 0, total = 1), exerciseTally(cardio, buildJsonObject { }))
+        assertNull(getExerciseProgress(cardio, buildJsonObject { }))
+        // The empty-string rule is the pill's, and the tally inherits it.
+        assertEquals(
+            TallyMarks(filled = 0, total = 1),
+            exerciseTally(cardio, buildJsonObject { put("duration_min", "") }),
+        )
+    }
+
+    @Test
+    @DisplayName("nothing countable, nothing drawn — the same silences the pill keeps")
+    fun tallyIsNullWhereThePillIs() {
+        assertNull(exerciseTally(exercise(type = TYPE_STRENGTH), entryWithSets(empty())))
+        assertNull(exerciseTally(exercise(type = TYPE_STRENGTH, targetSets = 0), entryWithSets(empty())))
+        assertNull(exerciseTally(exercise(type = TYPE_CHECKLIST, items = emptyList()), buildJsonObject { }))
+        assertNull(exerciseTally(exercise(type = "mystery"), buildJsonObject { }))
+    }
+
     // ---- the two named divergences ----------------------------------------------
 
     @Test

@@ -40,6 +40,19 @@ data class WorkoutHooksState(
     val statusFetchFailed: Boolean = false,
     val actions: HookAvailability = HookAvailability(),
     val startState: HookButtonState = HookButtonState.DEFAULT,
+    /**
+     * The server's `fired_at` for the start hook, carried verbatim.
+     *
+     * Read by the header eyebrow's `STARTED <time>` caption and by nothing else.
+     * It stays an opaque string here — the display-only parse, and the reasoning
+     * for why the protocol rule survives it, live in `CoachNotation`'s
+     * `wallClock`.
+     *
+     * Null whenever the time is not the server's to give: before any status has
+     * been read, on an optimistic FIRED from our own POST (the server has a time,
+     * we have not fetched it back), and on a start that was undone.
+     */
+    val startFiredAt: String? = null,
     val endState: HookButtonState = HookButtonState.DEFAULT,
     val dataExists: Boolean = false,
     val inFlight: Set<HookAction> = emptySet(),
@@ -149,6 +162,7 @@ class WorkoutHooks(
                 statusFetchFailed = false,
                 actions = HookAvailability(),
                 startState = HookButtonState.DEFAULT,
+                startFiredAt = null,
                 endState = HookButtonState.DEFAULT,
                 dataExists = false,
                 inFlight = emptySet(),
@@ -211,9 +225,13 @@ class WorkoutHooks(
                 finishRequest(sessionId, action) { HookButtonState.DEFAULT }
                 return@launch
             }
-            val recovered = attempt { api.workoutStatus(sessionId) }.getOrNull()
-                ?.let { statusToState(it.forAction(action)) }
-            finishRequest(sessionId, action) { recovered ?: HookButtonState.DEFAULT }
+            // The recovered state and its time come from the same read: adopting
+            // one without the other would caption the eyebrow with a different
+            // attempt than the button is showing.
+            val recoveredResult = attempt { api.workoutStatus(sessionId) }.getOrNull()?.forAction(action)
+            finishRequest(sessionId, action, firedAt = recoveredResult?.firedAt) {
+                recoveredResult?.let { statusToState(it) } ?: HookButtonState.DEFAULT
+            }
             startRecheckIfPending(sessionId)
         }
     }
@@ -252,6 +270,14 @@ class WorkoutHooks(
             current.copy(
                 actions = HookAvailability(status.actionsAvailable.start, status.actionsAvailable.end),
                 startState = current.adopt(HookAction.START, statusToState(status.start), initial),
+                // The time travels with the state it belongs to: adopting the
+                // server's view of Start without its `fired_at` would caption the
+                // eyebrow from an earlier read of a different run.
+                startFiredAt = if (current.adopts(HookAction.START, initial)) {
+                    status.start?.firedAt
+                } else {
+                    current.startFiredAt
+                },
                 endState = current.adopt(HookAction.END, statusToState(status.end), initial),
                 statusFetchFailed = false,
                 statusLoaded = true,
@@ -260,20 +286,19 @@ class WorkoutHooks(
     }
 
     /**
-     * Which server state to take on. The one-shot fetch takes all of it; the
-     * re-check only resolves a button that is still PENDING and is not waiting
-     * on a request of our own.
+     * Whether a status read owns this action's state. The one-shot fetch owns all
+     * of it; the re-check only resolves a button that is still PENDING and is not
+     * waiting on a request of our own.
      */
+    private fun WorkoutHooksState.adopts(action: HookAction, initial: Boolean): Boolean =
+        initial || (buttonState(action) == HookButtonState.PENDING && action !in inFlight)
+
+    /** Which state to take on, per [adopts]: the server's, or the one we hold. */
     private fun WorkoutHooksState.adopt(
         action: HookAction,
         serverState: HookButtonState,
         initial: Boolean,
-    ): HookButtonState {
-        if (initial) return serverState
-        val mine = buttonState(action)
-        if (mine != HookButtonState.PENDING || action in inFlight) return mine
-        return serverState
-    }
+    ): HookButtonState = if (adopts(action, initial)) serverState else buttonState(action)
 
     /**
      * Deviation 10: bounded re-checking of a pending hook.
@@ -308,10 +333,15 @@ class WorkoutHooks(
         }
     }
 
-    private fun finishRequest(sessionId: Long, action: HookAction, outcome: () -> HookButtonState) {
+    private fun finishRequest(
+        sessionId: Long,
+        action: HookAction,
+        firedAt: String? = null,
+        outcome: () -> HookButtonState,
+    ) {
         _state.update { current ->
             if (current.sessionId != sessionId) return@update current
-            current.copy(inFlight = current.inFlight - action).withActionState(action, outcome())
+            current.copy(inFlight = current.inFlight - action).withActionState(action, outcome(), firedAt)
         }
     }
 
@@ -338,12 +368,24 @@ class WorkoutHooks(
  *
  * Doing it in one step is the point: two updates would render a frame where the
  * Undo button exists on a workout that is already under way.
+ *
+ * [firedAt] is the server time that arrived WITH [next], and it defaults to
+ * null because every locally-initiated transition has none: a retried Start
+ * must not caption the eyebrow with the failed attempt's time, and an
+ * optimistic FIRED has a time the server holds but we have not read. Only the
+ * undo-failure recovery — the one caller whose state comes from a fresh status
+ * read — passes one, so state and time can never describe different attempts.
  */
 private fun WorkoutHooksState.withActionState(
     action: HookAction,
     next: HookButtonState,
+    firedAt: String? = null,
 ): WorkoutHooksState = when (action) {
-    HookAction.START -> copy(startState = next)
+    HookAction.START -> copy(
+        startState = next,
+        startFiredAt = if (next == HookButtonState.DEFAULT) null else firedAt,
+    )
+
     HookAction.END -> copy(endState = next)
 }.promoted()
 

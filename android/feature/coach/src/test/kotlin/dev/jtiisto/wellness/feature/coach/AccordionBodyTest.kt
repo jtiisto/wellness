@@ -18,7 +18,7 @@ class AccordionBodyTest {
     private val live = EntryWidgetState.Sets(
         columns = listOf(SetColumn(key = "reps", label = "Reps")),
         rows = emptyList(),
-        lastPerformanceHint = null,
+        provenance = null,
     )
     private val retained = EntryWidgetState.Checklist(items = emptyList())
 

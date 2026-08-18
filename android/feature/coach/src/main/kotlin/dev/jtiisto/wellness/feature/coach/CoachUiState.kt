@@ -11,6 +11,7 @@ import dev.jtiisto.wellness.core.data.coach.PlanDto
 import dev.jtiisto.wellness.core.data.coach.PlanExerciseDto
 import dev.jtiisto.wellness.core.data.coach.RxToken
 import dev.jtiisto.wellness.core.data.coach.SetColumn
+import dev.jtiisto.wellness.core.data.coach.TallyMarks
 import dev.jtiisto.wellness.core.data.coach.TYPE_CHECKLIST
 import dev.jtiisto.wellness.core.data.coach.TYPE_CIRCUIT
 import dev.jtiisto.wellness.core.data.coach.TYPE_DURATION
@@ -21,6 +22,7 @@ import dev.jtiisto.wellness.core.data.coach.WorkoutStatus
 import dev.jtiisto.wellness.core.data.coach.array
 import dev.jtiisto.wellness.core.data.coach.buildColumns
 import dev.jtiisto.wellness.core.data.coach.buildPrescription
+import dev.jtiisto.wellness.core.data.coach.exerciseTally
 import dev.jtiisto.wellness.core.data.coach.findLastPerformance
 import dev.jtiisto.wellness.core.data.coach.formatInterval
 import dev.jtiisto.wellness.core.data.coach.formatSelectedDate
@@ -44,6 +46,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import java.time.LocalDate
 import java.time.YearMonth
+import java.time.ZoneId
 import java.util.Locale
 
 /**
@@ -63,6 +66,8 @@ data class CoachUiState(
     val selectedDate: DateString = "",
     val dateCaption: String = "",
     val selectedStatus: WorkoutStatus? = null,
+    /** [selectedStatus] as the trigger row's ink mark — the same one its cell draws. */
+    val selectedMark: DayMark = DayMark.NONE,
     val isEditable: Boolean = false,
     val calendar: CalendarState = CalendarState(),
     val day: WorkoutDayState = WorkoutDayState.Rest(showEmptyState = true, extra = null),
@@ -123,6 +128,13 @@ sealed interface WorkoutDayState {
         val dayName: String,
         val location: String?,
         val phase: String?,
+        /** The lifecycle line under the header. Logbook's replacement for [banner]. */
+        val eyebrow: WorkoutEyebrow,
+        /**
+         * What each plate dot in this day means, in assignment order. Empty when
+         * no exercise carries a tier, which is how the header leaves the row out.
+         */
+        val legend: List<TierLegendEntry>,
         val banner: ReadOnlyBanner?,
         val controls: HookControlsState?,
         val gateSatisfied: Boolean,
@@ -204,8 +216,12 @@ data class ExerciseRowState(
     val name: String,
     val pills: List<String>,
     val exposure: String?,
+    /** The tier dot, or null when this exercise carries no exposure to dot. */
+    val plate: PlateSlot?,
     val target: String,
     val progress: ExerciseProgress?,
+    /** The collapsed row's marks. Null where there is nothing countable to draw. */
+    val tally: TallyMarks?,
     val completed: Boolean,
     val expanded: Boolean,
     val guidanceNote: String?,
@@ -219,7 +235,8 @@ sealed interface EntryWidgetState {
     data class Sets(
         val columns: List<SetColumn>,
         val rows: List<SetRowState>,
-        val lastPerformanceHint: String?,
+        /** The footer naming where the faint values came from; null when nothing matched. */
+        val provenance: GhostProvenance?,
     ) : EntryWidgetState
 
     data class Cardio(
@@ -264,17 +281,20 @@ fun buildCoachUiState(
     isLoading: Boolean = false,
     capture: HrCaptureState = HrCaptureState(),
     locale: Locale = Locale.getDefault(),
+    zone: ZoneId = ZoneId.systemDefault(),
 ): CoachUiState {
     val todayString = today.toString()
     val plan = plans[selectedDate]
     val log = logs[selectedDate]
     val isEditable = selectedDate == todayString
     val dataExists = hasAnyProgress(log)
+    val selectedStatus = getWorkoutStatus(selectedDate, plans, logs, todayString)
 
     return CoachUiState(
         selectedDate = selectedDate,
         dateCaption = formatSelectedDate(selectedDate, today, locale),
-        selectedStatus = getWorkoutStatus(selectedDate, plans, logs, todayString),
+        selectedStatus = selectedStatus,
+        selectedMark = dayMark(selectedStatus),
         isEditable = isEditable,
         calendar = buildCalendarState(
             viewMonth = viewMonth,
@@ -304,6 +324,7 @@ fun buildCoachUiState(
                 expandedExercises = expandedExercises,
                 today = todayString,
                 locale = locale,
+                zone = zone,
             )
         },
         syncStatus = syncStatus,
@@ -359,17 +380,32 @@ private fun buildPlannedDayState(
     expandedExercises: Set<String>,
     today: DateString,
     locale: Locale,
+    zone: ZoneId,
 ): WorkoutDayState.Planned {
     // The gate locks exercise entry and session feedback; the raw editability
     // governs the banners and the controls. `endState` gates nothing at all.
     val effectiveEditable = hooks.effectiveEditable(isEditable, dataExists)
     val feedback = log?.get("session_feedback") as? JsonObject
+    // Plate order is the order the exercises are read in, and the blocks render
+    // in the order they arrive: the first tier the user meets takes the first
+    // colour, whichever block it is in.
+    val tiers = assignTierPlates(plan.blocks.flatMap { it.exercises }.map { it.tier() })
 
     return WorkoutDayState.Planned(
         sessionId = plan.sessionId,
         dayName = plan.dayName?.takeIf { it.isNotBlank() } ?: "Workout",
         location = plan.location?.takeIf { it.isNotBlank() },
         phase = plan.phase?.takeIf { it.isNotBlank() },
+        eyebrow = workoutEyebrow(
+            date = date,
+            today = today,
+            hasProgress = dataExists,
+            startState = hooks.buttonState(HookAction.START),
+            startFiredAt = hooks.startFiredAt,
+            locale = locale,
+            zone = zone,
+        ),
+        legend = tiers.legend,
         banner = if (isEditable) null else readOnlyBanner(date, today, locale),
         controls = if (hooks.showControls(isEditable)) hookControls(hooks) else null,
         gateSatisfied = hooks.startGateSatisfied(dataExists),
@@ -382,6 +418,7 @@ private fun buildPlannedDayState(
                 plans = plans,
                 logs = logs,
                 expandedExercises = expandedExercises,
+                tiers = tiers,
                 locale = locale,
             )
         },
@@ -432,6 +469,7 @@ private fun buildBlockState(
     plans: Map<DateString, PlanDto?>,
     logs: Map<DateString, JsonObject>,
     expandedExercises: Set<String>,
+    tiers: TierPlates,
     locale: Locale,
 ): BlockState {
     fun row(exercise: PlanExerciseDto) = buildExerciseRowState(
@@ -442,6 +480,7 @@ private fun buildBlockState(
         plans = plans,
         logs = logs,
         expanded = exercise.id in expandedExercises,
+        tiers = tiers,
         locale = locale,
     )
 
@@ -474,16 +513,20 @@ private fun buildExerciseRowState(
     plans: Map<DateString, PlanDto?>,
     logs: Map<DateString, JsonObject>,
     expanded: Boolean,
+    tiers: TierPlates,
     locale: Locale,
 ): ExerciseRowState {
     val parsed = parseName(exercise.name)
+    val tier = exercise.tier()
     return ExerciseRowState(
         id = exercise.id,
         name = parsed.base,
         pills = parsed.pills,
-        exposure = exercise.exposure?.takeIf { it.isNotBlank() },
+        exposure = tier,
+        plate = tiers.slotFor(tier),
         target = formatTarget(exercise, block),
         progress = getExerciseProgress(exercise, logData),
+        tally = exerciseTally(exercise, logData),
         completed = isExerciseCompleted(exercise, logData),
         expanded = expanded,
         guidanceNote = exercise.guidanceNote?.takeIf { it.isNotBlank() },
@@ -521,15 +564,24 @@ private fun buildEntryWidget(
             exposure = exercise.exposure,
         )
         val columns = buildColumns(showWeight = showWeight, showTime = showTime)
+        val rows = buildSetRows(
+            columns = columns,
+            sets = logData?.array("sets") ?: EMPTY_ARRAY,
+            targetSets = targetSets,
+            lastPerformance = lastPerformance,
+        )
         return EntryWidgetState.Sets(
             columns = columns,
-            rows = buildSetRows(
-                columns = columns,
-                sets = logData?.array("sets") ?: EMPTY_ARRAY,
-                targetSets = targetSets,
-                lastPerformance = lastPerformance,
-            ),
-            lastPerformanceHint = lastPerformance?.let { "Last · ${formatShortDate(it.date, locale)}" },
+            rows = rows,
+            provenance = lastPerformance?.let {
+                GhostProvenance(
+                    date = formatShortDate(it.date, locale),
+                    // A cell shows its ghost only while it has no value of its
+                    // own, so this is exactly "are any faint numbers on screen"
+                    // — which is the question the footer's wording answers.
+                    ghostsShowing = rows.any { row -> row.cells.any { cell -> cell.showsGhost } },
+                )
+            },
         )
     }
 

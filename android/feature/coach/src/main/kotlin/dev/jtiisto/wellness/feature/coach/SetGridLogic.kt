@@ -36,7 +36,17 @@ data class SetCellState(
     val key: String,
     val text: String,
     val ghost: String?,
-)
+) {
+    /**
+     * Whether last time's value is the one on screen right now.
+     *
+     * In Logbook a ghost is a colour state rather than a layout one — the cell
+     * sets in ink-faint until it holds something of its own — and the table's
+     * provenance footer changes wording on whether any cell is still in that
+     * state. Both read this rather than re-testing the pair.
+     */
+    val showsGhost: Boolean get() = text.isEmpty() && ghost != null
+}
 
 /**
  * Rows for one exercise: always [targetSets] of them, padded with blanks beyond

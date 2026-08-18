@@ -18,6 +18,7 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
@@ -542,6 +543,134 @@ class WorkoutHooksTest {
 
         assertEquals(HookButtonState.FIRED, hooks.state.value.startState)
         assertEquals(HookButtonState.FIRED, hooks.state.value.endState)
+    }
+
+    // ---- the start time the header eyebrow captions from -------------------------------------
+
+    @Test
+    @DisplayName("the start hook's fired_at is carried verbatim, and travels with the state it belongs to")
+    fun startTimeFollowsTheStatus() = runTest {
+        coEvery { api.workoutStatus(7) } returns status(start = fired)
+        val hooks = hooks()
+
+        hooks.onSession(7, isEditable = true)
+        runCurrent()
+
+        assertEquals("t1", hooks.state.value.startFiredAt, "opaque here; only the eyebrow ever reads it as a time")
+    }
+
+    @Test
+    @DisplayName("a new session drops the previous one's start time with the rest of its state")
+    fun startTimeResetsOnSessionChange() = runTest {
+        coEvery { api.workoutStatus(7) } returns status(start = fired)
+        coEvery { api.workoutStatus(8) } returns status(start = null)
+        val hooks = hooks()
+
+        hooks.onSession(7, isEditable = true)
+        runCurrent()
+
+        hooks.onSession(8, isEditable = true)
+        assertNull(hooks.state.value.startFiredAt, "before the new fetch even lands")
+
+        runCurrent()
+        assertNull(hooks.state.value.startFiredAt)
+    }
+
+    @Test
+    @DisplayName("an optimistic FIRED has no time yet — the server has one, we have not read it back")
+    fun optimisticFireHasNoTime() = runTest {
+        coEvery { api.workoutStatus(7) } returns status(start = null)
+        coEvery { api.fireWorkoutHook(7, HookAction.START) } returns Unit
+        val hooks = hooks()
+        hooks.onSession(7, isEditable = true)
+        runCurrent()
+
+        hooks.fire(HookAction.START)
+        runCurrent()
+
+        assertEquals(HookButtonState.FIRED, hooks.state.value.startState)
+        assertNull(hooks.state.value.startFiredAt)
+    }
+
+    @Test
+    @DisplayName("a re-check that resolves a pending Start brings its time along")
+    fun recheckAdoptsTheStartTime() = runTest {
+        coEvery { api.workoutStatus(7) } returnsMany listOf(
+            status(start = pending),
+            status(start = HookResultDto(firedAt = "t2", exitCode = 0)),
+        )
+        val hooks = hooks()
+
+        hooks.onSession(7, isEditable = true)
+        runCurrent()
+        assertEquals("t1", hooks.state.value.startFiredAt)
+
+        advanceTimeBy(15_001)
+
+        assertEquals(HookButtonState.FIRED, hooks.state.value.startState)
+        assertEquals("t2", hooks.state.value.startFiredAt)
+    }
+
+    @Test
+    @DisplayName("retrying a failed start drops the failed attempt's time — the new attempt has none to show")
+    fun retryDropsTheFailedAttemptsTime() = runTest {
+        coEvery { api.workoutStatus(7) } returns status(start = failed)
+        coEvery { api.fireWorkoutHook(7, HookAction.START) } returns Unit
+        val hooks = hooks()
+        hooks.onSession(7, isEditable = true)
+        runCurrent()
+        assertEquals(HookButtonState.FAILED, hooks.state.value.startState)
+        assertEquals("t1", hooks.state.value.startFiredAt)
+
+        hooks.fire(HookAction.START)
+        runCurrent()
+
+        assertEquals(HookButtonState.FIRED, hooks.state.value.startState)
+        assertNull(
+            hooks.state.value.startFiredAt,
+            "the failed attempt's t1 must not caption the retried session",
+        )
+    }
+
+    @Test
+    @DisplayName("undo-failure recovery adopts the state and its time from the same read")
+    fun undoRecoveryAdoptsStateAndTimeTogether() = runTest {
+        coEvery { api.workoutStatus(7) } returnsMany listOf(
+            status(start = fired),
+            status(start = HookResultDto(firedAt = "t3", exitCode = 0)),
+        )
+        coEvery { api.undoWorkoutHook(7, HookAction.START) } throws IOException("boom")
+        val hooks = hooks()
+        hooks.onSession(7, isEditable = true)
+        runCurrent()
+        assertEquals("t1", hooks.state.value.startFiredAt)
+
+        hooks.undo(HookAction.START)
+        runCurrent()
+
+        assertEquals(HookButtonState.FIRED, hooks.state.value.startState)
+        assertEquals(
+            "t3",
+            hooks.state.value.startFiredAt,
+            "the recovered state's own read supplies the time, not the earlier fetch",
+        )
+    }
+
+    @Test
+    @DisplayName("an undone start loses its time, so the eyebrow cannot caption a session that was taken back")
+    fun undoClearsTheStartTime() = runTest {
+        coEvery { api.workoutStatus(7) } returns status(start = fired)
+        coEvery { api.undoWorkoutHook(7, HookAction.START) } returns Unit
+        val hooks = hooks()
+        hooks.onSession(7, isEditable = true)
+        runCurrent()
+        assertEquals("t1", hooks.state.value.startFiredAt)
+
+        hooks.undo(HookAction.START)
+        runCurrent()
+
+        assertEquals(HookButtonState.DEFAULT, hooks.state.value.startState)
+        assertNull(hooks.state.value.startFiredAt)
     }
 
     // ---- button affordances -----------------------------------------------------------------

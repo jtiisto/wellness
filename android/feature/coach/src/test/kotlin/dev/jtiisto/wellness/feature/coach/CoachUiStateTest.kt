@@ -6,12 +6,15 @@ import dev.jtiisto.wellness.core.data.coach.PlanBlockDto
 import dev.jtiisto.wellness.core.data.coach.PlanDto
 import dev.jtiisto.wellness.core.data.coach.PlanExerciseDto
 import dev.jtiisto.wellness.core.data.coach.RxKind
+import dev.jtiisto.wellness.core.data.coach.TallyMarks
 import dev.jtiisto.wellness.core.data.coach.TYPE_CHECKLIST
 import dev.jtiisto.wellness.core.data.coach.TYPE_DURATION
 import dev.jtiisto.wellness.core.data.coach.TYPE_WEIGHTED_TIME
 import dev.jtiisto.wellness.core.data.coach.WorkoutStatus
 import dev.jtiisto.wellness.core.data.network.DateString
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -23,6 +26,7 @@ import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 import java.time.LocalDate
 import java.time.YearMonth
+import java.time.ZoneId
 import java.util.Locale
 
 /**
@@ -45,6 +49,7 @@ class CoachUiStateTest {
         expanded: Set<String> = emptySet(),
         isLoading: Boolean = false,
         capture: HrCaptureState = HrCaptureState(),
+        locale: Locale = Locale.ENGLISH,
     ): CoachUiState = buildCoachUiState(
         selectedDate = selectedDate,
         viewMonth = viewMonth,
@@ -56,7 +61,10 @@ class CoachUiStateTest {
         expandedExercises = expanded,
         isLoading = isLoading,
         capture = capture,
-        locale = Locale.ENGLISH,
+        locale = locale,
+        // Pinned so a caption built from a server instant does not depend on
+        // where the machine running the suite happens to be.
+        zone = ZoneId.of("UTC"),
     )
 
     // ---- the live BPM chip --------------------------------------------------
@@ -473,7 +481,7 @@ class CoachUiStateTest {
     }
 
     @Test
-    @DisplayName("ghosts and the Last hint come from the previous matching session")
+    @DisplayName("ghosts and the provenance footer come from the previous matching session")
     fun ghostsFromHistory() {
         val plan = plan(
             blocks = listOf(
@@ -496,7 +504,9 @@ class CoachUiStateTest {
         )
 
         val entry = firstRow(ui).entry as EntryWidgetState.Sets
-        assertEquals("Last · Aug 1", entry.lastPerformanceHint)
+        // The Logbook footer replaces the `Last · Aug 1` hint; the wording by
+        // state is pinned in ghostProvenanceFooter below.
+        assertEquals("Aug 1", entry.provenance?.date)
         assertEquals("60", entry.rows[0].cells[0].ghost)
         assertNull(entry.rows[1].cells[0].ghost)
     }
@@ -638,6 +648,279 @@ class CoachUiStateTest {
         assertEquals("Working…", start?.label)
         assertFalse(start?.enabled == true)
         assertFalse(start?.canFire == true)
+    }
+
+    // ---- Logbook notation, wired into the day tree ------------------------------------
+
+    @Test
+    @DisplayName("plates are assigned across the whole day, in the order the exercises are read")
+    fun plateAssignmentSpansBlocks() {
+        val plan = plan(
+            blocks = listOf(
+                block(
+                    blockIndex = 0,
+                    exercises = listOf(
+                        exercise(id = "a", exposure = "Heavy"),
+                        exercise(id = "b", exposure = "Volume"),
+                        exercise(id = "c", exposure = "Heavy"),
+                    ),
+                ),
+                block(
+                    blockIndex = 1,
+                    exercises = listOf(
+                        exercise(id = "d", exposure = "Technique"),
+                        exercise(id = "e"),
+                    ),
+                ),
+            ),
+        )
+
+        val ui = state(plans = mapOf(today.toString() to plan))
+        val day = ui.day as WorkoutDayState.Planned
+        val rows = allRows(ui)
+
+        assertEquals(PlateSlot.Plate(0), rows.getValue("a").plate)
+        assertEquals(PlateSlot.Plate(1), rows.getValue("b").plate)
+        assertEquals(PlateSlot.Plate(0), rows.getValue("c").plate, "the same tier keeps its colour")
+        assertEquals(PlateSlot.Plate(2), rows.getValue("d").plate, "the count carries into the next block")
+        assertNull(rows.getValue("e").plate)
+        assertEquals(listOf("Heavy", "Volume", "Technique"), day.legend.map { it.exposure })
+    }
+
+    @Test
+    @DisplayName("a day whose exercises carry no tier produces no legend at all")
+    fun noLegendWithoutTiers() {
+        val plan = plan(blocks = listOf(block(exercises = listOf(exercise()))))
+
+        val day = state(plans = mapOf(today.toString() to plan)).day as WorkoutDayState.Planned
+
+        assertEquals(emptyList<TierLegendEntry>(), day.legend)
+    }
+
+    @Test
+    @DisplayName("a blank exposure is no tier: no dot, no legend row, no colour consumed")
+    fun blankExposureIsNoTier() {
+        val plan = plan(
+            blocks = listOf(
+                block(
+                    exercises = listOf(
+                        exercise(id = "blank", exposure = "   "),
+                        exercise(id = "real", exposure = "Heavy"),
+                    ),
+                ),
+            ),
+        )
+
+        val ui = state(plans = mapOf(today.toString() to plan))
+        val rows = allRows(ui)
+
+        assertNull(rows.getValue("blank").plate)
+        assertNull(rows.getValue("blank").exposure)
+        assertEquals(PlateSlot.Plate(0), rows.getValue("real").plate)
+        assertEquals(1, (ui.day as WorkoutDayState.Planned).legend.size)
+    }
+
+    @Test
+    @DisplayName("the eyebrow reports the lifecycle the banners used to: past, future, ready, under way")
+    fun eyebrowStates() {
+        assertEquals(WorkoutEyebrow.Past, plannedDay(selectedDate = "2026-08-01").eyebrow)
+        assertEquals(
+            WorkoutEyebrow.Scheduled("Thu, Aug 20"),
+            plannedDay(selectedDate = "2026-08-20").eyebrow,
+        )
+        assertEquals(WorkoutEyebrow.TodayReady, plannedDay().eyebrow)
+    }
+
+    @Test
+    @DisplayName("a fired start puts its wall-clock time in the eyebrow")
+    fun eyebrowCarriesTheStartTime() {
+        val hooks = WorkoutHooksState(
+            sessionId = 1,
+            statusLoaded = true,
+            actions = HookAvailability(start = true),
+            startState = HookButtonState.FIRED,
+            startFiredAt = "2026-08-08T06:05:00Z",
+        )
+
+        val day = state(plans = mapOf(today.toString() to plan()), hooks = hooks, locale = Locale.UK).day
+            as WorkoutDayState.Planned
+
+        assertEquals(WorkoutEyebrow.InProgress("06:05"), day.eyebrow)
+    }
+
+    @Test
+    @DisplayName("a session started by logging rather than by pressing Start still reads as under way")
+    fun eyebrowFromLoggedDataAlone() {
+        val logs = mapOf(
+            today.toString() to dayLog("ex_1", buildJsonObject { put("sets", sets(loggedSet(setNum = 1, reps = 5))) }),
+        )
+
+        val day = state(plans = mapOf(today.toString() to plan()), logs = logs).day as WorkoutDayState.Planned
+
+        assertEquals(WorkoutEyebrow.InProgress(startedAt = null), day.eyebrow)
+    }
+
+    @Test
+    @DisplayName("each row carries the tally its widget draws — ticked sets, checked items, one cardio mark")
+    fun talliesPerWidgetType() {
+        val plan = plan(
+            blocks = listOf(
+                block(
+                    exercises = listOf(
+                        exercise(id = "strength", targetSets = 3),
+                        exercise(id = "untargeted"),
+                        exercise(id = "cardio", type = TYPE_DURATION, targetDurationMin = 30),
+                        exercise(id = "check", type = TYPE_CHECKLIST, items = listOf("Foam roll", "Band pulls")),
+                    ),
+                ),
+            ),
+        )
+        val logs = mapOf(
+            today.toString() to buildJsonObject {
+                put(
+                    "strength",
+                    buildJsonObject {
+                        put(
+                            "sets",
+                            sets(
+                                loggedSet(setNum = 1, completed = true),
+                                loggedSet(setNum = 2, reps = 8),
+                            ),
+                        )
+                    },
+                )
+                put("cardio", buildJsonObject { put("duration_min", 32) })
+                put("check", buildJsonObject { put("completed_items", JsonArray(listOf(JsonPrimitive("Foam roll")))) })
+            },
+        )
+
+        val rows = allRows(state(plans = mapOf(today.toString() to plan), logs = logs))
+
+        // Two rows logged, one ticked: the tally counts ticks, like the pill.
+        assertEquals(TallyMarks(filled = 1, total = 3), rows.getValue("strength").tally)
+        assertEquals(TallyMarks(filled = 1, total = 1), rows.getValue("cardio").tally)
+        assertEquals(TallyMarks(filled = 1, total = 2), rows.getValue("check").tally)
+        assertNull(rows.getValue("untargeted").tally, "no target sets, nothing to count — as with the pill")
+    }
+
+    @Test
+    @DisplayName("an unlogged cardio row still draws its single empty mark, where the pill draws nothing")
+    fun cardioTallyWithoutALog() {
+        val plan = plan(
+            blocks = listOf(
+                block(exercises = listOf(exercise(id = "cardio", type = TYPE_DURATION, targetDurationMin = 30))),
+            ),
+        )
+
+        val row = firstRow(state(plans = mapOf(today.toString() to plan)))
+
+        assertEquals(TallyMarks(filled = 0, total = 1), row.tally)
+        assertNull(row.progress)
+    }
+
+    @Test
+    @DisplayName("duplicate checklist items tick together but count once — the PWA's `includes` parity")
+    fun duplicateChecklistItemsCollapse() {
+        val plan = plan(
+            blocks = listOf(
+                block(
+                    exercises = listOf(
+                        exercise(id = "check", type = TYPE_CHECKLIST, items = listOf("Foam roll", "Foam roll")),
+                    ),
+                ),
+            ),
+        )
+        val logs = mapOf(
+            today.toString() to dayLog(
+                "check",
+                buildJsonObject { put("completed_items", JsonArray(listOf(JsonPrimitive("Foam roll")))) },
+            ),
+        )
+
+        val row = firstRow(state(plans = mapOf(today.toString() to plan), logs = logs, expanded = setOf("check")))
+
+        val items = (row.entry as EntryWidgetState.Checklist).items
+        assertTrue(items.all { it.checked }, "identity is the string, so both rows read as checked")
+        assertEquals(TallyMarks(filled = 1, total = 2), row.tally, "one entry in completed_items, two marks drawn")
+    }
+
+    @Test
+    @DisplayName("calendar cells and the trigger carry the ink mark for their status")
+    fun calendarInkMarks() {
+        val plans = mapOf(
+            today.toString() to plan(),
+            "2026-08-05" to plan(),
+            "2026-08-04" to plan(),
+            "2026-08-20" to plan(),
+        )
+        val logs = mapOf(
+            "2026-08-05" to dayLog("ex_1", buildJsonObject { put("duration_min", 30) }),
+        )
+
+        val ui = state(plans = plans, logs = logs)
+        val cells = ui.calendar.cells.associateBy { it.date }
+
+        assertEquals(DayMark.FILLED, cells.getValue("2026-08-05").mark)
+        assertEquals(DayMark.SLASHED, cells.getValue("2026-08-04").mark)
+        assertEquals(DayMark.OUTLINED, cells.getValue("2026-08-20").mark)
+        assertEquals(DayMark.NONE, cells.getValue("2026-08-06").mark)
+        assertEquals(DayMark.OUTLINED, ui.selectedMark, "today is planned and unlogged")
+    }
+
+    @Test
+    @DisplayName("the footer names the ghosts while any are showing, and drops to bare provenance once none are")
+    fun ghostProvenanceFooter() {
+        val plan = plan(
+            blocks = listOf(
+                block(exercises = listOf(exercise(id = "ex_now", canonicalSlug = "squat", targetSets = 1))),
+            ),
+        )
+        val history = plan(
+            blocks = listOf(block(exercises = listOf(exercise(id = "ex_then", canonicalSlug = "squat")))),
+        )
+        val plans = mapOf(today.toString() to plan, "2026-08-01" to history)
+        val historyLog = mapOf(
+            "2026-08-01" to dayLog(
+                "ex_then",
+                buildJsonObject { put("sets", sets(loggedSet(setNum = 1, weight = 60.0, reps = 8))) },
+            ),
+        )
+        fun entryWith(todaysSets: JsonObject?) = firstRow(
+            state(
+                plans = plans,
+                logs = historyLog + listOfNotNull(todaysSets?.let { today.toString() to dayLog("ex_now", it) }),
+                expanded = setOf("ex_now"),
+            ),
+        ).entry as EntryWidgetState.Sets
+
+        val untouched = requireNotNull(entryWith(null).provenance)
+        assertEquals("Ghost values · last at this tier · Aug 1", untouched.label)
+
+        val partial = requireNotNull(
+            entryWith(buildJsonObject { put("sets", sets(loggedSet(setNum = 1, weight = 62.5))) }).provenance,
+        )
+        assertTrue(partial.ghostsShowing, "the reps cell is still showing last time's 8")
+
+        val covered = requireNotNull(
+            entryWith(buildJsonObject { put("sets", sets(loggedSet(setNum = 1, weight = 62.5, reps = 8))) })
+                .provenance,
+        )
+        assertEquals("Last at this tier · Aug 1", covered.label)
+    }
+
+    @Test
+    @DisplayName("no matching history, no footer at all")
+    fun noProvenanceWithoutAMatch() {
+        val plan = plan(
+            blocks = listOf(
+                block(exercises = listOf(exercise(id = "ex_now", canonicalSlug = "squat", targetSets = 1))),
+            ),
+        )
+
+        val entry = firstRow(state(plans = mapOf(today.toString() to plan), expanded = setOf("ex_now")))
+            .entry as EntryWidgetState.Sets
+
+        assertNull(entry.provenance)
     }
 
     private fun plannedDay(

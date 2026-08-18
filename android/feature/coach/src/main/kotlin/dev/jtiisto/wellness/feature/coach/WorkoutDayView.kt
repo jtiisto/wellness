@@ -1055,9 +1055,9 @@ private fun SetGrid(
             }
         }
 
-        entry.lastPerformanceHint?.let {
+        entry.provenance?.let {
             Text(
-                text = it,
+                text = it.label,
                 style = WellnessTheme.type.label,
                 color = palette.textFaint,
                 modifier = Modifier.padding(top = WellnessSpace.xs),

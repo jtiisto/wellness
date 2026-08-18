@@ -30,7 +30,12 @@ data class CalendarState(
     val earliestDate: DateString? = null,
 )
 
-/** One day cell. [inViewMonth] false is the greyed padding from a neighbour month. */
+/**
+ * One day cell. [inViewMonth] false is the greyed padding from a neighbour month.
+ *
+ * [mark] is [status] in Logbook's notation, derived here so the grid draws what
+ * it is handed rather than deciding anything per cell.
+ */
 data class CalendarCell(
     val date: DateString,
     val dayOfMonth: Int,
@@ -38,6 +43,7 @@ data class CalendarCell(
     val isSelected: Boolean,
     val isToday: Boolean,
     val status: WorkoutStatus?,
+    val mark: DayMark,
     val enabled: Boolean,
 )
 
@@ -61,13 +67,15 @@ fun buildCalendarState(
     val cells = (0 until GRID_CELLS).map { offset ->
         val day = gridStart.plusDays(offset.toLong())
         val date = day.toString()
+        val status = getWorkoutStatus(date, plans, logs, today)
         CalendarCell(
             date = date,
             dayOfMonth = day.dayOfMonth,
             inViewMonth = YearMonth.from(day) == viewMonth,
             isSelected = date == selectedDate,
             isToday = date == today,
-            status = getWorkoutStatus(date, plans, logs, today),
+            status = status,
+            mark = dayMark(status),
             enabled = canSelectDate(date, earliestDate),
         )
     }
