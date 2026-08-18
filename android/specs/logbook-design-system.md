@@ -1,12 +1,12 @@
 # Spec: Logbook Design System (Round 1: shell + Coach)
 
-Status: **approved 2026-08-17** (user directed implementation the same day) —
-**in implementation**: Phase 1 (core/ui foundation: fonts, palette, type,
-theme, palette test) landed with the token table below finalized by
-measurement; Phase 2 (shell dual-theme wiring), Phase 3 (coach presentation
-derivation in `CoachNotation`) and Phase 4 (coach composables, and the coach
-destination's flip to Logbook) followed. Journal, Trends, Analysis and Tools
-stay on Graphite Signal.
+Status: **Round 1 (shell + Coach) shipped 2026-08-18** — foundation, dual-theme
+shell, coach presentation state and rendering, five device-pass fix rounds all
+landed and pushed on `feature/logbook-design`. **Round 2 (Journal) designed
+2026-08-18** — the user chose the pure-ink variant from two mockups
+(`plans/logbook-design/journal-logbook-{ink,accent}.html`); the
+"Components — Journal" section below is its committed form. Trends, Analysis
+and Tools stay on Graphite Signal until their rounds.
 
 ## Goal
 
@@ -299,6 +299,92 @@ error rail).
   label.
 - Loading: M3 spinner tinted ink (unchanged mechanics).
 - Session feedback: section header + mono labels per user-notes treatment.
+
+## Components — Journal (Round 2; mockup: `journal-logbook-ink.html`)
+
+**Journal renders no chromatic elements at all** — the pure-ink resolution the
+user chose over an adherence color axis (2026-08-18). Principle 2 survives
+unamended: color means tier, and journal has no tiers, so the page is entirely
+ink. The PWA's semantic-honesty rules (avoided never success-styled, a slip is
+crossed out rather than alarmed, no verdict where none exists) are carried by
+**shape**, not hue. Behavioral contracts in [journal-ui.md](journal-ui.md) —
+ports, schedule/target/rollup logic, entry presence semantics, `mergeEntry`,
+stamping — are untouchable; this section replaces only its visual clauses.
+
+### The week-mark grammar (one shape language for rows and rollups)
+Drawn marks, ≤2dp radius where square, sized ~8dp in rows / 9dp in rollups:
+
+| State (`recentDayStates` / `dayStatus`) | Mark |
+|---|---|
+| met (habit) | filled ink dot |
+| partial | half-filled dot (left half ink, hairline outline) |
+| open / quiet (on schedule, nothing logged) | ink-faint outline dot |
+| missed | outline dot with a diagonal slash |
+| off-schedule | short faint dash (a non-day, not a failure) |
+| avoidance held | the **hoop**: ink-soft ring with a center point |
+| avoidance broken | hoop with a diagonal slash |
+| observation noted | filled ink diamond |
+| observation expected, not noted | outline diamond |
+
+The selected/today mark carries an offset outline ring (the strip's "you are
+here"). Negative-polarity rows use hoop marks exclusively — a held avoidance
+is never a filled "success" dot. A mono **shape legend** renders once under
+the header (as mocked); it is one quiet line and it is what makes the grammar
+self-describing.
+
+### Screen structure
+- Header: eyebrow (`TODAY · N OF M LOGGED` — derived, mono caps) · display-caps
+  `JOURNAL` · the 7-day strip.
+- **Date strip**: 7 mono columns (day initial in eyebrow style over day number
+  in data mono), selected day = 2dp ink underline + ink numeral; locked days
+  (dirty-tracker rule, unchanged) render ink-faint with a small ink-faint lock
+  glyph; today's column is tappable always.
+- **Categories become sections**: display-caps head + 1.5dp ink underline; the
+  welded card, band, and `Modifier.welded()` retire (JournalScreen is their
+  only consumer). Collapsed/expanded state and its persistence are unchanged —
+  the chevron leads, rows show/hide, the head and rollup always render.
+- **Rollup cluster** (replaces the Graphite signal ring; same
+  `categoryRollup`/`describeCategoryRollup` state): one flat cluster,
+  right-aligned in the head, classes in fixed order with a wider gap between
+  classes — habit marks one-per-habit, **state-sorted** met → partial → open;
+  then ONE avoidance hoop as worst-state collapse (any broken → slashed);
+  then diamond + mono count of noted. Classes degrade by subtraction; nothing
+  expected today → bare head. a11y: the existing `describeCategoryRollup`
+  string on the merged head node.
+
+### Rows
+- Anatomy: ink entry mark (the coach set-mark component, same 48dp target,
+  same `mergeEntry` write path) · name in `type.name` · value right-aligned in
+  mono (`6 / 8 glasses`, `✓`, `70`) — ink when committed, ink-faint ghost when
+  uncommitted or defaulted; an off-schedule-but-logged row carries a mono
+  eyebrow label (`off`-style) instead of any tint.
+- Second line, indented past the mark column: the target bar (3dp hairline
+  track in `rule`, ink fill, only when `fillPct != null` — at-most targets get
+  no bar, exactly as today) and the 7-day week marks right-aligned.
+- Third line when present: the last-updated caption in faint mono.
+- Widgets keep their contracts: quantifiable = NAKED numeric field
+  (form-aligned Start), note = quiet multiline with the mono-caps label voice,
+  evaluation = M3 Slider restyled to ink track/thumb via explicit colors,
+  accumulator = paper sheet in the capture-sheet treatment. Checkbox semantics
+  (default-write on ABSENT only) untouched.
+
+### Config screen and chrome
+- Config list + form follow the established Logbook form patterns: sections,
+  mono-caps field labels, NAKED/quiet fields, ink buttons with explicit
+  `LogbookShapes.soft`, marginalia for inline guidance. The weekday picker
+  becomes seven mono day-initials over toggleable ink squares (the mark
+  language, not FilterChips); paused dims the picker to ink-faint as today.
+  Target parse errors render as ink text with a `!` glyph — no error color
+  exists in Logbook.
+- Delete confirm stays an `AlertDialog` — it inherits the Logbook M3 mapping
+  (paper, 2dp, ink) with no per-callsite color work.
+- `SyncStatusDot` (journal header) keeps its status colors — the documented
+  live-signal exception — and passes Logbook `textStyle`/`labelColor` like
+  coach's indicator does.
+- The launch-window `colors.xml` **flips to Logbook paper in this round** —
+  journal is the start destination; this is the recorded trigger. Shell flip:
+  journal → LOGBOOK in the destination table + `ShellSystemTest`'s pinned map
+  + a `journalIsLogbook`-style pin (the deliberate multi-place edit).
 
 ## Behavior
 
