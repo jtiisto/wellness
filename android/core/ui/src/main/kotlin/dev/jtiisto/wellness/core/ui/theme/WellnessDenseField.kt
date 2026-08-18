@@ -159,6 +159,10 @@ fun WellnessDenseField(
     dropdownExpanded: Boolean? = null,
     keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
     keyboardActions: KeyboardActions = KeyboardActions.Default,
+    // NAKED numerics only. Null keeps the skin's own End — the set table's
+    // convention — while a field under a left-aligned form label passes Start
+    // so the value sits beneath the words that name it.
+    textAlign: TextAlign? = null,
 ) {
     // Routed before everything else: the skin's contract is that nothing is
     // drawn around the text, so the label/supporting-text column below would
@@ -175,6 +179,7 @@ fun WellnessDenseField(
             multiLine = multiLine,
             keyboardOptions = keyboardOptions,
             keyboardActions = keyboardActions,
+            textAlign = textAlign,
         )
         return
     }
@@ -416,6 +421,7 @@ private fun NakedInput(
     multiLine: Boolean,
     keyboardOptions: KeyboardOptions,
     keyboardActions: KeyboardActions,
+    textAlign: TextAlign?,
 ) {
     val palette = LogbookTheme.palette
     val type = LogbookTheme.type
@@ -423,10 +429,11 @@ private fun NakedInput(
     val interactionSource = remember { MutableInteractionSource() }
     val focused by interactionSource.collectIsFocusedAsState()
 
-    // Numbers are mono and column-aligned; a note is prose and is not. The
-    // right alignment is the table's, not the field's — it has to match the
-    // read-only cells it sits between.
-    val baseStyle = if (numeric) type.data.copy(textAlign = TextAlign.End) else type.body
+    // Numbers are mono and column-aligned; a note is prose and is not. End is
+    // the set table's convention — the cells match the read-only rows they sit
+    // between — and [textAlign] is how a form-labelled field asks for Start
+    // instead, so its value sits under the words that name it.
+    val baseStyle = if (numeric) type.data.copy(textAlign = textAlign ?: TextAlign.End) else type.body
     // Ink whether or not it can be edited: a value logged on a past day is not
     // a fainter value, and "indistinguishable from the read-only text" is the
     // whole contract of the skin. Absence is what recedes, not read-only-ness.

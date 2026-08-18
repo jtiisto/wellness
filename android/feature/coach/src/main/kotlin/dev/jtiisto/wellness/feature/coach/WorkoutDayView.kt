@@ -1162,6 +1162,7 @@ private fun SetTable(
                             enabled = true,
                             onCommit = { actions.onCommitSetCell(exerciseId, row.index, cell.key, it) },
                             modifier = Modifier.weight(1f),
+                            textAlign = TextAlign.End,
                         )
                     } else {
                         val shown = cell.text.ifEmpty { cell.ghost.orEmpty() }
@@ -1600,6 +1601,11 @@ private fun NumericField(
     enabled: Boolean,
     onCommit: (String) -> Unit,
     modifier: Modifier = Modifier,
+    // Start is the form default — a value sits under the label that names it
+    // (device-found 2026-08-17: End-aligned cardio values floated away from
+    // their left-aligned labels). The set grid, the one table context, passes
+    // End to match its read-only rows.
+    textAlign: TextAlign = TextAlign.Start,
 ) {
     var text by remember(value) { mutableStateOf(value) }
     var focused by remember { mutableStateOf(false) }
@@ -1617,6 +1623,7 @@ private fun NumericField(
         // table it sits in, and the ghost recedes by colour alone.
         skin = DenseFieldSkin.NAKED,
         numeric = true,
+        textAlign = textAlign,
         placeholder = placeholder,
         modifier = modifier
             .onFocusChanged { focusState ->
