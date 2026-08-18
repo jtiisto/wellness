@@ -2,6 +2,13 @@
 
 Status: **approved 2026-08-07** (v2 after Codex review; user-approved with bounded hook re-check; pipeline running)
 
+> **2026-08-17: visual clauses superseded** by
+> [logbook-design-system.md](logbook-design-system.md) (banners → eyebrow,
+> chips/pills → ink text + tally marks, superset label/rail → drawn bracket,
+> calendar status colors → ink marks, `Last · <date>` hint → ghost provenance
+> footer). Every behavioral clause here — ports, gates, hook machine, set-grid
+> write path, ghost lookup — stands unchanged.
+
 ## Goal
 
 Replace the Phase 4 debug screen with the full Coach feature at PWA parity: calendar-driven day selection with status dots, the workout day view (blocks, supersets, exercise accordions with prescriptions and ghost values, four entry-widget shapes, session feedback, extra Zone-2 sessions), and the workout Start/End hook machinery with its four-escape entry gate. Pure logic ported and pinned; ~43 transcribed JS/e2e-embedded cases plus new tests for previously-unpinned helpers.

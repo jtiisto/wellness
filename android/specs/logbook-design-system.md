@@ -1,0 +1,291 @@
+# Spec: Logbook Design System (Round 1: shell + Coach)
+
+Status: **draft 2026-08-17 — awaiting user approval** (spec-first gate; no
+implementation before approval)
+
+## Goal
+
+Replace Graphite Signal as the app's design language with **Logbook** — a
+training-log system whose governing metaphor is a coach's paper logbook: one
+flat surface, tabular numerals, coach's notation, ink — with color reserved for
+exactly one meaning. The language is destined for the whole app; this round
+converts the **app shell and the Coach feature**. Journal, Trends, Analysis and
+Tools migrate in later rounds and remain on Graphite Signal
+([design-system.md](design-system.md)) until theirs.
+
+Design source: `DESIGN-LANGUAGE.md` + `logbook-mockup.html` (past state) +
+`logbook-scheduled.html` (scheduled state), local-only at the repo root's
+`plans/logbook-design/`. This spec is their committed, Android-resolved form —
+where they and this spec disagree, this spec wins.
+
+Behavior contracts are untouched: every rule in [coach-ui.md](coach-ui.md)
+(ports, gates, hook machine, set-grid write path, ghost lookup) stands. The
+round adds pure presentation-derivation code (plate assignment, legend, eyebrow,
+marks) to the tested state layer and restructures composables above it.
+
+## Core principles
+
+1. **One surface, no nested cards.** The screen background is the only surface.
+   Grouping is whitespace and hairline rules — never card-in-card containers,
+   tinted panels, or colored left rails.
+2. **Color means tier, nothing else.** The only chromatic UI elements are
+   plate-color dots encoding an exercise's tier. **Tier = `exposure`** (the
+   free-string identity key on `PlanExerciseDto`). Colors are assigned
+   **positionally**: each distinct exposure string in a workout takes the next
+   color from the fixed palette (red → blue → yellow → green) in order of first
+   appearance; a 5th+ distinct exposure renders a solid ink dot (colors never
+   repeat). A legend under the header maps each dot to its string and is
+   **load-bearing** — required on any screen showing tier dots.
+3. **Numbers are mono, words are sans.** Every numeral (weights, reps, RPE,
+   times, schemes like `3×6–9`) sets in IBM Plex Mono (tabular by default).
+   Prose and names use Inter; display headings use Barlow Condensed caps.
+4. **Grouping is drawn, not named.** Superset membership is a thin ink square
+   bracket in the left gutter spanning the grouped rows. Straight sets leave the
+   gutter empty. No "Superset A" labels, no A1/A2 letters.
+5. **Completion is a tally, not a badge.** Small filled ink marks, one per
+   completed set; outlined when incomplete. No `2/3` pills.
+6. **At most one metadata cluster per row.** Collapsed row = dot · name ·
+   scheme · tally. Everything else lives in the expanded state.
+
+## Migration state (dual themes)
+
+| Surface | System |
+|---|---|
+| Shell (nav bar, snackbar, `ServerRecoveryScreen`) | **Logbook** (this round) |
+| Coach | **Logbook** (this round) |
+| Journal, Trends, Analysis, Tools | Graphite Signal — [design-system.md](design-system.md) stays their authority |
+
+Each nav destination is wrapped in its own theme; the Scaffold container color
+follows the active destination's canvas. Launch-window `colors.xml` keeps the
+Graphite canvas values until the journal round (start destination is journal;
+flipping early reintroduces the launch flash). Graphite tokens retire
+module-by-module; the Graphite spec shrinks as modules leave it.
+
+## Tokens (`core/ui/theme/` — new `LogbookPalette.kt`, `LogbookType.kt`, `LogbookTheme.kt`; package stays `dev.jtiisto.wellness.core.ui.theme`, the Kover-excluded package)
+
+### Color
+
+| Token | Light | Dark | Use |
+|---|---|---|---|
+| `paper` | `#FBFAF7` | `#141517` | screen background — the only surface |
+| `ink` | `#17191B` | `#EDECE7` | primary text, tally marks, strong rules |
+| `inkSoft` | `#71757B` | (light value holds; verify contrast) | secondary text, schemes, meta labels |
+| `inkFaint` | `#A6A9AD` | (˝) | ghost values, empty states, table headers, unfilled marks |
+| `rule` | `#E7E5DE` | `#2A2C2F` | hairline dividers between rows |
+| `ruleStrong` | `#C7C5BB` | `#3A3C40` | group boundaries, marginalia rails, popup border |
+| `plateRed` | `#B92D3A` | `#B92D3A` | tier dot, 1st distinct exposure |
+| `plateBlue` | `#2A5FA8` | *lighten minimally* | tier dot, 2nd |
+| `plateYellow` | *darken ≈`#A87C1F`* | `#C99A2A` | tier dot, 3rd |
+| `plateGreen` | `#2E7D4F` | `#2E7D4F` | tier dot, 4th |
+
+Contrast resolutions (dots are non-text UI: 3:1 floor on their paper):
+- Design-doc light `plateYellow` `#C99A2A` measures ≈2.5:1 on light paper —
+  darken toward `#A87C1F` (≈3.5:1), same hue family.
+- Dark `plateBlue` `#2A5FA8` measures ≈2.9:1 on dark paper — lighten minimally.
+- Final values are whatever passes `LogbookPaletteTest`, which pins them.
+- **`inkFaint` is a documented WCAG exemption**: ghost values on paper measure
+  ≈2.3:1 — *by design intent* ("not yet yours" must recede). The palette test
+  asserts a ≥2:1 floor with the rationale in KDoc, not the 3:1 text floor.
+
+**No semantic success/warning/error tokens exist in Logbook.** Coach's current
+semantic-color usages are re-expressed in ink (see Components). Two documented
+exceptions carry color for live signal, not decoration: the **HR tone dot**
+(instrument reading) and the sync status indicator's states (transient device
+truth); both are quiet dots, never fills or text colors.
+
+### Type
+
+Bundled fonts (first font resources in the repo, `core/ui/src/main/res/font/`,
+all SIL OFL — license files ship alongside; ≈1–1.5 MB APK cost):
+Barlow Condensed (SemiBold), Inter (Regular/Medium/SemiBold + Italic),
+IBM Plex Mono (Regular/Medium + Italic).
+
+| Role | Face | Spec | Use |
+|---|---|---|---|
+| `display` | Barlow Condensed 600 caps | 34sp, tight leading | workout titles |
+| `section` | Barlow Condensed 600 caps | 17sp, +6% tracking | section labels |
+| `name` | Inter 500 | 14.5sp | exercise names |
+| `body` | Inter 400 | 12.5–13sp | prose, user notes; italic variant = marginalia + empty states |
+| `data` | IBM Plex Mono 400 | 12.5sp | set-table cells, schemes |
+| `meta` | IBM Plex Mono 400/500 | 11.5sp | meta lines (values 500-weight ink, labels 400 ink-soft) |
+| `eyebrow` | IBM Plex Mono 400 caps | 10.5sp, +12–14% tracking | eyebrows, legend, user-note labels, hints |
+| `tableHeader` | IBM Plex Mono 500 caps | 10sp, +12% tracking | set-table column heads |
+
+Plex Mono is tabular-figured natively — no `tnum` gymnastics needed. The M3
+`Typography` and `ColorScheme` adapters fill **every** slot (incl. the `*Fixed`
+roles) from Logbook tokens, same discipline as Graphite's adapter — baseline
+purple must be unreachable.
+
+### Spacing, rules, shape, interaction
+
+- Base grid 4dp. Row padding 14dp vertical; 18dp around group boundaries.
+- Hairlines 1dp `rule`; group boundaries 1dp `ruleStrong`; section underline
+  1.5dp ink.
+- Corner radius ≤2dp (marks only). The design is flat by intent: no drop
+  shadows inside the screen, no tonal elevation.
+- Touch targets ≥48dp everywhere (Android law beats paper flatness; the
+  density-pass visual-vs-interactive split carries over unchanged).
+- **Indication**: `LogbookTheme` replaces the M3 ripple with a quiet ink press
+  overlay (low-alpha ink wash, no bounded ripple animation) via
+  `LocalIndication` inside Logbook subtrees.
+- Icons: trimmed set. Decorative glyphs are removed (prescription dumbbell,
+  meta-row location/phase icons → text labels). Survivors (nav glyphs,
+  chevrons, lock, calendar) render as outlined glyphs in ink. Eyebrow state
+  glyphs are icon glyphs tinted ink — **never colored emoji**.
+
+## Components — shell
+
+- **Theme wiring**: `LogbookTheme {}` wraps the Scaffold + nav bar + coach
+  destination; other destinations stay under `WellnessTheme` (each destination
+  wrapped at the nav-graph dispatch). Scaffold container follows the active
+  destination's canvas so tab switches never flash the wrong paper.
+- **Bottom nav**: paper surface, 1dp `rule` top hairline, outlined ink glyphs;
+  selected item = full-ink glyph + label with the existing underline bar drawn
+  in ink (module accents leave the nav). Stock `NavigationBar` retained
+  (accessibility surface stays stock), colors overridden.
+- **Snackbar**: inverted paper/ink (dark ink surface, paper text in light mode
+  and vice versa), radius ≤2dp.
+- **`ServerRecoveryScreen`**: same treatment as coach empty states — display
+  heading, body prose, ink outline button.
+
+## Components — Coach
+
+### Header block
+Eyebrow · display title · meta line · legend, replacing the banner system.
+The workout lifecycle expresses **only** through the eyebrow, value color, and
+mark fill — `ReadOnlyBannerRow` and `SemanticBanner`-for-read-only retire.
+
+Eyebrow states (mono caps, ink-soft, glyph in ink):
+
+| State | Eyebrow |
+|---|---|
+| Past | `PAST WORKOUT · READ-ONLY` (lock glyph) |
+| Future | `SCHEDULED · LOG ON <WEEKDAY, MON D>` (calendar glyph) |
+| Today, nothing logged, start not fired | `TODAY · READY TO LOG` (calendar glyph) — *new state the mockups don't cover; wording open* |
+| Today, started (start hook fired or any data logged) | `IN PROGRESS · STARTED <time>` when the start-hook time exists, else `IN PROGRESS` (filled-dot glyph) |
+
+Legend: one mono line mapping each plate dot to its exposure string in palette
+order, strings uppercased in the legend only, rendered verbatim otherwise.
+Required whenever any dot is visible on screen.
+
+### Sections
+Display-caps label with a 1.5dp ink underline; optional mono hint right-aligned
+on the same baseline (rest guidance moves here). Section-level execution notes
+render as marginalia directly under the head. `UnreadablePlanDay` keeps its
+banner *content* but restyles as marginalia + ink glyph (no `band` fill, no
+error rail).
+
+### Exercise rows
+- 16dp left gutter on all strength rows. Grouped rows share a drawn bracket:
+  1.5dp ink vertical stroke with 6dp horizontal ticks top/bottom, spanning the
+  group (including any expanded content). Straight sets leave the gutter empty.
+  `SupersetGroup`'s accent rail, 6% wash, label chip, and A/B/C hue rotation
+  retire; `groupExercises` grouping data is reused as-is
+  (`supersetDisplayLabel` stays ported/tested but rendering stops using it).
+  Group-level execution notes render as marginalia inside the bracket above the
+  first row.
+- Collapsed row: plate dot inline with the name (wraps with text) · scheme +
+  tally right-aligned in mono. Parsed-name pills (`NeutralPill`) become plain
+  ink-soft text after the name; `ExposureChip` retires (the dot + legend carry
+  exposure). Completed-name success-green retires (the tally says it).
+- Tally: 6×11dp ink marks, ≤2dp radius, one per set — filled when completed,
+  outlined `inkFaint` when not. Checklist rows tally per item (`9 items
+  ▮▮▮▮▮▮▮▮▮`); cardio/duration rows keep value + one mark.
+- Expanded detail (indented under the name column):
+  - Meta line (mono): values ink 500, labels ink-soft — e.g. `35 lb/hand ·
+    target RPE 7 · tempo 3-1-1-0` (invented example). The load slot accepts
+    arbitrary strings (`load light band assist`) — never assume numeric; label
+    it explicitly when it is not a weight. Replaces `PrescriptionRow` + its
+    dumbbell icon.
+  - Set table: mono, right-aligned numeric columns, hairline `rule` row
+    dividers only — **no cell backgrounds, no zebra striping**. Column heads in
+    `tableHeader` ink-faint. Set index numbers stay ink in all states (they are
+    structure, not data).
+  - Set completion mark: custom ink square (filled ✓-less mark when logged,
+    outlined when not) replacing the M3 `Checkbox`, inside the same 48dp
+    target, writing `{completed}` through the unchanged path.
+  - **Ghost vs logged is a color state, not a layout state**: ghost values
+    render `inkFaint`; once a set is logged its values switch to ink and its
+    mark fills. Row structure never changes. Footer names provenance:
+    scheduled/today `Ghost values · last at this tier · <date>`; completed
+    workouts `Last at this tier · <date>` (replaces the `Last · <date>` hint).
+    Never label ghosts "planned" or "target".
+  - Entry cells (editable states): `WellnessDenseField` gains a **`NAKED`
+    skin** — bare mono text at rest (indistinguishable from the read-only
+    table), 1dp ink underline + cursor when focused. 48dp targets, string-backed
+    commit semantics untouched.
+  - Execution note as marginalia; then the user-notes field.
+
+### Notes taxonomy (two kinds, opposite directions, distinct treatments)
+1. **Execution notes (program → user)** — *marginalia*: italic ink-soft body
+   with a 2dp `ruleStrong` left border, indented to the level they attach to
+   (section / group / exercise). Same look at every level = same meaning.
+   Replaces `GuidanceNote`'s warning rail.
+2. **User notes (user → log)** — mono eyebrow label (`YOUR NOTES`,
+   `PAIN / DISCOMFORT`) above roman ink body text. Never italic, never a left
+   rule. Empty states are italic ink-faint, phrased by workout state:
+   read-only `None recorded` · scheduled `None yet — recorded after the
+   session` / `Added when you log this session` (exercise level) · editable
+   `Add a note`.
+
+### Calendar
+- Trigger row: paper + bottom hairline (chrome fill retires).
+- Popup: paper surface, 1dp `ruleStrong` border, **no shadow**, radius ≤2dp.
+- Day status marks in ink: filled dot = completed, outlined = scheduled,
+  slashed = missed (`statusColor` semantic mapping retires). Selected day =
+  ink fill with paper numeral; today = ink underline under the numeral.
+  Legend row updates to the mark language.
+
+### Controls
+- Hook buttons: Start = ink-filled (paper text); End = ink outline; PENDING =
+  outline + `WORKING…` mono label; FIRED/LOCKED = ink-filled + ✓ glyph;
+  FAILED = outline + ✗ glyph + `FAILED` mono label — **no semantic colors**.
+  Undo stays a text button in ink. State machine untouched.
+- `HrBpmChip` → bare mono value + tone dot, no container (tone colors kept —
+  documented exception above). Capture sheets: paper container, 1dp `ruleStrong`
+  top edge, drag handle restyled to a short ink rule.
+- `ExtraSessionCard` → flat section treatment (rule-bounded, no card fill);
+  buttons per hook-button language. The `off-plan` chip becomes an eyebrow
+  label.
+- Loading: M3 spinner tinted ink (unchanged mechanics).
+- Session feedback: section header + mono labels per user-notes treatment.
+
+## Behavior
+
+- All new rendering decisions (plate assignment, legend order, eyebrow state,
+  tally counts, calendar marks, ghost footer strings) derive in **pure state
+  code** (`CoachUiState` + helpers), unit-tested — composables stay thin.
+- Plate assignment is per-workout and positional: distinct exposure strings in
+  order of first appearance across the day's exercises.
+- Any new layout-wrapper composable is **`inline`** (Kover capturing-lambda
+  trap; `CardSurface` precedent).
+- No sync, store, gate, or hook logic changes. Existing behavioral tests stay
+  green unmodified.
+
+## Tests
+
+- **`LogbookPaletteTest`** (`:core:ui`): programmatic contrast, both modes —
+  ink ≥4.5:1 and inkSoft ≥4.5:1 on paper; inkFaint ≥2:1 (documented ghost
+  exemption); every plate dot ≥3:1 on its paper (final token values pinned
+  here); all tokens fully opaque.
+- **`CoachUiStateTest` extensions**: positional plate assignment (order of
+  first appearance, repeat exposures share a dot, 5th+ → ink, legend order/
+  uppercasing), eyebrow state matrix (past/future/today-ready/in-progress ×
+  hook-time present/absent), tally-mark counts per widget type, calendar
+  ink-mark mapping, ghost-footer provenance strings by state.
+- Gate: `./gradlew testDebugUnitTest koverVerifyAggregated` (≥85);
+  `./gradlew build assembleDebugAndroidTest` separately. Never module-scoped
+  or `--tests`-filtered runs.
+- Visual acceptance: APK on device per delivery phase (the design's actual
+  gate), both themes.
+
+## Dependencies
+
+Three bundled OFL font families (resources only — no new libraries). Nothing
+else new.
+
+## Open Questions
+
+1. Today-not-started eyebrow wording — `TODAY · READY TO LOG` proposed above.
+2. Exact adjusted plate token values (light yellow, dark blue) — computed in
+   Phase 1, pinned by `LogbookPaletteTest`, recorded back into this spec.

@@ -2,6 +2,13 @@
 
 Status: **shipped & device-accepted 2026-08-09** (commit `ccada51`; user: "looks better" — possible further tightening deliberately deferred to Phase 8 polish). Originally approved 2026-08-09 (user-selected "now, as a 6.5 mini-round" at the in-session gate; motivated by device feedback — entry fields large, fonts blocky vs the PWA's compact layout; reference screenshot `Screenshot_20260809-081928` of the Coach set grid)
 
+> **2026-08-17:** the Logbook round
+> ([logbook-design-system.md](logbook-design-system.md)) moves **Coach** entry
+> cells to a new bare `NAKED` `WellnessDenseField` skin (no fill at rest,
+> ink underline on focus). The 48dp interactive / smaller-visual split and the
+> commit semantics defined here carry over unchanged; Journal keeps the filled
+> skin until its round.
+
 ## Goal
 
 Bring Journal + Coach data-entry surfaces to a density closer to the PWA without touching any logic: today every entry cell is a stock M3 `OutlinedTextField` (56 dp min box, 16 sp inner text, big padding), so a 3-set grid fills half a screen. Presentation-only — the string-backed field pattern (local state while focused, commit on focus-loss/IME-Done, invalid restores) and every existing test stay byte-untouched.

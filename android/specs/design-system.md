@@ -2,6 +2,12 @@
 
 Status: **approved 2026-08-08** (v2 after Codex review; user-approved incl. edge-to-edge chrome and the 5.5a icon mark; pipeline running)
 
+> **2026-08-17: superseded for the app shell + Coach** by
+> [logbook-design-system.md](logbook-design-system.md) (the Logbook design
+> language, destined app-wide). This spec remains authoritative for Journal,
+> Trends, Analysis and Tools until their migration rounds; it shrinks as
+> modules leave it.
+
 ## Goal
 
 Replace the placeholder M3 theme with the app's own visual identity — **Graphite Signal**, chosen by the user from three direction boards (artifact `three-directions-v1`, 2026-08-08): cold neutral graphite surfaces where the chrome carries zero hue, so the four module accents and the semantic colors are the only color on screen. Dark is the flagship; light derives by rule. Restyle the shell + Journal + Coach on the new system so Phase 6 (Trends) builds on it natively, with the motion system and the interactive-chart foundation (the user's two chosen investments) established here.
