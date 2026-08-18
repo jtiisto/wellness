@@ -121,7 +121,7 @@ internal val topLevelDestinations = listOf(
         label = "Coach",
         icon = Icons.Outlined.FitnessCenter,
         accent = ModuleAccent.COACH,
-        system = ShellSystem.GRAPHITE,
+        system = ShellSystem.LOGBOOK,
     ),
     TopLevelDestination(
         route = TRENDS_ROUTE,

@@ -6,6 +6,7 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -13,15 +14,20 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import dev.jtiisto.wellness.core.data.sync.SyncStatus
+import dev.jtiisto.wellness.core.ui.theme.DarkPalette
+import dev.jtiisto.wellness.core.ui.theme.LightPalette
+import dev.jtiisto.wellness.core.ui.theme.WellnessPalette
 import dev.jtiisto.wellness.core.ui.theme.WellnessTheme
 
 /**
@@ -58,6 +64,13 @@ fun SyncStatusIndicator(
     status: SyncStatus,
     modifier: Modifier = Modifier,
     syncing: Boolean = false,
+    // The dot's colours are the documented cross-system exception; the label's
+    // face and ink are not, so a Logbook host passes its own and a Graphite
+    // host passes nothing. Nullable-with-fallback rather than a default reading
+    // the theme: defaults resolve at the callsite, where WellnessTheme may not
+    // be the theme in force.
+    textStyle: TextStyle? = null,
+    labelColor: Color? = null,
 ) {
     val label = syncStatusLabel(status, syncing)
     val alpha = pulseAlpha(syncing)
@@ -76,8 +89,8 @@ fun SyncStatusIndicator(
         )
         Text(
             text = label,
-            style = WellnessTheme.type.secondary,
-            color = WellnessTheme.palette.textSecondary,
+            style = textStyle ?: WellnessTheme.type.secondary,
+            color = labelColor ?: semanticPalette().textSecondary,
         )
     }
 }
@@ -120,13 +133,30 @@ private fun syncStatusLabel(status: SyncStatus, syncing: Boolean): String = when
 /** Semantic tokens, so the dot tracks the theme instead of three fixed hues. */
 @Composable
 private fun dotColor(status: SyncStatus): Color {
-    val palette = WellnessTheme.palette
+    val palette = semanticPalette()
     return when (status) {
         SyncStatus.GREEN -> palette.success
         SyncStatus.RED -> palette.error
         SyncStatus.GRAY -> palette.syncIdle
     }
 }
+
+/**
+ * The Graphite palette this indicator draws itself from.
+ *
+ * Taken from the system's dark-mode setting rather than from
+ * `LocalWellnessPalette`, because the indicator sits in every module's header
+ * and the coach's is now a Logbook subtree — which provides no Graphite palette
+ * at all, so the local would answer with its `DarkPalette` default and paint a
+ * dark-theme dot and near-white label onto light paper. `WellnessTheme` derives
+ * its own palette exactly this way, so nothing under Graphite changes.
+ *
+ * The status colours themselves stay: they are transient device truth, the
+ * second of Logbook's two documented live-signal exceptions.
+ */
+@Composable
+@ReadOnlyComposable
+private fun semanticPalette(): WellnessPalette = if (isSystemInDarkTheme()) DarkPalette else LightPalette
 
 private const val PULSE_MS = 700
 private const val PULSE_MIN_ALPHA = 0.3f

@@ -1,24 +1,29 @@
 package dev.jtiisto.wellness.feature.coach
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Button
+import androidx.compose.foundation.layout.width
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.unit.dp
 import dev.jtiisto.wellness.core.ui.hr.HrCaptureDisplay
 import dev.jtiisto.wellness.core.ui.hr.HrToneDot
-import dev.jtiisto.wellness.core.ui.theme.WellnessDefaults
-import dev.jtiisto.wellness.core.ui.theme.WellnessShape
-import dev.jtiisto.wellness.core.ui.theme.WellnessSpace
-import dev.jtiisto.wellness.core.ui.theme.WellnessTheme
+import dev.jtiisto.wellness.core.ui.hr.logbookColor
+import dev.jtiisto.wellness.core.ui.theme.LogbookShapes
+import dev.jtiisto.wellness.core.ui.theme.LogbookSpace
+import dev.jtiisto.wellness.core.ui.theme.LogbookTheme
 
 /**
  * "Connect HRM?" — the one question Start Workout asks.
@@ -35,45 +40,44 @@ import dev.jtiisto.wellness.core.ui.theme.WellnessTheme
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun ConnectStrapSheet(prompt: StrapPrompt, onConnect: () -> Unit, onSkip: () -> Unit) {
-    val palette = WellnessTheme.palette
+    val palette = LogbookTheme.palette
     ModalBottomSheet(
         onDismissRequest = onSkip,
-        containerColor = palette.card,
-        contentColor = palette.textPrimary,
-        shape = WellnessShape.floating,
+        containerColor = palette.paper,
+        contentColor = palette.ink,
+        shape = LogbookShapes.square,
+        dragHandle = { SheetHandle() },
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(start = WellnessSpace.md, end = WellnessSpace.md, bottom = WellnessSpace.lg),
-            verticalArrangement = Arrangement.spacedBy(WellnessSpace.sm),
+                .padding(start = SHEET_PADDING, end = SHEET_PADDING, bottom = SHEET_BOTTOM),
+            verticalArrangement = Arrangement.spacedBy(LogbookSpace.grid * 2),
         ) {
-            Text(CaptureCopy.CONNECT_TITLE, style = WellnessTheme.type.title, color = palette.textPrimary)
+            Text(
+                text = CaptureCopy.CONNECT_TITLE.uppercase(),
+                style = LogbookTheme.type.section,
+                color = palette.ink,
+            )
             Text(
                 text = CaptureCopy.connectBody(prompt.name),
-                style = WellnessTheme.type.body,
-                color = palette.textSecondary,
+                style = LogbookTheme.type.body,
+                color = palette.inkSoft,
             )
             Row(
-                modifier = Modifier.padding(top = WellnessSpace.xs),
-                horizontalArrangement = Arrangement.spacedBy(WellnessSpace.sm),
+                modifier = Modifier.padding(top = LogbookSpace.grid),
+                horizontalArrangement = Arrangement.spacedBy(LogbookSpace.grid * 2),
             ) {
-                Button(
+                InkButton(
+                    label = CaptureCopy.CONNECT,
                     onClick = onConnect,
                     modifier = Modifier.weight(1f),
-                    shape = WellnessShape.card,
-                    colors = WellnessDefaults.accentButtonColors(),
-                ) {
-                    Text(CaptureCopy.CONNECT, style = WellnessTheme.type.label)
-                }
-                OutlinedButton(
+                )
+                InkOutlineButton(
+                    label = CaptureCopy.SKIP,
                     onClick = onSkip,
                     modifier = Modifier.weight(1f),
-                    shape = WellnessShape.card,
-                    colors = WellnessDefaults.accentOutlinedButtonColors(),
-                ) {
-                    Text(CaptureCopy.SKIP, style = WellnessTheme.type.label)
-                }
+                )
             }
         }
     }
@@ -84,9 +88,9 @@ internal fun ConnectStrapSheet(prompt: StrapPrompt, onConnect: () -> Unit, onSki
  *
  * Everything the chip deliberately omits lands here, which is what lets the chip
  * stay a bare number. [HrCaptureDisplay.detail] is the connect diagnostics —
- * authored text about a Bluetooth link, never an exception message — and it is
- * shown as a warning rather than an error because most of what it says is
- * "retrying", not "gave up".
+ * authored text about a Bluetooth link, never an exception message. It used to
+ * be tinted warning-amber; Logbook has no such colour and does not need one,
+ * because most of what the line says is "retrying" rather than "gave up".
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -96,38 +100,47 @@ internal fun CaptureStatusSheet(
     onStop: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    val palette = WellnessTheme.palette
+    val palette = LogbookTheme.palette
     ModalBottomSheet(
         onDismissRequest = onDismiss,
-        containerColor = palette.card,
-        contentColor = palette.textPrimary,
-        shape = WellnessShape.floating,
+        containerColor = palette.paper,
+        contentColor = palette.ink,
+        shape = LogbookShapes.square,
+        dragHandle = { SheetHandle() },
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(start = WellnessSpace.md, end = WellnessSpace.md, bottom = WellnessSpace.lg),
-            verticalArrangement = Arrangement.spacedBy(WellnessSpace.sm),
+                .padding(start = SHEET_PADDING, end = SHEET_PADDING, bottom = SHEET_BOTTOM),
+            verticalArrangement = Arrangement.spacedBy(LogbookSpace.grid * 2),
         ) {
-            Text(display.deviceName, style = WellnessTheme.type.title, color = palette.textPrimary)
+            Text(
+                text = display.deviceName.uppercase(),
+                style = LogbookTheme.type.section,
+                color = palette.ink,
+            )
 
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(WellnessSpace.sm),
+                horizontalArrangement = Arrangement.spacedBy(LogbookSpace.grid * 2),
             ) {
-                HrToneDot(display.tone)
+                // The one dot on the page that carries a colour, and it carries
+                // it for the documented reason: this is an instrument reading.
+                HrToneDot(tone = display.tone, color = display.tone.logbookColor())
                 Text(
                     text = "${display.bpmText} bpm · ${display.connectionText}",
-                    style = WellnessTheme.type.body,
-                    color = palette.textPrimary,
+                    style = LogbookTheme.type.meta,
+                    color = palette.ink,
                 )
             }
 
             display.qualityText?.let {
-                Text(it, style = WellnessTheme.type.secondary, color = palette.textSecondary)
+                Text(it, style = LogbookTheme.type.meta, color = palette.inkSoft)
             }
             display.detail?.let {
-                Text(it, style = WellnessTheme.type.secondary, color = palette.warning)
+                // No warning colour to reach for: the sentence says it, and most
+                // of what it says is "retrying".
+                Text(it, style = LogbookTheme.type.body, color = palette.inkSoft)
             }
 
             // The question the feature exists to answer, and the only one the
@@ -137,27 +150,55 @@ internal fun CaptureStatusSheet(
             link?.let {
                 Text(
                     text = CaptureCopy.linkText(it),
-                    style = WellnessTheme.type.secondary,
-                    color = if (it == CaptureLink.THIS_WORKOUT) palette.textSecondary else palette.warning,
+                    style = LogbookTheme.type.body,
+                    color = palette.inkSoft,
                 )
             }
 
-            OutlinedButton(
+            InkOutlineButton(
+                label = CaptureCopy.STOP,
                 onClick = onStop,
                 modifier = Modifier.fillMaxWidth(),
-                shape = WellnessShape.card,
-                colors = WellnessDefaults.accentOutlinedButtonColors(),
-            ) {
-                Text(CaptureCopy.STOP, style = WellnessTheme.type.label)
-            }
+            )
             Text(
                 text = CaptureCopy.STOP_HINT,
-                style = WellnessTheme.type.secondary,
-                color = palette.textFaint,
+                style = LogbookTheme.type.body,
+                color = palette.inkFaint,
             )
         }
     }
 }
+
+/**
+ * The sheet's top edge: a `ruleStrong` hairline, then a short ink rule to drag.
+ *
+ * M3's handle is a rounded grey lozenge on a raised surface. Neither survives
+ * here — the sheet is the same paper as the page, so the boundary has to be
+ * drawn, and the handle is a mark rather than a pill.
+ */
+@Composable
+private fun SheetHandle() {
+    val palette = LogbookTheme.palette
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        HorizontalDivider(thickness = LogbookSpace.hairline, color = palette.ruleStrong)
+        Box(
+            modifier = Modifier
+                .padding(vertical = LogbookSpace.grid * 2.5f)
+                .width(HANDLE_WIDTH)
+                .height(HANDLE_HEIGHT)
+                .clip(LogbookShapes.soft)
+                .background(palette.ink),
+        )
+    }
+}
+
+private val SHEET_PADDING = 20.dp
+private val SHEET_BOTTOM = 24.dp
+private val HANDLE_WIDTH = 28.dp
+private val HANDLE_HEIGHT = 2.dp
 
 /** The capture surfaces' copy, gathered so the tests can assert it. */
 internal object CaptureCopy {

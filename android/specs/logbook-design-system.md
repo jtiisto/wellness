@@ -3,7 +3,10 @@
 Status: **approved 2026-08-17** (user directed implementation the same day) —
 **in implementation**: Phase 1 (core/ui foundation: fonts, palette, type,
 theme, palette test) landed with the token table below finalized by
-measurement; the shell and coach phases follow.
+measurement; Phase 2 (shell dual-theme wiring), Phase 3 (coach presentation
+derivation in `CoachNotation`) and Phase 4 (coach composables, and the coach
+destination's flip to Logbook) followed. Journal, Trends, Analysis and Tools
+stay on Graphite Signal.
 
 ## Goal
 
@@ -115,6 +118,17 @@ semantic-color usages are re-expressed in ink (see Components). Two documented
 exceptions carry color for live signal, not decoration: the **HR tone dot**
 (instrument reading) and the sync status indicator's states (transient device
 truth); both are quiet dots, never fills or text colors.
+
+Both exceptions borrow Graphite's semantic tokens, and both are rendered inside
+a Logbook subtree — where `LocalWellnessPalette` is **not provided** and answers
+with its `DarkPalette` default. Reading the local would therefore have painted a
+dark-theme green onto light paper. `HrTone.color()` and the sync indicator
+resolve the Graphite pair from the system's dark-mode setting instead (which is
+how `WellnessTheme` picks its own, so Graphite is unchanged), and
+`HrTone.logbookColor()` resolves it from the Logbook palette's own `isDark`.
+This is the shape of the trap for every later round: a shared `core/ui`
+component that still reads Graphite locals silently degrades to the *dark*
+palette the moment its host destination flips.
 
 ### Type
 
@@ -236,7 +250,15 @@ error rail).
   - Entry cells (editable states): `WellnessDenseField` gains a **`NAKED`
     skin** — bare mono text at rest (indistinguishable from the read-only
     table), 1dp ink underline + cursor when focused. 48dp targets, string-backed
-    commit semantics untouched.
+    commit semantics untouched. A **read-only day draws plain text, not disabled
+    fields**: "no layout change between ghost and logged" is a rule about one
+    table, and reserving a 48dp target per cell on a day with nothing to touch
+    doubles the height of every past workout. The two render identically
+    otherwise, which is what the skin exists for — so a naked field's value is
+    ink whether or not it is enabled, and only *absence* recedes.
+  - The row **chevron survives** the icon trim (the mockups, being static, show
+    none): it is the only affordance saying a row opens, and chevrons are on the
+    survivor list. Drawn ink-faint so it recedes from the metadata cluster.
   - Execution note as marginalia; then the user-notes field.
 
 ### Notes taxonomy (two kinds, opposite directions, distinct treatments)

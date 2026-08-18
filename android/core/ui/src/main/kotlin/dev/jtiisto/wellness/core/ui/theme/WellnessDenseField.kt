@@ -30,7 +30,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.semantics.error
@@ -58,6 +60,23 @@ enum class DenseFieldSkin {
 
     /** A well, no stroke until focus — grid cells and in-card notes. */
     FILLED,
+
+    /**
+     * No box at all — Logbook's coach tables and notes.
+     *
+     * A paper logbook has no input boxes on it: a cell at rest is bare mono text,
+     * indistinguishable from the read-only row above it, and only the caret and a
+     * 1dp ink underline say which one is being written into. It is the one skin
+     * that reads **Logbook** tokens rather than Graphite's, so it belongs
+     * exclusively to a `LogbookTheme` subtree; the other two are unchanged and
+     * stay Graphite's.
+     *
+     * Being bare is the whole definition, so `label`, `supportingText`,
+     * `isError`, `italic`, `hint` and `dropdownExpanded` have nothing to draw and
+     * are ignored — a Logbook callsite sets its own mono-caps label above the
+     * field, and a ghost is a colour rather than a dialect.
+     */
+    NAKED,
 }
 
 /**
@@ -141,6 +160,25 @@ fun WellnessDenseField(
     keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
     keyboardActions: KeyboardActions = KeyboardActions.Default,
 ) {
+    // Routed before everything else: the skin's contract is that nothing is
+    // drawn around the text, so the label/supporting-text column below would
+    // contradict it (and would set Graphite type on a Logbook page besides).
+    if (skin == DenseFieldSkin.NAKED) {
+        NakedInput(
+            value = value,
+            onValueChange = onValueChange,
+            modifier = modifier,
+            enabled = enabled,
+            readOnly = readOnly,
+            placeholder = placeholder,
+            numeric = numeric,
+            multiLine = multiLine,
+            keyboardOptions = keyboardOptions,
+            keyboardActions = keyboardActions,
+        )
+        return
+    }
+
     // The bare field takes the caller's modifier itself, so a `contentDescription`
     // passed in lands on the editable node rather than on a wrapper beside it —
     // a screen reader would otherwise announce the grid cell twice.
@@ -350,6 +388,111 @@ private fun DenseInput(
 }
 
 /**
+ * The bare field: Logbook's [DenseFieldSkin.NAKED].
+ *
+ * Deliberately not a branch inside [DenseInput]. Everything about it is the
+ * other system's — Plex Mono against ink, an underline where the other two draw
+ * a border, no fill to animate — and threading a second palette through the
+ * Graphite box would leave both harder to read than the two of them apart.
+ *
+ * Rest and read-only are the same picture on purpose: a cell nobody is typing in
+ * must not advertise that it could be typed in, or the table stops being a
+ * table. The caret and the underline arrive together on focus, and they are the
+ * only difference.
+ *
+ * The painted box stays small — [NAKED_HEIGHT] — while
+ * [minimumInteractiveComponentSize] reserves the 48dp around it, the same
+ * visual-vs-interactive split the dense field has always used.
+ */
+@Composable
+private fun NakedInput(
+    value: String,
+    onValueChange: (String) -> Unit,
+    modifier: Modifier,
+    enabled: Boolean,
+    readOnly: Boolean,
+    placeholder: String?,
+    numeric: Boolean,
+    multiLine: Boolean,
+    keyboardOptions: KeyboardOptions,
+    keyboardActions: KeyboardActions,
+) {
+    val palette = LogbookTheme.palette
+    val type = LogbookTheme.type
+
+    val interactionSource = remember { MutableInteractionSource() }
+    val focused by interactionSource.collectIsFocusedAsState()
+
+    // Numbers are mono and column-aligned; a note is prose and is not. The
+    // right alignment is the table's, not the field's — it has to match the
+    // read-only cells it sits between.
+    val baseStyle = if (numeric) type.data.copy(textAlign = TextAlign.End) else type.body
+    // Ink whether or not it can be edited: a value logged on a past day is not
+    // a fainter value, and "indistinguishable from the read-only text" is the
+    // whole contract of the skin. Absence is what recedes, not read-only-ness.
+    val textStyle = baseStyle.copy(color = palette.ink)
+    // A ghost recedes by colour alone. Italic is Graphite's convention and
+    // saying it twice here would make last session's number a different *kind*
+    // of thing rather than a fainter one.
+    val hintStyle = baseStyle.copy(color = palette.inkFaint)
+
+    val selectionColors = remember(palette.ink) {
+        TextSelectionColors(
+            handleColor = palette.ink,
+            backgroundColor = palette.ink.copy(alpha = SELECTION_ALPHA),
+        )
+    }
+
+    CompositionLocalProvider(LocalTextSelectionColors provides selectionColors) {
+        BasicTextField(
+            value = value,
+            onValueChange = onValueChange,
+            modifier = modifier.minimumInteractiveComponentSize(),
+            enabled = enabled,
+            readOnly = readOnly,
+            textStyle = textStyle,
+            keyboardOptions = keyboardOptions,
+            keyboardActions = keyboardActions,
+            singleLine = !multiLine,
+            minLines = if (multiLine) MULTILINE_MIN_LINES else 1,
+            cursorBrush = SolidColor(palette.ink),
+            interactionSource = interactionSource,
+        ) { field ->
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = if (multiLine) NAKED_MULTILINE_HEIGHT else NAKED_HEIGHT)
+                    .drawBehind {
+                        if (!focused) return@drawBehind
+                        val stroke = WellnessSpace.hairline.toPx()
+                        drawLine(
+                            color = palette.ink,
+                            start = Offset(0f, size.height - stroke / 2f),
+                            end = Offset(size.width, size.height - stroke / 2f),
+                            strokeWidth = stroke,
+                        )
+                    },
+                contentAlignment = if (multiLine) Alignment.TopStart else Alignment.CenterStart,
+            ) {
+                if (value.isEmpty() && placeholder != null) {
+                    Text(
+                        text = placeholder,
+                        style = hintStyle,
+                        maxLines = if (multiLine) Int.MAX_VALUE else 1,
+                        overflow = TextOverflow.Ellipsis,
+                        // Full width so the style's own alignment decides where
+                        // the hint sits — a right-aligned column's ghost has to
+                        // land under the value it is standing in for.
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+                field()
+            }
+        }
+    }
+}
+
+/**
  * A set-grid column head.
  *
  * Micro's size, quieted: a shade lighter and the tracking pulled most of the
@@ -365,6 +508,10 @@ fun columnHeaderStyle() = WellnessTheme.type.micro.copy(
 
 /** The painted box. The 48dp around it is reserved, not drawn. */
 private val HEIGHT = 40.dp
+
+/** The naked skin paints no box, so it reserves only what the line of text needs. */
+private val NAKED_HEIGHT = 24.dp
+private val NAKED_MULTILINE_HEIGHT = 44.dp
 
 /** Two lines of note plus its padding — the notes fields, top-aligned. */
 private val MULTILINE_HEIGHT = 72.dp

@@ -4,6 +4,8 @@ import dev.jtiisto.wellness.core.ble.capture.HrCaptureState
 import dev.jtiisto.wellness.core.ble.model.ConnectionState
 import dev.jtiisto.wellness.core.ble.quality.SignalQuality
 import dev.jtiisto.wellness.core.ble.quality.SignalQualityLevel
+import dev.jtiisto.wellness.core.ui.theme.DarkPalette
+import dev.jtiisto.wellness.core.ui.theme.LightPalette
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -48,6 +50,20 @@ class HrCaptureDisplayTest {
         val display = hrCaptureDisplay(HrCaptureState(isRunning = true, bpm = 132))
 
         assertEquals("132", display?.bpmText)
+    }
+
+    @Test
+    @DisplayName("one tone→semantic table, whichever design system is asking")
+    fun toneColours() {
+        // Both systems resolve the tone here: Graphite from the system's mode,
+        // Logbook from its own palette's — the dot's colour is the design's
+        // documented live-signal exception, and it must mean the same thing on
+        // paper as it does on graphite.
+        for (palette in listOf(LightPalette, DarkPalette)) {
+            assertEquals(palette.success, HrTone.LIVE.colorOn(palette))
+            assertEquals(palette.warning, HrTone.WAITING.colorOn(palette))
+            assertEquals(palette.error, HrTone.LOST.colorOn(palette))
+        }
     }
 
     @Test

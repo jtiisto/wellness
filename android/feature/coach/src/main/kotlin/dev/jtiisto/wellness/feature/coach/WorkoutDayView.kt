@@ -11,10 +11,11 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -25,26 +26,24 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.InlineTextContent
+import androidx.compose.foundation.text.appendInlineContent
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Undo
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.BarChart
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.ErrorOutline
-import androidx.compose.material.icons.filled.EventAvailable
 import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material.icons.filled.FitnessCenter
-import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.Place
+import androidx.compose.material.icons.outlined.CalendarToday
+import androidx.compose.material.icons.outlined.Check
+import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.ErrorOutline
+import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
@@ -57,48 +56,56 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.Placeholder
+import androidx.compose.ui.text.PlaceholderVerticalAlign
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.jtiisto.wellness.core.data.coach.EXTRA_SESSION_TITLE
-import dev.jtiisto.wellness.core.data.coach.HookAction
-import dev.jtiisto.wellness.core.data.coach.HookButtonState
 import dev.jtiisto.wellness.core.data.coach.RxKind
 import dev.jtiisto.wellness.core.data.coach.RxToken
+import dev.jtiisto.wellness.core.data.coach.SetColumn
+import dev.jtiisto.wellness.core.data.coach.TallyMarks
 import dev.jtiisto.wellness.core.ui.motion.WellnessMotion
-import dev.jtiisto.wellness.core.ui.theme.AccentColors
-import dev.jtiisto.wellness.core.ui.theme.DenseFieldHint
 import dev.jtiisto.wellness.core.ui.theme.DenseFieldSkin
-import dev.jtiisto.wellness.core.ui.theme.ModuleAccent
-import dev.jtiisto.wellness.core.ui.theme.WellnessDefaults
+import dev.jtiisto.wellness.core.ui.theme.LogbookShapes
+import dev.jtiisto.wellness.core.ui.theme.LogbookSpace
+import dev.jtiisto.wellness.core.ui.theme.LogbookTheme
 import dev.jtiisto.wellness.core.ui.theme.WellnessDenseField
-import dev.jtiisto.wellness.core.ui.theme.WellnessShape
-import dev.jtiisto.wellness.core.ui.theme.WellnessSpace
-import dev.jtiisto.wellness.core.ui.theme.WellnessTheme
-import dev.jtiisto.wellness.core.ui.theme.colors
-import dev.jtiisto.wellness.core.ui.theme.columnHeaderStyle
 
 /**
- * The selected day's workout.
+ * The selected day's workout, on paper.
  *
  * A scrolling [Column] rather than a lazy list: a day is a handful of blocks,
  * and the accordions inside need a real scroll container to bring themselves
  * into view when the keyboard appears.
+ *
+ * Everything below draws Logbook — one surface, whitespace and hairlines for
+ * grouping, colour spent only on the tier dots. Nothing here decides anything:
+ * the eyebrow, the plates, the legend, the tally counts and the provenance
+ * wording all arrive already derived, and the few remaining presentation choices
+ * (which glyph, which empty-note wording, filled or outlined) live in
+ * `CoachNotation` where a JVM test can hold them.
  */
 @Composable
 fun WorkoutDayView(day: WorkoutDayState, actions: CoachActions, modifier: Modifier = Modifier) {
@@ -107,16 +114,16 @@ fun WorkoutDayView(day: WorkoutDayState, actions: CoachActions, modifier: Modifi
             .fillMaxWidth()
             .verticalScroll(rememberScrollState())
             .imePadding()
-            .padding(horizontal = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+            .padding(horizontal = SCREEN_PADDING),
     ) {
+        Spacer(Modifier.height(SCREEN_TOP))
         when (day) {
             WorkoutDayState.Loading -> LoadingDay()
             is WorkoutDayState.PlanUnavailable -> UnreadablePlanDay(day)
             is WorkoutDayState.Rest -> RestDay(day = day, actions = actions)
             is WorkoutDayState.Planned -> PlannedDay(day = day, actions = actions)
         }
-        Spacer(Modifier.height(WellnessSpace.lg))
+        Spacer(Modifier.height(SCREEN_BOTTOM))
     }
 }
 
@@ -125,23 +132,20 @@ fun WorkoutDayView(day: WorkoutDayState, actions: CoachActions, modifier: Modifi
 /** Storage has not answered yet. Deliberately not the rest-day empty state. */
 @Composable
 private fun LoadingDay() {
+    val palette = LogbookTheme.palette
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 48.dp),
+            .padding(vertical = EMPTY_DAY_PADDING),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         CircularProgressIndicator(
-            color = WellnessTheme.accent.fill,
-            trackColor = WellnessTheme.palette.line,
-            modifier = Modifier.size(28.dp),
+            color = palette.ink,
+            trackColor = palette.rule,
+            modifier = Modifier.size(SPINNER_SIZE),
         )
-        Spacer(Modifier.height(12.dp))
-        Text(
-            text = "Loading…",
-            style = WellnessTheme.type.secondary,
-            color = WellnessTheme.palette.textSecondary,
-        )
+        Spacer(Modifier.height(LogbookSpace.grid * 3))
+        EmptyStateText("Loading…")
     }
 }
 
@@ -150,102 +154,96 @@ private fun LoadingDay() {
  *
  * No entry, and no ad-hoc session either: offering one here would file an
  * off-plan Zone 2 against a day that already has a workout on it.
+ *
+ * Drawn as marginalia with an ink glyph rather than as a railed band: Logbook
+ * has no error colour to rail it in, and a note in the margin is what this is —
+ * the page explaining itself, not the page reporting damage.
  */
 @Composable
 private fun UnreadablePlanDay(day: WorkoutDayState.PlanUnavailable) {
-    val palette = WellnessTheme.palette
-    SemanticBanner(
-        rail = palette.error,
-        icon = Icons.Filled.ErrorOutline,
+    Marginalia(
         text = day.message,
-        modifier = Modifier.padding(top = WellnessSpace.lg),
+        glyph = Icons.Outlined.ErrorOutline,
+        modifier = Modifier.padding(top = LogbookSpace.group),
     )
 }
 
 /**
- * A band with a semantic rail down its left edge.
+ * An execution note: the programme talking to the user.
  *
- * The band carries the message and the rail carries the meaning, which keeps
- * error out of the surface itself — a whole card tinted red reads as damage
- * rather than as "this one thing did not load".
+ * Italic prose behind a 2dp `ruleStrong` rail, identical at every level it
+ * attaches to (section, group, exercise) because it means the same thing at all
+ * of them. The user's own notes are the opposite direction and never look like
+ * this — see [NoteBlock].
  */
 @Composable
-private fun SemanticBanner(
-    rail: Color,
-    icon: ImageVector,
-    text: String,
-    modifier: Modifier = Modifier,
-) {
-    val palette = WellnessTheme.palette
+private fun Marginalia(text: String, modifier: Modifier = Modifier, glyph: ImageVector? = null) {
+    val palette = LogbookTheme.palette
     Row(
         modifier = modifier
             .fillMaxWidth()
-            // Intrinsic height, because `fillMaxHeight` inside a scrolling
-            // column resolves against unbounded constraints and leaves the rail
-            // a zero-height sliver.
-            .height(IntrinsicSize.Min)
-            .clip(WellnessShape.card)
-            .background(palette.band)
-            .heightIn(min = 40.dp),
-        verticalAlignment = Alignment.CenterVertically,
+            .drawBehind {
+                val stroke = MARGINALIA_RAIL.toPx()
+                drawLine(
+                    color = palette.ruleStrong,
+                    start = Offset(stroke / 2f, 0f),
+                    end = Offset(stroke / 2f, size.height),
+                    strokeWidth = stroke,
+                )
+            }
+            .padding(start = MARGINALIA_INSET),
+        horizontalArrangement = Arrangement.spacedBy(LogbookSpace.grid * 1.5f),
     ) {
-        Box(
-            modifier = Modifier
-                .width(3.dp)
-                .fillMaxHeight()
-                .background(rail),
-        )
-        Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = WellnessSpace.sm),
-            horizontalArrangement = Arrangement.spacedBy(WellnessSpace.sm),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
+        glyph?.let {
             Icon(
-                imageVector = icon,
+                imageVector = it,
                 contentDescription = null,
-                tint = rail,
-                modifier = Modifier.size(16.dp),
-            )
-            Text(
-                text = text,
-                style = WellnessTheme.type.secondary,
-                color = palette.textPrimary,
+                tint = palette.ink,
+                modifier = Modifier
+                    .padding(top = MARGINALIA_GLYPH_LIFT)
+                    .size(GLYPH_SIZE),
             )
         }
+        Text(
+            text = text,
+            style = LogbookTheme.type.body.copy(fontStyle = FontStyle.Italic),
+            color = palette.inkSoft,
+        )
     }
+}
+
+/** Whatever is not there yet, said in the italic ink-faint voice reserved for absence. */
+@Composable
+private fun EmptyStateText(text: String, modifier: Modifier = Modifier) {
+    Text(
+        text = text,
+        style = LogbookTheme.type.body.copy(fontStyle = FontStyle.Italic),
+        color = LogbookTheme.palette.inkFaint,
+        modifier = modifier,
+    )
 }
 
 // ---- rest day ------------------------------------------------------------------
 
 @Composable
 private fun RestDay(day: WorkoutDayState.Rest, actions: CoachActions) {
-    val palette = WellnessTheme.palette
     if (day.showEmptyState) {
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(vertical = 48.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
+                .padding(vertical = EMPTY_DAY_PADDING),
+            contentAlignment = Alignment.Center,
         ) {
-            Icon(
-                imageVector = Icons.Filled.EventAvailable,
-                contentDescription = null,
-                modifier = Modifier.size(40.dp),
-                tint = palette.textFaint,
-            )
-            Spacer(Modifier.height(WellnessSpace.sm))
-            Text(
-                text = "No workout scheduled for this day",
-                style = WellnessTheme.type.body,
-                color = palette.textSecondary,
-            )
+            // The calendar glyph retires with the rest of the decorative set:
+            // the sentence says it, and an icon above it says it twice.
+            EmptyStateText("No workout scheduled for this day")
         }
     }
-    day.extra?.let { ExtraSessionCard(state = it, actions = actions) }
+    day.extra?.let { ExtraSessionSection(state = it, actions = actions) }
 }
 
 /**
- * The ad-hoc Zone 2 card.
+ * The ad-hoc Zone 2 session.
  *
  * The draft lives here and nowhere else: until Save it is not in the log store,
  * so nothing syncs and nothing is dirty. Discarding it is a local act, which is
@@ -253,104 +251,90 @@ private fun RestDay(day: WorkoutDayState.Rest, actions: CoachActions) {
  * delete is a recoverable tombstone.
  */
 @Composable
-private fun ExtraSessionCard(state: ExtraSessionState, actions: CoachActions) {
+private fun ExtraSessionSection(state: ExtraSessionState, actions: CoachActions) {
     var draft by remember { mutableStateOf<ExtraSessionDraft?>(null) }
 
     when (state) {
-        is ExtraSessionState.Saved -> CardSurface {
-            Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(WellnessSpace.sm)) {
-                ExtraSessionHeader()
-                CardioFields(
-                    durationPlaceholder = "min",
-                    durationText = state.durationText,
-                    avgHrText = state.avgHrText,
-                    maxHrText = state.maxHrText,
-                    enabled = state.editable,
-                    onCommit = actions.onCommitExtraSessionField,
-                )
-                if (state.editable) {
-                    TextButton(
-                        onClick = actions.onDeleteExtraSession,
-                        colors = ButtonDefaults.textButtonColors(
-                            contentColor = WellnessTheme.palette.error,
-                        ),
-                        modifier = Modifier.align(Alignment.End),
-                    ) {
-                        Icon(Icons.Filled.Delete, contentDescription = null)
-                        Spacer(Modifier.width(WellnessSpace.xs))
-                        Text("Delete session")
-                    }
-                }
+        is ExtraSessionState.Saved -> Section {
+            ExtraSessionHead()
+            CardioFields(
+                durationPlaceholder = "min",
+                durationText = state.durationText,
+                avgHrText = state.avgHrText,
+                maxHrText = state.maxHrText,
+                enabled = state.editable,
+                onCommit = actions.onCommitExtraSessionField,
+            )
+            if (state.editable) {
+                TextButton(
+                    onClick = actions.onDeleteExtraSession,
+                    colors = ButtonDefaults.textButtonColors(contentColor = LogbookTheme.palette.ink),
+                    modifier = Modifier.align(Alignment.End),
+                ) { Text("DELETE SESSION", style = LogbookTheme.type.eyebrow) }
             }
         }
 
         ExtraSessionState.Idle -> {
             val current = draft
             if (current == null) {
-                OutlinedButton(
+                Spacer(Modifier.height(LogbookSpace.group))
+                InkOutlineButton(
+                    label = "Add Zone 2 session",
                     onClick = { draft = ExtraSessionDraft() },
-                    shape = WellnessShape.card,
-                    colors = WellnessDefaults.accentOutlinedButtonColors(),
-                    border = BorderStroke(1.dp, WellnessTheme.accent.border),
                     modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Icon(Icons.Filled.Add, contentDescription = null)
-                    Spacer(Modifier.width(WellnessSpace.sm))
-                    Text("Add Zone 2 session", style = WellnessTheme.type.label)
-                }
+                )
             } else {
-                CardSurface {
-                    Column(
-                        modifier = Modifier.padding(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(WellnessSpace.sm),
-                    ) {
-                        ExtraSessionHeader()
-                        Row(horizontalArrangement = Arrangement.spacedBy(WellnessSpace.sm)) {
+                Section {
+                    ExtraSessionHead()
+                    Row(horizontalArrangement = Arrangement.spacedBy(LogbookSpace.grid * 2)) {
+                        LabelledField(label = "Duration (min)", modifier = Modifier.weight(1f)) {
                             NumericField(
                                 value = current.durationMin,
                                 label = "Duration (min)",
                                 placeholder = "min",
                                 enabled = true,
                                 onCommit = { draft = current.copy(durationMin = it) },
-                                modifier = Modifier.weight(1f),
                             )
+                        }
+                        LabelledField(label = "Avg HR", modifier = Modifier.weight(1f)) {
                             NumericField(
                                 value = current.avgHr,
                                 label = "Avg HR",
                                 placeholder = "bpm",
                                 enabled = true,
                                 onCommit = { draft = current.copy(avgHr = it) },
-                                modifier = Modifier.weight(1f),
                             )
+                        }
+                        LabelledField(label = "Max HR", modifier = Modifier.weight(1f)) {
                             NumericField(
                                 value = current.maxHr,
                                 label = "Max HR",
                                 placeholder = "bpm",
                                 enabled = true,
                                 onCommit = { draft = current.copy(maxHr = it) },
-                                modifier = Modifier.weight(1f),
                             )
                         }
-                        Row(
-                            modifier = Modifier.align(Alignment.End),
-                            horizontalArrangement = Arrangement.spacedBy(WellnessSpace.sm),
-                        ) {
-                            TextButton(
-                                onClick = { draft = null },
-                                colors = ButtonDefaults.textButtonColors(
-                                    contentColor = WellnessTheme.palette.textSecondary,
-                                ),
-                            ) { Text("Delete") }
-                            Button(
-                                onClick = {
-                                    actions.onSaveExtraSession(current)
-                                    draft = null
-                                },
-                                enabled = draftCanSave(current),
-                                shape = WellnessShape.card,
-                                colors = WellnessDefaults.accentButtonColors(),
-                            ) { Text("Save", style = WellnessTheme.type.label) }
-                        }
+                    }
+                    Row(
+                        modifier = Modifier
+                            .align(Alignment.End)
+                            .padding(top = LogbookSpace.grid * 2),
+                        horizontalArrangement = Arrangement.spacedBy(LogbookSpace.grid * 2),
+                    ) {
+                        TextButton(
+                            onClick = { draft = null },
+                            colors = ButtonDefaults.textButtonColors(
+                                contentColor = LogbookTheme.palette.inkSoft,
+                            ),
+                        ) { Text("DELETE", style = LogbookTheme.type.eyebrow) }
+                        InkButton(
+                            label = "Save",
+                            enabled = draftCanSave(current),
+                            onClick = {
+                                actions.onSaveExtraSession(current)
+                                draft = null
+                            },
+                        )
                     }
                 }
             }
@@ -359,89 +343,84 @@ private fun ExtraSessionCard(state: ExtraSessionState, actions: CoachActions) {
 }
 
 /**
- * The content plane: a card surface behind a hairline, at the default radius.
+ * A flat, rule-bounded block of the page.
  *
- * `inline`, like the layout primitives it stands in for: a wrapper this thin
- * should not cost a lambda allocation per card, and keeping the caller's body
- * in the caller is also what lets Kover see it as the composable it is.
+ * The card retires with the fills and the borders that made it one: what is left
+ * is air above, a `ruleStrong` boundary across the top, and air below. `inline`
+ * for the same reason `CardSurface` was — a wrapper this thin should not cost a
+ * lambda allocation, and keeping the caller's body in the caller is what lets
+ * Kover see it as the composable it is.
  */
 @Composable
-private inline fun CardSurface(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
-    val palette = WellnessTheme.palette
-    Box(
+private inline fun Section(
+    modifier: Modifier = Modifier,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    val palette = LogbookTheme.palette
+    Column(
         modifier = modifier
             .fillMaxWidth()
-            .clip(WellnessShape.card)
-            .background(palette.card)
-            .border(1.dp, palette.line, WellnessShape.card),
-    ) {
-        content()
-    }
+            .padding(top = LogbookSpace.group)
+            .drawBehind {
+                val stroke = LogbookSpace.hairline.toPx()
+                drawLine(
+                    color = palette.ruleStrong,
+                    start = Offset(0f, stroke / 2f),
+                    end = Offset(size.width, stroke / 2f),
+                    strokeWidth = stroke,
+                )
+            }
+            .padding(top = LogbookSpace.grid * 3),
+        content = content,
+    )
 }
 
+/** The off-plan session names itself, and says so in the eyebrow dialect. */
 @Composable
-private fun ExtraSessionHeader() {
-    val palette = WellnessTheme.palette
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(WellnessSpace.sm)) {
-        Text(
-            text = EXTRA_SESSION_TITLE,
-            style = WellnessTheme.type.title,
-            color = palette.textPrimary,
-        )
-        // Off-plan is a fact, not a warning: band and secondary, no amber.
-        Text(
-            text = "off-plan".uppercase(),
-            style = WellnessTheme.type.micro,
-            color = palette.textSecondary,
-            modifier = Modifier
-                .clip(WellnessShape.card)
-                .background(palette.band)
-                .padding(horizontal = 6.dp, vertical = 2.dp),
-        )
-    }
+private fun ExtraSessionHead() {
+    val palette = LogbookTheme.palette
+    Text(
+        text = "off-plan".uppercase(),
+        style = LogbookTheme.type.eyebrow,
+        color = palette.inkSoft,
+    )
+    Spacer(Modifier.height(LogbookSpace.grid))
+    SectionHead(label = EXTRA_SESSION_TITLE, hint = "")
 }
 
 // ---- planned day ---------------------------------------------------------------
 
 @Composable
 private fun PlannedDay(day: WorkoutDayState.Planned, actions: CoachActions) {
-    day.banner?.let { ReadOnlyBannerRow(it) }
-
     WorkoutHeader(day = day, actions = actions)
 
+    // One voice for the whole day, resolved once: every empty note on screen is
+    // answering the same question about the same session.
+    val voice = noteVoice(day.eyebrow, day.editable)
+
     for (block in day.blocks) {
-        BlockCard(block = block, editable = day.editable, actions = actions)
+        BlockSection(block = block, editable = day.editable, voice = voice, actions = actions)
     }
 
-    SessionFeedbackFields(state = day.feedback, onFeedback = actions.onFeedback)
-}
-
-@Composable
-private fun ReadOnlyBannerRow(banner: ReadOnlyBanner) {
-    SemanticBanner(
-        // Past and future are both "not now", and neither is a failure.
-        rail = WellnessTheme.palette.textFaint,
-        icon = when (banner.kind) {
-            ReadOnlyBanner.Kind.PAST -> Icons.Filled.Lock
-            ReadOnlyBanner.Kind.FUTURE -> Icons.Filled.EventAvailable
-        },
-        text = banner.text,
-    )
+    SessionFeedbackSection(state = day.feedback, voice = voice, onFeedback = actions.onFeedback)
 }
 
 /**
- * The day's title, its meta, and the collapsible hook controls.
+ * The day's eyebrow, title, meta and legend — and the collapsible hook controls.
  *
- * The header opens itself once per session while the gate is still shut, so the
- * user can see *why* entry is locked. After that the toggle is theirs: a manual
- * collapse is not undone by the next recomposition.
+ * The lifecycle is the eyebrow's whole job now: the read-only bands are gone,
+ * and so is every semantic colour they carried.
+ *
+ * The header opens its controls once per session while the gate is still shut,
+ * so the user can see *why* entry is locked. After that the toggle is theirs: a
+ * manual collapse is not undone by the next recomposition.
  */
 @Composable
 private fun WorkoutHeader(day: WorkoutDayState.Planned, actions: CoachActions) {
     var expanded by remember(day.sessionId) { mutableStateOf(false) }
     var hasAutoExpanded by remember(day.sessionId) { mutableStateOf(false) }
     val hasControls = day.controls != null
-    val palette = WellnessTheme.palette
+    val palette = LogbookTheme.palette
 
     LaunchedEffect(hasControls, day.gateSatisfied, hasAutoExpanded) {
         if (!hasAutoExpanded && hasControls && !day.gateSatisfied) {
@@ -450,60 +429,64 @@ private fun WorkoutHeader(day: WorkoutDayState.Planned, actions: CoachActions) {
         }
     }
 
-    val rotation by animateFloatAsState(if (expanded) 0f else -90f, label = "controls-chevron")
+    val rotation by animateFloatAsState(if (expanded) 0f else -QUARTER_TURN, label = "controls-chevron")
 
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(WellnessShape.card)
-            .background(palette.band)
-            .padding(horizontal = 12.dp, vertical = WellnessSpace.sm),
-    ) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        EyebrowLine(day.eyebrow)
+
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .then(
                     if (hasControls) {
                         Modifier.clickableRow(
-                            label = if (expanded) "Hide workout controls" else "Show workout controls",
+                            // The title rides along: a merged clickable replaces
+                            // its children's semantics, so without it the day
+                            // name is never announced at all.
+                            label = if (expanded) {
+                                "${day.dayName}, hide workout controls"
+                            } else {
+                                "${day.dayName}, show workout controls"
+                            },
                             onClick = { expanded = !expanded },
                         )
                     } else {
                         Modifier
                     },
                 )
-                .padding(vertical = WellnessSpace.sm),
+                .padding(top = TITLE_TOP, bottom = TITLE_BOTTOM),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                text = day.dayName,
-                style = WellnessTheme.type.headline,
-                color = palette.textPrimary,
+                text = day.dayName.uppercase(),
+                style = LogbookTheme.type.display,
+                color = palette.ink,
                 modifier = Modifier.weight(1f),
             )
             if (hasControls) {
                 Icon(
                     imageVector = Icons.Filled.ExpandMore,
                     contentDescription = null,
-                    tint = palette.textSecondary,
+                    tint = palette.inkSoft,
                     modifier = Modifier
-                        .size(14.dp)
+                        .size(GLYPH_SIZE)
                         .rotate(rotation),
                 )
             }
         }
 
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            day.location?.let { MetaItem(icon = Icons.Filled.Place, text = it) }
-            day.phase?.let { MetaItem(icon = Icons.Filled.BarChart, text = it) }
+        MetaLine(location = day.location, phase = day.phase)
+
+        if (day.legend.isNotEmpty()) {
+            LegendRow(legend = day.legend, modifier = Modifier.padding(top = LEGEND_TOP))
         }
 
         AnimatedVisibility(visible = expanded && hasControls) {
             // One full-width row per hook: sharing a single Row pushed the End
             // button's Undo off-screen once labels grew ("(locked)", "Working…").
             Column(
-                modifier = Modifier.padding(top = WellnessSpace.sm),
-                verticalArrangement = Arrangement.spacedBy(WellnessSpace.sm),
+                modifier = Modifier.padding(top = LogbookSpace.grid * 3),
+                verticalArrangement = Arrangement.spacedBy(LogbookSpace.grid * 2),
             ) {
                 day.controls?.start?.let { HookButton(model = it, actions = actions) }
                 day.controls?.end?.let { HookButton(model = it, actions = actions) }
@@ -512,180 +495,246 @@ private fun WorkoutHeader(day: WorkoutDayState.Planned, actions: CoachActions) {
     }
 }
 
+/** Mono caps in ink-soft behind an ink glyph — never a colour emoji. */
 @Composable
-private fun MetaItem(icon: ImageVector, text: String) {
-    val palette = WellnessTheme.palette
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(WellnessSpace.xs)) {
-        Icon(
-            imageVector = icon,
-            contentDescription = null,
-            tint = palette.textSecondary,
-            modifier = Modifier.size(14.dp),
-        )
+private fun EyebrowLine(eyebrow: WorkoutEyebrow) {
+    val palette = LogbookTheme.palette
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(LogbookSpace.grid * 2),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        when (eyebrow.glyph()) {
+            EyebrowGlyph.LOCK -> Icon(
+                imageVector = Icons.Outlined.Lock,
+                contentDescription = null,
+                tint = palette.ink,
+                modifier = Modifier.size(EYEBROW_GLYPH),
+            )
+
+            EyebrowGlyph.CALENDAR -> Icon(
+                imageVector = Icons.Outlined.CalendarToday,
+                contentDescription = null,
+                tint = palette.ink,
+                modifier = Modifier.size(EYEBROW_GLYPH),
+            )
+
+            // Under way is the one state with no icon for it: a filled dot is
+            // the notation for "this is live", the same mark the tally uses.
+            EyebrowGlyph.DOT -> Box(
+                modifier = Modifier
+                    .size(EYEBROW_DOT)
+                    .clip(CircleShape)
+                    .background(palette.ink),
+            )
+        }
         Text(
-            text = text,
-            style = WellnessTheme.type.label,
-            color = palette.textSecondary,
+            text = eyebrow.label.uppercase(),
+            style = LogbookTheme.type.eyebrow,
+            color = palette.inkSoft,
         )
     }
 }
 
+/** Where and which phase, as words — the location pin and the bar chart retire. */
+@Composable
+private fun MetaLine(location: String?, phase: String?) {
+    if (location == null && phase == null) return
+    val palette = LogbookTheme.palette
+    Text(
+        text = buildAnnotatedString {
+            location?.let {
+                withStyle(SpanStyle(color = palette.ink, fontWeight = FontWeight.Medium)) { append(it) }
+            }
+            if (location != null && phase != null) {
+                withStyle(SpanStyle(color = palette.inkFaint)) { append(META_SEPARATOR) }
+            }
+            phase?.let { append(it) }
+        },
+        style = LogbookTheme.type.body,
+        color = palette.inkSoft,
+    )
+}
+
 /**
- * One hook button, with its Undo beside it when the state allows one.
+ * The tier legend — load-bearing, not decoration.
  *
- * The button stays enabled while FIRED and simply does nothing — the PWA's
- * behaviour, kept because greying it out next to a live Undo reads as "this
- * workout is finished".
- *
- * Start is the day's one filled action; End outlines, so the two never compete
- * for the same weight.
+ * Plate assignment is positional, so the same word is red in one workout and
+ * blue in the next; a dot without this row underneath says nothing at all. It
+ * flows rather than scrolls, because a legend that runs off the edge of the page
+ * is the same as no legend.
  */
 @Composable
-private fun HookButton(model: HookButtonModel, actions: CoachActions) {
-    val palette = WellnessTheme.palette
-    val accent = WellnessTheme.accent
-    val settled = model.state == HookButtonState.FIRED || model.state == HookButtonState.LOCKED
-    val failed = model.state == HookButtonState.FAILED
-    val outlined = model.action == HookAction.END && !settled && !failed
-
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(WellnessSpace.xs),
+private fun LegendRow(legend: List<TierLegendEntry>, modifier: Modifier = Modifier) {
+    FlowRow(
+        modifier = modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(LogbookSpace.grid * 4),
+        verticalArrangement = Arrangement.spacedBy(LogbookSpace.grid),
     ) {
-        if (outlined) {
-            OutlinedButton(
-                modifier = Modifier.weight(1f),
-                onClick = { if (model.canFire) actions.onFireHook(model.action) },
-                enabled = model.enabled,
-                shape = WellnessShape.card,
-                colors = WellnessDefaults.accentOutlinedButtonColors(),
-                border = BorderStroke(1.dp, accent.border),
-            ) { Text(model.label, style = WellnessTheme.type.label) }
-        } else {
-            Button(
-                modifier = Modifier.weight(1f),
-                onClick = { if (model.canFire) actions.onFireHook(model.action) },
-                enabled = model.enabled,
-                shape = WellnessShape.card,
-                colors = when {
-                    settled -> WellnessDefaults.semanticButtonColors(palette.success)
-                    failed -> WellnessDefaults.semanticButtonColors(palette.error)
-                    else -> WellnessDefaults.accentButtonColors()
-                },
-            ) { Text(model.label, style = WellnessTheme.type.label) }
-        }
-
-        if (model.canUndo) {
-            TextButton(
-                onClick = { actions.onUndoHook(model.action) },
-                colors = WellnessDefaults.accentTextButtonColors(),
+        for (entry in legend) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(LogbookSpace.grid * 1.5f),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Icon(Icons.AutoMirrored.Filled.Undo, contentDescription = null, modifier = Modifier.size(16.dp))
-                Spacer(Modifier.width(WellnessSpace.xs))
-                Text("Undo")
+                Box(
+                    modifier = Modifier
+                        .size(PLATE_DOT)
+                        .clip(CircleShape)
+                        .background(plateColor(entry.slot)),
+                )
+                Text(
+                    // Uppercased here and nowhere else: the string is the plan's
+                    // and is rendered verbatim everywhere it is not a legend.
+                    text = entry.exposure.uppercase(),
+                    style = LogbookTheme.type.eyebrow,
+                    color = LogbookTheme.palette.inkSoft,
+                )
             }
         }
+    }
+}
+
+/** A plate index against the palette; anything past it is the ink fallback. */
+@Composable
+private fun plateColor(slot: PlateSlot): Color {
+    val palette = LogbookTheme.palette
+    return when (slot) {
+        // `getOrElse` rather than an index: the assignment and the palette are
+        // pinned to the same length by test, and a drawing routine is the wrong
+        // place to find out they stopped agreeing.
+        is PlateSlot.Plate -> palette.plates.getOrElse(slot.index) { palette.ink }
+        PlateSlot.Ink -> palette.ink
     }
 }
 
 // ---- blocks --------------------------------------------------------------------
 
+/**
+ * A block, drawn as a section: display-caps label over a 1.5dp ink underline,
+ * with its timing and rest guidance as the one mono hint on the same baseline.
+ */
 @Composable
-private fun BlockCard(block: BlockState, editable: Boolean, actions: CoachActions) {
-    val palette = WellnessTheme.palette
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        // Stacked like the PWA's .block-header (a column): title, timing badge,
-        // rest guidance — each full-width. Sharing a Row squeezed a long
-        // guidance sentence into the leftover width beside a long title.
-        Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(text = block.title, style = WellnessTheme.type.title, color = palette.textPrimary)
-            if (block.timing.isNotEmpty()) {
-                Text(
-                    text = block.timing,
-                    style = WellnessTheme.type.label,
-                    color = WellnessTheme.accent.text,
-                )
-            }
-            if (block.restGuidance.isNotEmpty()) {
-                Text(
-                    text = block.restGuidance,
-                    style = WellnessTheme.type.label,
-                    color = palette.textFaint,
-                )
-            }
-        }
+private fun BlockSection(
+    block: BlockState,
+    editable: Boolean,
+    voice: NoteVoice,
+    actions: CoachActions,
+) {
+    Column(modifier = Modifier.padding(top = SECTION_GAP)) {
+        SectionHead(label = block.title, hint = sectionHint(block.timing, block.restGuidance))
 
         for (item in block.items) {
             when (item) {
                 is BlockItemState.Single -> ExerciseAccordion(
                     row = item.exercise,
                     editable = editable,
+                    voice = voice,
                     actions = actions,
+                    gutter = true,
                 )
 
-                is BlockItemState.Group -> SupersetGroup(
-                    group = item,
-                    editable = editable,
-                    actions = actions,
+                is BlockItemState.Group -> SupersetBracket {
+                    for (exercise in item.exercises) {
+                        ExerciseAccordion(
+                            row = exercise,
+                            editable = editable,
+                            voice = voice,
+                            actions = actions,
+                            // The bracket already owns the gutter it is drawn
+                            // in; indenting the rows again would double it.
+                            gutter = false,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SectionHead(label: String, hint: String) {
+    val palette = LogbookTheme.palette
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .drawBehind {
+                val stroke = LogbookSpace.sectionUnderline.toPx()
+                drawLine(
+                    color = palette.ink,
+                    start = Offset(0f, size.height - stroke / 2f),
+                    end = Offset(size.width, size.height - stroke / 2f),
+                    strokeWidth = stroke,
                 )
             }
+            .padding(bottom = SECTION_UNDERLINE_GAP),
+    ) {
+        Text(
+            text = label.uppercase(),
+            style = LogbookTheme.type.section,
+            color = palette.ink,
+            modifier = Modifier
+                .weight(1f)
+                .alignByBaseline(),
+        )
+        if (hint.isNotEmpty()) {
+            Text(
+                text = hint,
+                style = LogbookTheme.type.meta,
+                color = palette.inkSoft,
+                modifier = Modifier
+                    .padding(start = LogbookSpace.grid * 2)
+                    .alignByBaseline(),
+                textAlign = TextAlign.End,
+            )
         }
     }
 }
 
 /**
- * A superset, marked by a rail rather than a box.
+ * A superset, drawn rather than named.
  *
- * Concurrent groups rotate hue exactly as the PWA does — A stays the module's
- * own accent, B borrows sky and C violet — so two groups running side by side
- * are told apart by colour rather than by reading their labels.
+ * A 1.5dp ink stroke in the gutter with a 6dp tick at each end — a square
+ * bracket, inset from the top and bottom rows so it brackets the group rather
+ * than boxing it. It spans whatever the group contains, expanded bodies
+ * included, because it is drawn behind the whole column.
+ *
+ * The accent rail, the 6% wash, the label chip and the A/B/C hue rotation all
+ * retire with it: `supersetDisplayLabel` is still ported and still tested, and
+ * nothing renders it any more.
  */
 @Composable
-private fun SupersetGroup(group: BlockItemState.Group, editable: Boolean, actions: CoachActions) {
-    val accent = supersetAccent(group.label)
-    Row(
+private inline fun SupersetBracket(content: @Composable ColumnScope.() -> Unit) {
+    val palette = LogbookTheme.palette
+    Column(
         modifier = Modifier
             .fillMaxWidth()
-            .height(IntrinsicSize.Min)
-            .clip(RoundedCornerShape(topEnd = 8.dp, bottomEnd = 8.dp))
-            .background(accent.wash),
-    ) {
-        Box(
-            modifier = Modifier
-                .width(3.dp)
-                .fillMaxHeight()
-                .background(accent.fill),
-        )
-        Column(
-            modifier = Modifier.padding(WellnessSpace.sm),
-            verticalArrangement = Arrangement.spacedBy(WellnessSpace.xs),
-        ) {
-            Text(
-                text = group.displayLabel.uppercase(),
-                style = WellnessTheme.type.micro,
-                color = accent.text,
-                modifier = Modifier
-                    .clip(WellnessShape.card)
-                    .background(accent.chipFill)
-                    .padding(horizontal = 6.dp, vertical = 2.dp),
-            )
-            for (exercise in group.exercises) {
-                ExerciseAccordion(row = exercise, editable = editable, actions = actions)
+            .drawBehind {
+                val stroke = BRACKET_STROKE.toPx()
+                val tick = BRACKET_TICK.toPx()
+                val inset = LogbookSpace.row.toPx()
+                val top = inset
+                val bottom = (size.height - inset).coerceAtLeast(inset)
+                drawLine(
+                    color = palette.ink,
+                    start = Offset(stroke / 2f, top),
+                    end = Offset(stroke / 2f, bottom),
+                    strokeWidth = stroke,
+                )
+                drawLine(
+                    color = palette.ink,
+                    start = Offset(0f, top + stroke / 2f),
+                    end = Offset(tick, top + stroke / 2f),
+                    strokeWidth = stroke,
+                )
+                drawLine(
+                    color = palette.ink,
+                    start = Offset(0f, bottom - stroke / 2f),
+                    end = Offset(tick, bottom - stroke / 2f),
+                    strokeWidth = stroke,
+                )
             }
-        }
-    }
-}
-
-/** A → the module's accent, B → sky, C → violet. Anything else keeps the module's. */
-@Composable
-private fun supersetAccent(label: String): AccentColors {
-    val palette = WellnessTheme.palette
-    return when (label.trim().firstOrNull()?.uppercaseChar()) {
-        'B' -> ModuleAccent.TRENDS.colors(palette)
-        'C' -> ModuleAccent.ANALYSIS.colors(palette)
-        else -> WellnessTheme.accent
-    }
+            .padding(start = GUTTER),
+        content = content,
+    )
 }
 
 /** What an accordion body should draw, and whether a finger may reach it. */
@@ -720,7 +769,11 @@ internal fun accordionBody(
 }
 
 /**
- * One exercise, header plus expandable body.
+ * One exercise: a row of the log, and everything behind it.
+ *
+ * Collapsed it is one line — dot, name, scheme, tally — because the design's
+ * sixth principle allows exactly one metadata cluster per row. Everything else
+ * is in the expanded body.
  *
  * Expanding brings the body into view: the PWA does not scroll, which on a phone
  * means the keyboard covers the set grid the moment it opens. The request fires
@@ -729,8 +782,14 @@ internal fun accordionBody(
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun ExerciseAccordion(row: ExerciseRowState, editable: Boolean, actions: CoachActions) {
-    val palette = WellnessTheme.palette
+private fun ExerciseAccordion(
+    row: ExerciseRowState,
+    editable: Boolean,
+    voice: NoteVoice,
+    actions: CoachActions,
+    gutter: Boolean,
+) {
+    val palette = LogbookTheme.palette
     val bringIntoView = remember { BringIntoViewRequester() }
     val bodyVisible = remember(row.id) { MutableTransitionState(row.expanded) }
     bodyVisible.targetState = row.expanded
@@ -755,325 +814,442 @@ private fun ExerciseAccordion(row: ExerciseRowState, editable: Boolean, actions:
         editable = editable,
     )
 
-    CardSurface(modifier = Modifier.bringIntoViewRequester(bringIntoView)) {
-        Column {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .bringIntoViewRequester(bringIntoView)
+            // The hairline runs the full width of the row, gutter included —
+            // a group's rows inherit the bracket's inset instead, which is how
+            // the drawn bracket reads as owning them.
+            .hairlineBelow(palette.rule)
+            .padding(start = if (gutter) GUTTER else 0.dp),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickableRow(
+                    // The row is one merged node, so everything drawn on it has
+                    // to be in this sentence — the tally above all, since marks
+                    // are geometry to a screen reader.
+                    label = exerciseRowDescription(
+                        name = row.name,
+                        exposure = row.exposure,
+                        scheme = row.target,
+                        tally = row.tally,
+                        expanded = row.expanded,
+                    ),
+                    onClick = { actions.onToggleExercise(row.id) },
+                )
+                // Height before padding: the other order asks for 48dp *plus*
+                // 28dp of padding and gives every row of the log a 76dp bed.
+                .heightIn(min = MIN_TOUCH_TARGET)
+                .padding(vertical = LogbookSpace.row),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            ExerciseNameText(
+                row = row,
+                modifier = Modifier
+                    .weight(1f)
+                    .alignByBaseline(),
+            )
             Row(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .clickableRow(
-                        label = if (row.expanded) "Collapse ${row.name}" else "Expand ${row.name}",
-                        onClick = { actions.onToggleExercise(row.id) },
-                    )
-                    .padding(horizontal = 12.dp, vertical = 10.dp)
-                    .heightIn(min = MIN_TOUCH_TARGET),
+                    .padding(start = LogbookSpace.grid * 2.5f)
+                    .alignByBaseline(),
+                horizontalArrangement = Arrangement.spacedBy(LogbookSpace.grid * 2.5f),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-                Text(
-                    text = row.name,
-                    style = WellnessTheme.type.title,
-                    color = if (row.completed) palette.success else palette.textPrimary,
-                    modifier = Modifier.weight(1f),
-                )
-                for (pill in row.pills) NeutralPill(text = pill)
-                row.exposure?.let { ExposureChip(text = it) }
                 if (row.target.isNotEmpty()) {
                     Text(
                         text = row.target,
-                        style = WellnessTheme.type.label,
-                        color = palette.textSecondary,
+                        style = LogbookTheme.type.data,
+                        color = palette.inkSoft,
                     )
                 }
-                row.progress?.let { ProgressPill(display = it.display, complete = it.complete) }
-                Icon(
-                    imageVector = Icons.Filled.ExpandMore,
-                    contentDescription = null,
-                    tint = palette.textSecondary,
-                    modifier = Modifier
-                        .size(14.dp)
-                        .rotate(if (row.expanded) 0f else -90f),
+                row.tally?.let { Tally(it) }
+            }
+            Icon(
+                imageVector = Icons.Filled.ExpandMore,
+                contentDescription = null,
+                tint = palette.inkFaint,
+                modifier = Modifier
+                    .padding(start = LogbookSpace.grid)
+                    .size(GLYPH_SIZE)
+                    .rotate(if (row.expanded) 0f else -QUARTER_TURN),
+            )
+        }
+
+        AnimatedVisibility(
+            visibleState = bodyVisible,
+            enter = WellnessMotion.expandEnter,
+            exit = WellnessMotion.expandExit,
+        ) {
+            Column(modifier = Modifier.padding(bottom = LogbookSpace.grid * 3)) {
+                if (row.prescription.isNotEmpty()) {
+                    PrescriptionMeta(row.prescription)
+                }
+
+                when (val entry = body.entry) {
+                    is EntryWidgetState.Sets -> SetTable(
+                        exerciseId = row.id,
+                        entry = entry,
+                        editable = body.interactive,
+                        actions = actions,
+                    )
+
+                    is EntryWidgetState.Cardio -> CardioFields(
+                        durationPlaceholder = entry.durationPlaceholder,
+                        durationText = entry.durationText,
+                        avgHrText = entry.avgHrText,
+                        maxHrText = entry.maxHrText,
+                        enabled = body.interactive,
+                        onCommit = { field, input -> actions.onCommitCardioField(row.id, field, input) },
+                    )
+
+                    is EntryWidgetState.Checklist -> ChecklistItems(
+                        items = entry.items,
+                        enabled = body.interactive,
+                        onToggle = { actions.onToggleChecklistItem(row.id, it) },
+                    )
+
+                    null -> Unit
+                }
+
+                row.guidanceNote?.let {
+                    Marginalia(text = it, modifier = Modifier.padding(top = LogbookSpace.grid * 3))
+                }
+
+                NoteBlock(
+                    label = "Your notes",
+                    value = row.note,
+                    voice = voice,
+                    scope = NoteScope.EXERCISE,
+                    accessibilityLabel = "${row.name} note",
+                    enabled = body.interactive,
+                    onChange = { actions.onExerciseNote(row.id, it) },
                 )
             }
-
-            AnimatedVisibility(
-                visibleState = bodyVisible,
-                enter = WellnessMotion.expandEnter,
-                exit = WellnessMotion.expandExit,
-            ) {
-                Column(
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = WellnessSpace.sm),
-                    verticalArrangement = Arrangement.spacedBy(WellnessSpace.sm),
-                ) {
-                    row.guidanceNote?.let { GuidanceNote(it) }
-                    if (row.prescription.isNotEmpty()) PrescriptionRow(row.prescription)
-
-                    when (val entry = body.entry) {
-                        is EntryWidgetState.Sets -> SetGrid(
-                            exerciseId = row.id,
-                            entry = entry,
-                            editable = body.interactive,
-                            actions = actions,
-                        )
-
-                        is EntryWidgetState.Cardio -> CardioFields(
-                            durationPlaceholder = entry.durationPlaceholder,
-                            durationText = entry.durationText,
-                            avgHrText = entry.avgHrText,
-                            maxHrText = entry.maxHrText,
-                            enabled = body.interactive,
-                            onCommit = { field, input -> actions.onCommitCardioField(row.id, field, input) },
-                        )
-
-                        is EntryWidgetState.Checklist -> ChecklistItems(
-                            items = entry.items,
-                            enabled = body.interactive,
-                            onToggle = { actions.onToggleChecklistItem(row.id, it) },
-                        )
-
-                        null -> Unit
-                    }
-
-                    NoteField(
-                        value = row.note,
-                        label = "${row.name} note",
-                        placeholder = if (editable) "Add notes…" else "No notes",
-                        enabled = body.interactive,
-                        onChange = { actions.onExerciseNote(row.id, it) },
-                    )
-                }
-            }
         }
     }
 }
 
-/** Coaching advice, railed in warning amber and set in italic — it is a caution, not a value. */
+/**
+ * The exercise's name with its tier dot set into it.
+ *
+ * Inline content rather than a `Row`, so a dot belongs to the text: a two-line
+ * name keeps its dot against the first word instead of floating beside a column
+ * of wrapped prose. The parsed-name pills follow as plain ink-soft text — the
+ * chips they used to be were a second surface, and there is only one.
+ */
 @Composable
-private fun GuidanceNote(text: String) {
-    val palette = WellnessTheme.palette
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(IntrinsicSize.Min),
-        horizontalArrangement = Arrangement.spacedBy(WellnessSpace.sm),
-    ) {
-        Box(
-            modifier = Modifier
-                .width(3.dp)
-                .fillMaxHeight()
-                .clip(WellnessShape.pill)
-                .background(palette.warning),
-        )
-        Text(
-            text = text,
-            style = WellnessTheme.type.secondary.copy(fontStyle = FontStyle.Italic),
-            color = palette.textSecondary,
-        )
-    }
-}
+private fun ExerciseNameText(row: ExerciseRowState, modifier: Modifier = Modifier) {
+    val palette = LogbookTheme.palette
+    val dotColor = row.plate?.let { plateColor(it) }
+    val density = LocalDensity.current
 
-@Composable
-private fun NeutralPill(text: String) {
-    val palette = WellnessTheme.palette
+    val text = buildAnnotatedString {
+        if (dotColor != null) appendInlineContent(PLATE_DOT_SLOT, "●")
+        append(row.name)
+        for (pill in row.pills) {
+            withStyle(SpanStyle(color = palette.inkSoft)) { append("  $pill") }
+        }
+    }
+
+    val inlineContent = remember(dotColor, density) {
+        if (dotColor == null) {
+            emptyMap()
+        } else {
+            // TextUnit carries no `plus` — sp and em are not addable — so the
+            // span's width is summed in Dp and converted once.
+            val dot = with(density) { PLATE_DOT.toSp() }
+            val span = with(density) { (PLATE_DOT + PLATE_DOT_GAP).toSp() }
+            mapOf(
+                PLATE_DOT_SLOT to InlineTextContent(
+                    Placeholder(
+                        width = span,
+                        height = dot,
+                        placeholderVerticalAlign = PlaceholderVerticalAlign.TextCenter,
+                    ),
+                ) {
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.CenterStart) {
+                        Box(
+                            modifier = Modifier
+                                .size(PLATE_DOT)
+                                .clip(CircleShape)
+                                .background(dotColor),
+                        )
+                    }
+                },
+            )
+        }
+    }
+
     Text(
         text = text,
-        style = WellnessTheme.type.label,
-        color = palette.textSecondary,
-        modifier = Modifier
-            .clip(RoundedCornerShape(6.dp))
-            .background(palette.band)
-            .padding(horizontal = 5.dp, vertical = 1.dp),
+        style = LogbookTheme.type.name,
+        // Completion is the tally's job now; a green name said it twice and said
+        // it in a colour the system does not own.
+        color = palette.ink,
+        inlineContent = inlineContent,
+        modifier = modifier,
     )
 }
 
-/** Exposure is taxonomy — the one place the uppercase micro style belongs. */
+/** One mark per unit of work: inked when done, outlined when not. */
 @Composable
-private fun ExposureChip(text: String) {
-    val accent = WellnessTheme.accent
-    Text(
-        text = text.uppercase(),
-        style = WellnessTheme.type.micro,
-        color = accent.text,
-        modifier = Modifier
-            .clip(RoundedCornerShape(6.dp))
-            .background(accent.softFill)
-            .padding(horizontal = 5.dp, vertical = 1.dp),
-    )
-}
-
-@Composable
-private fun ProgressPill(display: String, complete: Boolean) {
-    val palette = WellnessTheme.palette
-    Text(
-        text = display,
-        style = WellnessTheme.type.label,
-        color = if (complete) palette.onSemanticFill else palette.textSecondary,
-        modifier = Modifier
-            .clip(RoundedCornerShape(6.dp))
-            .background(if (complete) palette.success else palette.band)
-            .padding(horizontal = 5.dp, vertical = 1.dp)
-            .semantics { contentDescription = "Progress: $display" },
-    )
-}
-
-/** RPE · load · tempo. Load is self-describing, so it gets an icon, not a word. */
-@Composable
-private fun PrescriptionRow(tokens: List<RxToken>) {
-    val palette = WellnessTheme.palette
-    val accent = WellnessTheme.accent
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        tokens.forEachIndexed { index, token ->
-            if (index > 0) {
-                Text(text = "·", color = palette.textFaint)
-            }
-            when (token.kind) {
-                RxKind.LOAD -> Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(3.dp),
-                    modifier = Modifier.semantics { contentDescription = "Load ${token.value}" },
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.FitnessCenter,
-                        contentDescription = null,
-                        modifier = Modifier.size(13.dp),
-                        tint = accent.text,
-                    )
-                    Text(
-                        text = token.value,
-                        style = WellnessTheme.type.label,
-                        color = palette.textPrimary,
-                    )
-                }
-
-                else -> Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(3.dp),
-                ) {
-                    Text(
-                        text = if (token.kind == RxKind.RPE) "RPE" else "TEMPO",
-                        style = WellnessTheme.type.micro,
-                        color = accent.text,
-                    )
-                    Text(
-                        text = token.value,
-                        style = WellnessTheme.type.label,
-                        color = palette.textPrimary,
-                    )
-                }
-            }
+private fun Tally(tally: TallyMarks) {
+    val palette = LogbookTheme.palette
+    Row(horizontalArrangement = Arrangement.spacedBy(TALLY_GAP)) {
+        for (filled in tallyMarkFills(tally)) {
+            Box(
+                modifier = Modifier
+                    .size(width = TALLY_WIDTH, height = TALLY_HEIGHT)
+                    .then(
+                        if (filled) {
+                            Modifier
+                                .clip(MARK_SHAPE)
+                                .background(palette.ink)
+                        } else {
+                            Modifier.border(LogbookSpace.hairline, palette.inkFaint, MARK_SHAPE)
+                        },
+                    ),
+            )
         }
     }
+}
+
+/**
+ * RPE · load · tempo, in mono: labels ink-soft at 400, values ink at 500.
+ *
+ * The load slot holds free coaching text, so it is introduced by the word `load`
+ * whenever it does not begin with a number — see [loadNeedsLabel]. The dumbbell
+ * icon retires with the rest of the decorative set.
+ */
+@Composable
+private fun PrescriptionMeta(tokens: List<RxToken>) {
+    val palette = LogbookTheme.palette
+    val value = SpanStyle(color = palette.ink, fontWeight = FontWeight.Medium)
+    Text(
+        text = buildAnnotatedString {
+            tokens.forEachIndexed { index, token ->
+                if (index > 0) withStyle(SpanStyle(color = palette.inkFaint)) { append(META_SEPARATOR) }
+                when (token.kind) {
+                    RxKind.RPE -> {
+                        append("target ")
+                        withStyle(value) { append("RPE ${token.value}") }
+                    }
+
+                    RxKind.LOAD -> {
+                        if (loadNeedsLabel(token.value)) append("load ")
+                        withStyle(value) { append(token.value) }
+                    }
+
+                    RxKind.TEMPO -> {
+                        append("tempo ")
+                        withStyle(value) { append(token.value) }
+                    }
+                }
+            }
+        },
+        style = LogbookTheme.type.meta,
+        color = palette.inkSoft,
+        modifier = Modifier.padding(bottom = LogbookSpace.grid * 2.5f),
+    )
 }
 
 // ---- entry widgets ----------------------------------------------------------------
 
 /**
- * The set grid: a header row and exactly `target_sets` rows under it.
+ * The set table: a header row and exactly `target_sets` rows under it.
  *
- * Ghost values from the last matching session sit in the placeholders, so an
- * untouched row still logs nothing at all.
+ * Bare mono cells on paper — no fills, no zebra, hairline row rules only. Ghost
+ * values from the last matching session sit in the cells as placeholders, so an
+ * untouched row still logs nothing at all; they are drawn in ink-faint and turn
+ * to ink the moment a value of the row's own arrives. The structure never
+ * changes between the two, which is the whole point of the rule.
+ *
+ * A read-only day draws plain text rather than disabled fields: with nothing to
+ * touch there is no target to reserve, and a past workout reads as the compact
+ * table it is.
  */
 @Composable
-private fun SetGrid(
+private fun SetTable(
     exerciseId: String,
     entry: EntryWidgetState.Sets,
     editable: Boolean,
     actions: CoachActions,
 ) {
-    val palette = WellnessTheme.palette
-    val headerStyle = columnHeaderStyle()
-    // No spacing between rows: each one already reserves 48dp around a 40dp
-    // box, so the touch targets themselves leave an 8dp gutter. Adding more
-    // would open the grid back up, which is the thing this pass closed.
+    val palette = LogbookTheme.palette
+    val markColumn = if (editable) MIN_TOUCH_TARGET else MARK_COLUMN
     Column {
         Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.padding(bottom = WellnessSpace.xs),
+            modifier = Modifier
+                .fillMaxWidth()
+                .hairlineBelow(palette.rule)
+                .padding(bottom = TABLE_HEAD_GAP),
         ) {
             Text(
-                text = "#",
-                style = headerStyle,
-                color = palette.textSecondary,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.width(SET_NUMBER_COLUMN),
+                text = "Set".uppercase(),
+                style = LogbookTheme.type.tableHeader,
+                color = palette.inkFaint,
+                // Spoken in its natural case: TalkBack spells out a three-letter
+                // capital as letters, and this one is a word.
+                modifier = Modifier
+                    .width(SET_NUMBER_COLUMN)
+                    .semantics { contentDescription = "Set" },
             )
             for (column in entry.columns) {
                 Text(
-                    text = columnLabel(column.label, column.unit, palette.textFaint),
-                    style = headerStyle,
-                    color = palette.textSecondary,
-                    textAlign = TextAlign.Center,
+                    text = columnLabel(column),
+                    style = LogbookTheme.type.tableHeader,
+                    color = palette.inkFaint,
+                    textAlign = TextAlign.End,
                     modifier = Modifier.weight(1f),
                 )
             }
-            Text(
-                text = "✓",
-                style = headerStyle,
-                color = palette.textSecondary,
-                textAlign = TextAlign.Center,
-                modifier = Modifier
-                    .width(MIN_TOUCH_TARGET)
-                    .semantics { contentDescription = "Done" },
-            )
+            // The tick column's head is deliberately blank: the marks under it
+            // say what they are, and a "✓" over them is the word for the mark.
+            Box(modifier = Modifier.width(markColumn))
         }
-        // The rule the PWA draws under its column heads. With it there the
-        // heads no longer have to carry the separation themselves, which is
-        // what let them drop back to a quiet micro.
-        HorizontalDivider(color = palette.line)
 
-        for (row in entry.rows) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+        entry.rows.forEachIndexed { position, row ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .then(
+                        // The mockup drops the last row's rule; the provenance
+                        // footer or the marginalia below is the boundary there.
+                        if (position == entry.rows.lastIndex) Modifier else Modifier.hairlineBelow(palette.rule),
+                    ),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 Text(
                     text = (row.index + 1).toString(),
-                    style = WellnessTheme.type.secondary,
-                    color = palette.textFaint,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.width(SET_NUMBER_COLUMN),
+                    style = LogbookTheme.type.data,
+                    // Set numbers are structure, not data: they stay ink whether
+                    // the row has been logged or not.
+                    color = palette.ink,
+                    modifier = Modifier
+                        .width(SET_NUMBER_COLUMN)
+                        .padding(vertical = TABLE_CELL_PADDING),
                 )
                 for (cell in row.cells) {
-                    NumericField(
-                        value = cell.text,
-                        label = "Set ${row.index + 1} ${cell.key}",
-                        placeholder = cell.ghost,
-                        enabled = editable,
-                        onCommit = { actions.onCommitSetCell(exerciseId, row.index, cell.key, it) },
-                        modifier = Modifier
-                            .weight(1f)
-                            .padding(horizontal = 2.dp),
-                    )
+                    if (editable) {
+                        NumericField(
+                            value = cell.text,
+                            label = "Set ${row.index + 1} ${cell.key}",
+                            placeholder = cell.ghost,
+                            enabled = true,
+                            onCommit = { actions.onCommitSetCell(exerciseId, row.index, cell.key, it) },
+                            modifier = Modifier.weight(1f),
+                        )
+                    } else {
+                        val shown = cell.text.ifEmpty { cell.ghost.orEmpty() }
+                        val spoken = setCellDescription(
+                            setNumber = row.index + 1,
+                            key = cell.key,
+                            value = shown,
+                            isGhost = cell.showsGhost,
+                        )
+                        Text(
+                            text = shown,
+                            style = LogbookTheme.type.data,
+                            color = if (cell.showsGhost) palette.inkFaint else palette.ink,
+                            textAlign = TextAlign.End,
+                            modifier = Modifier
+                                .weight(1f)
+                                .padding(vertical = TABLE_CELL_PADDING)
+                                .semantics { contentDescription = spoken },
+                        )
+                    }
                 }
-                Box(modifier = Modifier.width(MIN_TOUCH_TARGET), contentAlignment = Alignment.Center) {
-                    Checkbox(
-                        checked = row.completed,
-                        onCheckedChange = { actions.onSetCompleted(exerciseId, row.index, it) },
-                        enabled = editable,
-                        colors = WellnessDefaults.checkboxColors(),
-                        modifier = Modifier.semantics {
-                            contentDescription = "Set ${row.index + 1} done"
-                        },
-                    )
-                }
+                SetMark(
+                    checked = row.completed,
+                    editable = editable,
+                    description = "Set ${row.index + 1} done",
+                    width = markColumn,
+                    onCheckedChange = { actions.onSetCompleted(exerciseId, row.index, it) },
+                )
             }
         }
 
         entry.provenance?.let {
             Text(
+                // Verbatim, unlike the eyebrow and the legend: this sentence is
+                // already written the way it should read.
                 text = it.label,
-                style = WellnessTheme.type.label,
-                color = palette.textFaint,
-                modifier = Modifier.padding(top = WellnessSpace.xs),
+                style = LogbookTheme.type.meta,
+                color = palette.inkFaint,
+                modifier = Modifier.padding(top = LogbookSpace.grid * 2.5f),
             )
         }
     }
 }
 
-/** "WEIGHT (LBS)" with the unit dropped back to faint — the label is the signal. */
-private fun columnLabel(label: String, unit: String?, unitColor: Color): AnnotatedString =
-    buildAnnotatedString {
-        append(label.uppercase())
-        if (unit != null) {
-            withStyle(SpanStyle(color = unitColor)) { append(" (${unit.uppercase()})") }
-        }
+/** "WEIGHT (LBS)" — the unit rides along in the head so the cells stay bare. */
+private fun columnLabel(column: SetColumn): String =
+    if (column.unit == null) column.label.uppercase() else "${column.label} (${column.unit})".uppercase()
+
+/**
+ * The set-completion mark: an ink square, filled once the set is logged.
+ *
+ * Replaces the M3 `Checkbox` — a tick in a rounded box is Material's notation,
+ * not the log's — while keeping the target it stood in and the write path behind
+ * it. On a read-only day it is drawn and nothing more.
+ */
+@Composable
+private fun SetMark(
+    checked: Boolean,
+    editable: Boolean,
+    description: String,
+    width: Dp,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    Box(
+        modifier = if (editable) {
+            Modifier
+                .size(width)
+                .toggleable(
+                    value = checked,
+                    role = Role.Checkbox,
+                    onValueChange = onCheckedChange,
+                )
+                .semantics { contentDescription = description }
+        } else {
+            // A read-only mark is not toggleable, but its state still has to be
+            // heard: the disabled Checkbox this replaced announced checked and
+            // unchecked, and "done, done" versus "done" does not.
+            Modifier
+                .width(width)
+                .semantics {
+                    contentDescription = description
+                    stateDescription = if (checked) "Done" else "Not done"
+                }
+        },
+        contentAlignment = Alignment.Center,
+    ) {
+        MarkBox(checked)
     }
+}
+
+/** The mark itself: filled ink when done, an ink-faint outline when not. */
+@Composable
+private fun MarkBox(checked: Boolean) {
+    val palette = LogbookTheme.palette
+    Box(
+        modifier = Modifier
+            .size(MARK_SIZE)
+            .then(
+                if (checked) {
+                    Modifier
+                        .clip(MARK_SHAPE)
+                        .background(palette.ink)
+                } else {
+                    Modifier.border(LogbookSpace.hairline, palette.inkFaint, MARK_SHAPE)
+                },
+            ),
+    )
+}
 
 @Composable
 private fun CardioFields(
@@ -1084,62 +1260,90 @@ private fun CardioFields(
     enabled: Boolean,
     onCommit: (String, String) -> Unit,
 ) {
-    Row(horizontalArrangement = Arrangement.spacedBy(WellnessSpace.sm)) {
-        NumericField(
-            value = durationText,
-            label = "Duration (min)",
-            placeholder = durationPlaceholder.ifEmpty { "min" },
-            enabled = enabled,
-            onCommit = { onCommit("duration_min", it) },
-            modifier = Modifier.weight(1f),
+    Row(horizontalArrangement = Arrangement.spacedBy(LogbookSpace.grid * 3)) {
+        LabelledField(label = "Duration (min)", modifier = Modifier.weight(1f)) {
+            NumericField(
+                value = durationText,
+                label = "Duration (min)",
+                placeholder = durationPlaceholder.ifEmpty { "min" },
+                enabled = enabled,
+                onCommit = { onCommit("duration_min", it) },
+            )
+        }
+        LabelledField(label = "Avg HR", modifier = Modifier.weight(1f)) {
+            NumericField(
+                value = avgHrText,
+                label = "Avg HR",
+                placeholder = "bpm",
+                enabled = enabled,
+                onCommit = { onCommit("avg_hr", it) },
+            )
+        }
+        LabelledField(label = "Max HR", modifier = Modifier.weight(1f)) {
+            NumericField(
+                value = maxHrText,
+                label = "Max HR",
+                placeholder = "bpm",
+                enabled = enabled,
+                onCommit = { onCommit("max_hr", it) },
+            )
+        }
+    }
+}
+
+/** A field under its mono-caps name — the naked skin draws no label of its own. */
+@Composable
+private inline fun LabelledField(
+    label: String,
+    modifier: Modifier = Modifier,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    Column(modifier = modifier) {
+        Text(
+            text = label.uppercase(),
+            style = LogbookTheme.type.eyebrow,
+            color = LogbookTheme.palette.inkSoft,
         )
-        NumericField(
-            value = avgHrText,
-            label = "Avg HR",
-            placeholder = "bpm",
-            enabled = enabled,
-            onCommit = { onCommit("avg_hr", it) },
-            modifier = Modifier.weight(1f),
-        )
-        NumericField(
-            value = maxHrText,
-            label = "Max HR",
-            placeholder = "bpm",
-            enabled = enabled,
-            onCommit = { onCommit("max_hr", it) },
-            modifier = Modifier.weight(1f),
-        )
+        content()
     }
 }
 
 @Composable
 private fun ChecklistItems(items: List<ChecklistItemState>, enabled: Boolean, onToggle: (String) -> Unit) {
-    val palette = WellnessTheme.palette
+    val palette = LogbookTheme.palette
     Column {
         for (item in items) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(MIN_TOUCH_TARGET),
+                    .then(
+                        if (enabled) {
+                            Modifier.toggleable(
+                                value = item.checked,
+                                role = Role.Checkbox,
+                                onValueChange = { onToggle(item.item) },
+                            )
+                        } else {
+                            Modifier
+                        },
+                    )
+                    .heightIn(min = MIN_TOUCH_TARGET)
+                    .semantics {
+                        contentDescription = if (item.checked) "${item.item}, done" else item.item
+                    },
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Checkbox(
-                    checked = item.checked,
-                    onCheckedChange = { onToggle(item.item) },
-                    enabled = enabled,
-                    colors = WellnessDefaults.checkboxColors(),
-                    modifier = Modifier.clearAndSetSemantics { },
-                )
+                Box(
+                    modifier = Modifier.width(MIN_TOUCH_TARGET),
+                    contentAlignment = Alignment.Center,
+                ) { MarkBox(item.checked) }
                 Text(
                     text = item.item,
-                    style = WellnessTheme.type.secondary,
-                    color = palette.textPrimary,
+                    style = LogbookTheme.type.body,
+                    color = if (item.checked) palette.inkSoft else palette.ink,
                     modifier = Modifier
                         .weight(1f)
-                        .alpha(if (item.checked) COMPLETED_ALPHA else 1f)
-                        .semantics {
-                            contentDescription = if (item.checked) "${item.item}, done" else item.item
-                        },
+                        .clearAndSetSemantics { },
                 )
             }
         }
@@ -1147,31 +1351,208 @@ private fun ChecklistItems(items: List<ChecklistItemState>, enabled: Boolean, on
 }
 
 @Composable
-private fun SessionFeedbackFields(state: SessionFeedbackState, onFeedback: (String, String) -> Unit) {
-    val palette = WellnessTheme.palette
-    Column(verticalArrangement = Arrangement.spacedBy(WellnessSpace.sm)) {
-        HorizontalDivider(color = palette.line)
-        Text(
-            text = "Session Feedback",
-            style = WellnessTheme.type.title,
-            color = palette.textPrimary,
-        )
-        NoteField(
+private fun SessionFeedbackSection(
+    state: SessionFeedbackState,
+    voice: NoteVoice,
+    onFeedback: (String, String) -> Unit,
+) {
+    Column(modifier = Modifier.padding(top = SECTION_GAP)) {
+        SectionHead(label = "Session feedback", hint = "")
+        NoteBlock(
+            label = "Pain / discomfort",
             value = state.painDiscomfort,
-            label = "Pain / Discomfort",
-            placeholder = if (state.editable) "Note any pain, discomfort, or issues…" else "No notes recorded",
+            voice = voice,
+            scope = NoteScope.SESSION,
+            accessibilityLabel = "Pain / Discomfort",
             enabled = state.editable,
             onChange = { onFeedback("pain_discomfort", it) },
-            showLabel = true,
         )
-        NoteField(
+        NoteBlock(
+            label = "General notes",
             value = state.generalNotes,
-            label = "General Notes",
-            placeholder = if (state.editable) "How did the session feel overall?" else "No notes recorded",
+            voice = voice,
+            scope = NoteScope.SESSION,
+            accessibilityLabel = "General Notes",
             enabled = state.editable,
             onChange = { onFeedback("general_notes", it) },
-            showLabel = true,
         )
+    }
+}
+
+/**
+ * A note the user writes: mono-caps label over roman ink prose.
+ *
+ * Never italic and never railed — that treatment belongs to the programme's own
+ * notes, and the two directions must not look alike. Empty is the one italic
+ * case, and what it says depends on whether the session can still be written to
+ * (see [NoteVoice]).
+ */
+@Composable
+private fun NoteBlock(
+    label: String,
+    value: String,
+    voice: NoteVoice,
+    scope: NoteScope,
+    accessibilityLabel: String,
+    enabled: Boolean,
+    onChange: (String) -> Unit,
+) {
+    Column(modifier = Modifier.padding(top = LogbookSpace.grid * 3.5f)) {
+        Text(
+            text = label.uppercase(),
+            style = LogbookTheme.type.eyebrow,
+            color = LogbookTheme.palette.inkSoft,
+        )
+        Spacer(Modifier.height(LogbookSpace.grid))
+        if (enabled) {
+            NoteField(
+                value = value,
+                label = accessibilityLabel,
+                placeholder = voice.emptyNote(scope),
+                onChange = onChange,
+            )
+        } else if (value.isEmpty()) {
+            EmptyStateText(voice.emptyNote(scope))
+        } else {
+            Text(
+                text = value,
+                style = LogbookTheme.type.body,
+                color = LogbookTheme.palette.ink,
+            )
+        }
+    }
+}
+
+// ---- controls -------------------------------------------------------------------------
+
+/**
+ * One hook button, with its Undo beside it when the state allows one.
+ *
+ * The button stays enabled while FIRED and simply does nothing — the PWA's
+ * behaviour, kept because greying it out next to a live Undo reads as "this
+ * workout is finished".
+ *
+ * Fill and glyph come from [hookButtonSkin]; the label is the state's own and is
+ * only uppercased here. No semantic colour is spent at any point: a settled hook
+ * ticks, a failed one crosses and says `FAILED`.
+ */
+@Composable
+private fun HookButton(model: HookButtonModel, actions: CoachActions) {
+    val palette = LogbookTheme.palette
+    val skin = hookButtonSkin(model.action, model.state)
+    val onClick = { if (model.canFire) actions.onFireHook(model.action) }
+
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(LogbookSpace.grid),
+    ) {
+        if (skin.filled) {
+            InkButton(
+                label = model.label,
+                enabled = model.enabled,
+                onClick = onClick,
+                modifier = Modifier.weight(1f),
+                skin = skin,
+            )
+        } else {
+            InkOutlineButton(
+                label = model.label,
+                enabled = model.enabled,
+                onClick = onClick,
+                modifier = Modifier.weight(1f),
+                skin = skin,
+            )
+        }
+
+        if (model.canUndo) {
+            TextButton(
+                onClick = { actions.onUndoHook(model.action) },
+                colors = ButtonDefaults.textButtonColors(contentColor = palette.ink),
+            ) { Text("UNDO", style = LogbookTheme.type.eyebrow) }
+        }
+    }
+}
+
+/** Ink on paper: a filled call to action, in the hook buttons' language. */
+@Composable
+internal fun InkButton(
+    label: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    skin: HookButtonSkin = PLAIN_SKIN,
+) {
+    val palette = LogbookTheme.palette
+    Button(
+        modifier = modifier,
+        onClick = onClick,
+        enabled = enabled,
+        // Explicit: M3's default is a fully rounded pill, the one shape the
+        // system forbids.
+        shape = LogbookShapes.soft,
+        colors = ButtonDefaults.buttonColors(
+            containerColor = palette.ink,
+            contentColor = palette.paper,
+            disabledContainerColor = palette.rule,
+            disabledContentColor = palette.inkFaint,
+        ),
+    ) { InkButtonLabel(label = label, skin = skin) }
+}
+
+/** The same button, hollow — everything that is not the primary call. */
+@Composable
+internal fun InkOutlineButton(
+    label: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    skin: HookButtonSkin = PLAIN_SKIN,
+) {
+    val palette = LogbookTheme.palette
+    OutlinedButton(
+        modifier = modifier,
+        onClick = onClick,
+        enabled = enabled,
+        shape = LogbookShapes.soft,
+        border = BorderStroke(LogbookSpace.hairline, palette.ink),
+        colors = ButtonDefaults.outlinedButtonColors(
+            contentColor = palette.ink,
+            disabledContentColor = palette.inkFaint,
+        ),
+    ) { InkButtonLabel(label = label, skin = skin) }
+}
+
+@Composable
+private fun InkButtonLabel(label: String, skin: HookButtonSkin) {
+    Row(
+        // The fill and the glyph are visual; the state has to be audible too,
+        // and it merges into the button's own node.
+        modifier = Modifier.semantics {
+            skin.a11yState?.let { stateDescription = it }
+        },
+        horizontalArrangement = Arrangement.spacedBy(LogbookSpace.grid * 1.5f),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        when (skin.glyph) {
+            HookGlyph.CHECK -> Icon(
+                imageVector = Icons.Outlined.Check,
+                contentDescription = null,
+                modifier = Modifier.size(GLYPH_SIZE),
+            )
+
+            HookGlyph.CROSS -> Icon(
+                imageVector = Icons.Outlined.Close,
+                contentDescription = null,
+                modifier = Modifier.size(GLYPH_SIZE),
+            )
+
+            HookGlyph.NONE -> Unit
+        }
+        Text(text = label.uppercase(), style = LogbookTheme.type.eyebrow)
+        skin.note?.let {
+            Text(text = it.uppercase(), style = LogbookTheme.type.eyebrow)
+        }
     }
 }
 
@@ -1206,14 +1587,11 @@ private fun NumericField(
         value = text,
         onValueChange = { text = it },
         enabled = enabled,
-        // A grid of outlines is what made the old grid heavy; the columns
-        // already say these are boxes.
-        skin = DenseFieldSkin.FILLED,
+        // Bare on paper: a cell at rest is indistinguishable from the read-only
+        // table it sits in, and the ghost recedes by colour alone.
+        skin = DenseFieldSkin.NAKED,
         numeric = true,
         placeholder = placeholder,
-        // A ghost is last session's number, not this one's: italic and
-        // half-there until you make it yours.
-        hint = DenseFieldHint.GHOST,
         modifier = modifier
             .onFocusChanged { focusState ->
                 if (focused && !focusState.isFocused) commit()
@@ -1238,9 +1616,7 @@ private fun NoteField(
     value: String,
     label: String,
     placeholder: String,
-    enabled: Boolean,
     onChange: (String) -> Unit,
-    showLabel: Boolean = false,
 ) {
     var text by remember(label) { mutableStateOf(value) }
     var focused by remember(label) { mutableStateOf(false) }
@@ -1254,12 +1630,9 @@ private fun NoteField(
             text = it
             onChange(it)
         },
-        enabled = enabled,
-        skin = DenseFieldSkin.FILLED,
+        skin = DenseFieldSkin.NAKED,
         multiLine = true,
-        label = label.takeIf { showLabel },
         placeholder = placeholder,
-        hint = DenseFieldHint.PROMPT,
         modifier = Modifier
             .fillMaxWidth()
             .onFocusChanged { focused = it.isFocused }
@@ -1267,12 +1640,81 @@ private fun NoteField(
     )
 }
 
+// ---- drawing helpers ------------------------------------------------------------------
+
 /** A whole row made tappable, with the label a screen reader announces. */
 private fun Modifier.clickableRow(label: String, onClick: () -> Unit): Modifier = this
     .clickable(onClick = onClick)
     .semantics { contentDescription = label }
 
-private const val COMPLETED_ALPHA = 0.6f
+/** The system's one divider: a 1dp line along the bottom edge, drawn not laid out. */
+private fun Modifier.hairlineBelow(color: Color): Modifier = this.drawBehind {
+    val stroke = LogbookSpace.hairline.toPx()
+    drawLine(
+        color = color,
+        start = Offset(0f, size.height - stroke / 2f),
+        end = Offset(size.width, size.height - stroke / 2f),
+        strokeWidth = stroke,
+    )
+}
+
+// ---- metrics ---------------------------------------------------------------------------
+
+/** The page margin: the mockups' 20dp of paper down each side. */
+private val SCREEN_PADDING = 20.dp
+private val SCREEN_TOP = 22.dp
+private val SCREEN_BOTTOM = 40.dp
+
+/** The air a section stands in. Bigger than any gap inside one, which is what groups it. */
+private val SECTION_GAP = 30.dp
+private val SECTION_UNDERLINE_GAP = 6.dp
+
+/** The superset gutter — empty on a straight set, bracketed on a grouped one. */
+private val GUTTER = 16.dp
+private val BRACKET_STROKE = 1.5.dp
+private val BRACKET_TICK = 6.dp
+
+private val TITLE_TOP = 10.dp
+private val TITLE_BOTTOM = 8.dp
+private val LEGEND_TOP = 14.dp
+private const val META_SEPARATOR = " · "
+
+private val PLATE_DOT = 9.dp
+private val PLATE_DOT_GAP = 8.dp
+private const val PLATE_DOT_SLOT = "plate"
+
+private val TALLY_WIDTH = 6.dp
+private val TALLY_HEIGHT = 11.dp
+private val TALLY_GAP = 3.dp
+
+/** Marks round by 1dp — enough to read as drawn rather than as a screen artefact. */
+private val MARK_SHAPE = RoundedCornerShape(1.dp)
+private val MARK_SIZE = 11.dp
 
 /** The set-number gutter, narrow enough to leave the value columns usable. */
-private val SET_NUMBER_COLUMN = 28.dp
+private val SET_NUMBER_COLUMN = 34.dp
+
+/** The tick column on a read-only day: the mark and nothing around it. */
+private val MARK_COLUMN = 24.dp
+private val TABLE_HEAD_GAP = 5.dp
+private val TABLE_CELL_PADDING = 6.dp
+
+private val MARGINALIA_RAIL = 2.dp
+private val MARGINALIA_INSET = 10.dp
+private val MARGINALIA_GLYPH_LIFT = 2.dp
+
+private val GLYPH_SIZE = 14.dp
+private val EYEBROW_GLYPH = 12.dp
+private val EYEBROW_DOT = 8.dp
+private val SPINNER_SIZE = 28.dp
+private val EMPTY_DAY_PADDING = 48.dp
+
+private const val QUARTER_TURN = 90f
+
+/**
+ * A button with nothing to report: no glyph, no note.
+ *
+ * `filled` is unread here — which of the two buttons was called is what decides
+ * that — and is set true only because a plain button is the filled one.
+ */
+internal val PLAIN_SKIN = HookButtonSkin(filled = true, glyph = HookGlyph.NONE, note = null, a11yState = null)

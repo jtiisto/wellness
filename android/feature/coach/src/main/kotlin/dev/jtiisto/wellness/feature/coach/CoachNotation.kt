@@ -1,7 +1,9 @@
 package dev.jtiisto.wellness.feature.coach
 
+import dev.jtiisto.wellness.core.data.coach.HookAction
 import dev.jtiisto.wellness.core.data.coach.HookButtonState
 import dev.jtiisto.wellness.core.data.coach.PlanExerciseDto
+import dev.jtiisto.wellness.core.data.coach.TallyMarks
 import dev.jtiisto.wellness.core.data.coach.WorkoutStatus
 import dev.jtiisto.wellness.core.data.coach.shortDatePattern
 import dev.jtiisto.wellness.core.data.network.DateString
@@ -208,6 +210,226 @@ private fun wallClock(firedAt: String?, locale: Locale, zone: ZoneId): String? {
         .format(instant.atZone(zone))
 }
 
+/**
+ * The mark an eyebrow carries in front of its words.
+ *
+ * Named rather than drawn here so the choice is pinned in a JVM test: the header
+ * turns [LOCK] and [CALENDAR] into outlined ink icons and [DOT] into a filled ink
+ * disc. Never a coloured emoji — the mockups use one and the design system
+ * overrules them, because an emoji is the one glyph on the page whose colour the
+ * theme does not own.
+ */
+enum class EyebrowGlyph { LOCK, CALENDAR, DOT }
+
+/**
+ * Which glyph a lifecycle wears.
+ *
+ * A day still ahead and a day whose work has not begun get the same calendar:
+ * both are appointments, and the words after the glyph are what separate them.
+ */
+fun WorkoutEyebrow.glyph(): EyebrowGlyph = when (this) {
+    WorkoutEyebrow.Past -> EyebrowGlyph.LOCK
+    is WorkoutEyebrow.Scheduled, WorkoutEyebrow.TodayReady -> EyebrowGlyph.CALENDAR
+    is WorkoutEyebrow.InProgress -> EyebrowGlyph.DOT
+}
+
+// ---- tally marks --------------------------------------------------------------------
+
+/**
+ * One entry per mark a collapsed row draws: true is inked, false is outlined.
+ *
+ * The list *is* the drawing instruction, which is what keeps a `for` loop with an
+ * index comparison out of a composable. Both counts are clamped on the way
+ * through: a log that ticked more sets than the plan now asks for — an exercise
+ * edited down after the fact — would otherwise ink more marks than it draws, and
+ * `List(-1)` is an exception rather than a quiet nothing.
+ */
+fun tallyMarkFills(tally: TallyMarks): List<Boolean> {
+    val total = tally.total.coerceAtLeast(0)
+    val filled = tally.filled.coerceIn(0, total)
+    return List(total) { index -> index < filled }
+}
+
+/**
+ * What a screen reader says about a whole collapsed exercise row.
+ *
+ * The row is one tappable node, so it announces itself as one: everything drawn
+ * on it has to be in this sentence or it is not read at all. That is why the
+ * tally is spelled out — it is the only place completion is shown now that the
+ * progress pill has retired, and marks are geometry to a screen reader.
+ *
+ * A cardio row's single mark says "done" or nothing rather than "1 of 1", which
+ * is the same thing the pill said about a duration it could not count.
+ */
+fun exerciseRowDescription(
+    name: String,
+    exposure: String?,
+    scheme: String,
+    tally: TallyMarks?,
+    expanded: Boolean,
+): String {
+    val action = if (expanded) "Collapse" else "Expand"
+    val tier = exposure?.takeIf { it.isNotBlank() }?.let { "$it tier" }
+    val marks = tally?.let {
+        val total = it.total.coerceAtLeast(0)
+        val filled = it.filled.coerceIn(0, total)
+        when {
+            total == 0 -> null
+            total == 1 -> if (filled == 1) "done" else "not done"
+            else -> "$filled of $total done"
+        }
+    }
+    // The tier rides the sentence for the same reason the tally does: the plate
+    // dot is geometry, and the legend maps colours globally, not to this row.
+    return listOfNotNull("$action $name", tier, scheme.takeIf { it.isNotBlank() }, marks)
+        .joinToString(", ")
+}
+
+// ---- section heads -------------------------------------------------------------------
+
+/**
+ * The one mono hint a section head may carry, right-aligned on its baseline.
+ *
+ * A block can say two things about how it runs — its interval timing and its
+ * rest guidance — and the head has room for one line, so they share it. Either
+ * may be absent, and both being absent is the common case: the result is empty
+ * and the head draws nothing beside its label.
+ */
+fun sectionHint(timing: String, restGuidance: String): String =
+    listOf(timing, restGuidance).filter { it.isNotBlank() }.joinToString(" · ")
+
+// ---- the prescription meta line -----------------------------------------------------
+
+/**
+ * Whether a load has to be introduced by the word `load`.
+ *
+ * The slot holds free coaching text, not a number: `35 lb/hand` reads as a
+ * weight on its own, while `light band assist` reads as nothing at all
+ * without a word in front of it. A leading digit is the whole test — it is what
+ * separates "a measurement" from "an instruction" here, and it never assumes the
+ * string is numeric, which is the trap this exists to avoid.
+ */
+fun loadNeedsLabel(value: String): Boolean = value.trimStart().firstOrNull()?.isDigit() != true
+
+// ---- the set table ---------------------------------------------------------------------
+
+/**
+ * What a screen reader says about one read-only set cell.
+ *
+ * An editable cell is a text field and announces its own value, so it needs only
+ * a name. A logged one is plain text, and a bare `20` in a four-column row says
+ * nothing about which column it is — so the name and the value are read
+ * together.
+ *
+ * A ghost is named as what it is. It looks faint on screen, which a screen
+ * reader cannot see, and announcing last session's number as though it were this
+ * session's would be the one mistake the ghost convention exists to prevent.
+ */
+fun setCellDescription(setNumber: Int, key: String, value: String, isGhost: Boolean): String = when {
+    value.isEmpty() -> "Set $setNumber $key, not logged"
+    isGhost -> "Set $setNumber $key, $value last time"
+    else -> "Set $setNumber $key, $value"
+}
+
+// ---- hook buttons ---------------------------------------------------------------------
+
+/** The mark on a hook button: a settled hook ticks, a failed one crosses. */
+enum class HookGlyph { NONE, CHECK, CROSS }
+
+/**
+ * How a hook button is drawn — the whole of what Logbook replaced the semantic
+ * colours with.
+ *
+ * [note] is a mono word set after the label; it exists for FAILED alone, where
+ * the cross needs a word beside it. The label itself is untouched — it comes off
+ * `HookButtonModel` and is pinned by the hook tests.
+ */
+data class HookButtonSkin(
+    val filled: Boolean,
+    val glyph: HookGlyph,
+    val note: String?,
+    /**
+     * What the button's state sounds like. The fill and the glyph are geometry
+     * to a screen reader, and FIRED/LOCKED carry no visible note — without this
+     * a fired Start is indistinguishable from an idle one by ear.
+     */
+    val a11yState: String?,
+)
+
+/**
+ * Ink fill or ink outline, and which mark rides with it.
+ *
+ * State outranks action, and the order below is the precedence: a hook still
+ * working outlines whichever phase it belongs to, a settled one fills, a failed
+ * one outlines and says so. Only when the state says nothing does the action
+ * decide — Start is the day's one filled call to action, End sits behind it.
+ * No colour is spent at any point.
+ */
+fun hookButtonSkin(action: HookAction, state: HookButtonState): HookButtonSkin = when (state) {
+    HookButtonState.PENDING ->
+        HookButtonSkin(filled = false, glyph = HookGlyph.NONE, note = null, a11yState = "working")
+
+    HookButtonState.FIRED ->
+        HookButtonSkin(filled = true, glyph = HookGlyph.CHECK, note = null, a11yState = "fired")
+
+    HookButtonState.LOCKED ->
+        HookButtonSkin(filled = true, glyph = HookGlyph.CHECK, note = null, a11yState = "locked")
+
+    HookButtonState.FAILED ->
+        HookButtonSkin(filled = false, glyph = HookGlyph.CROSS, note = "Failed", a11yState = "failed")
+
+    HookButtonState.DEFAULT ->
+        HookButtonSkin(filled = action == HookAction.START, glyph = HookGlyph.NONE, note = null, a11yState = null)
+}
+
+// ---- empty notes -------------------------------------------------------------------------
+
+/** Which of the two note fields is empty — they are asked at different levels. */
+enum class NoteScope { EXERCISE, SESSION }
+
+/**
+ * How an empty note speaks about itself.
+ *
+ * The three voices are the three honest things there are to say: you may write
+ * here, you may write here *later*, or nobody wrote here and nobody will. Which
+ * one applies is a property of the whole day, so it is resolved once per screen
+ * rather than re-derived per field.
+ */
+enum class NoteVoice { EDITABLE, SCHEDULED, RECORDED }
+
+/**
+ * The day's note voice.
+ *
+ * [editable] is the gate's answer rather than the calendar's, so a today whose
+ * start hook has not been pressed speaks in the past tense — which is true:
+ * nothing can be written until the gate opens. A future day is the one case
+ * where "not yet" is worth saying, and [WorkoutEyebrow.Scheduled] is exactly
+ * that day.
+ */
+fun noteVoice(eyebrow: WorkoutEyebrow, editable: Boolean): NoteVoice = when {
+    editable -> NoteVoice.EDITABLE
+    eyebrow is WorkoutEyebrow.Scheduled -> NoteVoice.SCHEDULED
+    else -> NoteVoice.RECORDED
+}
+
+/**
+ * What an empty note field reads, set italic in ink-faint by the callsite.
+ *
+ * A scheduled day is the one voice that changes with [scope]: the session's
+ * feedback is recorded after the session, while an exercise's note is added as
+ * it is logged, and saying either sentence in the other's place would describe a
+ * moment that does not exist.
+ */
+fun NoteVoice.emptyNote(scope: NoteScope): String = when (this) {
+    NoteVoice.EDITABLE -> "Add a note"
+    NoteVoice.SCHEDULED -> when (scope) {
+        NoteScope.EXERCISE -> "Added when you log this session"
+        NoteScope.SESSION -> "None yet — recorded after the session"
+    }
+
+    NoteVoice.RECORDED -> "None recorded"
+}
+
 // ---- calendar marks ---------------------------------------------------------------
 
 /**
@@ -225,6 +447,17 @@ fun dayMark(status: WorkoutStatus?): DayMark = when (status) {
     WorkoutStatus.SCHEDULED -> DayMark.OUTLINED
     WorkoutStatus.MISSED -> DayMark.SLASHED
     null -> DayMark.NONE
+}
+
+/**
+ * What a drawn day mark tells a screen reader. [DayMark.NONE] draws nothing and
+ * says nothing; the other three are pure geometry without this.
+ */
+fun DayMark.a11yLabel(): String? = when (this) {
+    DayMark.FILLED -> "Completed"
+    DayMark.OUTLINED -> "Scheduled"
+    DayMark.SLASHED -> "Missed"
+    DayMark.NONE -> null
 }
 
 // ---- ghost provenance -------------------------------------------------------------

@@ -1,6 +1,8 @@
 package dev.jtiisto.wellness.feature.coach
 
+import dev.jtiisto.wellness.core.data.coach.HookAction
 import dev.jtiisto.wellness.core.data.coach.HookButtonState
+import dev.jtiisto.wellness.core.data.coach.TallyMarks
 import dev.jtiisto.wellness.core.data.coach.WorkoutStatus
 import dev.jtiisto.wellness.core.ui.theme.LogbookDark
 import dev.jtiisto.wellness.core.ui.theme.LogbookLight
@@ -136,10 +138,10 @@ class CoachNotationTest {
     @Test
     @DisplayName("a future day says which day it opens on, in the locale's date form")
     fun futureEyebrow() {
-        val scheduled = eyebrow(date = "2026-08-20") as WorkoutEyebrow.Scheduled
+        val scheduled = eyebrow(date = "2030-01-10") as WorkoutEyebrow.Scheduled
 
-        assertEquals("Thu, Aug 20", scheduled.logOn)
-        assertEquals("Scheduled · Log on Thu, Aug 20", scheduled.label)
+        assertEquals("Thu, Jan 10", scheduled.logOn)
+        assertEquals("Scheduled · Log on Thu, Jan 10", scheduled.label)
     }
 
     @Test
@@ -232,6 +234,228 @@ class CoachNotationTest {
         )
     }
 
+    // ---- eyebrow glyphs -------------------------------------------------------------
+
+    @Test
+    @DisplayName("each lifecycle wears its own mark, and an appointment is an appointment")
+    fun eyebrowGlyphs() {
+        assertEquals(EyebrowGlyph.LOCK, WorkoutEyebrow.Past.glyph())
+        assertEquals(EyebrowGlyph.CALENDAR, WorkoutEyebrow.Scheduled("Thu, Jan 10").glyph())
+        // A day ahead and a day not begun are the same kind of thing: the words
+        // after the glyph are what separate them.
+        assertEquals(EyebrowGlyph.CALENDAR, WorkoutEyebrow.TodayReady.glyph())
+        assertEquals(EyebrowGlyph.DOT, WorkoutEyebrow.InProgress(startedAt = null).glyph())
+        assertEquals(EyebrowGlyph.DOT, WorkoutEyebrow.InProgress(startedAt = "14:32").glyph())
+    }
+
+    // ---- tally marks -----------------------------------------------------------------
+
+    @Test
+    @DisplayName("the tally draws one mark per unit of work, inked up to the count done")
+    fun tallyFills() {
+        assertEquals(listOf(true, true, false), tallyMarkFills(TallyMarks(filled = 2, total = 3)))
+        assertEquals(listOf(false, false), tallyMarkFills(TallyMarks(filled = 0, total = 2)))
+        assertEquals(listOf(true), tallyMarkFills(TallyMarks(filled = 1, total = 1)))
+    }
+
+    @Test
+    @DisplayName("a log that outran its plan inks what is drawn and no more")
+    fun tallyClampsToWhatItDraws() {
+        // An exercise edited down to two sets after three were ticked: the marks
+        // must not claim a fourth that is not on screen.
+        assertEquals(listOf(true, true), tallyMarkFills(TallyMarks(filled = 3, total = 2)))
+        // Nothing to draw is a legitimate answer; a negative count is not a
+        // list of minus-one marks.
+        assertEquals(emptyList<Boolean>(), tallyMarkFills(TallyMarks(filled = 0, total = 0)))
+        assertEquals(emptyList<Boolean>(), tallyMarkFills(TallyMarks(filled = 1, total = -1)))
+    }
+
+    @Test
+    @DisplayName("each drawn day mark has a spoken name, and an unmarked day stays silent")
+    fun dayMarkVoices() {
+        assertEquals("Completed", DayMark.FILLED.a11yLabel())
+        assertEquals("Scheduled", DayMark.OUTLINED.a11yLabel())
+        assertEquals("Missed", DayMark.SLASHED.a11yLabel())
+        assertNull(DayMark.NONE.a11yLabel())
+    }
+
+    @Test
+    @DisplayName("the collapsed row announces its marks and tier, which are geometry to a screen reader")
+    fun rowDescriptions() {
+        assertEquals(
+            "Expand Bench Press, 3 x 8, 2 of 3 done",
+            exerciseRowDescription("Bench Press", null, "3 x 8", TallyMarks(2, 3), expanded = false),
+        )
+        assertEquals(
+            "Collapse Bench Press, 3 x 8, 2 of 3 done",
+            exerciseRowDescription("Bench Press", null, "3 x 8", TallyMarks(2, 3), expanded = true),
+        )
+        // The plate dot's meaning rides the sentence — the legend maps colours
+        // for the sighted, not tiers to rows for a screen reader.
+        assertEquals(
+            "Expand Bench Press, Heavy tier, 3 x 8, 2 of 3 done",
+            exerciseRowDescription("Bench Press", "Heavy", "3 x 8", TallyMarks(2, 3), expanded = false),
+        )
+        // A single mark is a yes/no, not a count — the same thing the retired
+        // progress pill said about a duration it could not count.
+        assertEquals(
+            "Expand Zone 2, 20 min, done",
+            exerciseRowDescription("Zone 2", null, "20 min", TallyMarks(1, 1), expanded = false),
+        )
+        assertEquals(
+            "Expand Zone 2, 20 min, not done",
+            exerciseRowDescription("Zone 2", null, "20 min", TallyMarks(0, 1), expanded = false),
+        )
+    }
+
+    @Test
+    @DisplayName("a row with nothing countable and no scheme still announces what it is")
+    fun rowDescriptionsDegrade() {
+        assertEquals(
+            "Expand Mobility",
+            exerciseRowDescription("Mobility", null, "", null, expanded = false),
+        )
+        // Blank exposure is absent, the same rule the dot itself follows.
+        assertEquals(
+            "Expand Mobility",
+            exerciseRowDescription("Mobility", " ", "", null, expanded = false),
+        )
+        assertEquals(
+            "Expand Mobility, 4 items",
+            exerciseRowDescription("Mobility", null, "4 items", TallyMarks(0, 0), expanded = false),
+        )
+        // Clamped like the marks themselves: a plan edited down must not claim
+        // more done than it draws.
+        assertEquals(
+            "Expand Rows, 2 of 2 done",
+            exerciseRowDescription("Rows", null, "", TallyMarks(3, 2), expanded = false),
+        )
+    }
+
+    // ---- section heads ----------------------------------------------------------------
+
+    @Test
+    @DisplayName("a section head carries one hint, however many things the block has to say")
+    fun sectionHints() {
+        assertEquals("3 rounds · rest 60s", sectionHint("3 rounds", "rest 60s"))
+        assertEquals("3 rounds", sectionHint("3 rounds", ""))
+        assertEquals("rest 60s", sectionHint("", "rest 60s"))
+        // Empty is how the head draws nothing beside its label — the common case.
+        assertEquals("", sectionHint("", ""))
+        assertEquals("", sectionHint("   ", ""))
+    }
+
+    // ---- the prescription meta line -------------------------------------------------
+
+    @Test
+    @DisplayName("a load that is not a number is introduced by the word for it")
+    fun loadLabelling() {
+        assertEquals(false, loadNeedsLabel("35 lb/hand"))
+        assertEquals(false, loadNeedsLabel("  20"))
+        assertEquals(true, loadNeedsLabel("light band assist"))
+        assertEquals(true, loadNeedsLabel("hold prior assistance"))
+        // Never assume the slot is numeric — including when it is empty.
+        assertEquals(true, loadNeedsLabel(""))
+    }
+
+    // ---- the set table -------------------------------------------------------------------
+
+    @Test
+    @DisplayName("a read-only cell is announced with its column, and a ghost is announced as one")
+    fun setCellDescriptions() {
+        assertEquals("Set 2 weight, 20", setCellDescription(2, "weight", "20", isGhost = false))
+        // Faintness is the visual tell and a screen reader cannot see it: saying
+        // last session's number as though it were this one's is the exact
+        // mistake the ghost convention exists to prevent.
+        assertEquals("Set 2 weight, 20 last time", setCellDescription(2, "weight", "20", isGhost = true))
+        assertEquals("Set 1 reps, not logged", setCellDescription(1, "reps", "", isGhost = false))
+        assertEquals("Set 1 reps, not logged", setCellDescription(1, "reps", "", isGhost = true))
+    }
+
+    // ---- hook buttons ------------------------------------------------------------------
+
+    @Test
+    @DisplayName("Start fills and End outlines, until the state has something of its own to say")
+    fun hookSkinFollowsTheAction() {
+        val start = hookButtonSkin(HookAction.START, HookButtonState.DEFAULT)
+        val end = hookButtonSkin(HookAction.END, HookButtonState.DEFAULT)
+
+        assertTrue(start.filled, "Start is the day's one filled call to action")
+        assertEquals(HookGlyph.NONE, start.glyph)
+        assertEquals(false, end.filled, "End sits behind Start rather than competing with it")
+        assertNull(end.note)
+    }
+
+    @Test
+    @DisplayName("state outranks action: working outlines, settled ticks, failed crosses and says so")
+    fun hookSkinFollowsTheState() {
+        for (action in HookAction.entries) {
+            val pending = hookButtonSkin(action, HookButtonState.PENDING)
+            assertEquals(false, pending.filled, "$action pending")
+            assertEquals(HookGlyph.NONE, pending.glyph)
+            assertEquals("working", pending.a11yState)
+
+            for (settled in listOf(HookButtonState.FIRED, HookButtonState.LOCKED)) {
+                val skin = hookButtonSkin(action, settled)
+                assertTrue(skin.filled, "$action $settled")
+                assertEquals(HookGlyph.CHECK, skin.glyph, "$action $settled")
+                assertNull(skin.note)
+            }
+            // Same fill, same glyph — but by ear FIRED and LOCKED are different
+            // states, and DEFAULT says nothing at all.
+            assertEquals("fired", hookButtonSkin(action, HookButtonState.FIRED).a11yState)
+            assertEquals("locked", hookButtonSkin(action, HookButtonState.LOCKED).a11yState)
+            assertNull(hookButtonSkin(action, HookButtonState.DEFAULT).a11yState)
+
+            val failed = hookButtonSkin(action, HookButtonState.FAILED)
+            assertEquals(false, failed.filled, "$action failed")
+            assertEquals(HookGlyph.CROSS, failed.glyph)
+            // The cross needs a word beside it; no colour is spent on either.
+            assertEquals("Failed", failed.note)
+            assertEquals("failed", failed.a11yState)
+        }
+    }
+
+    // ---- empty notes ---------------------------------------------------------------------
+
+    @Test
+    @DisplayName("an editable day invites a note, whatever the calendar says about it")
+    fun editableVoice() {
+        for (eyebrow in ALL_EYEBROWS) {
+            assertEquals(NoteVoice.EDITABLE, noteVoice(eyebrow, editable = true), "$eyebrow")
+        }
+        assertEquals("Add a note", NoteVoice.EDITABLE.emptyNote(NoteScope.EXERCISE))
+        assertEquals("Add a note", NoteVoice.EDITABLE.emptyNote(NoteScope.SESSION))
+    }
+
+    @Test
+    @DisplayName("a scheduled day says 'not yet', and says it differently at each level")
+    fun scheduledVoice() {
+        assertEquals(NoteVoice.SCHEDULED, noteVoice(WorkoutEyebrow.Scheduled("Thu, Jan 10"), editable = false))
+
+        assertEquals(
+            "Added when you log this session",
+            NoteVoice.SCHEDULED.emptyNote(NoteScope.EXERCISE),
+        )
+        assertEquals(
+            "None yet — recorded after the session",
+            NoteVoice.SCHEDULED.emptyNote(NoteScope.SESSION),
+        )
+    }
+
+    @Test
+    @DisplayName("a shut gate speaks in the past tense, because nothing can be written through it")
+    fun recordedVoice() {
+        // Today with the start gate still closed is not "not yet" — it is
+        // "nothing here", which is what the field honestly holds.
+        assertEquals(NoteVoice.RECORDED, noteVoice(WorkoutEyebrow.TodayReady, editable = false))
+        assertEquals(NoteVoice.RECORDED, noteVoice(WorkoutEyebrow.Past, editable = false))
+        assertEquals(NoteVoice.RECORDED, noteVoice(WorkoutEyebrow.InProgress(null), editable = false))
+
+        assertEquals("None recorded", NoteVoice.RECORDED.emptyNote(NoteScope.EXERCISE))
+        assertEquals("None recorded", NoteVoice.RECORDED.emptyNote(NoteScope.SESSION))
+    }
+
     // ---- calendar marks -------------------------------------------------------------
 
     @Test
@@ -260,5 +484,13 @@ class CoachNotationTest {
 
     private companion object {
         const val TODAY = "2026-08-08"
+
+        /** One of each lifecycle, for the rules that must hold across all of them. */
+        val ALL_EYEBROWS = listOf(
+            WorkoutEyebrow.Past,
+            WorkoutEyebrow.Scheduled("Thu, Jan 10"),
+            WorkoutEyebrow.TodayReady,
+            WorkoutEyebrow.InProgress(startedAt = null),
+        )
     }
 }

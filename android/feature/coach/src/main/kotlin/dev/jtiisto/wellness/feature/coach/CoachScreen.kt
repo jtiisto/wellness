@@ -2,30 +2,31 @@ package dev.jtiisto.wellness.feature.coach
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.MutableTransitionState
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CalendarMonth
-import androidx.compose.material.icons.filled.ChevronLeft
-import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.outlined.CalendarToday
+import androidx.compose.material.icons.outlined.ChevronLeft
+import androidx.compose.material.icons.outlined.ChevronRight
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -33,7 +34,6 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -42,14 +42,18 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Popup
@@ -63,10 +67,9 @@ import dev.jtiisto.wellness.core.data.coach.WorkoutStatus
 import dev.jtiisto.wellness.core.ui.SyncStatusIndicator
 import dev.jtiisto.wellness.core.ui.hr.HrBpmChip
 import dev.jtiisto.wellness.core.ui.motion.WellnessMotion
-import dev.jtiisto.wellness.core.ui.theme.WellnessDefaults
-import dev.jtiisto.wellness.core.ui.theme.WellnessShape
-import dev.jtiisto.wellness.core.ui.theme.WellnessSpace
-import dev.jtiisto.wellness.core.ui.theme.WellnessTheme
+import dev.jtiisto.wellness.core.ui.theme.LogbookShapes
+import dev.jtiisto.wellness.core.ui.theme.LogbookSpace
+import dev.jtiisto.wellness.core.ui.theme.LogbookTheme
 import org.koin.androidx.compose.koinViewModel
 
 /**
@@ -162,7 +165,7 @@ fun CoachScreen(viewModel: CoachViewModel = koinViewModel()) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun CoachContent(state: CoachUiState, actions: CoachActions) {
-    val palette = WellnessTheme.palette
+    val palette = LogbookTheme.palette
     // Local because it is a view of state that already exists: the sheet can
     // only be open while there is a capture to describe, and `state.hr` going
     // null closes it on its own.
@@ -170,10 +173,11 @@ private fun CoachContent(state: CoachUiState, actions: CoachActions) {
 
     Column(modifier = Modifier.fillMaxSize()) {
         TopAppBar(
-            title = { Text("Coach", style = WellnessTheme.type.headline) },
+            title = { Text("Coach".uppercase(), style = LogbookTheme.type.section) },
             colors = TopAppBarDefaults.topAppBarColors(
-                containerColor = palette.canvas,
-                titleContentColor = palette.textPrimary,
+                // Paper, like everything else — the bar is not a second surface.
+                containerColor = palette.paper,
+                titleContentColor = palette.ink,
             ),
             windowInsets = WindowInsets(0),
             actions = {
@@ -184,7 +188,11 @@ private fun CoachContent(state: CoachUiState, actions: CoachActions) {
                 SyncStatusIndicator(
                     status = state.syncStatus,
                     syncing = state.isSyncing,
-                    modifier = Modifier.padding(end = 12.dp),
+                    // The colour exception is documented; the type is not — the
+                    // label reads in Logbook's own mono, not Graphite's ramp.
+                    textStyle = LogbookTheme.type.meta,
+                    labelColor = palette.inkSoft,
+                    modifier = Modifier.padding(end = LogbookSpace.grid * 3),
                 )
             },
         )
@@ -224,18 +232,20 @@ private fun CoachContent(state: CoachUiState, actions: CoachActions) {
 private fun CalendarPicker(state: CoachUiState, actions: CoachActions) {
     var open by remember { mutableStateOf(false) }
     var triggerHeight by remember { mutableIntStateOf(0) }
-    val palette = WellnessTheme.palette
+    val palette = LogbookTheme.palette
 
     Box(modifier = Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(palette.chrome)
+                // Paper with a hairline under it: the chrome fill retires, and
+                // the rule is what separates the strip from the day below.
+                .background(palette.paper)
                 .drawWithContent {
                     drawContent()
-                    val stroke = 1.dp.toPx()
+                    val stroke = LogbookSpace.hairline.toPx()
                     drawLine(
-                        color = palette.line,
+                        color = palette.rule,
                         start = Offset(0f, size.height - stroke / 2f),
                         end = Offset(size.width, size.height - stroke / 2f),
                         strokeWidth = stroke,
@@ -243,27 +253,36 @@ private fun CalendarPicker(state: CoachUiState, actions: CoachActions) {
                 }
                 .clickable { open = !open }
                 .onSizeChanged { triggerHeight = it.height }
-                .padding(horizontal = WellnessSpace.md, vertical = 12.dp),
+                .padding(horizontal = STRIP_PADDING, vertical = LogbookSpace.grid * 3),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(WellnessSpace.sm),
+            horizontalArrangement = Arrangement.spacedBy(LogbookSpace.grid * 2),
         ) {
             Icon(
-                imageVector = Icons.Filled.CalendarMonth,
+                imageVector = Icons.Outlined.CalendarToday,
                 contentDescription = null,
-                tint = palette.textSecondary,
-                modifier = Modifier.size(18.dp),
+                tint = palette.ink,
+                modifier = Modifier.size(TRIGGER_GLYPH),
             )
             Text(
                 text = state.dateCaption,
-                style = WellnessTheme.type.title,
-                color = palette.textPrimary,
+                style = LogbookTheme.type.name,
+                color = palette.ink,
             )
-            state.selectedStatus?.let { StatusDot(it) }
+            // The drawn mark says completed/scheduled/missed to the eye; the
+            // semantics say it to TalkBack, or the trigger row is blind to it.
+            DayMarkGlyph(
+                mark = state.selectedMark,
+                color = palette.ink,
+                markSize = DAY_MARK_SIZE,
+                modifier = state.selectedMark.a11yLabel()
+                    ?.let { label -> Modifier.semantics { contentDescription = label } }
+                    ?: Modifier,
+            )
             Spacer(Modifier.weight(1f))
             Icon(
                 imageVector = Icons.Filled.ExpandMore,
                 contentDescription = if (open) "Close calendar" else "Open calendar",
-                tint = palette.textSecondary,
+                tint = palette.inkSoft,
             )
         }
 
@@ -299,38 +318,39 @@ private fun CalendarPicker(state: CoachUiState, actions: CoachActions) {
 
 @Composable
 private fun CalendarCard(calendar: CalendarState, actions: CoachActions, onDismiss: () -> Unit) {
-    val palette = WellnessTheme.palette
+    val palette = LogbookTheme.palette
     Surface(
-        modifier = Modifier.padding(horizontal = WellnessSpace.sm),
-        // It floats, so it gets a real shadow and the floating radius — and the
-        // card surface, never the canvas it is hovering over.
-        shape = WellnessShape.floating,
-        color = palette.card,
-        contentColor = palette.textPrimary,
+        modifier = Modifier.padding(horizontal = LogbookSpace.grid * 2),
+        // A drawn border instead of a shadow: the design is flat inside the
+        // screen, and a floating card is still the same sheet of paper.
+        shape = LogbookShapes.soft,
+        color = palette.paper,
+        contentColor = palette.ink,
+        border = BorderStroke(LogbookSpace.hairline, palette.ruleStrong),
         tonalElevation = 0.dp,
-        shadowElevation = 8.dp,
+        shadowElevation = 0.dp,
     ) {
-        Column(modifier = Modifier.padding(12.dp)) {
+        Column(modifier = Modifier.padding(LogbookSpace.grid * 3)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = actions.onPreviousMonth, enabled = calendar.canGoPrev) {
                     Icon(
-                        imageVector = Icons.Filled.ChevronLeft,
+                        imageVector = Icons.Outlined.ChevronLeft,
                         contentDescription = "Previous month",
-                        tint = palette.textSecondary,
+                        tint = if (calendar.canGoPrev) palette.ink else palette.inkFaint,
                     )
                 }
                 Text(
-                    text = calendar.monthCaption,
-                    style = WellnessTheme.type.title,
-                    color = palette.textPrimary,
+                    text = calendar.monthCaption.uppercase(),
+                    style = LogbookTheme.type.section,
+                    color = palette.ink,
                     modifier = Modifier.weight(1f),
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    textAlign = TextAlign.Center,
                 )
                 IconButton(onClick = actions.onNextMonth) {
                     Icon(
-                        imageVector = Icons.Filled.ChevronRight,
+                        imageVector = Icons.Outlined.ChevronRight,
                         contentDescription = "Next month",
-                        tint = palette.textSecondary,
+                        tint = palette.ink,
                     )
                 }
             }
@@ -339,9 +359,9 @@ private fun CalendarCard(calendar: CalendarState, actions: CoachActions, onDismi
                 for (label in calendar.weekdayLabels) {
                     Text(
                         text = label.uppercase(),
-                        style = WellnessTheme.type.micro,
-                        color = palette.textFaint,
-                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                        style = LogbookTheme.type.tableHeader,
+                        color = palette.inkFaint,
+                        textAlign = TextAlign.Center,
                         modifier = Modifier.weight(1f),
                     )
                 }
@@ -368,24 +388,27 @@ private fun CalendarCard(calendar: CalendarState, actions: CoachActions, onDismi
                     actions.onToday()
                     onDismiss()
                 },
-                colors = WellnessDefaults.accentTextButtonColors(),
+                colors = ButtonDefaults.textButtonColors(contentColor = palette.ink),
                 modifier = Modifier.align(Alignment.CenterHorizontally),
-            ) { Text("Today") }
+            ) { Text("TODAY", style = LogbookTheme.type.eyebrow) }
 
-            Row(
-                modifier = Modifier.padding(top = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            // The legend speaks the marks' language, not a colour's: there are
+            // no status hues left to name.
+            FlowRow(
+                modifier = Modifier.padding(top = LogbookSpace.grid),
+                horizontalArrangement = Arrangement.spacedBy(LogbookSpace.grid * 3),
+                verticalArrangement = Arrangement.spacedBy(LogbookSpace.grid),
             ) {
                 for (status in WorkoutStatus.entries) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(LogbookSpace.grid + 2.dp),
                     ) {
-                        StatusDot(status, size = 6.dp)
+                        DayMarkGlyph(mark = dayMark(status), color = palette.ink, markSize = DAY_MARK_SIZE)
                         Text(
-                            text = statusLabel(status),
-                            style = WellnessTheme.type.label,
-                            color = palette.textSecondary,
+                            text = statusLabel(status).uppercase(),
+                            style = LogbookTheme.type.eyebrow,
+                            color = palette.inkSoft,
                         )
                     }
                 }
@@ -402,16 +425,18 @@ private fun DayCell(cell: CalendarCell, onClick: () -> Unit, modifier: Modifier 
         if (cell.isToday) append(", today")
         if (!cell.enabled) append(", unavailable")
     }
-    val palette = WellnessTheme.palette
-    val accent = WellnessTheme.accent
-    Surface(
-        onClick = onClick,
-        enabled = cell.enabled,
+    val palette = LogbookTheme.palette
+    // On a selected day the ink is spent on the fill, so everything drawn on
+    // top of it inverts to paper.
+    val onCell = if (cell.isSelected) palette.paper else palette.ink
+
+    Box(
         modifier = modifier
             .height(MIN_TOUCH_TARGET)
+            .background(if (cell.isSelected) palette.ink else Color.Transparent)
+            .clickable(enabled = cell.enabled, role = Role.Button, onClick = onClick)
             .semantics { contentDescription = description },
-        shape = RoundedCornerShape(6.dp),
-        color = if (cell.isSelected) accent.fill else Color.Transparent,
+        contentAlignment = Alignment.Center,
     ) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -426,49 +451,65 @@ private fun DayCell(cell: CalendarCell, onClick: () -> Unit, modifier: Modifier 
         ) {
             Text(
                 text = cell.dayOfMonth.toString(),
-                style = WellnessTheme.type.secondary,
-                fontWeight = if (cell.isToday) FontWeight(700) else null,
-                color = when {
-                    cell.isSelected -> accent.ink
-                    cell.isToday -> accent.text
-                    else -> palette.textPrimary
-                },
-                modifier = Modifier.clearAndSetSemantics { },
+                style = LogbookTheme.type.data,
+                color = onCell,
+                modifier = Modifier
+                    .then(
+                        // Today is underlined rather than emboldened: weight is
+                        // how the log says "logged", and this day may not be.
+                        if (cell.isToday) {
+                            Modifier.drawBehind {
+                                val stroke = TODAY_UNDERLINE.toPx()
+                                drawLine(
+                                    color = onCell,
+                                    start = Offset(0f, size.height - stroke / 2f),
+                                    end = Offset(size.width, size.height - stroke / 2f),
+                                    strokeWidth = stroke,
+                                )
+                            }
+                        } else {
+                            Modifier
+                        },
+                    )
+                    .padding(bottom = TODAY_UNDERLINE_GAP)
+                    .clearAndSetSemantics { },
             )
-            Box(modifier = Modifier.height(6.dp)) {
-                // On a selected day the dot inverts, because the accent fill
-                // underneath has already spent the colour it would have used.
-                cell.status?.let { StatusDot(it, size = 6.dp, inverted = cell.isSelected) }
+            Box(modifier = Modifier.height(MARK_ROW_HEIGHT)) {
+                DayMarkGlyph(mark = cell.mark, color = onCell, markSize = DAY_MARK_SIZE)
             }
         }
     }
 }
 
+/**
+ * A day's status as notation.
+ *
+ * The slash is drawn rather than typed: a `/` glyph would sit on the text
+ * baseline at whatever weight the face happens to have, next to two marks that
+ * are geometry.
+ */
 @Composable
-private fun StatusDot(
-    status: WorkoutStatus,
-    size: androidx.compose.ui.unit.Dp = 8.dp,
-    inverted: Boolean = false,
-) {
-    Box(
-        modifier = Modifier
-            .size(size)
-            .background(
-                color = if (inverted) WellnessTheme.accent.ink else statusColor(status),
-                shape = CircleShape,
+private fun DayMarkGlyph(mark: DayMark, color: Color, markSize: Dp, modifier: Modifier = Modifier) {
+    if (mark == DayMark.NONE) return
+    Canvas(modifier = modifier.size(markSize)) {
+        val stroke = DAY_MARK_STROKE.toPx()
+        when (mark) {
+            DayMark.FILLED -> drawCircle(color = color)
+            DayMark.OUTLINED -> drawCircle(
+                color = color,
+                radius = (size.minDimension - stroke) / 2f,
+                style = Stroke(width = stroke),
             )
-            .clearAndSetSemantics { },
-    )
-}
 
-@Composable
-private fun statusColor(status: WorkoutStatus): Color {
-    val palette = WellnessTheme.palette
-    return when (status) {
-        WorkoutStatus.COMPLETED -> palette.success
-        WorkoutStatus.MISSED -> palette.error
-        // Scheduled is a plan, not a verdict: amber, never red.
-        WorkoutStatus.SCHEDULED -> palette.warning
+            DayMark.SLASHED -> drawLine(
+                color = color,
+                start = Offset(0f, size.height),
+                end = Offset(size.width, 0f),
+                strokeWidth = stroke,
+            )
+
+            DayMark.NONE -> Unit
+        }
     }
 }
 
@@ -481,6 +522,14 @@ private fun statusLabel(status: WorkoutStatus): String = when (status) {
 private const val DAYS_PER_WEEK = 7
 private const val OTHER_MONTH_ALPHA = 0.4f
 private const val DISABLED_ALPHA = 0.25f
+
+private val STRIP_PADDING = 16.dp
+private val TRIGGER_GLYPH = 16.dp
+private val DAY_MARK_SIZE = 8.dp
+private val DAY_MARK_STROKE = 1.5.dp
+private val MARK_ROW_HEIGHT = 10.dp
+private val TODAY_UNDERLINE = 1.5.dp
+private val TODAY_UNDERLINE_GAP = 2.dp
 
 /** Android's minimum comfortable tap size; the PWA's 20 px cells miss it. */
 internal val MIN_TOUCH_TARGET = 48.dp

@@ -28,7 +28,7 @@ class ShellSystemTest {
         // BOTH the destination table and this map, deliberately.
         val expected = mapOf(
             "journal" to ShellSystem.GRAPHITE,
-            "coach" to ShellSystem.GRAPHITE, // flips in the coach rendering phase
+            "coach" to ShellSystem.LOGBOOK, // flipped with its rendering phase
             "trends" to ShellSystem.GRAPHITE,
             "analysis" to ShellSystem.GRAPHITE,
             "tools" to ShellSystem.GRAPHITE,
@@ -59,12 +59,15 @@ class ShellSystemTest {
     }
 
     @Test
-    @DisplayName("Coach is still Graphite: its composables move to Logbook in their own round")
-    fun coachStaysGraphiteUntilItsRound() {
-        // Pinned so the flip is a deliberate edit here rather than a side
-        // effect: Logbook locals under Graphite-styled composables render
-        // tokens that mean something else, not a degraded version of them.
-        assertEquals(ShellSystem.GRAPHITE, shellSystemFor("coach"))
+    @DisplayName("Coach is Logbook, and stays there: its composables read no Graphite tokens")
+    fun coachIsLogbook() {
+        // Pinned separately from the table above so a revert is as deliberate as
+        // the flip was. Coach's composables now read `LogbookTheme` directly —
+        // under `WellnessTheme` they would find the Logbook locals unprovided
+        // and fall back to defaults, which is tokens meaning something else
+        // rather than a degraded version of them. Journal, Trends, Analysis and
+        // Tools are the ones still waiting for their round.
+        assertEquals(ShellSystem.LOGBOOK, shellSystemFor("coach"))
     }
 
     @Test
