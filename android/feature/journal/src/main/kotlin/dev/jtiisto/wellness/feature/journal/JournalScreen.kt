@@ -25,7 +25,6 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -340,19 +339,12 @@ private fun DateCell(cell: DateCellState, onClick: () -> Unit, modifier: Modifie
     val label = buildString {
         append("${cell.dayName} ${cell.dayNum}")
         if (cell.isToday) append(", today")
-        if (!cell.enabled) append(", locked — commit pending changes first")
     }
-    // Locked days recede rather than disappear: the day is still readable, it
-    // simply cannot be written to until the pending tracker edits upload.
-    val numeral = when {
-        !cell.enabled -> palette.inkFaint
-        cell.isSelected -> palette.ink
-        else -> palette.inkSoft
-    }
+    val numeral = if (cell.isSelected) palette.ink else palette.inkSoft
     Box(
         modifier = modifier
             .heightIn(min = LogbookSpace.touchTarget)
-            .clickable(enabled = cell.enabled, role = Role.Button, onClick = onClick)
+            .clickable(role = Role.Button, onClick = onClick)
             .then(
                 if (cell.isSelected) {
                     Modifier.drawBehind {
@@ -392,17 +384,6 @@ private fun DateCell(cell: DateCellState, onClick: () -> Unit, modifier: Modifie
                 modifier = Modifier
                     .padding(top = STRIP_NUMERAL_GAP)
                     .clearAndSetSemantics { },
-            )
-        }
-        if (!cell.enabled) {
-            Icon(
-                imageVector = Icons.Outlined.Lock,
-                contentDescription = null,
-                tint = palette.inkFaint,
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(top = LogbookSpace.grid / 2, end = LogbookSpace.grid / 2)
-                    .size(LOCK_GLYPH),
             )
         }
     }
@@ -559,7 +540,7 @@ private fun TrackerRow(
             if (row.type != TrackerType.NOTE) {
                 InkMarkToggle(
                     checked = row.checked,
-                    editable = row.editable,
+                    editable = true,
                     description = if (row.checked) "${row.name}, done" else "${row.name}, not done",
                     onCheckedChange = { onChecked(row.id, it) },
                 )
@@ -725,7 +706,6 @@ private fun NumericField(
         WellnessDenseField(
             value = text,
             onValueChange = { text = it },
-            enabled = row.editable,
             skin = DenseFieldSkin.NAKED,
             numeric = true,
             // A default nobody has committed to yet is not the user's number.
@@ -757,7 +737,6 @@ private fun NumericField(
         if (row.isAccumulator) {
             IconButton(
                 onClick = onOpenAccumulator,
-                enabled = row.editable,
                 // No explicit size: M3's own 48dp is the target Android asks
                 // for, and it costs the row nothing — the entry mark on the
                 // other side already holds the line at 48dp.
@@ -807,7 +786,6 @@ private fun EvaluationSlider(row: TrackerRowState, onSlider: (String, Float) -> 
             onValueChangeFinished = { dragging = false },
             valueRange = 0f..SLIDER_MAX,
             steps = SLIDER_INTERMEDIATE_STOPS,
-            enabled = row.editable,
             // Named explicitly rather than inherited: M3 would take `primary`
             // for the track and its own disabled greys for the rest, and this
             // is the one control on the page with enough surface to matter.
@@ -861,7 +839,6 @@ private fun NoteField(row: TrackerRowState, onNote: (String, String) -> Unit) {
             text = it
             onNote(row.id, it)
         },
-        enabled = row.editable,
         skin = DenseFieldSkin.NAKED,
         multiLine = true,
         placeholder = "Add note…",
@@ -1007,7 +984,6 @@ private val SLIDER_WIDTH = 140.dp
 
 private val GLYPH_SIZE = 18.dp
 private val CHEVRON_SIZE = 14.dp
-private val LOCK_GLYPH = 10.dp
 
 private val SHEET_PADDING = 20.dp
 private val SHEET_BOTTOM = 24.dp

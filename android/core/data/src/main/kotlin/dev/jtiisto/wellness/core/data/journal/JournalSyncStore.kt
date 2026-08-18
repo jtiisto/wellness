@@ -133,20 +133,8 @@ class JournalSyncStore(
     fun observeEntriesByDate(): Flow<Map<DateString, Map<String, EntryDto>>> =
         dao.observeAllEntries().map(::groupByDate)
 
-    /** How many trackers have unsent edits — what locks the date strip. */
-    fun observeDirtyTrackerCount(): Flow<Int> = dao.observeDirtyTrackerCount()
-
     /** The scheduler's dirty hook. */
     suspend fun hasDirtyData(): Boolean = dao.countDirty() > 0
-
-    /**
-     * Today is always editable. Any other day is editable only while no tracker
-     * is dirty — a pending config change (a delete included) could change what
-     * that older day even means once the server arbitrates it. Dirty *entries*
-     * never lock anything.
-     */
-    suspend fun isDayEditable(date: DateString): Boolean =
-        isDayEditable(date, today().toString(), dao.countDirtyTrackers())
 
     /**
      * The client identity, minted once and cached for the process. The mutex

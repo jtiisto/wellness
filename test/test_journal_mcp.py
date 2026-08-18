@@ -2,6 +2,7 @@
 
 import json
 import sqlite3
+from datetime import date, timedelta
 
 import pytest
 
@@ -169,7 +170,8 @@ class TestJournalMCPTools:
             "scheduleHistory": [{"effectiveFrom": "0000-01-01", "days": [1, 2, 3, 4, 5]}],
             "polarity": "positive",
         }
-        # Mon done, Tue done, Wed logged-not-done, Sat off-schedule.
+        # Mon done, Tue done, Wed emptied (unchecked, no value — asserts
+        # nothing, so it is not logged), Sat off-schedule.
         days = {
             "2026-07-06": {"tracker-adh": {"completed": True}},
             "2026-07-07": {"tracker-adh": {"completed": True}},
@@ -192,12 +194,12 @@ class TestJournalMCPTools:
         assert r["metric_kind"] == "adherence"
         assert r["window"] == {"start": "2026-07-06", "end": "2026-07-12"}
         assert r["scheduled_days"] == 5
-        assert r["logged_days"] == 3
+        assert r["logged_days"] == 2
         assert r["done_days"] == 2
-        assert r["missed_days"] == 2
+        assert r["missed_days"] == 3
         assert r["off_schedule_entries"] == 1
         assert r["adherence_rate"] == 0.4
-        assert r["coverage_rate"] == 0.6
+        assert r["coverage_rate"] == 0.4
 
     def test_get_schedule_adherence_omits_trackers_without_entries(self, client, journal_registered_client):
         """A scheduled tracker with no entries is omitted (nothing to measure)."""
@@ -368,6 +370,42 @@ class TestJournalMCPTools:
     def test_get_journal_summary_max_days(self):
         with pytest.raises(ValueError, match="cannot exceed 365"):
             self.tools["get_journal_summary"](days=500)
+
+    def test_get_journal_summary_ignores_emptied_rows(self):
+        """The emptiness rule reaches the summary: a row an uncheck emptied
+        (completed=0, value NULL) is invisible to every count the tool reports
+        — total_entries, active_days, categories, top_trackers — and therefore
+        to completion_rate_percent's denominator, while a valued-but-unchecked
+        row still counts (the value is the assertion). Pins the changed
+        completion-rate math the ARCHITECTURE doc records."""
+        tracker_id = self.seed_data["tracker"]["id"]
+        used = set(self.seed_data["dates"])
+        free = (
+            d for n in range(1, 28)
+            if (d := (date.today() - timedelta(days=n)).isoformat()) not in used
+        )
+        emptied_day, valued_day = next(free), next(free)
+
+        before = self.tools["get_journal_summary"](days=30)
+
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "INSERT INTO entries (date, tracker_id, value, completed)"
+                " VALUES (?, ?, NULL, 0)",
+                (emptied_day, tracker_id),
+            )
+        assert self.tools["get_journal_summary"](days=30) == before
+
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                "INSERT INTO entries (date, tracker_id, value, completed)"
+                " VALUES (?, ?, 2.0, 0)",
+                (valued_day, tracker_id),
+            )
+        after = self.tools["get_journal_summary"](days=30)
+        assert after["total_entries"] == before["total_entries"] + 1
+        # An uncompleted entry grows the denominator only, so the rate falls.
+        assert after["completion_rate_percent"] < before["completion_rate_percent"]
 
     def test_get_entries_empty_date_range(self):
         result = self.tools["get_entries"](

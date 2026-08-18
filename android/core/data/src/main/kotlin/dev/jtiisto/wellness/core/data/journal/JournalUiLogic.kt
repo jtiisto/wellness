@@ -146,15 +146,6 @@ fun groupByCategory(trackers: List<TrackerDto>): Map<String, List<TrackerDto>> =
 fun getCategories(trackers: List<TrackerDto>): List<String> =
     trackers.mapNotNull { it.category?.takeIf(String::isNotEmpty) }.distinct().sorted()
 
-/**
- * Whether a day is editable: today always, and any other day only while **no
- * tracker** is dirty. Dirty entries never lock the strip — only a pending
- * tracker config change (a delete included), whose upload could re-arbitrate
- * what the older day even contains.
- */
-fun isDayEditable(dateStr: DateString, today: DateString, dirtyTrackerCount: Int): Boolean =
-    dateStr == today || dirtyTrackerCount == 0
-
 /** The category a tracker with none falls into. */
 const val UNCATEGORIZED = "Uncategorized"
 

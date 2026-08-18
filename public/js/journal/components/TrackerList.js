@@ -5,58 +5,38 @@ import { h } from 'preact';
 import { useState, useEffect } from 'preact/hooks';
 import { effect } from '@preact/signals';
 import htm from 'htm';
-import { trackerConfig, selectedDate, dailyLogs, syncMetadata, expandedCategories, toggleCategoryExpanded } from '../store.js';
+import { trackerConfig, selectedDate, dailyLogs, expandedCategories, toggleCategoryExpanded } from '../store.js';
 import { getLastNDays, shouldShowTracker, groupByCategory, categorySummary, formatCategorySummary } from '../utils.js';
 import { getToday } from '../../shared/utils.js';
 import { TrackerItem } from './TrackerItem.js';
 
 const html = htm.bind(h);
 
-function DateSelector({ selected, hasDirtyTrackers, onDateSelect }) {
+function DateSelector({ selected, onDateSelect }) {
     const days = getLastNDays(7);
     const today = getToday();
-
-    const handleDateClick = (date) => {
-        if (hasDirtyTrackers && date !== today) {
-            return;
-        }
-        onDateSelect(date);
-    };
-
-    const isDisabled = (date) => hasDirtyTrackers && date !== today;
-    const lockReason = 'Locked — commit pending changes first';
 
     return html`
         <div class="date-selector" role="group" aria-label="Select date">
             ${days.map(day => {
-                const disabled = isDisabled(day.date);
                 const isToday = day.date === today;
                 const classes = [
                     'date-item',
                     day.date === selected ? 'selected' : '',
-                    isToday ? 'today' : '',
-                    disabled ? 'disabled' : ''
+                    isToday ? 'today' : ''
                 ].filter(Boolean).join(' ');
-                const label = `${day.dayName} ${day.dayNum}${isToday ? ' (today)' : ''}${disabled ? ' — ' + lockReason : ''}`;
+                const label = `${day.dayName} ${day.dayNum}${isToday ? ' (today)' : ''}`;
                 return html`
                     <button
                         type="button"
                         class=${classes}
-                        onClick=${() => handleDateClick(day.date)}
+                        onClick=${() => onDateSelect(day.date)}
                         aria-pressed=${day.date === selected}
-                        aria-disabled=${disabled}
                         aria-label=${label}
-                        disabled=${disabled}
                         key=${day.date}
                     >
                         <span class="date-day" aria-hidden="true">${day.dayName}</span>
                         <span class="date-num" aria-hidden="true">${day.dayNum}</span>
-                        ${disabled && html`
-                            <svg class="date-lock" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="10" height="10" aria-hidden="true">
-                                <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
-                                <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
-                            </svg>
-                        `}
                     </button>
                 `;
             })}
@@ -68,7 +48,6 @@ export function TrackerList() {
     const [config, setConfig] = useState(trackerConfig.value);
     const [date, setDate] = useState(selectedDate.value);
     const [logs, setLogs] = useState(dailyLogs.value);
-    const [hasDirtyTrackers, setHasDirtyTrackers] = useState(syncMetadata.value.dirtyTrackers.length > 0);
     const [expanded, setExpanded] = useState(new Set(expandedCategories.value));
 
     useEffect(() => {
@@ -76,7 +55,6 @@ export function TrackerList() {
             setConfig([...trackerConfig.value]);
             setDate(selectedDate.value);
             setLogs(dailyLogs.value);
-            setHasDirtyTrackers(syncMetadata.value.dirtyTrackers.length > 0);
             setExpanded(new Set(expandedCategories.value));
         });
         return dispose;
@@ -99,7 +77,7 @@ export function TrackerList() {
     if (config.length === 0) {
         return html`
             <div>
-                <${DateSelector} selected=${date} hasDirtyTrackers=${hasDirtyTrackers} onDateSelect=${handleDateSelect} />
+                <${DateSelector} selected=${date} onDateSelect=${handleDateSelect} />
                 <div class="main-content">
                     <div class="empty-state">
                         <div class="empty-state-icon">\u{1F4DD}</div>
@@ -114,7 +92,7 @@ export function TrackerList() {
     if (visibleTrackers.length === 0) {
         return html`
             <div>
-                <${DateSelector} selected=${date} hasDirtyTrackers=${hasDirtyTrackers} onDateSelect=${handleDateSelect} />
+                <${DateSelector} selected=${date} onDateSelect=${handleDateSelect} />
                 <div class="main-content">
                     <div class="empty-state">
                         <div class="empty-state-icon">\u{1F4C5}</div>
@@ -127,7 +105,7 @@ export function TrackerList() {
 
     return html`
         <div>
-            <${DateSelector} selected=${date} hasDirtyTrackers=${hasDirtyTrackers} onDateSelect=${handleDateSelect} />
+            <${DateSelector} selected=${date} onDateSelect=${handleDateSelect} />
             <div class="main-content">
                 ${categories.map(category => {
                     const isCollapsed = !expanded.has(category);

@@ -387,7 +387,7 @@ class JournalNotationTest {
     @Test
     @DisplayName("today leads with the word, and the tally counts entries against what is visible")
     fun todayEyebrow() {
-        val eyebrow = journalEyebrow(TODAY, TODAY, LoggedTally(4, 11), editable = true, locale = uk)
+        val eyebrow = journalEyebrow(TODAY, TODAY, LoggedTally(4, 11), locale = uk)
 
         assertEquals(JournalEyebrow.Today(LoggedTally(4, 11)), eyebrow)
         assertEquals("Today · 4 of 11 logged", eyebrow.label)
@@ -396,45 +396,19 @@ class JournalNotationTest {
     @Test
     @DisplayName("a browsed day swaps the word for the date and says nothing else")
     fun browsingEyebrow() {
-        val eyebrow = journalEyebrow("2030-01-10", TODAY, LoggedTally(3, 9), editable = true, locale = uk)
+        val eyebrow = journalEyebrow("2030-01-10", TODAY, LoggedTally(3, 9), locale = uk)
 
         assertEquals(JournalEyebrow.Browsing("Thu, Jan 10", LoggedTally(3, 9)), eyebrow)
         assertEquals("Thu, Jan 10 · 3 of 9 logged", eyebrow.label)
     }
 
     @Test
-    @DisplayName("a locked day names its own state — the rows are disabled and the reason is elsewhere")
-    fun lockedEyebrow() {
-        val eyebrow = journalEyebrow("2030-01-10", TODAY, LoggedTally(3, 9), editable = false, locale = uk)
-
-        assertEquals(JournalEyebrow.Locked("Thu, Jan 10", LoggedTally(3, 9)), eyebrow)
-        assertEquals("Thu, Jan 10 · 3 of 9 logged · Locked", eyebrow.label)
-    }
-
-    @Test
-    @DisplayName("today is editable by definition, so it is never the locked voice")
-    fun todayIsNeverLocked() {
-        assertEquals(
-            JournalEyebrow.Today(LoggedTally(0, 1)),
-            journalEyebrow(TODAY, TODAY, LoggedTally(0, 1), editable = false, locale = uk),
-        )
-    }
-
-    @Test
     @DisplayName("a day that asks nothing drops the tally rather than announcing zero of zero")
     fun emptyDayDropsTheTally() {
-        assertEquals(
-            "Today",
-            journalEyebrow(TODAY, TODAY, LoggedTally(0, 0), editable = true, locale = uk).label,
-        )
+        assertEquals("Today", journalEyebrow(TODAY, TODAY, LoggedTally(0, 0), locale = uk).label)
         assertEquals(
             "Thu, Jan 10",
-            journalEyebrow("2030-01-10", TODAY, LoggedTally(0, 0), editable = true, locale = uk).label,
-        )
-        // Locked still has to explain itself on an empty day.
-        assertEquals(
-            "Thu, Jan 10 · Locked",
-            journalEyebrow("2030-01-10", TODAY, LoggedTally(0, 0), editable = false, locale = uk).label,
+            journalEyebrow("2030-01-10", TODAY, LoggedTally(0, 0), locale = uk).label,
         )
     }
 
@@ -443,7 +417,7 @@ class JournalNotationTest {
     fun zeroOfSomethingIsStillATally() {
         assertEquals(
             "Today · 0 of 9 logged",
-            journalEyebrow(TODAY, TODAY, LoggedTally(0, 9), editable = true, locale = uk).label,
+            journalEyebrow(TODAY, TODAY, LoggedTally(0, 9), locale = uk).label,
         )
     }
 
@@ -454,19 +428,21 @@ class JournalNotationTest {
             trackers = listOf(
                 tracker("logged", category = "Morning"),
                 tracker("uncommitted", category = "Morning"),
+                tracker("emptied", category = "Evening"),
                 tracker("bare", category = "Evening"),
             ),
             entries = mapOf(
                 // Completed…
                 "logged" to EntryDto(value = JsonPrimitive(1), completed = true),
-                // …and an entry row that exists but says "not done". The journal's
-                // load-bearing semantic is that the row exists at all: something
-                // was written here today.
-                "uncommitted" to EntryDto(value = null, completed = false),
+                // …and a value with the box cleared, which is still something
+                // written here today: presence, not completion.
+                "uncommitted" to EntryDto(value = JsonPrimitive(4), completed = false),
+                // A row an uncheck emptied says nothing, and counts as nothing.
+                "emptied" to EntryDto(value = null, completed = false),
             ),
         )
 
-        assertEquals(LoggedTally(logged = 2, total = 3), loggedTally(state.groups))
+        assertEquals(LoggedTally(logged = 2, total = 4), loggedTally(state.groups))
     }
 
     @Test
@@ -521,7 +497,6 @@ class JournalNotationTest {
         buildJournalUiState(
             trackers = trackers,
             entriesByDate = mapOf(TODAY to entries),
-            dirtyTrackerCount = 0,
             selectedDate = TODAY,
             today = LocalDate.parse(TODAY),
             expandedCategories = emptySet(),
@@ -572,7 +547,6 @@ class JournalNotationTest {
         dayNum = 7,
         isToday = false,
         isSelected = false,
-        enabled = true,
     )
 
     /** Day [offset] of a three-day run ending on [TODAY]. */

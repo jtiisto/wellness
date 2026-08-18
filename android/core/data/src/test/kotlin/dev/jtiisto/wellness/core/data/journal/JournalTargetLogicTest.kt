@@ -1,5 +1,6 @@
 package dev.jtiisto.wellness.core.data.journal
 
+import kotlinx.serialization.json.JsonNull
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
@@ -286,6 +287,36 @@ class JournalTargetLogicTest {
         assertEquals(TargetState.MET, dayStatus(negative, today, null).state)
         assertEquals(TargetState.MISSED, dayStatus(negative, today, entry(completed = true)).state)
         assertEquals(TargetState.MISSED, dayStatus(negative, today, entry(value = num(1))).state)
+    }
+
+    // ---- the emptiness rule (judgment presence) ---------------------------
+
+    @Test
+    @DisplayName("countsAsLogged: an entry counts iff it asserts something")
+    fun countsAsLoggedMatrix() {
+        assertFalse((null as EntryDto?).countsAsLogged())
+        // The row an uncheck leaves behind: nothing said, so nothing counted.
+        assertFalse(entry(completed = false).countsAsLogged())
+        assertFalse(entry().countsAsLogged())
+        assertFalse(entry(value = JsonNull, completed = false).countsAsLogged())
+        // Either half is an assertion on its own.
+        assertTrue(entry(completed = true).countsAsLogged())
+        assertTrue(entry(value = num(0)).countsAsLogged(), "zero is a value")
+        assertTrue(entry(value = text("")).countsAsLogged(), "so is empty text")
+        assertTrue(entry(value = num(3), completed = false).countsAsLogged())
+    }
+
+    @Test
+    @DisplayName("dayStatus: an emptied row judges as no row, so an uncheck can be retracted")
+    fun dayStatusEmptiedRow() {
+        val negative = tracker(id = "t", polarity = "negative")
+        assertEquals(TargetState.MET, dayStatus(negative, today, entry(completed = false)).state)
+        assertFalse(dayStatus(negative, today, entry(completed = false)).hasEntry)
+        // A written value keeps the row judged even once the box is cleared —
+        // the value is the assertion; blanking the field is its retraction.
+        val valued = entry(value = num(1), completed = false)
+        assertEquals(TargetState.MISSED, dayStatus(negative, today, valued).state)
+        assertTrue(dayStatus(negative, today, valued).hasEntry)
     }
 
     @Test

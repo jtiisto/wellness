@@ -62,14 +62,12 @@ class JournalViewModel(
     val uiState: StateFlow<JournalUiState> = combine(
         trackers,
         entriesByDate,
-        store.observeDirtyTrackerCount(),
         preferences,
         viewInputs,
-    ) { allTrackers, entries, dirtyTrackers, (expanded, stamps), (date, status) ->
+    ) { allTrackers, entries, (expanded, stamps), (date, status) ->
         buildJournalUiState(
             trackers = allTrackers,
             entriesByDate = entries,
-            dirtyTrackerCount = dirtyTrackers,
             selectedDate = date,
             today = today(),
             expandedCategories = expanded,

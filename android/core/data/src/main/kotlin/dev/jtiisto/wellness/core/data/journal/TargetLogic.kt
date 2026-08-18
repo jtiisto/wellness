@@ -174,6 +174,27 @@ fun targetStatus(
 }
 
 /**
+ * Whether an entry asserts anything — the judgment-time presence rule.
+ *
+ * Unchecking a box does not delete the row: every client writes
+ * `{completed: false}` and keeps it (the wire has no entry delete). If judgment
+ * keyed off row existence, an uncheck could never be retracted — the day would
+ * read "broken" forever. So an entry counts as logged iff it *says* something:
+ * the box is ticked, or a value was written. An all-empty row judges exactly
+ * like no row at all.
+ *
+ * A written value keeps the row counted even with the box cleared. The value is
+ * the assertion; blanking the field is its retraction.
+ *
+ * This is presence for JUDGMENT only. Presence for VISIBILITY stays raw row
+ * existence ([shouldShowTracker]) — an off-schedule row that has been written to
+ * has to stay on screen, or the entry could never be found and cleared. The
+ * storage distinction between an absent and an explicitly-null value is likewise
+ * untouched; both simply read as "no value" here.
+ */
+fun EntryDto?.countsAsLogged(): Boolean = this?.completed == true || hasValue()
+
+/**
  * A tracker's status on one date, from that day's entry.
  *
  * - Targeted: delegate to [targetStatus].
@@ -181,13 +202,13 @@ fun targetStatus(
  *   checkbox is set; negative is met iff there is **no entry** (avoided). A
  *   value with no checkbox is not met.
  *
- * Pass null for [entry] when nothing is logged, never a blank [EntryDto]: "no
- * entry" has to stay distinguishable from "an entry with nothing in it".
+ * "No entry" is [countsAsLogged]'s answer, not the row's existence: a blank
+ * [EntryDto] left behind by an uncheck judges as nothing logged.
  */
 fun dayStatus(tracker: TrackerDto?, dateStr: DateString, entry: EntryDto?): DayStatus {
     val target = targetForDate(tracker, dateStr)
     val hasTarget = target != null
-    val hasEntry = entry != null
+    val hasEntry = entry.countsAsLogged()
     val value = entry?.value
     val completed = entry?.completed == true
     val polarity = tracker?.polarity

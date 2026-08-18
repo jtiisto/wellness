@@ -46,25 +46,46 @@ NEXT_MON = "2026-07-13"
 @pytest.mark.unit
 class TestComputeAdherence:
     def test_positive_adherence_math(self):
-        # Mon–Fri schedule over Mon..Sun. Logged Mon,Tue,Wed (Wed not done),
-        # plus a Sat off-schedule entry; Thu,Fri scheduled-but-not-logged.
+        # Mon–Fri schedule over Mon..Sun. Logged Mon,Tue; Wed carries an emptied
+        # row (unchecked, no value) which asserts nothing and so is not logged;
+        # plus a Sat off-schedule entry; Wed,Thu,Fri scheduled-but-not-logged.
         entries = {MON: 1, TUE: 1, WED: 0, SAT: 1}
         r = compute_adherence(MON_FRI, "positive", "simple", entries, MON, SUN)
         assert r["metric_kind"] == "adherence"
         assert r["scheduled_days"] == 5           # Mon..Fri
-        assert r["logged_days"] == 3              # Mon,Tue,Wed
-        assert r["done_days"] == 2               # Mon,Tue (Wed completed=0)
-        assert r["missed_days"] == 2             # Thu,Fri
+        assert r["logged_days"] == 2              # Mon,Tue
+        assert r["done_days"] == 2               # Mon,Tue
+        assert r["missed_days"] == 3             # Wed,Thu,Fri
         assert r["off_schedule_entries"] == 1    # Sat
         assert r["adherence_rate"] == 0.4        # 2/5
-        assert r["coverage_rate"] == 0.6         # 3/5
+        assert r["coverage_rate"] == 0.4         # 2/5
 
-    def test_completed_false_is_logged_not_done(self):
+    def test_emptied_row_is_not_logged(self):
+        # The retraction rule: an uncheck leaves `{completed: 0}` behind rather
+        # than deleting the row, so a row that asserts nothing must judge
+        # exactly like no row — otherwise the uncheck could never be taken back.
         r = compute_adherence(MON_FRI, "positive", "simple", {MON: 0}, MON, MON)
-        assert r["logged_days"] == 1
+        assert r["logged_days"] == 0
         assert r["done_days"] == 0
         assert r["adherence_rate"] == 0.0
+        assert r["coverage_rate"] == 0.0
+
+    def test_value_keeps_an_unchecked_row_logged(self):
+        # A written value is the assertion; clearing the box does not retract
+        # it (blanking the field does). Needs `values` — presence is only
+        # knowable where the value data was loaded.
+        r = compute_adherence(MON_FRI, "positive", "simple", {MON: 0}, MON, MON,
+                              values={MON: 12})
+        assert r["logged_days"] == 1
+        assert r["done_days"] == 0               # still not checked off
         assert r["coverage_rate"] == 1.0
+
+    def test_emptied_row_lets_a_negative_tracker_be_avoided_again(self):
+        # The device finding this rule came from: unchecking an avoidance left
+        # the day reading 'broken' forever, because the row outlived the claim.
+        r = compute_adherence(MON_FRI, "negative", "simple", {MON: 0}, MON, MON)
+        assert r["logged_days"] == 0
+        assert r["avoidance_rate"] == 1.0
 
     def test_negative_polarity_avoidance_inversion(self):
         # Occurrence = entry present; avoided = scheduled days with no entry.

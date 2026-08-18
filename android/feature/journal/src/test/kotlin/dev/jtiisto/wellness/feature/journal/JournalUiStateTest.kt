@@ -48,7 +48,6 @@ class JournalUiStateTest {
     private fun build(
         trackers: List<TrackerDto>,
         entriesByDate: Map<DateString, Map<String, EntryDto>> = emptyMap(),
-        dirtyTrackerCount: Int = 0,
         selectedDate: DateString = todayStr,
         expandedCategories: Set<String> = emptySet(),
         valueUpdatedTimes: Map<String, String> = emptyMap(),
@@ -56,7 +55,6 @@ class JournalUiStateTest {
     ) = buildJournalUiState(
         trackers = trackers,
         entriesByDate = entriesByDate,
-        dirtyTrackerCount = dirtyTrackerCount,
         selectedDate = selectedDate,
         today = today,
         expandedCategories = expandedCategories,
@@ -66,7 +64,7 @@ class JournalUiStateTest {
         locale = Locale.US,
     )
 
-    // ---- the date strip and its lock ---------------------------------------
+    // ---- the date strip ------------------------------------------------------
 
     @Test
     @DisplayName("the strip is the trailing seven days, ending today")
@@ -77,41 +75,6 @@ class JournalUiStateTest {
         assertEquals(todayStr, state.dateStrip.last().date)
         assertTrue(state.dateStrip.last().isToday)
         assertTrue(state.dateStrip.last().isSelected)
-    }
-
-    @Test
-    @DisplayName("a dirty tracker locks every day but today")
-    fun dirtyTrackerLocksTheStrip() {
-        val state = build(listOf(simple("t")), dirtyTrackerCount = 1)
-        val byDate = state.dateStrip.associateBy { it.date }
-        assertTrue(byDate.getValue(todayStr).enabled, "today is always tappable")
-        assertTrue(state.dateStrip.filterNot { it.isToday }.none { it.enabled })
-        assertTrue(row(state, "t").editable, "today's rows stay editable")
-
-        // A day already selected when the tracker went dirty locks its rows too.
-        val onOlderDay = build(listOf(simple("t")), dirtyTrackerCount = 1, selectedDate = yesterday)
-        assertFalse(row(onOlderDay, "t").editable)
-    }
-
-    @Test
-    @DisplayName("with no dirty trackers every day is editable")
-    fun cleanStripIsFullyEditable() {
-        val state = build(listOf(simple("t")), selectedDate = yesterday, expandedCategories = setOf("Habits"))
-        assertTrue(state.dateStrip.all { it.enabled })
-        assertTrue(state.groups.first().trackers.first().editable)
-    }
-
-    @Test
-    @DisplayName("the day's own editability is hoisted to the screen, for the header to explain")
-    fun dayEditableIsHoisted() {
-        // The rows carry it already; a day with no rows at all has nothing to
-        // ask, and that is exactly the day the header has to speak for.
-        assertTrue(build(listOf(simple("t")), dirtyTrackerCount = 1).dayEditable, "today always")
-        assertFalse(
-            build(listOf(simple("t")), dirtyTrackerCount = 1, selectedDate = yesterday).dayEditable,
-        )
-        assertTrue(build(emptyList(), selectedDate = yesterday).dayEditable)
-        assertFalse(build(emptyList(), dirtyTrackerCount = 1, selectedDate = yesterday).dayEditable)
     }
 
     @Test
@@ -380,6 +343,18 @@ class JournalUiStateTest {
         val entries = mapOf(todayStr to mapOf("h" to EntryDto(value = null, completed = true)))
         val logged = row(build(listOf(simple("h", polarity = "positive")), entriesByDate = entries), "h")
         assertEquals(WeekMark.FILLED_DOT, logged.marks.last().mark)
+
+        // The emptiness rule composes with the suspension: a row an uncheck
+        // emptied is "nothing logged" again, so today's mark returns to the
+        // open dot — the retraction restores "no verdict yet". A written value
+        // is an assertion, so it keeps the judged mark on the page.
+        val emptied = mapOf(todayStr to mapOf("h" to EntryDto(value = null, completed = false)))
+        val retracted = row(build(listOf(simple("h", polarity = "positive")), entriesByDate = emptied), "h")
+        assertEquals(WeekMark.OPEN_DOT, retracted.marks.last().mark)
+
+        val valued = mapOf(todayStr to mapOf("h" to EntryDto(value = JsonPrimitive(1), completed = false)))
+        val asserted = row(build(listOf(simple("h", polarity = "positive")), entriesByDate = valued), "h")
+        assertEquals(WeekMark.SLASHED_DOT, asserted.marks.last().mark)
     }
 
     @Test
@@ -423,17 +398,29 @@ class JournalUiStateTest {
     @Test
     @DisplayName("the header's eyebrow is assembled with the rest, tally and all")
     fun eyebrowIsDerived() {
-        val entries = mapOf(todayStr to mapOf("a" to EntryDto(value = null, completed = false)))
+        val entries = mapOf(todayStr to mapOf("a" to EntryDto(value = null, completed = true)))
         val today = build(listOf(simple("a"), simple("b")), entriesByDate = entries).eyebrow
         assertEquals(JournalEyebrow.Today(LoggedTally(logged = 1, total = 2)), today)
         assertEquals("Today · 1 of 2 logged", today.label)
 
-        // A browsed day names itself; a locked one says why the rows below it
-        // cannot be written to.
         val browsing = build(listOf(simple("a")), selectedDate = yesterday).eyebrow
         assertTrue(browsing is JournalEyebrow.Browsing, browsing.toString())
-        val locked = build(listOf(simple("a")), dirtyTrackerCount = 1, selectedDate = yesterday).eyebrow
-        assertTrue(locked is JournalEyebrow.Locked, locked.toString())
+    }
+
+    @Test
+    @DisplayName("the tally counts asserted entries: an unchecked, valueless row is nothing logged")
+    fun tallyIgnoresEmptyRows() {
+        val emptied = mapOf(todayStr to mapOf("a" to EntryDto(value = null, completed = false)))
+        val state = build(listOf(simple("a"), simple("b")), entriesByDate = emptied)
+        assertEquals(LoggedTally(logged = 0, total = 2), state.eyebrow.tally)
+        assertFalse(row(state, "a").hasEntry, "an uncheck retracts the row's claim on the day")
+
+        // A value keeps the row counted even with the box cleared — the value
+        // is the assertion, and blanking the field is its retraction.
+        val valued = mapOf(
+            todayStr to mapOf("a" to EntryDto(value = JsonPrimitive(3), completed = false)),
+        )
+        assertTrue(row(build(listOf(simple("a")), entriesByDate = valued), "a").hasEntry)
     }
 
     @Test
@@ -447,21 +434,26 @@ class JournalUiStateTest {
     }
 
     @Test
-    @DisplayName("hasEntry is the row existing, not the checkbox being true")
-    fun entryPresenceIsRowExistence() {
+    @DisplayName("hasEntry is the row asserting something, not the checkbox and not mere existence")
+    fun entryPresenceIsAnAssertion() {
         val entries = mapOf(
             todayStr to mapOf(
                 "done" to EntryDto(value = JsonPrimitive(1), completed = true),
-                // A row that exists and says "not done" is still something
-                // written down today — the distinction the whole journal keys
-                // off, and what the header tally counts.
-                "open" to EntryDto(value = null, completed = false),
+                // A value with the box cleared is still a claim about the day.
+                "valued" to EntryDto(value = JsonPrimitive(7), completed = false),
+                // A row that exists but says nothing: what an uncheck leaves
+                // behind, and it must read exactly like no row at all.
+                "emptied" to EntryDto(value = null, completed = false),
             ),
         )
-        val state = build(listOf(simple("done"), simple("open"), simple("bare")), entriesByDate = entries)
+        val state = build(
+            listOf(simple("done"), simple("valued"), simple("emptied"), simple("bare")),
+            entriesByDate = entries,
+        )
 
         assertTrue(row(state, "done").hasEntry)
-        assertTrue(row(state, "open").hasEntry)
+        assertTrue(row(state, "valued").hasEntry)
+        assertFalse(row(state, "emptied").hasEntry)
         assertFalse(row(state, "bare").hasEntry)
     }
 

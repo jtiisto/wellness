@@ -16,7 +16,6 @@ import dev.jtiisto.wellness.core.data.journal.formatLastUpdated
 import dev.jtiisto.wellness.core.data.journal.formatTargetProgress
 import dev.jtiisto.wellness.core.data.journal.getLastNDays
 import dev.jtiisto.wellness.core.data.journal.groupByCategory
-import dev.jtiisto.wellness.core.data.journal.isDayEditable
 import dev.jtiisto.wellness.core.data.journal.isExpectedOn
 import dev.jtiisto.wellness.core.data.journal.journalNumberJson
 import dev.jtiisto.wellness.core.data.journal.localDataWindowStart
@@ -39,9 +38,9 @@ import java.util.Locale
  * Everything the journal day view renders, derived in one pure pass.
  *
  * The composables downstream are deliberately dumb: they read fields off this
- * and draw. Every rule with a decision in it — what is visible, what is
- * editable, which value a field shows when there is no entry — happens in
- * [buildJournalUiState], where it can be tested without a Compose rig.
+ * and draw. Every rule with a decision in it — what is visible, which value a
+ * field shows when there is no entry — happens in [buildJournalUiState], where
+ * it can be tested without a Compose rig.
  */
 data class JournalUiState(
     val selectedDate: DateString = "",
@@ -67,19 +66,12 @@ data class JournalUiState(
     val eyebrow: JournalEyebrow = JournalEyebrow.Today(LoggedTally(0, 0)),
     val emptyState: JournalEmptyState? = null,
     val syncStatus: SyncStatus = SyncStatus.GRAY,
-    /**
-     * `isDayEditable` for the selected day, hoisted to the screen.
-     *
-     * The rows already carry it, but the header has to say *why* they are all
-     * disabled and an empty day has no rows to ask.
-     */
-    val dayEditable: Boolean = true,
 )
 
 /** The two "nothing to show" cases, which need different words. */
 enum class JournalEmptyState { NO_TRACKERS, NONE_SCHEDULED }
 
-/** One day of the strip. [enabled] false means the lock badge shows. */
+/** One day of the strip. Every day in the strip is writable. */
 data class DateCellState(
     val date: DateString,
     val dayName: String,
@@ -92,7 +84,6 @@ data class DateCellState(
     val dayNum: Int,
     val isToday: Boolean,
     val isSelected: Boolean,
-    val enabled: Boolean,
 )
 
 data class CategoryGroupState(
@@ -117,7 +108,6 @@ data class TrackerRowState(
     val id: String,
     val name: String,
     val type: TrackerType,
-    val editable: Boolean,
     val checked: Boolean,
     val committed: Boolean,
     val valueText: String,
@@ -185,7 +175,6 @@ const val EVALUATION_DEFAULT = 50.0
 fun buildJournalUiState(
     trackers: List<TrackerDto>,
     entriesByDate: Map<DateString, Map<String, EntryDto>>,
-    dirtyTrackerCount: Int,
     selectedDate: DateString,
     today: LocalDate,
     expandedCategories: Set<String>,
@@ -198,7 +187,6 @@ fun buildJournalUiState(
     val strip = getLastNDays(today)
     val date = if (strip.any { it.date == selectedDate }) selectedDate else todayStr
     val dayLog = entriesByDate[date].orEmpty()
-    val editable = isDayEditable(date, todayStr, dirtyTrackerCount)
     val windowStart = localDataWindowStart(today)
 
     val dateStrip = strip.map { cell ->
@@ -209,7 +197,6 @@ fun buildJournalUiState(
             dayNum = cell.dayNum,
             isToday = cell.isToday,
             isSelected = cell.date == date,
-            enabled = isDayEditable(cell.date, todayStr, dirtyTrackerCount),
         )
     }
 
@@ -230,7 +217,6 @@ fun buildJournalUiState(
                     entriesByDate = entriesByDate,
                     date = date,
                     today = todayStr,
-                    editable = editable,
                     windowStart = windowStart,
                     valueUpdatedTimes = valueUpdatedTimes,
                     zone = zone,
@@ -249,7 +235,6 @@ fun buildJournalUiState(
             selectedDate = date,
             today = todayStr,
             tally = loggedTally(groups),
-            editable = editable,
             locale = locale,
         ),
         emptyState = when {
@@ -258,7 +243,6 @@ fun buildJournalUiState(
             else -> null
         },
         syncStatus = syncStatus,
-        dayEditable = editable,
     )
 }
 
@@ -269,7 +253,6 @@ private fun buildTrackerRowState(
     entriesByDate: Map<DateString, Map<String, EntryDto>>,
     date: DateString,
     today: DateString,
-    editable: Boolean,
     windowStart: DateString,
     valueUpdatedTimes: Map<String, String>,
     zone: ZoneId,
@@ -291,7 +274,6 @@ private fun buildTrackerRowState(
         id = tracker.id,
         name = tracker.name.orEmpty(),
         type = type,
-        editable = editable,
         checked = entry?.completed ?: false,
         committed = entry?.completed == true,
         valueText = displayed.asFieldText(),

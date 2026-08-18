@@ -11,6 +11,7 @@ import {
     computeTargetHistoryUpdate,
     targetStatus,
     dayStatus,
+    entryCountsAsLogged,
     formatTargetProgress,
 } from '../../public/js/journal/utils.js';
 
@@ -234,6 +235,45 @@ test('dayStatus: untargeted negative → met iff no entry (avoided)', () => {
     assert.equal(dayStatus(neg, TODAY, undefined).state, 'met');            // avoided
     assert.equal(dayStatus(neg, TODAY, { completed: true }).state, 'missed');
     assert.equal(dayStatus(neg, TODAY, { value: 1 }).state, 'missed');      // logged = not avoided
+});
+
+// ---- the emptiness rule (judgment presence) -------------------------------
+
+test('entryCountsAsLogged: an entry counts iff it asserts something', () => {
+    assert.equal(entryCountsAsLogged(undefined), false);
+    assert.equal(entryCountsAsLogged(null), false);
+    // The row an uncheck leaves behind: nothing said, so nothing counted.
+    assert.equal(entryCountsAsLogged({ completed: false }), false);
+    assert.equal(entryCountsAsLogged({ completed: false, value: null }), false);
+    assert.equal(entryCountsAsLogged({}), false);
+    // Either half is an assertion on its own.
+    assert.equal(entryCountsAsLogged({ completed: true }), true);
+    assert.equal(entryCountsAsLogged({ value: 0 }), true);          // zero is a value
+    assert.equal(entryCountsAsLogged({ value: '' }), true);         // so is empty text
+    assert.equal(entryCountsAsLogged({ completed: false, value: 3 }), true);
+});
+
+test('dayStatus: an emptied row judges as no row, so an uncheck can be retracted', () => {
+    // The device finding: unchecking an avoidance left the day reading
+    // 'missed' forever, because the row outlived the claim it carried.
+    const neg = { id: 't', polarity: 'negative' };
+    assert.equal(dayStatus(neg, TODAY, { completed: false }).state, 'met');
+    assert.equal(dayStatus(neg, TODAY, { completed: false, value: null }).state, 'met');
+    assert.equal(dayStatus(neg, TODAY, { completed: false }).hasEntry, false);
+
+    // A written value keeps the row judged even once the box is cleared —
+    // the value is the assertion; blanking the field is its retraction.
+    assert.equal(dayStatus(neg, TODAY, { completed: false, value: 1 }).state, 'missed');
+    assert.equal(dayStatus(neg, TODAY, { completed: false, value: 1 }).hasEntry, true);
+
+    // A targeted positive reads the emptied row as no entry, not as a
+    // value-less miss — same verdict here, but reached the honest way.
+    const t = {
+        id: 't', polarity: 'positive',
+        targetHistory: [{ effectiveFrom: '0000-01-01', target: { min: 10 } }],
+    };
+    assert.equal(dayStatus(t, TODAY, { completed: false }).hasEntry, false);
+    assert.equal(dayStatus(t, TODAY, { completed: false }).state, 'missed');
 });
 
 test('dayStatus: targeted delegates to targetStatus with the in-effect target', () => {

@@ -146,12 +146,6 @@ button.category-header {
     text-align: inherit;
 }
 
-button.date-item[disabled] {
-    /* preserve the existing .disabled visual; UA disabled styling is muted
-       by letting the class rule own opacity/cursor. */
-    pointer-events: none;
-}
-
 /* ==================== Focus rings ====================
 
    Strategy: suppress the default focus ring on mouse-click only
@@ -779,21 +773,6 @@ textarea:focus-visible,
 .date-num {
     font-size: var(--font-size-lg);
     font-weight: 600;
-}
-
-/* Journal-specific: disabled state when trackers are unsynced. A small
-   lock glyph replaces the prior red dot so the reason reads instead of
-   looking like an error indicator. */
-.journal .date-item.disabled {
-    opacity: 0.55;
-    cursor: not-allowed;
-}
-
-.journal .date-item .date-lock {
-    position: absolute;
-    top: 3px;
-    right: 3px;
-    color: var(--text-secondary);
 }
 
 /* Main Content */

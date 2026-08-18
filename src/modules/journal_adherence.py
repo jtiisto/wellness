@@ -140,13 +140,63 @@ def _target_for_date(target_history, date_str):
     return target if isinstance(target, dict) else None
 
 
+def entry_present(completed, value):
+    """Whether an entry asserts anything — the judgment-time presence rule.
+
+    Unchecking a box does not delete the row: every client writes
+    `{completed: false}` and keeps it (the wire has no entry delete). If
+    judgment keyed off row existence, an uncheck could never be retracted — the
+    day would read 'missed' forever. So an entry counts as present iff it *says*
+    something: the box is ticked, or a value was written. An all-empty row
+    (`completed` 0/NULL, `value` NULL) judges exactly like no row at all.
+
+    A written value keeps the row counted even with the box cleared: the value
+    is the assertion, and blanking the field is its retraction.
+
+    Presence for raw LISTING is a different question — `get_entries`, the sync
+    delta and the Trends chart series all keep returning every stored row.
+    Twin of `entryCountsAsLogged` in public/js/journal/utils.js and of
+    `EntryDto?.countsAsLogged()` on Android. The SQL form of the same rule is
+    `ENTRY_PRESENT_SQL`.
+    """
+    return completed == 1 or value is not None
+
+
+def entry_present_sql(alias=""):
+    """The `entry_present` rule as a SQL predicate, for the aggregate sites
+    that judge presence without loading rows into Python (first/last-entry
+    bounds, COUNTs, HAVING gates). `alias` qualifies the columns for a joined
+    query (`entry_present_sql("e")`).
+
+    `completed = 1` rather than a bare truth test: the column is nullable, and
+    in SQLite `NULL OR ...` is not false — it has to be compared explicitly.
+    """
+    prefix = f"{alias}." if alias else ""
+    return f"({prefix}completed = 1 OR {prefix}value IS NOT NULL)"
+
+
+ENTRY_PRESENT_SQL = entry_present_sql()
+
+
+def _has_entry(entries, values, date_str):
+    """`entry_present` over the parallel `entries`/`values` dicts the callers
+    carry. `values` is optional throughout this module, so a caller that omits
+    it falls back to the checkbox alone — which is the right reading when no
+    value data was loaded at all."""
+    if date_str not in entries:
+        return False
+    return entry_present(entries[date_str], (values or {}).get(date_str))
+
+
 def _target_status(target, value, has_entry, polarity):
     """Whether a scheduled day meets its in-effect target: 'met' | 'partial' |
     'missed'.
 
     No-entry rule (user decision): a **negative**-polarity tracker with no entry
     counts as **met** (absence = successfully avoided); positive/neutral with no
-    entry is **missed** (never partial). With an entry present, the value is
+    entry is **missed** (never partial). "No entry" is `entry_present`'s
+    answer, not the row's existence — an all-empty row left behind by an uncheck
+    is no entry. With an entry present, the value is
     tested against the bounds:
       - at-least (min): met if value >= min; partial if 0 < value < min; else missed
       - at-most (max): met if value <= max; over → missed
@@ -198,8 +248,11 @@ def compute_adherence(schedule_json, polarity, tracker_type, entries,
     [`window_start`, `window_end`] (real `YYYY-MM-DD` strings).
 
     `entries` maps a date string to that day's `completed` value (1/0/None);
-    `values` (optional) maps a date string to the day's numeric `value`, needed
-    only when the tracker has a target. `meta_json` (optional) supplies the
+    `values` (optional) maps a date string to the day's `value`. Pass `values`
+    whenever it is available: a row is only *present* for judgment when it
+    asserts something (see `entry_present`), and without `values` an unchecked
+    row carrying a value cannot be told from an emptied one. `meta_json`
+    (optional) supplies the
     legacy frequency/weeklyDay fallback for trackers whose schedule_json has
     not been normalized yet (see _legacy_weekly_days).
 
@@ -237,7 +290,7 @@ def compute_adherence(schedule_json, polarity, tracker_type, entries,
     while day <= end:
         date_str = day.isoformat()
         weekday = day.isoweekday() % 7  # Mon=1..Sun=7 -> Sun=0..Sat=6
-        has_entry = date_str in entries
+        has_entry = _has_entry(entries, values, date_str)
         day_set = (legacy_days if legacy_days is not None
                    else _segment_days_for_date(schedule, date_str))
         if weekday in day_set:
@@ -319,7 +372,7 @@ def _day_status_parsed(schedule, legacy_days, polarity, entries, values,
                else _segment_days_for_date(schedule, date_str))
     if weekday not in day_set:
         return "off"
-    has_entry = date_str in entries
+    has_entry = _has_entry(entries, values, date_str)
     target = _target_for_date(target_history, date_str)
     if target is not None:
         return _target_status(
@@ -367,8 +420,8 @@ def compute_streaks(schedule_json, polarity, entries, values, target_json,
         tracker with an entry (the lapse already happened), or a targeted day
         whose value already exceeds the max bound (values only accumulate
         upward within a day)."""
-        if date_str not in entries:
-            return False  # no entry yet: still repairable today
+        if not _has_entry(entries, values, date_str):
+            return False  # nothing asserted yet: still repairable today
         if polarity == "negative":
             return True
         target = _target_for_date(target_history, date_str)

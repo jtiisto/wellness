@@ -1213,10 +1213,6 @@ internal open class FakeJournalDao : JournalDao() {
     override suspend fun countDirty(): Int =
         trackers.values.count { it.isDirty } + entries.values.count { it.isDirty }
 
-    override suspend fun countDirtyTrackers(): Int = trackers.values.count { it.isDirty }
-
-    override fun observeDirtyTrackerCount(): Flow<Int> = revision.map { trackers.values.count { it.isDirty } }
-
     override suspend fun upsertTracker(row: JournalTrackerEntity) {
         trackers[row.id] = row
         touch()

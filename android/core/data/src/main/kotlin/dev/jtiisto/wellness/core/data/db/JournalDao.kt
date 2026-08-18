@@ -179,16 +179,6 @@ abstract class JournalDao {
     )
     abstract suspend fun countDirty(): Int
 
-    /**
-     * Dirty *trackers* only — what the date strip's lock keys off. A pending
-     * delete counts (it is a dirty tracker row); a dirty entry never does.
-     */
-    @Query("SELECT COUNT(*) FROM journal_trackers WHERE isDirty = 1")
-    abstract suspend fun countDirtyTrackers(): Int
-
-    @Query("SELECT COUNT(*) FROM journal_trackers WHERE isDirty = 1")
-    abstract fun observeDirtyTrackerCount(): Flow<Int>
-
     // ---- primitive writes ------------------------------------------------
 
     @Upsert

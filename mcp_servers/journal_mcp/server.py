@@ -20,7 +20,7 @@ except ImportError:
         "Install with: pip install fastmcp"
     )
 
-from .adherence import compute_adherence
+from .adherence import ENTRY_PRESENT_SQL, compute_adherence, entry_present_sql
 from .config import MCPConfig
 
 # Default DB path: ../../data/journal.db relative to this file's directory
@@ -476,10 +476,10 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
         try:
             start_date = (date.today() - timedelta(days=days)).isoformat()
 
-            total_query = """
+            total_query = f"""
                 SELECT COUNT(*) as total_entries
                 FROM entries
-                WHERE date >= ?
+                WHERE date >= ? AND {ENTRY_PRESENT_SQL}
             """
             total_result = db_manager.execute_safe_query(total_query, [start_date])
             total_entries = total_result[0]["total_entries"] if total_result else 0
@@ -492,30 +492,30 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
             completed_result = db_manager.execute_safe_query(completed_query, [start_date])
             completed = completed_result[0]["completed"] if completed_result else 0
 
-            days_query = """
+            days_query = f"""
                 SELECT COUNT(DISTINCT date) as active_days
                 FROM entries
-                WHERE date >= ?
+                WHERE date >= ? AND {ENTRY_PRESENT_SQL}
             """
             days_result = db_manager.execute_safe_query(days_query, [start_date])
             active_days = days_result[0]["active_days"] if days_result else 0
 
-            category_query = """
+            category_query = f"""
                 SELECT t.category, COUNT(*) as entry_count
                 FROM entries e
                 JOIN trackers t ON e.tracker_id = t.id
-                WHERE e.date >= ?
+                WHERE e.date >= ? AND {entry_present_sql('e')}
                 GROUP BY t.category
                 ORDER BY entry_count DESC
             """
             categories = db_manager.execute_safe_query(category_query, [start_date])
 
-            top_trackers_query = """
+            top_trackers_query = f"""
                 SELECT t.name, t.deleted as tracker_deleted, COUNT(*) as entry_count,
                        SUM(CASE WHEN e.completed = 1 THEN 1 ELSE 0 END) as completed_count
                 FROM entries e
                 JOIN trackers t ON e.tracker_id = t.id
-                WHERE e.date >= ?
+                WHERE e.date >= ? AND {entry_present_sql('e')}
                 GROUP BY t.id, t.name, t.deleted
                 ORDER BY entry_count DESC
                 LIMIT 10
@@ -615,12 +615,13 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
             results: List[Dict[str, Any]] = []
             for tracker in trackers:
                 first = db_manager.execute_safe_query(
-                    "SELECT MIN(date) AS first_date FROM entries WHERE tracker_id = ?",
+                    "SELECT MIN(date) AS first_date FROM entries "
+                    f"WHERE tracker_id = ? AND {ENTRY_PRESENT_SQL}",
                     [tracker["id"]],
                 )
                 first_date = first[0]["first_date"] if first else None
                 if not first_date:
-                    continue  # no entries → nothing to measure
+                    continue  # nothing ever asserted → nothing to measure
                 eff_start = max(start, first_date)
                 if eff_start > end:
                     continue  # first activity is after the window → nothing to measure

@@ -11,7 +11,6 @@ import {
     trackerValueUpdatedTimes,
     updateEntry,
     markValueUpdated,
-    isDayEditable,
 } from '../store.js';
 import { NumericInput } from '../../shared/numeric-input.js';
 import { dayStatus, formatTargetProgress, recentDayStates, localDataWindowStart } from '../utils.js';
@@ -60,7 +59,6 @@ export function TrackerItem({ tracker }) {
 
     const rawEntry = logs[date]?.[tracker.id];
     const entry = rawEntry || {};
-    const editable = isDayEditable(date);
 
     const completed = entry.completed ?? false;
     const isCommitted = entry.completed === true;
@@ -90,7 +88,6 @@ export function TrackerItem({ tracker }) {
     const recentStates = recentDayStates(tracker, date, logs, 7, localDataWindowStart(7));
 
     const handleCompletedChange = (e) => {
-        if (!editable) return;
         const newCompleted = e.target.checked;
         const updateData = { completed: newCompleted };
 
@@ -108,18 +105,15 @@ export function TrackerItem({ tracker }) {
     };
 
     const handleSliderChange = (e) => {
-        if (!editable) return;
         updateEntry(date, tracker.id, { value: Number(e.target.value) });
     };
 
     const handleNoteChange = (e) => {
-        if (!editable) return;
         const noteValue = e.target.value;
         updateEntry(date, tracker.id, { value: noteValue, completed: noteValue.trim() !== '' });
     };
 
     const handleNumericChange = (v) => {
-        if (!editable) return;
         // NumericInput fires onValueChange on blur even when the field was
         // only focused, so we no-op when nothing actually changed — otherwise
         // tabbing through inputs would bump every "Last updated" timestamp.
@@ -136,7 +130,6 @@ export function TrackerItem({ tracker }) {
     };
 
     const handleAccumulatorAdd = () => {
-        if (!editable) return;
         setAccumModal({ open: true, raw: '' });
     };
 
@@ -144,7 +137,6 @@ export function TrackerItem({ tracker }) {
 
     const handleAccumulatorSubmit = (e) => {
         e.preventDefault();
-        if (!editable) return;
         const increment = Number(accumModal.raw);
         if (!Number.isFinite(increment) || increment === 0) {
             closeAccumModal();
@@ -159,7 +151,6 @@ export function TrackerItem({ tracker }) {
 
     const rowClasses = [
         'tracker-item',
-        !editable ? 'disabled' : '',
         !isCommitted ? 'tracker-item--uncommitted' : '',
         tracker.type === 'note' ? 'tracker-item-note' : ''
     ].filter(Boolean).join(' ');
@@ -173,7 +164,6 @@ export function TrackerItem({ tracker }) {
                             type="checkbox"
                             checked=${completed}
                             onChange=${handleCompletedChange}
-                            disabled=${!editable}
                         />
                     </div>
                 `}
@@ -185,7 +175,6 @@ export function TrackerItem({ tracker }) {
                         <${NumericInput}
                             value=${value}
                             onValueChange=${handleNumericChange}
-                            disabled=${!editable}
                             min="0"
                             step="any"
                         />
@@ -195,7 +184,6 @@ export function TrackerItem({ tracker }) {
                                 type="button"
                                 class="tracker-accum-btn"
                                 onClick=${handleAccumulatorAdd}
-                                disabled=${!editable}
                                 title="Add to total"
                                 aria-label="Add to total"
                             >+</button>
@@ -212,7 +200,6 @@ export function TrackerItem({ tracker }) {
                             value=${value ?? 50}
                             onInput=${handleSliderChange}
                             onWheel=${(e) => e.preventDefault()}
-                            disabled=${!editable}
                             aria-valuetext="${value ?? 50}"
                         />
                         <span class="tracker-slider-value" aria-hidden="true">${value ?? 50}</span>
@@ -234,7 +221,6 @@ export function TrackerItem({ tracker }) {
                     <textarea
                         value=${value ?? ''}
                         onInput=${handleNoteChange}
-                        disabled=${!editable}
                         placeholder="Add note..."
                         rows="2"
                     />

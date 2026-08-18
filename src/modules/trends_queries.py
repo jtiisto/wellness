@@ -34,9 +34,11 @@ from pathlib import Path
 from modules.coach_logs import AD_HOC_LOG_SLUGS
 from modules.db import read_transaction
 from modules.journal_adherence import (
+    entry_present,
     compute_adherence,
     compute_streaks,
     day_status,
+    entry_present_sql,
     target_band_segments,
 )
 
@@ -378,13 +380,13 @@ def journal_trackers(journal_db):
     DESC (most recently active first), name ASC secondary."""
     with journal_db.get_db() as conn:
         with read_transaction(conn) as cursor:
-            rows = cursor.execute("""
+            rows = cursor.execute(f"""
                 SELECT t.id, t.name, t.type, t.polarity, t.meta_json,
                        t.target_json,
                        MIN(e.date) AS first_entry, MAX(e.date) AS last_entry
                 FROM trackers t
                 JOIN entries e ON e.tracker_id = t.id
-                WHERE t.deleted = 0
+                WHERE t.deleted = 0 AND {entry_present_sql('e')}
                 GROUP BY t.id
             """).fetchall()
 
@@ -434,10 +436,15 @@ def journal_tracker_detail(journal_db, *, tracker_id, start=None, end, today):
                 (tracker_id,),
             ).fetchall()
 
-    if not entry_rows:
+    # The window bounds and the streak scan are judgments, so they run on the
+    # rows that assert something; `entry_rows` stays raw because the chart
+    # series below has to plot every stored point, emptied ones included.
+    present_rows = [r for r in entry_rows
+                    if entry_present(r["completed"], r["value"])]
+    if not present_rows:
         raise ValueError(f"Tracker has no entries: {tracker_id}")
-    first_entry = entry_rows[0]["date"]
-    last_entry = entry_rows[-1]["date"]
+    first_entry = present_rows[0]["date"]
+    last_entry = present_rows[-1]["date"]
 
     eff_start = max(start or first_entry, first_entry)
     entries = {r["date"]: r["completed"] for r in entry_rows}
@@ -509,7 +516,8 @@ def journal_tracker_detail(journal_db, *, tracker_id, start=None, end, today):
         ),
     }
     if not result["tracker"]["actionable"] and eff_start <= end:
-        in_range_dates = [r["date"] for r in in_range]
+        in_range_dates = [r["date"] for r in in_range
+                          if entry_present(r["completed"], r["value"])]
         result["weekly_usage"] = [
             {
                 "week_start": monday.isoformat(),
@@ -645,13 +653,14 @@ def overview(coach_db, journal_db, garmin_db, *, today):
         today - timedelta(days=OVERVIEW_FOCUS_WINDOW_DAYS)).isoformat()
     with journal_db.get_db() as conn:
         with read_transaction(conn) as cursor:
-            trackers = cursor.execute("""
+            trackers = cursor.execute(f"""
                 SELECT t.id, t.name, t.polarity, t.type, t.meta_json,
                        t.schedule_json, t.target_json, MAX(e.date) AS last_entry,
                        MIN(e.date) AS first_entry
                 FROM trackers t
                 JOIN entries e ON e.tracker_id = t.id
                 WHERE t.deleted = 0 AND t.polarity IN ('positive', 'negative')
+                      AND {entry_present_sql('e')}
                 GROUP BY t.id
                 HAVING last_entry >= ?
             """, (focus_cutoff,)).fetchall()

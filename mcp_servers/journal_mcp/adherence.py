@@ -7,6 +7,8 @@ __init__ bootstraps `src/` onto sys.path for standalone MCP runs.
 """
 
 from modules.journal_adherence import (  # noqa: F401
+    ENTRY_PRESENT_SQL,
+    entry_present_sql,
     compute_adherence,
     compute_streaks,
     day_status,

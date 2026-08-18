@@ -364,19 +364,19 @@ in `JournalNotationTest`; the mockup shows all three):
 
 ### Screen structure
 - Header: eyebrow (`TODAY · N OF M LOGGED` — derived, mono caps) · display-caps
-  `JOURNAL` · the 7-day strip. **N counts entry *presence*** (a row exists for
-  the tracker that day — journal-ui.md's load-bearing semantic — never
-  `completed`); **M is what is visible** that day, so an off-schedule tracker is
-  not an omission. A browsed day swaps the date in for `TODAY`; a browsed day the
-  dirty-tracker rule has locked appends `· LOCKED` (the rows are all disabled and
-  the reason is nowhere near them); a day with nothing visible drops the tally
-  rather than reading `0 OF 0 LOGGED`.
+  `JOURNAL` · the 7-day strip. **N counts entry *presence* for judgment** —
+  `countsAsLogged`, never bare `completed` and not raw row existence
+  (resolution 9): a row an uncheck emptied counts as nothing logged, while a
+  written value counts even with the box cleared. **M is what is visible** that
+  day, so an off-schedule tracker is not an omission. A browsed day swaps the
+  date in for `TODAY`; a day with nothing visible drops the tally rather than
+  reading `0 OF 0 LOGGED`. There is no third, un-writable voice — every day is
+  editable (resolution 10).
 - **Date strip**: 7 mono columns (day initial in eyebrow style over day number
   in data mono — the initial is the *locale's* narrow weekday, not a slice of
   the hard-coded English `dayName`), selected day = 2dp ink underline + ink
-  numeral; locked days
-  (dirty-tracker rule, unchanged) render ink-faint with a small ink-faint lock
-  glyph; today's column is tappable always.
+  numeral; **every column is tappable, always** (resolution 10 — the lock glyph
+  and the faded rendering retire with the rule).
 - **Categories become sections**: display-caps head + 1.5dp ink underline; the
   welded card, band, and `Modifier.welded()` retire (JournalScreen is their
   only consumer). Collapsed/expanded state and its persistence are unchanged —
@@ -483,6 +483,37 @@ Everything the section above did not settle, decided while building it.
    is the rollup cluster, whose width is bounded by the category's own tracker
    count — so the cluster measures first and the category name is the one that
    wraps. The readable failure of the two.
+9. **An empty entry judges as no entry** *(user decision, device pass — all
+   three stacks)*. Unchecking a negative tracker left the day reading "broken"
+   forever: the uncheck writes `{completed: false}` and **keeps the row** (there
+   is no entry delete on the wire), and every judgment site keyed off row
+   existence. That is faithful PWA parity and it is wrong — **retraction must
+   work**. For judgment, an entry counts as present iff `completed == true` OR
+   its value is non-null; an all-empty row judges exactly like no row. A written
+   value keeps the row judged even with the box cleared — the value is the
+   assertion, and blanking the field is its retraction. One predicate per stack
+   (`countsAsLogged` / `entryCountsAsLogged` / `entry_present`, plus a SQL form
+   for the server aggregates that never load a row). **Row *visibility* is
+   untouched** and still keys off raw existence: an emptied row has to stay on
+   screen or the entry could never be reached to clear it. Write paths,
+   tombstones and the absent-vs-explicit-null storage distinction are all
+   unchanged. The rule **composes with the today-open honesty rule**: emptying
+   today's row makes `hasEntry` false again, so today's mark returns to the
+   open dot rather than a judged one — the retraction restores "no verdict
+   yet", which is the point. Full rule in docs/ARCHITECTURE.md.
+10. **The day lock retires; every day in the strip is editable** *(user
+   decision, device pass — both clients)*. Past days locked on the device. The
+   cause was the dirty-tracker rule doing exactly what it was designed to do —
+   a pending tracker config edit locks all non-today days until it uploads —
+   but with the phone offline that leaves a read-only week, and **fixing a
+   forgotten log has to stay possible**. The whole rule goes: `isDayEditable`
+   (both clients and the store query behind it), `DateCellState.enabled` and
+   its lock glyph, `TrackerRowState.editable`, `JournalUiState.dayEditable`
+   (the addendum's own addition, retired with what it explained),
+   `JournalEyebrow.Locked`, the PWA's disabled rows and lock badge, and the
+   now-orphaned `.date-lock` CSS and dirty-tracker DAO counts. Entry writes
+   still mark only the entry dirty — that half fed the sync engine, not the
+   lock, and is untouched.
 
 ## Behavior
 

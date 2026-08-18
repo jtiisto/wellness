@@ -767,17 +767,6 @@ function pruneOldLogs() {
     }
 }
 
-// ==================== Computed Helpers ====================
-
-export function isDayEditable(dateStr) {
-    const today = getToday();
-    if (dateStr === today) {
-        return true;
-    }
-    // If trackers have unsynced changes, only today is editable
-    return syncMetadata.value.dirtyTrackers.length === 0;
-}
-
 // ==================== Force Sync ====================
 
 export async function forceSync() {

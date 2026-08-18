@@ -737,8 +737,7 @@ def test_schedule_days_and_polarity_via_config(journal_page, app_server):
         "Meds", "health", tracker_type="simple",
         days=[1, 2, 3, 4, 5], polarity="positive")
 
-    # Sync so the tracker reaches the server and dirty state clears (which
-    # unlocks past dates in the grid).
+    # Sync so the tracker reaches the server before the round-trip assertions.
     page.wait_for_timeout(3500)
     page.wait_for_selector(".sync-dot.green", timeout=10000)
 

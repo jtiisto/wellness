@@ -357,36 +357,22 @@ sealed interface JournalEyebrow {
     /** The tally segment, or nothing on a day with no visible trackers. */
     val tallyTail: String get() = if (tally.total == 0) "" else " · ${tally.label}"
 
-    /** The live day. Always editable, so it is never the locked variant. */
+    /** The live day. */
     data class Today(override val tally: LoggedTally) : JournalEyebrow {
         override val label: String get() = "Today$tallyTail"
     }
 
-    /** A day being browsed, still writable. [day] is already locale-formatted. */
+    /** A day being browsed. [day] is already locale-formatted. */
     data class Browsing(val day: String, override val tally: LoggedTally) : JournalEyebrow {
         override val label: String get() = "$day$tallyTail"
-    }
-
-    /**
-     * A day being browsed that cannot be written to.
-     *
-     * Worth its own voice: the rows below are all disabled and the reason is
-     * nowhere near them — a tracker config change is still waiting to upload, and
-     * until it does the server has not arbitrated what an older day contains.
-     * The strip draws a lock on those columns; this says the same thing about
-     * the one being looked at.
-     */
-    data class Locked(val day: String, override val tally: LoggedTally) : JournalEyebrow {
-        override val label: String get() = "$day$tallyTail · Locked"
     }
 }
 
 /**
- * Which eyebrow the header wears.
+ * Which eyebrow the header wears — today, or the day being browsed.
  *
- * [editable] is `isDayEditable`'s answer, not the calendar's, and today is
- * editable by definition — so [JournalEyebrow.Locked] describes a browsed day
- * only, which is the only day the dirty-tracker rule can lock.
+ * There is no third, un-writable voice: every day the strip offers is editable,
+ * so the only thing the eyebrow has left to say is *which* day is on screen.
  *
  * The date reuses coach's `shortDatePattern` rather than growing a second one:
  * two eyebrows on two tabs naming a day differently would read as two apps.
@@ -398,12 +384,10 @@ fun journalEyebrow(
     selectedDate: DateString,
     today: DateString,
     tally: LoggedTally,
-    editable: Boolean,
     locale: Locale,
 ): JournalEyebrow {
     if (selectedDate == today) return JournalEyebrow.Today(tally)
-    val day = LocalDate.parse(selectedDate).format(shortDatePattern(locale))
-    return if (editable) JournalEyebrow.Browsing(day, tally) else JournalEyebrow.Locked(day, tally)
+    return JournalEyebrow.Browsing(LocalDate.parse(selectedDate).format(shortDatePattern(locale)), tally)
 }
 
 // ---- the date strip ------------------------------------------------------------

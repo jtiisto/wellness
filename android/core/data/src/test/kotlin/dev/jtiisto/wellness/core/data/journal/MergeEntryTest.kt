@@ -112,15 +112,37 @@ class MergeEntryTest {
     }
 
     @Test
-    @DisplayName("an explicitly-null value still makes the entry exist")
-    fun explicitNullStillCountsAsAnEntry() = runTest {
+    @DisplayName("an empty row stays visible but claims nothing — visibility and judgment part ways")
+    fun explicitNullRowIsVisibleButNotLogged() = runTest {
         val world = World()
 
         world.store.mergeEntry(date, trackerId, EntryPatch(value = EntryField.Set(JsonNull)))
 
         val day = world.store.observeDay(date).first()
-        assertTrue(day.containsKey(trackerId), "visibility and dayStatus key off row existence")
-        assertEquals(TargetState.MISSED, dayStatus(tracker(id = trackerId, polarity = "negative"), date, day[trackerId]).state)
+        assertTrue(day.containsKey(trackerId), "visibility keys off row existence, and still does")
+        assertFalse(day[trackerId].countsAsLogged(), "no value, not completed: nothing asserted")
+        // The retraction rule: an uncheck leaves this row behind, so judging it
+        // as a lapse would make the avoidance impossible to take back.
+        assertEquals(
+            TargetState.MET,
+            dayStatus(tracker(id = trackerId, polarity = "negative"), date, day[trackerId]).state,
+        )
+    }
+
+    @Test
+    @DisplayName("a written value keeps the row judged even once the box is cleared")
+    fun aValueOutlivesItsCheckbox() = runTest {
+        val world = World()
+        world.seedEntry(valueJson = "3", completed = true)
+
+        world.store.mergeEntry(date, trackerId, EntryPatch(completed = EntryField.Set(false)))
+
+        val entry = world.entry()
+        assertTrue(entry.countsAsLogged(), "the value is the assertion, not the checkbox")
+        assertEquals(
+            TargetState.MISSED,
+            dayStatus(tracker(id = trackerId, polarity = "negative"), date, entry).state,
+        )
     }
 
     // ---- dirty accounting ---------------------------------------------------
@@ -134,9 +156,10 @@ class MergeEntryTest {
         world.store.mergeEntry(date, trackerId, EntryPatch(completed = EntryField.Set(true)))
 
         assertTrue(world.row()!!.isDirty)
-        assertFalse(world.dao.trackers.getValue(trackerId).isDirty, "the date strip must not lock on an entry edit")
-        assertEquals(0, world.dao.countDirtyTrackers())
-        assertTrue(world.store.isDayEditable("2026-08-01"), "a dirty entry alone never locks an older day")
+        assertFalse(
+            world.dao.trackers.getValue(trackerId).isDirty,
+            "an entry edit is not a config edit — the upload queues them separately",
+        )
     }
 
     @Test
@@ -159,33 +182,6 @@ class MergeEntryTest {
         world.store.mergeEntry(date, trackerId, EntryPatch(completed = EntryField.Set(false)))
 
         assertEquals(5L, world.row()?.dirtyGeneration, "the mid-sync clear guard depends on this counter")
-    }
-
-    // ---- the date-strip lock ------------------------------------------------
-
-    @Test
-    @DisplayName("isDayEditable: today always; an older day only while no tracker is dirty")
-    fun dayEditability() = runTest {
-        val world = World()
-        world.seedTracker(isDirty = true)
-
-        assertTrue(world.store.isDayEditable("2026-08-06"), "today is always editable")
-        assertFalse(world.store.isDayEditable("2026-08-05"))
-
-        world.dao.trackers[trackerId] = world.dao.trackers.getValue(trackerId).copy(isDirty = false)
-        assertTrue(world.store.isDayEditable("2026-08-05"))
-    }
-
-    @Test
-    @DisplayName("isDayEditable: a pending delete locks older days too")
-    fun pendingDeleteLocks() = runTest {
-        val world = World()
-        world.seedTracker()
-
-        world.store.deleteTracker(trackerId)
-
-        assertTrue(world.store.isDayEditable("2026-08-06"))
-        assertFalse(world.store.isDayEditable("2026-08-05"), "a soft delete is a dirty tracker")
     }
 
     /** One cell of the presence matrix. [writes] false means the merge is a no-op. */
