@@ -69,38 +69,6 @@ class WellnessMotionTest {
         )
     }
 
-    // ---- dot stagger ----------------------------------------------------
-
-    @Test
-    @DisplayName("scale 0: the whole dot row appears at once")
-    fun dotStaggerSnapsUnderReducedMotion() = runTest {
-        val emitted = mutableListOf<Int>()
-        withContext(FixedMotionScale(0f)) {
-            animateDotStagger(count = 7) { emitted.add(it) }
-        }
-        assertEquals(listOf(7), emitted)
-        assertEquals(0L, currentTime)
-    }
-
-    @Test
-    @DisplayName("scale 1: seven dots reveal one at a time, 30ms apart, the first immediately")
-    fun dotStaggerWalksTheRow() = runTest {
-        val emitted = mutableListOf<Int>()
-        withContext(FixedMotionScale(1f)) {
-            animateDotStagger(count = 7) { emitted.add(it) }
-        }
-        assertEquals(listOf(1, 2, 3, 4, 5, 6, 7), emitted)
-        assertEquals(6L * WellnessMotion.DOT_STAGGER_MS, currentTime)
-    }
-
-    @Test
-    @DisplayName("an empty dot row emits nothing at all")
-    fun dotStaggerIgnoresAnEmptyRow() = runTest {
-        val emitted = mutableListOf<Int>()
-        animateDotStagger(count = 0) { emitted.add(it) }
-        assertTrue(emitted.isEmpty())
-    }
-
     // ---- the built-ins --------------------------------------------------
 
     /**

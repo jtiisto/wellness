@@ -114,7 +114,7 @@ internal val topLevelDestinations = listOf(
         label = "Journal",
         icon = Icons.Outlined.Checklist,
         accent = ModuleAccent.JOURNAL,
-        system = ShellSystem.GRAPHITE,
+        system = ShellSystem.LOGBOOK,
     ),
     TopLevelDestination(
         route = COACH_ROUTE,

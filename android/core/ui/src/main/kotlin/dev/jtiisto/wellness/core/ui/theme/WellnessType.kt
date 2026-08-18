@@ -159,10 +159,6 @@ object WellnessShape {
     /** Sheets, popovers — anything that floats. */
     val floating = RoundedCornerShape(12.dp)
     val pill = CircleShape
-
-    /** The welded card's two ends. */
-    val weldedTop = RoundedCornerShape(topStart = 8.dp, topEnd = 8.dp)
-    val weldedBottom = RoundedCornerShape(bottomStart = 8.dp, bottomEnd = 8.dp)
 }
 
 internal val WellnessM3Shapes = Shapes(

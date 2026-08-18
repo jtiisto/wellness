@@ -527,9 +527,48 @@ class JournalNotationTest {
             expandedCategories = emptySet(),
         )
 
+    // ---- the shape legend ----------------------------------------------------
+
+    @Test
+    @DisplayName("the legend names seven marks, each with the word its own mark speaks")
+    fun legendIsSelfDescribing() {
+        assertEquals(JOURNAL_SHAPE_LEGEND.size, JOURNAL_SHAPE_LEGEND.toSet().size, "no mark twice")
+        val words = JOURNAL_SHAPE_LEGEND.map { it.a11yLabel() }
+        assertEquals(words.size, words.toSet().size, "two entries reading the same word teach nothing")
+        assertEquals(
+            listOf("done", "partial", "open", "missed", "held", "noted", "off schedule"),
+            words,
+        )
+    }
+
+    @Test
+    @DisplayName("the two omitted marks are the negated forms of ones the legend already names")
+    fun legendOmitsOnlyDerivedMarks() {
+        val omitted = WeekMark.entries.toSet() - JOURNAL_SHAPE_LEGEND.toSet()
+        // The slashed hoop is the held hoop struck through and the outline
+        // diamond is the noted diamond hollowed — and by the time either appears
+        // the dot half of the line has taught both modifiers. Anything else
+        // falling out of the legend would be a shape with no word anywhere.
+        assertEquals(setOf(WeekMark.SLASHED_HOOP, WeekMark.OUTLINE_DIAMOND), omitted)
+        assertTrue(WeekMark.HOOP in JOURNAL_SHAPE_LEGEND, "the hoop teaches the slashed hoop")
+        assertTrue(WeekMark.SLASHED_DOT in JOURNAL_SHAPE_LEGEND, "the slash is taught on a dot")
+        assertTrue(WeekMark.FILLED_DIAMOND in JOURNAL_SHAPE_LEGEND, "the diamond teaches its hollow")
+        assertTrue(WeekMark.OPEN_DOT in JOURNAL_SHAPE_LEGEND, "the hollow is taught on a dot")
+    }
+
+    @Test
+    @DisplayName("the initial comes off a bare date too, and agrees with the cell's own")
+    fun bareDateInitial() {
+        // The strip is assembled before its cells exist, so the builder needs
+        // the date form; two implementations could drift, one cannot.
+        val date = "2030-01-07"
+        assertEquals(cell(date).dayInitial(Locale.UK), dayInitial(date, Locale.UK))
+    }
+
     private fun cell(date: DateString) = DateCellState(
         date = date,
         dayName = "Mon",
+        initial = "M",
         dayNum = 7,
         isToday = false,
         isSelected = false,

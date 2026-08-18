@@ -1,12 +1,14 @@
-# Spec: Logbook Design System (Round 1: shell + Coach)
+# Spec: Logbook Design System (Rounds 1–2: shell, Coach, Journal)
 
 Status: **Round 1 (shell + Coach) shipped 2026-08-18** — foundation, dual-theme
 shell, coach presentation state and rendering, five device-pass fix rounds all
-landed and pushed on `feature/logbook-design`. **Round 2 (Journal) designed
+landed and pushed on `feature/logbook-design`. **Round 2 (Journal) built
 2026-08-18** — the user chose the pure-ink variant from two mockups
 (`plans/logbook-design/journal-logbook-{ink,accent}.html`); the
-"Components — Journal" section below is its committed form. Trends, Analysis
-and Tools stay on Graphite Signal until their rounds.
+"Components — Journal" section below is its committed form, and P1 (presentation
+state) and P2 (composables, shell flip, launch window) are implemented and
+green, awaiting the device acceptance pass. Trends, Analysis and Tools stay on
+Graphite Signal until their rounds.
 
 ## Goal
 
@@ -56,20 +58,23 @@ marks) to the tested state layer and restructures composables above it.
 
 | Surface | System |
 |---|---|
-| Shell (nav bar, snackbar, `ServerRecoveryScreen`) | **Logbook** (this round) |
-| Coach | **Logbook** (this round) |
-| Journal, Trends, Analysis, Tools | Graphite Signal — [design-system.md](design-system.md) stays their authority |
+| Shell (nav bar, snackbar, `ServerRecoveryScreen`) | **Logbook** (Round 1) |
+| Coach | **Logbook** (Round 1) |
+| Journal (day view + tracker config) | **Logbook** (Round 2) |
+| Trends, Analysis, Tools | Graphite Signal — [design-system.md](design-system.md) stays their authority |
 
 Each nav destination is wrapped in its own theme; the Scaffold container color
 follows the active destination's canvas. Phases land incrementally *inside*
-the round: the shell moved first while Coach stays wrapped in Graphite until
-its rendering phases land — flipping it earlier would render Graphite-styled
+each round: the shell moved first while Coach stayed wrapped in Graphite until
+its rendering phases landed — flipping it earlier would render Graphite-styled
 composables against Logbook locals, i.e. tokens that mean something else. The
-shell test pins Coach's current system so the flip is a deliberate edit, and
-the table above describes the end-of-round state. Launch-window `colors.xml` keeps the
-Graphite canvas values until the journal round (start destination is journal;
-flipping early reintroduces the launch flash). Graphite tokens retire
-module-by-module; the Graphite spec shrinks as modules leave it.
+shell test pins each destination's current system twice (once in the route
+table, once in its own named case) so a flip is always a deliberate multi-place
+edit. Launch-window `colors.xml` **flipped to Logbook paper in Round 2**, with
+journal — it is the start destination, so it is the one whose canvas the launch
+window has to match, and `ShellSystemTest.journalIsLogbook` is the pin on the
+other half of that pair. Graphite tokens retire module-by-module; the Graphite
+spec shrinks as modules leave it.
 
 ## Tokens (`core/ui/theme/` — new `LogbookPalette.kt`, `LogbookType.kt`, `LogbookTheme.kt`; package stays `dev.jtiisto.wellness.core.ui.theme`, the Kover-excluded package)
 
@@ -418,12 +423,66 @@ in `JournalNotationTest`; the mockup shows all three):
 - Delete confirm stays an `AlertDialog` — it inherits the Logbook M3 mapping
   (paper, 2dp, ink) with no per-callsite color work.
 - `SyncStatusDot` (journal header) keeps its status colors — the documented
-  live-signal exception — and passes Logbook `textStyle`/`labelColor` like
-  coach's indicator does.
+  live-signal exception. The bare dot draws no text, so unlike coach's
+  labelled `SyncStatusIndicator` there are no `textStyle`/`labelColor` params
+  to pass (implementation resolution 6 below).
 - The launch-window `colors.xml` **flips to Logbook paper in this round** —
   journal is the start destination; this is the recorded trigger. Shell flip:
   journal → LOGBOOK in the destination table + `ShellSystemTest`'s pinned map
   + a `journalIsLogbook`-style pin (the deliberate multi-place edit).
+
+### Round 2 implementation resolutions (2026-08-18)
+
+Everything the section above did not settle, decided while building it.
+
+1. **Three components hoisted into `core/ui/theme/`.** Features never depend on
+   each other, and journal needed three things coach had written first: the
+   set-completion mark (`InkMark` + `InkMarkToggle`), the button pair
+   (`InkButton`/`InkOutlineButton`, now taking `label`/`glyph`/`note`/
+   `stateDescription` rather than coach's `HookButtonSkin`), and the sheet's
+   drawn top edge (`LogbookSheetHandle`). Coach consumes the hoisted versions;
+   its hook-state machine keeps `HookGlyph`/`HookButtonSkin` and maps them onto
+   the neutral `InkGlyph` at one callsite, so `CoachNotation`'s pins are
+   untouched. **These are the design system's furniture, not coach's** — a
+   second copy in another feature is how a language starts to drift.
+2. **`WellnessDenseField.italic` → `ghostValue`.** The flag always meant "this
+   value is a default, not yet the user's own"; each system now says it in its
+   own voice — Graphite leans the value into italics, `NAKED` fades it to
+   `inkFaint`. NAKED had ignored `italic` outright, which left journal's
+   uncommitted values with no way to recede once its fields went bare.
+3. **The row's three lines, resolved.** The mockup is a static rendering, so its
+   "value" column holds text the live journal spends on a widget. Line 1 is
+   mark · name (+ `OFF` label) · **widget**; line 2 is the target — its sentence
+   over its bar — at the start, with the week-mark run right-aligned; line 3 is
+   the last-updated caption alone. The target *text* had nowhere else to go
+   (an at-most target draws no bar at all, so the bar cannot carry it), and
+   stacking it over the bar keeps the run of marks measured first — the run is
+   bounded at seven by construction, the target sentence is not.
+4. **A simple row's value column stays empty.** The mockup draws `✓` beside a
+   filled entry mark; the mark already said it, and the row's one metadata
+   cluster is worth more than the repetition.
+5. **The strip marks the selected day and nothing else.** It is a trailing
+   window that *ends* today, so the last column is today by construction — a
+   badge saying so is the page repeating its own shape back at itself. (Coach's
+   calendar keeps its today underline because a month grid has no such
+   guarantee.)
+6. **`SyncStatusDot` takes no `textStyle`/`labelColor`** — unlike coach's
+   `SyncStatusIndicator`, the bare dot draws no text, so there is no Graphite
+   typography to override. Its status colours already resolve from the system's
+   dark-mode setting rather than from `LocalWellnessPalette`, so the
+   composition-local trap is closed for it. The bare dot (not the labelled
+   indicator) stays journal's, for the reason its KDoc gives: the header line is
+   the crowded one.
+7. **The shape legend names seven of the nine marks**, in row-reading order, each
+   beside the word `a11yLabel` already gives it. The omitted two are the negated
+   forms of marks it does name — the slashed hoop and the hollow diamond — and
+   both modifiers are taught on dots earlier in the same line. Pinned by
+   `JournalNotationTest`, so a tenth mark cannot appear without a word.
+8. **Section-head measurement order is the reverse of coach's.** Coach measures
+   the *label* first because its sibling is free-running prose; here the sibling
+   is the rollup cluster, whose width is bounded by the category's own tracker
+   count — so the cluster measures first and the category name is the one that
+   wraps. The readable failure of the two.
 
 ## Behavior
 

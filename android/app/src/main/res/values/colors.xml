@@ -1,9 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!--
-      The launch window, painted before Compose has a frame. It is the light
-      theme's canvas token; values-night carries the dark one, so the handoff
-      into WellnessTheme is invisible in both.
+      The launch window, painted before Compose has a frame. It is the *start
+      destination's* canvas, which is journal's — and journal moved to Logbook
+      with its round, so this is Logbook `paper` (light here, dark in
+      values-night). The handoff into the real theme is invisible in both.
+
+      Flipping it is bound to the destination table's journal entry: paint the
+      other system's canvas here and every cold start opens with one frame of
+      the wrong page. `ShellSystemTest.journalIsLogbook` is the pin on the other
+      half of that pair.
     -->
-    <color name="window_background">#FAFBFC</color>
+    <color name="window_background">#FBFAF7</color>
 </resources>

@@ -4,9 +4,17 @@ Status: **approved 2026-08-08** (v2 after Codex review; user-approved incl. edge
 
 > **2026-08-17: superseded for the app shell + Coach** by
 > [logbook-design-system.md](logbook-design-system.md) (the Logbook design
-> language, destined app-wide). This spec remains authoritative for Journal,
-> Trends, Analysis and Tools until their migration rounds; it shrinks as
-> modules leave it.
+> language, destined app-wide). This spec shrinks as modules leave it.
+>
+> **2026-08-18: Journal left too** (Round 2 — the day view, the tracker config
+> screen and the launch-window `colors.xml`, which follows the start
+> destination). This spec remains authoritative for **Trends, Analysis and
+> Tools** only, until their migration rounds. Two Graphite components journal
+> used exclusively retired with it: `WeldedCard`/`Modifier.welded()` (and the
+> `weldedTop`/`weldedBottom` shape tokens) and the signal ring's arc maths
+> (`ringSlices`/`RingRole`/`RingSlice`). `describeCategoryRollup` survives
+> unchanged — it was always the rollup's *spoken* half, and the Logbook cluster
+> speaks the same sentence.
 
 ## Goal
 

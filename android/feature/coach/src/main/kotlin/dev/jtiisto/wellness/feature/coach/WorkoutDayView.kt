@@ -3,7 +3,6 @@ package dev.jtiisto.wellness.feature.coach
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -37,15 +36,11 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.outlined.CalendarToday
-import androidx.compose.material.icons.outlined.Check
-import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.Lock
-import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -68,7 +63,6 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.Placeholder
 import androidx.compose.ui.text.PlaceholderVerticalAlign
 import androidx.compose.ui.text.SpanStyle
@@ -79,7 +73,6 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.withStyle
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import dev.jtiisto.wellness.core.data.coach.EXTRA_SESSION_TITLE
 import dev.jtiisto.wellness.core.data.coach.RxKind
@@ -88,7 +81,11 @@ import dev.jtiisto.wellness.core.data.coach.SetColumn
 import dev.jtiisto.wellness.core.data.coach.TallyMarks
 import dev.jtiisto.wellness.core.ui.motion.WellnessMotion
 import dev.jtiisto.wellness.core.ui.theme.DenseFieldSkin
-import dev.jtiisto.wellness.core.ui.theme.LogbookShapes
+import dev.jtiisto.wellness.core.ui.theme.InkButton
+import dev.jtiisto.wellness.core.ui.theme.InkGlyph
+import dev.jtiisto.wellness.core.ui.theme.InkMark
+import dev.jtiisto.wellness.core.ui.theme.InkMarkToggle
+import dev.jtiisto.wellness.core.ui.theme.InkOutlineButton
 import dev.jtiisto.wellness.core.ui.theme.LogbookSpace
 import dev.jtiisto.wellness.core.ui.theme.LogbookTheme
 import dev.jtiisto.wellness.core.ui.theme.WellnessDenseField
@@ -1184,12 +1181,12 @@ private fun SetTable(
                         )
                     }
                 }
-                SetMark(
+                InkMarkToggle(
                     checked = row.completed,
                     editable = editable,
                     description = "Set ${row.index + 1} done",
-                    width = markColumn,
                     onCheckedChange = { actions.onSetCompleted(exerciseId, row.index, it) },
+                    width = markColumn,
                 )
             }
         }
@@ -1210,67 +1207,6 @@ private fun SetTable(
 /** "WEIGHT (LBS)" — the unit rides along in the head so the cells stay bare. */
 private fun columnLabel(column: SetColumn): String =
     if (column.unit == null) column.label.uppercase() else "${column.label} (${column.unit})".uppercase()
-
-/**
- * The set-completion mark: an ink square, filled once the set is logged.
- *
- * Replaces the M3 `Checkbox` — a tick in a rounded box is Material's notation,
- * not the log's — while keeping the target it stood in and the write path behind
- * it. On a read-only day it is drawn and nothing more.
- */
-@Composable
-private fun SetMark(
-    checked: Boolean,
-    editable: Boolean,
-    description: String,
-    width: Dp,
-    onCheckedChange: (Boolean) -> Unit,
-) {
-    Box(
-        modifier = if (editable) {
-            Modifier
-                .size(width)
-                .toggleable(
-                    value = checked,
-                    role = Role.Checkbox,
-                    onValueChange = onCheckedChange,
-                )
-                .semantics { contentDescription = description }
-        } else {
-            // A read-only mark is not toggleable, but its state still has to be
-            // heard: the disabled Checkbox this replaced announced checked and
-            // unchecked, and "done, done" versus "done" does not.
-            Modifier
-                .width(width)
-                .semantics {
-                    contentDescription = description
-                    stateDescription = if (checked) "Done" else "Not done"
-                }
-        },
-        contentAlignment = Alignment.Center,
-    ) {
-        MarkBox(checked)
-    }
-}
-
-/** The mark itself: filled ink when done, an ink-faint outline when not. */
-@Composable
-private fun MarkBox(checked: Boolean) {
-    val palette = LogbookTheme.palette
-    Box(
-        modifier = Modifier
-            .size(MARK_SIZE)
-            .then(
-                if (checked) {
-                    Modifier
-                        .clip(MARK_SHAPE)
-                        .background(palette.ink)
-                } else {
-                    Modifier.border(LogbookSpace.hairline, palette.inkFaint, MARK_SHAPE)
-                },
-            ),
-    )
-}
 
 @Composable
 private fun CardioFields(
@@ -1363,7 +1299,7 @@ private fun ChecklistItems(items: List<ChecklistItemState>, enabled: Boolean, on
                 Box(
                     modifier = Modifier.width(MIN_TOUCH_TARGET),
                     contentAlignment = Alignment.Center,
-                ) { MarkBox(item.checked) }
+                ) { InkMark(item.checked) }
                 Text(
                     text = item.item,
                     style = LogbookTheme.type.body,
@@ -1477,18 +1413,22 @@ private fun HookButton(model: HookButtonModel, actions: CoachActions) {
         if (skin.filled) {
             InkButton(
                 label = model.label,
-                enabled = model.enabled,
                 onClick = onClick,
                 modifier = Modifier.weight(1f),
-                skin = skin,
+                enabled = model.enabled,
+                glyph = skin.glyph.ink(),
+                note = skin.note,
+                stateDescription = skin.a11yState,
             )
         } else {
             InkOutlineButton(
                 label = model.label,
-                enabled = model.enabled,
                 onClick = onClick,
                 modifier = Modifier.weight(1f),
-                skin = skin,
+                enabled = model.enabled,
+                glyph = skin.glyph.ink(),
+                note = skin.note,
+                stateDescription = skin.a11yState,
             )
         }
 
@@ -1501,94 +1441,19 @@ private fun HookButton(model: HookButtonModel, actions: CoachActions) {
     }
 }
 
-/** Ink on paper: a filled call to action, in the hook buttons' language. */
-@Composable
-internal fun InkButton(
-    label: String,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-    enabled: Boolean = true,
-    skin: HookButtonSkin = PLAIN_SKIN,
-) {
-    val palette = LogbookTheme.palette
-    // A settled hook (fired/locked — the check glyph) is disabled only in the
-    // sense that pressing it does nothing: it is a record now, and a record
-    // keeps full ink (device-found 2026-08-17: rule-on-paper with ink-faint
-    // text read as mush). Only a button that is genuinely unavailable recedes.
-    val settled = skin.glyph == HookGlyph.CHECK
-    Button(
-        modifier = modifier,
-        onClick = onClick,
-        enabled = enabled,
-        // Explicit: M3's default is a fully rounded pill, the one shape the
-        // system forbids.
-        shape = LogbookShapes.soft,
-        colors = ButtonDefaults.buttonColors(
-            containerColor = palette.ink,
-            contentColor = palette.paper,
-            disabledContainerColor = if (settled) palette.ink else palette.rule,
-            disabledContentColor = if (settled) palette.paper else palette.inkFaint,
-        ),
-    ) { InkButtonLabel(label = label, skin = skin) }
-}
-
-/** The same button, hollow — everything that is not the primary call. */
-@Composable
-internal fun InkOutlineButton(
-    label: String,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-    enabled: Boolean = true,
-    skin: HookButtonSkin = PLAIN_SKIN,
-) {
-    val palette = LogbookTheme.palette
-    // Same settled rule as InkButton: a fired End that cannot be pressed is a
-    // record in full ink, not a faded control.
-    val settled = skin.glyph == HookGlyph.CHECK
-    OutlinedButton(
-        modifier = modifier,
-        onClick = onClick,
-        enabled = enabled,
-        shape = LogbookShapes.soft,
-        border = BorderStroke(LogbookSpace.hairline, palette.ink),
-        colors = ButtonDefaults.outlinedButtonColors(
-            contentColor = palette.ink,
-            disabledContentColor = if (settled) palette.ink else palette.inkFaint,
-        ),
-    ) { InkButtonLabel(label = label, skin = skin) }
-}
-
-@Composable
-private fun InkButtonLabel(label: String, skin: HookButtonSkin) {
-    Row(
-        // The fill and the glyph are visual; the state has to be audible too,
-        // and it merges into the button's own node.
-        modifier = Modifier.semantics {
-            skin.a11yState?.let { stateDescription = it }
-        },
-        horizontalArrangement = Arrangement.spacedBy(LogbookSpace.grid * 1.5f),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        when (skin.glyph) {
-            HookGlyph.CHECK -> Icon(
-                imageVector = Icons.Outlined.Check,
-                contentDescription = null,
-                modifier = Modifier.size(GLYPH_SIZE),
-            )
-
-            HookGlyph.CROSS -> Icon(
-                imageVector = Icons.Outlined.Close,
-                contentDescription = null,
-                modifier = Modifier.size(GLYPH_SIZE),
-            )
-
-            HookGlyph.NONE -> Unit
-        }
-        Text(text = label.uppercase(), style = LogbookTheme.type.eyebrow)
-        skin.note?.let {
-            Text(text = it.uppercase(), style = LogbookTheme.type.eyebrow)
-        }
-    }
+/**
+ * The hook machine's glyph vocabulary against the design system's.
+ *
+ * Two enums rather than one because they answer different questions: [HookGlyph]
+ * is what a *hook state* means (and is pinned by `CoachNotationTest`), while
+ * [InkGlyph] is what a Logbook button can *draw*. They happen to line up
+ * one-to-one today, and this is where that stays a coincidence rather than
+ * becoming a dependency of `core/ui` on the coach's state machine.
+ */
+private fun HookGlyph.ink(): InkGlyph = when (this) {
+    HookGlyph.NONE -> InkGlyph.NONE
+    HookGlyph.CHECK -> InkGlyph.CHECK
+    HookGlyph.CROSS -> InkGlyph.CROSS
 }
 
 // ---- fields -------------------------------------------------------------------------
@@ -1730,7 +1595,6 @@ private val TALLY_GAP = 3.dp
 
 /** Marks round by 1dp — enough to read as drawn rather than as a screen artefact. */
 private val MARK_SHAPE = RoundedCornerShape(1.dp)
-private val MARK_SIZE = 11.dp
 
 /** The set-number gutter, narrow enough to leave the value columns usable. */
 private val SET_NUMBER_COLUMN = 34.dp
@@ -1751,11 +1615,3 @@ private val SPINNER_SIZE = 28.dp
 private val EMPTY_DAY_PADDING = 48.dp
 
 private const val QUARTER_TURN = 90f
-
-/**
- * A button with nothing to report: no glyph, no note.
- *
- * `filled` is unread here — which of the two buttons was called is what decides
- * that — and is set true only because a plain button is the filled one.
- */
-internal val PLAIN_SKIN = HookButtonSkin(filled = true, glyph = HookGlyph.NONE, note = null, a11yState = null)

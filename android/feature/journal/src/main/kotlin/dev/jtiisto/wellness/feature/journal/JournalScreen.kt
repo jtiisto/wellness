@@ -1,17 +1,15 @@
 package dev.jtiisto.wellness.feature.journal
 
-import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -22,28 +20,21 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.ChecklistRtl
-import androidx.compose.material.icons.filled.EventBusy
 import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.Checkbox
+import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -53,51 +44,51 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import dev.jtiisto.wellness.core.data.journal.DayDot
-import dev.jtiisto.wellness.core.data.journal.DotState
-import dev.jtiisto.wellness.core.data.journal.ProgressTone
 import dev.jtiisto.wellness.core.data.journal.TargetProgress
 import dev.jtiisto.wellness.core.data.journal.TrackerType
+import dev.jtiisto.wellness.core.data.journal.describeCategoryRollup
 import dev.jtiisto.wellness.core.ui.SyncStatusDot
-import dev.jtiisto.wellness.core.ui.motion.WellnessMotion
-import dev.jtiisto.wellness.core.ui.motion.rememberDotReveal
-import dev.jtiisto.wellness.core.ui.theme.DenseFieldHint
-import dev.jtiisto.wellness.core.ui.theme.GHOST_ALPHA
-import dev.jtiisto.wellness.core.ui.theme.WeldPosition
-import dev.jtiisto.wellness.core.ui.theme.WellnessDefaults
+import dev.jtiisto.wellness.core.ui.theme.DenseFieldSkin
+import dev.jtiisto.wellness.core.ui.theme.InkButton
+import dev.jtiisto.wellness.core.ui.theme.InkMarkToggle
+import dev.jtiisto.wellness.core.ui.theme.LogbookShapes
+import dev.jtiisto.wellness.core.ui.theme.LogbookSheetHandle
+import dev.jtiisto.wellness.core.ui.theme.LogbookSpace
+import dev.jtiisto.wellness.core.ui.theme.LogbookTheme
 import dev.jtiisto.wellness.core.ui.theme.WellnessDenseField
-import dev.jtiisto.wellness.core.ui.theme.WellnessShape
-import dev.jtiisto.wellness.core.ui.theme.WellnessSpace
-import dev.jtiisto.wellness.core.ui.theme.WellnessTheme
-import dev.jtiisto.wellness.core.ui.theme.welded
 import org.koin.androidx.compose.koinViewModel
 
 /**
- * The journal day view: the date strip, collapsible category groups, and one
- * row per tracker with the widget its type calls for.
+ * The journal day view, on paper.
  *
- * Everything here reads off [JournalUiState] and calls back. The composables
- * make no decisions of their own — that is what keeps the day view's real rules
- * in JVM tests rather than in an emulator.
+ * The header block, a strip of seven days, categories as underlined sections and
+ * one row per tracker — drawn entirely in ink. The journal has no tiers, so it
+ * spends no colour at all: everything the retired palette used to say (held,
+ * slipped, off-schedule, not yet judged) is said by the shape of a mark instead.
+ *
+ * Nothing here decides anything. Which mark a day earns, what the eyebrow says,
+ * which class a row belongs to and what its run reads aloud all arrive already
+ * derived from `JournalNotation` and [JournalUiState] — which is what keeps the
+ * day view's real rules in JVM tests rather than in an emulator.
  */
 @Composable
 fun JournalScreen(
@@ -135,7 +126,6 @@ fun JournalScreen(
     )
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun JournalContent(
     state: JournalUiState,
@@ -154,48 +144,28 @@ private fun JournalContent(
     val accumulatorRow = accumulatorId?.let { id ->
         state.groups.asSequence().flatMap { it.trackers }.firstOrNull { it.id == id }
     }
-    val palette = WellnessTheme.palette
 
     Column(modifier = Modifier.fillMaxSize()) {
-        TopAppBar(
-            title = { Text("Journal", style = WellnessTheme.type.headline) },
-            colors = TopAppBarDefaults.topAppBarColors(
-                containerColor = palette.canvas,
-                titleContentColor = palette.textPrimary,
-                actionIconContentColor = palette.textSecondary,
-            ),
-            // The shell already inset the content below the status bar.
-            windowInsets = WindowInsets(0),
-            actions = {
-                SyncStatusDot(state.syncStatus, modifier = Modifier.padding(end = 8.dp))
-                IconButton(onClick = onOpenConfig) {
-                    Icon(Icons.Filled.Settings, contentDescription = "Tracker settings")
-                }
-            },
-        )
-
-        DateStrip(cells = state.dateStrip, onSelectDate = onSelectDate)
+        JournalHeader(state = state, onOpenConfig = onOpenConfig, onSelectDate = onSelectDate)
 
         when (state.emptyState) {
             JournalEmptyState.NO_TRACKERS -> EmptyState(
-                icon = Icons.Filled.ChecklistRtl,
                 title = "No trackers configured yet.",
                 detail = "Tap the settings icon in the header to add your first tracker.",
             )
 
             JournalEmptyState.NONE_SCHEDULED -> EmptyState(
-                icon = Icons.Filled.EventBusy,
                 title = "No trackers scheduled for this day.",
                 detail = null,
             )
 
             null -> LazyColumn(
                 modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(bottom = WellnessSpace.lg),
+                contentPadding = PaddingValues(bottom = SCREEN_BOTTOM),
             ) {
                 for (group in state.groups) {
                     item(key = "category-${group.name}") {
-                        CategoryHeader(
+                        SectionHead(
                             group = group,
                             onClick = { onToggleCategory(group.name) },
                             modifier = Modifier.animateItem(),
@@ -208,11 +178,6 @@ private fun JournalContent(
                         ) { index ->
                             TrackerRow(
                                 row = group.trackers[index],
-                                position = if (index == group.trackers.lastIndex) {
-                                    WeldPosition.BOTTOM
-                                } else {
-                                    WeldPosition.MIDDLE
-                                },
                                 onChecked = onChecked,
                                 onCommitNumeric = onCommitNumeric,
                                 onOpenAccumulator = { accumulatorId = group.trackers[index].id },
@@ -239,28 +204,120 @@ private fun JournalContent(
     }
 }
 
+// ---- header block --------------------------------------------------------------
+
+/**
+ * Eyebrow, title, strip, legend — the page's masthead.
+ *
+ * The app bar retires with it: a `TopAppBar` here would put the word "Journal"
+ * above a heading that already says it, and the two things the bar was carrying
+ * (the sync dot and the settings gear) sit better on the title's own line, where
+ * the display type gives their 48dp targets somewhere to stand.
+ */
+@Composable
+private fun JournalHeader(
+    state: JournalUiState,
+    onOpenConfig: () -> Unit,
+    onSelectDate: (String) -> Unit,
+) {
+    val palette = LogbookTheme.palette
+    Column(modifier = Modifier.padding(horizontal = SCREEN_PADDING)) {
+        Spacer(Modifier.height(SCREEN_TOP))
+        Text(
+            text = state.eyebrow.label.uppercase(),
+            style = LogbookTheme.type.eyebrow,
+            color = palette.inkSoft,
+        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = "Journal".uppercase(),
+                style = LogbookTheme.type.display,
+                color = palette.ink,
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(top = TITLE_TOP),
+            )
+            // The one thing on the page carrying colour, and it carries it for
+            // the documented reason: the sync state is transient device truth,
+            // not decoration. It draws no text, so there is no Graphite
+            // typography to override — and its colours already resolve from the
+            // system's dark-mode setting rather than from `LocalWellnessPalette`,
+            // which on this paper would have answered with the dark palette.
+            SyncStatusDot(state.syncStatus, modifier = Modifier.padding(end = LogbookSpace.grid))
+            IconButton(
+                onClick = onOpenConfig,
+                colors = IconButtonDefaults.iconButtonColors(contentColor = palette.ink),
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.Settings,
+                    contentDescription = "Tracker settings",
+                    modifier = Modifier.size(GLYPH_SIZE),
+                )
+            }
+        }
+
+        DateStrip(cells = state.dateStrip, onSelectDate = onSelectDate)
+        ShapeLegend(modifier = Modifier.padding(top = LEGEND_TOP))
+    }
+}
+
+/**
+ * The shape legend.
+ *
+ * Coach's legend is load-bearing because its plate colours are positional; this
+ * one is load-bearing because a shape vocabulary has to be handed to a reader
+ * once. Seven marks and the words `JournalNotation` already gives them — the two
+ * omitted are the slashed and hollow forms of marks named here, and the line has
+ * taught both modifiers by the time they appear.
+ *
+ * The marks themselves are geometry a screen reader cannot see, so the row reads
+ * as one node naming the vocabulary rather than as seven unattached words.
+ */
+@Composable
+private fun ShapeLegend(modifier: Modifier = Modifier) {
+    val spoken = JOURNAL_SHAPE_LEGEND.joinToString { it.a11yLabel() }
+    FlowRow(
+        modifier = modifier
+            .fillMaxWidth()
+            .clearAndSetSemantics { contentDescription = "Mark key: $spoken" },
+        horizontalArrangement = Arrangement.spacedBy(LEGEND_GAP),
+        verticalArrangement = Arrangement.spacedBy(LogbookSpace.grid),
+    ) {
+        for (mark in JOURNAL_SHAPE_LEGEND) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(LogbookSpace.grid + 1.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                WeekMarkGlyph(mark)
+                Text(
+                    text = mark.a11yLabel().uppercase(),
+                    style = LogbookTheme.type.eyebrow,
+                    color = LogbookTheme.palette.inkSoft,
+                )
+            }
+        }
+    }
+}
+
 // ---- date strip ------------------------------------------------------------
 
 @Composable
 private fun DateStrip(cells: List<DateCellState>, onSelectDate: (String) -> Unit) {
-    val palette = WellnessTheme.palette
+    val palette = LogbookTheme.palette
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(palette.chrome)
-            .drawWithContent {
-                drawContent()
-                val stroke = 1.dp.toPx()
+            .padding(top = STRIP_TOP)
+            .drawBehind {
+                val stroke = LogbookSpace.hairline.toPx()
                 drawLine(
-                    color = palette.line,
+                    color = palette.rule,
                     start = Offset(0f, size.height - stroke / 2f),
                     end = Offset(size.width, size.height - stroke / 2f),
                     strokeWidth = stroke,
                 )
             }
-            .padding(horizontal = WellnessSpace.sm, vertical = WellnessSpace.sm)
             .semantics { contentDescription = "Select date" },
-        horizontalArrangement = Arrangement.spacedBy(WellnessSpace.xs),
     ) {
         for (cell in cells) {
             DateCell(cell = cell, onClick = { onSelectDate(cell.date) }, modifier = Modifier.weight(1f))
@@ -268,128 +325,205 @@ private fun DateStrip(cells: List<DateCellState>, onSelectDate: (String) -> Unit
     }
 }
 
+/**
+ * One column of the strip.
+ *
+ * Today wears no mark of its own: the strip is a trailing window that *ends*
+ * today, so the last column is today by construction and a badge saying so would
+ * be the page repeating its own shape back at itself. The selected day is what
+ * needs marking, and it is marked the way the calendar marks its own — ink
+ * underneath, ink in the numeral.
+ */
 @Composable
 private fun DateCell(cell: DateCellState, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    val palette = WellnessTheme.palette
-    val accent = WellnessTheme.accent
-    // The border is always two dips wide and only sometimes visible, so
-    // selecting a day cannot shift the strip's layout by a hair.
-    val fill by animateColorAsState(
-        targetValue = if (cell.isSelected) accent.softFill else Color.Transparent,
-        animationSpec = WellnessMotion.fast(),
-        label = "date-fill",
-    )
-    val border by animateColorAsState(
-        targetValue = if (cell.isSelected) accent.border else Color.Transparent,
-        animationSpec = WellnessMotion.fast(),
-        label = "date-border",
-    )
-    // Locking is a consequence of an edit elsewhere on the screen, so the strip
-    // fades into it rather than snapping.
-    val contentAlpha by animateFloatAsState(
-        targetValue = if (cell.enabled) 1f else LOCKED_ALPHA,
-        animationSpec = WellnessMotion.fast(),
-        label = "date-lock",
-    )
+    val palette = LogbookTheme.palette
     val label = buildString {
         append("${cell.dayName} ${cell.dayNum}")
         if (cell.isToday) append(", today")
         if (!cell.enabled) append(", locked — commit pending changes first")
     }
+    // Locked days recede rather than disappear: the day is still readable, it
+    // simply cannot be written to until the pending tracker edits upload.
+    val numeral = when {
+        !cell.enabled -> palette.inkFaint
+        cell.isSelected -> palette.ink
+        else -> palette.inkSoft
+    }
     Box(
         modifier = modifier
-            .heightIn(min = WellnessSpace.touchTarget)
-            .clip(WellnessShape.card)
-            .background(fill)
-            .border(2.dp, border, WellnessShape.card)
-            .clickable(enabled = cell.enabled, onClick = onClick)
+            .heightIn(min = LogbookSpace.touchTarget)
+            .clickable(enabled = cell.enabled, role = Role.Button, onClick = onClick)
+            .then(
+                if (cell.isSelected) {
+                    Modifier.drawBehind {
+                        val stroke = SELECTED_UNDERLINE.toPx()
+                        val inset = size.width * SELECTED_UNDERLINE_INSET
+                        drawLine(
+                            color = palette.ink,
+                            start = Offset(inset, size.height - stroke / 2f),
+                            end = Offset(size.width - inset, size.height - stroke / 2f),
+                            strokeWidth = stroke,
+                        )
+                    }
+                } else {
+                    Modifier
+                },
+            )
             .semantics { contentDescription = label },
     ) {
         Column(
             modifier = Modifier
                 .align(Alignment.Center)
-                .padding(vertical = 6.dp)
-                .alpha(contentAlpha),
+                .padding(vertical = LogbookSpace.grid),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Text(
-                text = cell.dayName,
-                style = WellnessTheme.type.label,
-                color = palette.textSecondary,
+                text = cell.initial.uppercase(),
+                style = LogbookTheme.type.eyebrow,
+                color = palette.inkFaint,
                 modifier = Modifier.clearAndSetSemantics { },
             )
             Text(
                 text = cell.dayNum.toString(),
-                style = WellnessTheme.type.title,
-                color = palette.textPrimary,
-                modifier = Modifier.clearAndSetSemantics { },
-            )
-            // Today is marked under the numeral rather than around the cell, so
-            // it survives the selected day's border landing on top of it.
-            Box(
+                style = LogbookTheme.type.data.copy(
+                    fontWeight = if (cell.isSelected) FontWeight.Medium else FontWeight.Normal,
+                ),
+                color = numeral,
                 modifier = Modifier
-                    .padding(top = 3.dp)
-                    .size(width = 14.dp, height = 2.dp)
-                    .background(
-                        if (cell.isToday) accent.fill else Color.Transparent,
-                        CircleShape,
-                    ),
+                    .padding(top = STRIP_NUMERAL_GAP)
+                    .clearAndSetSemantics { },
             )
         }
         if (!cell.enabled) {
             Icon(
-                imageVector = Icons.Filled.Lock,
+                imageVector = Icons.Outlined.Lock,
                 contentDescription = null,
-                tint = palette.textFaint,
+                tint = palette.inkFaint,
                 modifier = Modifier
                     .align(Alignment.TopEnd)
-                    .padding(3.dp)
-                    .size(10.dp),
+                    .padding(top = LogbookSpace.grid / 2, end = LogbookSpace.grid / 2)
+                    .size(LOCK_GLYPH),
             )
         }
     }
 }
 
-// ---- categories -------------------------------------------------------------
+// ---- sections -------------------------------------------------------------
 
+/**
+ * A category, drawn as a section: chevron, display-caps label, rollup cluster,
+ * and the 1.5dp ink rule under all three.
+ *
+ * The whole head is one node. A merged clickable replaces its children's
+ * semantics, so the category name, the cluster's sentence and the expanded state
+ * all have to be said here or they are not said at all — the same lesson coach's
+ * collapsible header learned.
+ *
+ * Measurement order is the layout rule: the cluster is unweighted so it measures
+ * **first** and can never be squeezed out by a long category name, and it is
+ * safe to give it that priority because its width is bounded by the category's
+ * own tracker count rather than by free text. The name takes what remains and
+ * wraps, which is the readable failure of the two.
+ */
 @Composable
-private fun CategoryHeader(group: CategoryGroupState, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    val palette = WellnessTheme.palette
+private fun SectionHead(group: CategoryGroupState, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    val palette = LogbookTheme.palette
     val rotation by animateFloatAsState(
-        targetValue = if (group.expanded) 0f else -90f,
-        animationSpec = WellnessMotion.standard(),
+        targetValue = if (group.expanded) 0f else -QUARTER_TURN,
         label = "category-chevron",
     )
+    val spoken = buildString {
+        append(group.name)
+        group.rollup?.let { append(", ${describeCategoryRollup(it)}") }
+    }
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .padding(start = WellnessSpace.md, end = WellnessSpace.md, top = WellnessSpace.sm)
-            .welded(
-                position = if (group.expanded) WeldPosition.TOP else WeldPosition.SOLO,
-                fill = palette.band,
-                line = palette.line,
+            .padding(top = SECTION_GAP)
+            .padding(horizontal = SCREEN_PADDING)
+            .clickable(
+                onClickLabel = if (group.expanded) "Collapse" else "Expand",
+                role = Role.Button,
+                onClick = onClick,
             )
-            .clickable(onClick = onClick)
-            .heightIn(min = WellnessSpace.touchTarget)
-            .padding(horizontal = WellnessSpace.md, vertical = WellnessSpace.sm),
+            .semantics(mergeDescendants = true) {
+                contentDescription = spoken
+                stateDescription = if (group.expanded) "Expanded" else "Collapsed"
+            }
+            .drawBehind {
+                val stroke = LogbookSpace.sectionUnderline.toPx()
+                drawLine(
+                    color = palette.ink,
+                    start = Offset(0f, size.height - stroke / 2f),
+                    end = Offset(size.width, size.height - stroke / 2f),
+                    strokeWidth = stroke,
+                )
+            }
+            .padding(bottom = SECTION_UNDERLINE_GAP),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(WellnessSpace.sm),
     ) {
         Icon(
             imageVector = Icons.Filled.ExpandMore,
-            contentDescription = if (group.expanded) "Collapse ${group.name}" else "Expand ${group.name}",
-            tint = palette.textSecondary,
+            contentDescription = null,
+            tint = palette.inkSoft,
             modifier = Modifier
-                .size(14.dp)
+                .size(CHEVRON_SIZE)
                 .rotate(rotation),
         )
         Text(
-            text = group.name,
-            style = WellnessTheme.type.title,
-            color = palette.textPrimary,
-            modifier = Modifier.weight(1f),
+            text = group.name.uppercase(),
+            style = LogbookTheme.type.section,
+            color = palette.ink,
+            modifier = Modifier
+                .weight(1f)
+                .padding(start = LogbookSpace.grid * 2, end = LogbookSpace.grid * 2),
         )
-        group.rollup?.let { CategoryRollupIndicator(it) }
+        group.rollup?.let { rollup ->
+            rollupCluster(rollup)?.let { RollupClusterRow(it) }
+        }
+    }
+}
+
+/**
+ * The category's day as one flat cluster: habit marks, then the avoidance hoop,
+ * then the observation diamond and its count.
+ *
+ * A wider gap between classes than within one is the whole of what says these
+ * are three different questions. Everything drawn was decided by
+ * [rollupCluster]; the cluster's sentence lives on the head above, so the count
+ * is silenced here rather than read out as a stray number.
+ */
+@Composable
+private fun RollupClusterRow(cluster: RollupCluster) {
+    Row(
+        modifier = Modifier.clearAndSetSemantics { },
+        horizontalArrangement = Arrangement.spacedBy(CLUSTER_CLASS_GAP),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (cluster.habits.isNotEmpty()) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(CLUSTER_MARK_GAP),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                for (mark in cluster.habits) {
+                    WeekMarkGlyph(mark = mark, markSize = ROLLUP_MARK_SIZE)
+                }
+            }
+        }
+        cluster.avoidance?.let { WeekMarkGlyph(mark = it, markSize = ROLLUP_MARK_SIZE) }
+        cluster.observation?.let { observation ->
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(CLUSTER_MARK_GAP),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                WeekMarkGlyph(mark = observation.mark, markSize = ROLLUP_MARK_SIZE)
+                Text(
+                    text = observation.noted.toString(),
+                    style = LogbookTheme.type.meta,
+                    color = LogbookTheme.palette.inkSoft,
+                )
+            }
+        }
     }
 }
 
@@ -398,7 +532,6 @@ private fun CategoryHeader(group: CategoryGroupState, onClick: () -> Unit, modif
 @Composable
 private fun TrackerRow(
     row: TrackerRowState,
-    position: WeldPosition,
     onChecked: (String, Boolean) -> Unit,
     onCommitNumeric: (String, Double?, String) -> Unit,
     onOpenAccumulator: () -> Unit,
@@ -406,70 +539,158 @@ private fun TrackerRow(
     onNote: (String, String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val palette = WellnessTheme.palette
-    // Uncommitted rows ghost their value controls — but never the dot row,
-    // which is history and stays fully legible.
-    val valueAlpha = if (row.committed) 1f else GHOST_ALPHA
-
+    val palette = LogbookTheme.palette
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = WellnessSpace.md)
-            .welded(position = position, fill = palette.card, line = palette.line)
-            .padding(horizontal = WellnessSpace.sm, vertical = 6.dp),
+            .padding(horizontal = SCREEN_PADDING)
+            .drawBehind {
+                val stroke = LogbookSpace.hairline.toPx()
+                drawLine(
+                    color = palette.rule,
+                    start = Offset(0f, size.height - stroke / 2f),
+                    end = Offset(size.width, size.height - stroke / 2f),
+                    strokeWidth = stroke,
+                )
+            }
+            .padding(top = ROW_TOP, bottom = ROW_BOTTOM),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             if (row.type != TrackerType.NOTE) {
-                Checkbox(
+                InkMarkToggle(
                     checked = row.checked,
+                    editable = row.editable,
+                    description = if (row.checked) "${row.name}, done" else "${row.name}, not done",
                     onCheckedChange = { onChecked(row.id, it) },
-                    enabled = row.editable,
-                    colors = WellnessDefaults.checkboxColors(),
-                    modifier = Modifier.semantics {
-                        contentDescription = if (row.checked) "${row.name}, done" else "${row.name}, not done"
-                    },
                 )
             } else {
-                Spacer(Modifier.width(CHECKBOX_COLUMN))
+                Spacer(Modifier.width(MARK_COLUMN))
             }
-            Text(
-                text = row.name,
-                style = WellnessTheme.type.body,
-                color = palette.textPrimary,
+            Row(
                 modifier = Modifier.weight(1f),
-            )
-            Box(modifier = Modifier.alpha(valueAlpha)) {
-                when (row.type) {
-                    TrackerType.QUANTIFIABLE -> NumericField(row, onCommitNumeric, onOpenAccumulator)
-                    TrackerType.EVALUATION -> EvaluationSlider(row, onSlider)
-                    else -> Unit
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = row.name,
+                    style = LogbookTheme.type.name,
+                    color = palette.ink,
+                    // Shrink-wrapped so the off-schedule label sits against the
+                    // name rather than adrift at the far end of the row.
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                if (row.offSchedule) {
+                    // A non-day the user wrote on anyway. Stated in the mono
+                    // label voice rather than tinted: there is no failure here
+                    // to colour, only a fact about the schedule.
+                    Text(
+                        text = OFF_SCHEDULE_LABEL.uppercase(),
+                        style = LogbookTheme.type.eyebrow,
+                        color = palette.inkFaint,
+                        modifier = Modifier.padding(start = LogbookSpace.grid * 1.5f),
+                    )
                 }
             }
-        }
-
-        row.targetProgress?.let {
-            TargetLine(
-                progress = it,
-                modifier = Modifier
-                    .padding(start = CHECKBOX_COLUMN)
-                    .alpha(valueAlpha),
-            )
+            when (row.type) {
+                TrackerType.QUANTIFIABLE -> NumericField(row, onCommitNumeric, onOpenAccumulator)
+                TrackerType.EVALUATION -> EvaluationSlider(row, onSlider)
+                else -> Unit
+            }
         }
 
         if (row.type == TrackerType.NOTE) {
-            NoteField(row, onNote, modifier = Modifier.alpha(valueAlpha))
+            NoteField(row, onNote)
+        }
+
+        Row(
+            modifier = Modifier.padding(start = MARK_COLUMN, top = SUBLINE_TOP),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            // Weighted, so the run of marks — bounded at seven by construction —
+            // measures first and keeps its place whatever the target line says.
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(end = LogbookSpace.grid * 2),
+            ) {
+                row.targetProgress?.let { TargetLine(it) }
+            }
+            WeekMarkRun(row)
         }
 
         row.lastUpdatedCaption?.let {
             Text(
                 text = "Last updated $it",
-                style = WellnessTheme.type.label,
-                color = palette.textFaint,
-                modifier = Modifier.padding(start = CHECKBOX_COLUMN),
+                style = LogbookTheme.type.meta,
+                color = palette.inkFaint,
+                modifier = Modifier.padding(start = MARK_COLUMN, top = LogbookSpace.grid),
             )
         }
+    }
+}
 
-        DotRow(dots = row.dots, avoidPolarity = row.avoidPolarity)
+/**
+ * The target, in words and then as a bar.
+ *
+ * No tone: `ProgressTone` was a colour axis and Logbook has none, so met,
+ * partial and over all read in the same ink. The sentence already distinguishes
+ * them — "6 / 8 glasses" and "9 of 8 mg · over by 1" do not need a hue to be
+ * told apart — and an overshoot was never a failure to alarm about anyway.
+ *
+ * The bar appears only for an at-least target, exactly as before: there is no
+ * honest way to draw progress towards a ceiling.
+ */
+@Composable
+private fun TargetLine(progress: TargetProgress) {
+    val palette = LogbookTheme.palette
+    Text(
+        text = progress.text,
+        style = LogbookTheme.type.meta,
+        color = palette.inkSoft,
+    )
+    progress.fillPct?.let { pct ->
+        Box(
+            modifier = Modifier
+                .padding(top = LogbookSpace.grid)
+                .widthIn(max = TARGET_BAR_MAX_WIDTH)
+                .fillMaxWidth()
+                .height(TARGET_BAR_HEIGHT)
+                .background(palette.rule)
+                .clearAndSetSemantics { },
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth((pct / 100.0).toFloat())
+                    .height(TARGET_BAR_HEIGHT)
+                    .background(palette.ink),
+            )
+        }
+    }
+}
+
+/**
+ * The seven-day run.
+ *
+ * One semantics node, not seven: it is a single glance, and a reader stopping on
+ * each mark would hear geometry with no sentence around it. What it says is the
+ * *drawn* marks — so a verdict the today-open rule suspended survives aloud by
+ * construction, and an open day is never read out as "missed" to the one
+ * audience that cannot see the difference.
+ */
+@Composable
+private fun WeekMarkRun(row: TrackerRowState) {
+    val description = row.marksDescription
+    Row(
+        modifier = if (description == null) {
+            Modifier
+        } else {
+            Modifier.clearAndSetSemantics { contentDescription = description }
+        },
+        horizontalArrangement = Arrangement.spacedBy(WEEK_MARK_GAP),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        for (mark in row.marks) {
+            WeekMarkGlyph(mark = mark.mark, ringed = mark.ringed)
+        }
     }
 }
 
@@ -490,22 +711,31 @@ private fun NumericField(
 ) {
     var text by remember(row.id, row.valueText) { mutableStateOf(row.valueText) }
     var focused by remember(row.id) { mutableStateOf(false) }
+    val palette = LogbookTheme.palette
 
     val commit = {
         onCommit(row.id, row.displayedNumber, text)
         text = row.valueText
     }
 
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(LogbookSpace.grid),
+    ) {
         WellnessDenseField(
             value = text,
             onValueChange = { text = it },
             enabled = row.editable,
+            skin = DenseFieldSkin.NAKED,
             numeric = true,
-            // Italic while the value is only a default: not yet yours.
-            italic = !row.committed,
+            // A default nobody has committed to yet is not the user's number.
+            // On paper that recedes in ink rather than leaning into italics.
+            ghostValue = !row.committed,
+            // Start, the form convention: the value sits under the words naming
+            // it, which here is the tracker's own name to its left.
+            textAlign = TextAlign.Start,
             modifier = Modifier
-                .width(96.dp)
+                .width(VALUE_FIELD_WIDTH)
                 .onFocusChanged { focusState ->
                     if (focused && !focusState.isFocused) commit()
                     focused = focusState.isFocused
@@ -520,18 +750,30 @@ private fun NumericField(
         row.unit?.let {
             Text(
                 text = it,
-                style = WellnessTheme.type.label,
-                color = WellnessTheme.palette.textSecondary,
+                style = LogbookTheme.type.meta,
+                color = palette.inkSoft,
             )
         }
         if (row.isAccumulator) {
-            FilledTonalIconButton(
+            IconButton(
                 onClick = onOpenAccumulator,
                 enabled = row.editable,
-                colors = WellnessDefaults.accentTonalIconButtonColors(),
-                modifier = Modifier.size(36.dp),
+                // No explicit size: M3's own 48dp is the target Android asks
+                // for, and it costs the row nothing — the entry mark on the
+                // other side already holds the line at 48dp.
+                colors = IconButtonDefaults.iconButtonColors(
+                    contentColor = palette.ink,
+                    disabledContentColor = palette.inkFaint,
+                ),
             ) {
-                Icon(Icons.Filled.Add, contentDescription = "Add to ${row.name} total")
+                // A plus is the affordance rather than a decoration of it —
+                // there is no word for "add to today's running total" that fits
+                // beside a value field.
+                Icon(
+                    imageVector = Icons.Filled.Add,
+                    contentDescription = "Add to ${row.name} total",
+                    modifier = Modifier.size(GLYPH_SIZE),
+                )
             }
         }
     }
@@ -552,6 +794,7 @@ private fun EvaluationSlider(row: TrackerRowState, onSlider: (String, Float) -> 
     LaunchedEffect(row.sliderValue, dragging) {
         if (!dragging) position = row.sliderValue
     }
+    val palette = LogbookTheme.palette
 
     Row(verticalAlignment = Alignment.CenterVertically) {
         Slider(
@@ -562,19 +805,31 @@ private fun EvaluationSlider(row: TrackerRowState, onSlider: (String, Float) -> 
                 onSlider(row.id, it)
             },
             onValueChangeFinished = { dragging = false },
-            valueRange = 0f..100f,
+            valueRange = 0f..SLIDER_MAX,
             steps = SLIDER_INTERMEDIATE_STOPS,
             enabled = row.editable,
-            colors = WellnessDefaults.sliderColors(),
+            // Named explicitly rather than inherited: M3 would take `primary`
+            // for the track and its own disabled greys for the rest, and this
+            // is the one control on the page with enough surface to matter.
+            colors = SliderDefaults.colors(
+                thumbColor = palette.ink,
+                activeTrackColor = palette.ink,
+                activeTickColor = palette.paper,
+                inactiveTrackColor = palette.rule,
+                inactiveTickColor = palette.inkFaint,
+                disabledThumbColor = palette.inkFaint,
+                disabledActiveTrackColor = palette.inkFaint,
+                disabledInactiveTrackColor = palette.rule,
+            ),
             modifier = Modifier
-                .width(150.dp)
+                .width(SLIDER_WIDTH)
                 .semantics { contentDescription = "${row.name} rating" },
         )
-        Spacer(Modifier.width(WellnessSpace.sm))
+        Spacer(Modifier.width(LogbookSpace.grid))
         Text(
             text = position.toInt().toString(),
-            style = WellnessTheme.type.label,
-            color = WellnessTheme.palette.textPrimary,
+            style = LogbookTheme.type.data,
+            color = if (row.committed) palette.ink else palette.inkFaint,
             modifier = Modifier.clearAndSetSemantics { },
         )
     }
@@ -588,9 +843,12 @@ private fun EvaluationSlider(row: TrackerRowState, onSlider: (String, Float) -> 
  * time, and visibly dropping or reordering characters when it is not. Local
  * state is the source of truth while the field has focus; the store's value is
  * adopted whenever it does not, which is how an incoming sync still lands.
+ *
+ * Bare, with no label of its own: the tracker's name is directly above it and is
+ * the only name this note has.
  */
 @Composable
-private fun NoteField(row: TrackerRowState, onNote: (String, String) -> Unit, modifier: Modifier = Modifier) {
+private fun NoteField(row: TrackerRowState, onNote: (String, String) -> Unit) {
     var text by remember(row.id) { mutableStateOf(row.valueText) }
     var focused by remember(row.id) { mutableStateOf(false) }
     LaunchedEffect(row.valueText, focused) {
@@ -604,106 +862,15 @@ private fun NoteField(row: TrackerRowState, onNote: (String, String) -> Unit, mo
             onNote(row.id, it)
         },
         enabled = row.editable,
+        skin = DenseFieldSkin.NAKED,
         multiLine = true,
         placeholder = "Add note…",
-        hint = DenseFieldHint.PROMPT,
-        modifier = modifier
+        modifier = Modifier
             .fillMaxWidth()
-            .padding(top = WellnessSpace.xs)
+            .padding(start = MARK_COLUMN)
             .onFocusChanged { focused = it.isFocused }
             .semantics { contentDescription = "${row.name} note" },
     )
-}
-
-@Composable
-private fun TargetLine(progress: TargetProgress, modifier: Modifier = Modifier) {
-    val palette = WellnessTheme.palette
-    val tone = when (progress.tone) {
-        ProgressTone.MET -> palette.success
-        ProgressTone.PARTIAL -> WellnessTheme.accent.text
-        // Over target is amber, never red: an overshoot is not a failure.
-        ProgressTone.OVER -> palette.warning
-        ProgressTone.NEUTRAL -> palette.textSecondary
-    }
-    Column(modifier = modifier.padding(top = 2.dp)) {
-        Text(text = progress.text, style = WellnessTheme.type.secondary, color = tone)
-        progress.fillPct?.let { pct ->
-            Box(
-                modifier = Modifier
-                    .padding(top = 2.dp)
-                    .widthIn(max = TARGET_BAR_MAX_WIDTH)
-                    .fillMaxWidth()
-                    .height(3.dp)
-                    .background(palette.line, CircleShape)
-                    .clearAndSetSemantics { },
-            ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth((pct / 100.0).toFloat())
-                        .height(3.dp)
-                        .background(tone, CircleShape),
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun DotRow(dots: List<DayDot>, avoidPolarity: Boolean) {
-    val palette = WellnessTheme.palette
-    val revealed = rememberDotReveal(dots.size)
-    Row(
-        modifier = Modifier
-            .padding(start = CHECKBOX_COLUMN, top = 6.dp, bottom = 2.dp)
-            .semantics { contentDescription = "Last 7 days" },
-        horizontalArrangement = Arrangement.spacedBy(DOT_GAP),
-    ) {
-        dots.forEachIndexed { index, dot ->
-            val alpha by animateFloatAsState(
-                targetValue = if (index < revealed) 1f else 0f,
-                animationSpec = WellnessMotion.fast(),
-                label = "dot-reveal",
-            )
-            val isToday = index == dots.lastIndex
-            Box(
-                modifier = Modifier
-                    .size(DOT_SIZE)
-                    .alpha(alpha)
-                    // Today wears a ring drawn outside its own 8dp bounds: a
-                    // bigger dot would break the row's rhythm.
-                    .then(
-                        if (isToday) {
-                            Modifier.drawBehind {
-                                val centre = Offset(size.width / 2f, size.height / 2f)
-                                val radius = size.minDimension / 2f
-                                drawCircle(palette.textFaint, radius + 3.dp.toPx(), centre)
-                                drawCircle(palette.card, radius + 1.5.dp.toPx(), centre)
-                            }
-                        } else {
-                            Modifier
-                        },
-                    )
-                    .background(dotColor(dot.state, avoidPolarity), CircleShape),
-            )
-        }
-    }
-}
-
-/**
- * A tracker you are trying to *avoid* has no "good" day to celebrate, so its met
- * dots read neutral rather than green — a wall of green for "did not drink" is
- * the wrong kind of encouragement.
- */
-@Composable
-private fun dotColor(state: DotState, avoidPolarity: Boolean): Color {
-    val palette = WellnessTheme.palette
-    return when (state) {
-        DotState.MET -> if (avoidPolarity) palette.avoided else palette.success
-        DotState.PARTIAL -> palette.warning
-        DotState.MISSED -> palette.line
-        DotState.NOTED -> WellnessTheme.accent.fill
-        DotState.QUIET, DotState.OFF -> palette.line.copy(alpha = 0.5f)
-    }
 }
 
 // ---- accumulator sheet ---------------------------------------------------------
@@ -712,89 +879,136 @@ private fun dotColor(state: DotState, avoidPolarity: Boolean): Color {
 @Composable
 private fun AccumulatorSheet(row: TrackerRowState, onDismiss: () -> Unit, onAdd: (String) -> Unit) {
     var input by remember { mutableStateOf("") }
-    val palette = WellnessTheme.palette
+    val palette = LogbookTheme.palette
     ModalBottomSheet(
         onDismissRequest = onDismiss,
-        containerColor = palette.card,
-        contentColor = palette.textPrimary,
-        scrimColor = Color.Black.copy(alpha = SCRIM_ALPHA),
-        shape = RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp),
+        containerColor = palette.paper,
+        contentColor = palette.ink,
+        shape = LogbookShapes.square,
+        dragHandle = { LogbookSheetHandle() },
     ) {
         Column(
             modifier = Modifier
+                .fillMaxWidth()
                 .imePadding()
-                .padding(horizontal = WellnessSpace.lg, vertical = WellnessSpace.sm),
+                .padding(start = SHEET_PADDING, end = SHEET_PADDING, bottom = SHEET_BOTTOM),
+            verticalArrangement = Arrangement.spacedBy(LogbookSpace.grid * 2),
         ) {
             Text(
-                text = "Add to ${row.name}",
-                style = WellnessTheme.type.headline,
-                color = palette.textPrimary,
+                text = "Add to ${row.name}".uppercase(),
+                style = LogbookTheme.type.section,
+                color = palette.ink,
             )
-            Spacer(Modifier.height(WellnessSpace.md))
+            Text(
+                text = (if (row.unit != null) "Amount (${row.unit})" else "Amount").uppercase(),
+                style = LogbookTheme.type.eyebrow,
+                color = palette.inkSoft,
+            )
             WellnessDenseField(
                 value = input,
                 onValueChange = { input = it },
-                label = if (row.unit != null) "Amount (${row.unit})" else "Amount",
-                placeholder = "e.g. 25",
+                skin = DenseFieldSkin.NAKED,
                 numeric = true,
+                textAlign = TextAlign.Start,
+                placeholder = "e.g. 25",
                 keyboardOptions = KeyboardOptions(
                     keyboardType = KeyboardType.Decimal,
                     imeAction = ImeAction.Done,
                 ),
                 keyboardActions = KeyboardActions(onDone = { onAdd(input) }),
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .semantics { contentDescription = "Amount to add" },
             )
-            Spacer(Modifier.height(WellnessSpace.md))
-            TextButton(
+            InkButton(
+                label = "Add",
                 onClick = { onAdd(input) },
-                colors = WellnessDefaults.accentTextButtonColors(),
                 modifier = Modifier.align(Alignment.End),
-            ) { Text("Add") }
-            Spacer(Modifier.height(WellnessSpace.lg))
+            )
         }
     }
 }
 
+/** Whatever is not there yet, said in the italic ink-faint voice reserved for absence. */
 @Composable
-private fun EmptyState(
-    icon: ImageVector,
-    title: String,
-    detail: String?,
-) {
-    val palette = WellnessTheme.palette
+private fun EmptyState(title: String, detail: String?) {
+    val palette = LogbookTheme.palette
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(WellnessSpace.xl),
+            .padding(horizontal = SCREEN_PADDING, vertical = EMPTY_PADDING),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = null,
-            tint = palette.textFaint,
-            modifier = Modifier.size(40.dp),
+        Text(
+            text = title,
+            style = LogbookTheme.type.body.copy(fontStyle = FontStyle.Italic),
+            color = palette.inkFaint,
+            textAlign = TextAlign.Center,
         )
-        Spacer(Modifier.height(WellnessSpace.md))
-        Text(text = title, style = WellnessTheme.type.title, color = palette.textPrimary)
         detail?.let {
-            Spacer(Modifier.height(WellnessSpace.sm))
+            Spacer(Modifier.height(LogbookSpace.grid * 2))
             Text(
                 text = it,
-                style = WellnessTheme.type.secondary,
-                color = palette.textSecondary,
+                style = LogbookTheme.type.body.copy(fontStyle = FontStyle.Italic),
+                color = palette.inkFaint,
+                textAlign = TextAlign.Center,
             )
         }
     }
 }
 
+/** The one word a row says about a day nothing was asked of it. */
+private const val OFF_SCHEDULE_LABEL = "off"
+
 /** `step=25` in the PWA: five stops, so three between the ends. */
 private const val SLIDER_INTERMEDIATE_STOPS = 3
-private const val LOCKED_ALPHA = 0.55f
-private const val SCRIM_ALPHA = 0.6f
+private const val SLIDER_MAX = 100f
+private const val QUARTER_TURN = 90f
 
-/** The checkbox gutter. Everything below a row's title line indents past it. */
-private val CHECKBOX_COLUMN = 48.dp
-private val DOT_SIZE = 8.dp
-private val DOT_GAP = 5.dp
-private val TARGET_BAR_MAX_WIDTH = 220.dp
+/** The page margin: the mockups' 20dp of paper down each side. */
+private val SCREEN_PADDING = 20.dp
+private val SCREEN_TOP = 22.dp
+private val SCREEN_BOTTOM = 40.dp
+
+private val TITLE_TOP = 10.dp
+private val STRIP_TOP = 14.dp
+private val STRIP_NUMERAL_GAP = 3.dp
+private val SELECTED_UNDERLINE = 2.dp
+
+/** The underline sits under the numeral, not under the whole column. */
+private const val SELECTED_UNDERLINE_INSET = 0.22f
+
+private val LEGEND_TOP = 14.dp
+private val LEGEND_GAP = 14.dp
+
+private val SECTION_GAP = 26.dp
+private val SECTION_UNDERLINE_GAP = 6.dp
+
+/**
+ * The entry mark's gutter. Everything below a row's first line indents past it,
+ * and it is the mark's touch target as well as its column — Android law beats
+ * paper density, and the journal has always spent this width.
+ */
+private val MARK_COLUMN = 48.dp
+private val ROW_TOP = 12.dp
+private val ROW_BOTTOM = 11.dp
+private val SUBLINE_TOP = 7.dp
+private val WEEK_MARK_GAP = 6.dp
+
+private val CLUSTER_CLASS_GAP = 9.dp
+private val CLUSTER_MARK_GAP = 4.dp
+
+private val TARGET_BAR_MAX_WIDTH = 150.dp
+private val TARGET_BAR_HEIGHT = 3.dp
+
+private val VALUE_FIELD_WIDTH = 72.dp
+private val SLIDER_WIDTH = 140.dp
+
+private val GLYPH_SIZE = 18.dp
+private val CHEVRON_SIZE = 14.dp
+private val LOCK_GLYPH = 10.dp
+
+private val SHEET_PADDING = 20.dp
+private val SHEET_BOTTOM = 24.dp
+private val EMPTY_PADDING = 48.dp

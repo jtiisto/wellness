@@ -26,7 +26,6 @@ import androidx.compose.ui.unit.IntSize
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.currentCoroutineContext
 import kotlin.math.roundToInt
-import kotlin.math.roundToLong
 
 /**
  * The motion tokens.
@@ -88,9 +87,6 @@ object WellnessMotion {
 
     /** Stat tiles count up once per screen entry. */
     const val COUNT_UP_MS = 600
-
-    /** Dot rows reveal left to right, on first composition only. */
-    const val DOT_STAGGER_MS = 30
 }
 
 /**
@@ -132,48 +128,12 @@ suspend fun animateCountUp(
     emit(target)
 }
 
-/**
- * Reveal [count] dots left to right, [perDotMillis] apart.
- *
- * Emits the number of dots that should be visible. The first is immediate, so a
- * seven-dot row costs six gaps rather than seven.
- */
-suspend fun animateDotStagger(
-    count: Int,
-    perDotMillis: Int = WellnessMotion.DOT_STAGGER_MS,
-    emit: (Int) -> Unit,
-) {
-    if (count <= 0) return
-    val step = (perDotMillis * motionScale()).roundToLong()
-    if (step <= 0L) {
-        emit(count)
-        return
-    }
-    for (index in 1..count) {
-        if (index > 1) delay(step)
-        emit(index)
-    }
-}
-
 /** The count-up as a value to draw. Runs once per [target] change. */
 @Composable
 fun rememberCountUp(target: Int): Int {
     var value by remember { mutableIntStateOf(0) }
     LaunchedEffect(target) { animateCountUp(target) { value = it } }
     return value
-}
-
-/**
- * How many of [count] dots are revealed.
- *
- * Staggers once, not on every recomposition — the row is history, and history
- * re-dealing itself each time the value above it changes would be noise.
- */
-@Composable
-fun rememberDotReveal(count: Int): Int {
-    var visible by remember { mutableIntStateOf(0) }
-    LaunchedEffect(count) { animateDotStagger(count) { visible = it } }
-    return visible.coerceAtMost(count)
 }
 
 /** ~60fps. Exposed so a test can pin the frame count instead of guessing it. */

@@ -25,7 +25,7 @@ data class WellnessPalette(
     val chrome: Color,
     /** The content plane: cards, rows, tiles. */
     val card: Color,
-    /** The ONE chromatic surface: welded-card headers, pills at rest, selected-adjacent. */
+    /** The ONE chromatic surface: pills at rest, selected-adjacent fills, light-theme wells. */
     val band: Color,
     /** Hairline. Always drawn 1dp, never thicker. */
     val line: Color,
@@ -39,14 +39,6 @@ data class WellnessPalette(
     val success: Color,
     val warning: Color,
     val error: Color,
-    /**
-     * Avoided-and-met: a real colour, never an alpha'd text token.
-     *
-     * A tracker you are trying to avoid has no good day to celebrate, and a
-     * translucent grey over an unknown backdrop is not a colour you can trust
-     * on a solid 8dp dot.
-     */
-    val avoided: Color,
     /** The sync dot at rest — offline/unknown, not an error. */
     val syncIdle: Color,
     /**
@@ -84,7 +76,6 @@ val DarkPalette = WellnessPalette(
     // 3.87:1 on `band`, so the one semantic that has to be readable as words
     // ("Sync failed", "Delete") was the only token missing 4.5 in dark.
     error = Color(0xFFF87171),
-    avoided = Grey500,
     syncIdle = Grey500,
     onSemanticFill = Ink,
 )
@@ -107,7 +98,6 @@ val LightPalette = WellnessPalette(
     success = Color(0xFF166534),
     warning = Color(0xFF854D0E),
     error = Color(0xFFB91C1C),
-    avoided = Grey500,
     syncIdle = Grey500,
     onSemanticFill = Color(0xFFFFFFFF),
 )

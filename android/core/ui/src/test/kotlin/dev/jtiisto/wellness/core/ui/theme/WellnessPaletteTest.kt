@@ -157,7 +157,6 @@ class WellnessPaletteTest {
                 "success" to palette.success,
                 "warning" to palette.warning,
                 "error" to palette.error,
-                "avoided" to palette.avoided,
                 "syncIdle" to palette.syncIdle,
             )
             for ((markName, mark) in marks) {
@@ -165,15 +164,6 @@ class WellnessPaletteTest {
                     assertContrast(mark, surface, 3.0, "$markName dot on $name")
                 }
             }
-        }
-    }
-
-    @Test
-    @DisplayName("avoided is its own opaque token, never an alpha'd text colour")
-    fun avoidedIsSolid() {
-        for (palette in listOf(dark, light)) {
-            assertEquals(1f, palette.avoided.alpha)
-            assertEquals(palette.syncIdle, palette.avoided)
         }
     }
 

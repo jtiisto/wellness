@@ -1,20 +1,11 @@
 package dev.jtiisto.wellness.core.ui.theme
 
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.material3.ButtonColors
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CheckboxColors
-import androidx.compose.material3.CheckboxDefaults
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.IconButtonColors
 import androidx.compose.material3.IconButtonDefaults
-import androidx.compose.material3.SelectableChipColors
-import androidx.compose.material3.SliderColors
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.unit.dp
 
 /**
  * The component-role table, in one place.
@@ -30,65 +21,12 @@ object WellnessDefaults {
     // entry, and it reads the palette directly rather than through an M3
     // `TextFieldColors` its BasicTextField decoration could not consume.
 
-    @Composable
-    fun checkboxColors(): CheckboxColors {
-        val palette = WellnessTheme.palette
-        val accent = WellnessTheme.accent
-        return CheckboxDefaults.colors(
-            checkedColor = accent.fill,
-            uncheckedColor = palette.textFaint,
-            checkmarkColor = accent.ink,
-            disabledCheckedColor = accent.fill.copy(alpha = 0.38f),
-            disabledUncheckedColor = palette.textFaint.copy(alpha = 0.38f),
-        )
-    }
-
-    @Composable
-    fun sliderColors(): SliderColors {
-        val palette = WellnessTheme.palette
-        val accent = WellnessTheme.accent
-        return SliderDefaults.colors(
-            thumbColor = accent.fill,
-            activeTrackColor = accent.fill,
-            inactiveTrackColor = palette.line,
-            disabledThumbColor = palette.textFaint,
-            disabledActiveTrackColor = palette.line,
-            disabledInactiveTrackColor = palette.line,
-        )
-    }
-
-    /** Selected chips wear the accent wash; at rest they are the band. */
-    @OptIn(ExperimentalMaterial3Api::class)
-    @Composable
-    fun filterChipColors(): SelectableChipColors {
-        val palette = WellnessTheme.palette
-        val accent = WellnessTheme.accent
-        return FilterChipDefaults.filterChipColors(
-            containerColor = palette.band,
-            labelColor = palette.textSecondary,
-            disabledContainerColor = palette.band,
-            disabledLabelColor = palette.textFaint,
-            selectedContainerColor = accent.softFill,
-            selectedLabelColor = accent.text,
-        )
-    }
-
-    @OptIn(ExperimentalMaterial3Api::class)
-    @Composable
-    fun filterChipBorder(enabled: Boolean, selected: Boolean): BorderStroke? {
-        val palette = WellnessTheme.palette
-        val accent = WellnessTheme.accent
-        return FilterChipDefaults.filterChipBorder(
-            enabled = enabled,
-            selected = selected,
-            borderColor = palette.line,
-            selectedBorderColor = accent.border,
-            disabledBorderColor = palette.line,
-            disabledSelectedBorderColor = palette.line,
-            borderWidth = 1.dp,
-            selectedBorderWidth = 1.dp,
-        )
-    }
+    // Four factories retired with the journal's Logbook round (2026-08-18):
+    // `checkboxColors`, `sliderColors`, `filterChipColors` and
+    // `filterChipBorder`. Journal was their only consumer, and Logbook has no
+    // Material checkbox, no chip and no accent to tint a slider with — the ink
+    // mark, the weekday mark row and explicit ink slider colours replaced them.
+    // Trends, Analysis and Tools keep everything below.
 
     /** The one filled control per screen: the module's own colour, ink on top. */
     @Composable

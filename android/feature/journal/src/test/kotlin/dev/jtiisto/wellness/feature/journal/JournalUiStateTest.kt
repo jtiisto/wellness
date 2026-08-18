@@ -363,11 +363,87 @@ class JournalUiStateTest {
     }
 
     @Test
-    @DisplayName("negative polarity is flagged so the dots can avoid celebrating avoidance")
-    fun avoidPolarityFlag() {
-        val state = build(listOf(simple("v", polarity = "negative")))
-        assertTrue(row(state, "v").avoidPolarity)
-        assertFalse(row(build(listOf(simple("p", polarity = "positive"))), "p").avoidPolarity)
+    @DisplayName("the run is drawn as well as judged, and the drawing carries the today-open rule")
+    fun rowsCarryTheirDrawnRun() {
+        // Nothing logged today on a habit: the model still has to answer for the
+        // day and says MISSED, but the day is not over and no verdict has been
+        // earned — so the mark suspends to the open dot while the state behind
+        // it does not move. The two fields exist to hold exactly this
+        // disagreement.
+        val open = row(build(listOf(simple("h", polarity = "positive"))), "h")
+        assertEquals(DotState.MISSED, open.dots.last().state)
+        assertEquals(WeekMark.OPEN_DOT, open.marks.last().mark)
+        assertTrue(open.marks.last().ringed, "the run's last mark is the selected day")
+        assertEquals(7, open.marks.size)
+
+        // An entry restores the verdict, drawn and spoken alike.
+        val entries = mapOf(todayStr to mapOf("h" to EntryDto(value = null, completed = true)))
+        val logged = row(build(listOf(simple("h", polarity = "positive")), entriesByDate = entries), "h")
+        assertEquals(WeekMark.FILLED_DOT, logged.marks.last().mark)
+    }
+
+    @Test
+    @DisplayName("the run's sentence speaks the drawn marks, so a suspended verdict survives aloud")
+    fun rowsCarryTheirSpokenRun() {
+        val open = row(build(listOf(simple("h", polarity = "positive"))), "h")
+        val spoken = open.marksDescription.orEmpty()
+        assertTrue(spoken.startsWith("Last 7 days: "), spoken)
+        // 2026-08-06 is a Thursday, and it is the day the run ends on. The six
+        // days before it are over and really were missed, so they say so — the
+        // suspension is today's alone, and it is the last thing the sentence
+        // says. Both halves matter: a rule that silenced the whole week would be
+        // hiding the log rather than being honest about one unfinished day.
+        assertTrue(spoken.endsWith("Thu open"), spoken)
+        assertTrue(spoken.contains("missed"), spoken)
+    }
+
+    @Test
+    @DisplayName("a tracker logged on a day it was not scheduled says so")
+    fun offScheduleRowsAreFlagged() {
+        // Thursday is weekday 4; a weekend-only tracker is not expected today,
+        // and only shows at all because an entry exists against it.
+        val weekendOnly = simple("w").copy(
+            scheduleHistory = listOf(ScheduleSegmentDto(SCHEDULE_GENESIS_DATE, listOf(0, 6))),
+        )
+        val entries = mapOf(todayStr to mapOf("w" to EntryDto(value = null, completed = true)))
+        val state = build(listOf(weekendOnly, simple("d")), entriesByDate = entries)
+
+        assertTrue(row(state, "w").offSchedule)
+        assertFalse(row(state, "d").offSchedule, "a daily tracker is never off schedule")
+    }
+
+    @Test
+    @DisplayName("the real today is hoisted, and is not the same fact as the selected day")
+    fun todayIsHoisted() {
+        val browsing = build(listOf(simple("t")), selectedDate = yesterday)
+        assertEquals(todayStr, browsing.today)
+        assertEquals(yesterday, browsing.selectedDate)
+    }
+
+    @Test
+    @DisplayName("the header's eyebrow is assembled with the rest, tally and all")
+    fun eyebrowIsDerived() {
+        val entries = mapOf(todayStr to mapOf("a" to EntryDto(value = null, completed = false)))
+        val today = build(listOf(simple("a"), simple("b")), entriesByDate = entries).eyebrow
+        assertEquals(JournalEyebrow.Today(LoggedTally(logged = 1, total = 2)), today)
+        assertEquals("Today · 1 of 2 logged", today.label)
+
+        // A browsed day names itself; a locked one says why the rows below it
+        // cannot be written to.
+        val browsing = build(listOf(simple("a")), selectedDate = yesterday).eyebrow
+        assertTrue(browsing is JournalEyebrow.Browsing, browsing.toString())
+        val locked = build(listOf(simple("a")), dirtyTrackerCount = 1, selectedDate = yesterday).eyebrow
+        assertTrue(locked is JournalEyebrow.Locked, locked.toString())
+    }
+
+    @Test
+    @DisplayName("each strip cell carries the locale's own initial, not a slice of the English name")
+    fun stripCellsCarryTheirInitial() {
+        val state = build(listOf(simple("t")))
+        // 2026-08-06 is a Thursday: "Thu" abbreviated, "T" as a narrow initial.
+        assertEquals("Thu", state.dateStrip.last().dayName)
+        assertEquals("T", state.dateStrip.last().initial)
+        assertEquals(7, state.dateStrip.count { it.initial.isNotEmpty() })
     }
 
     @Test

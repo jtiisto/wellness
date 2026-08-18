@@ -17,6 +17,7 @@ import dev.jtiisto.wellness.core.data.journal.formatTargetProgress
 import dev.jtiisto.wellness.core.data.journal.getLastNDays
 import dev.jtiisto.wellness.core.data.journal.groupByCategory
 import dev.jtiisto.wellness.core.data.journal.isDayEditable
+import dev.jtiisto.wellness.core.data.journal.isExpectedOn
 import dev.jtiisto.wellness.core.data.journal.journalNumberJson
 import dev.jtiisto.wellness.core.data.journal.localDataWindowStart
 import dev.jtiisto.wellness.core.data.journal.recentDayStates
@@ -44,8 +45,26 @@ import java.util.Locale
  */
 data class JournalUiState(
     val selectedDate: DateString = "",
+    /**
+     * The real today, which is not always [selectedDate].
+     *
+     * The strip's last cell has always carried it, but the header's eyebrow and
+     * the week marks' today-open rule both need it as a fact rather than as a
+     * position in a list — and a screen that has to hunt through a list for
+     * "which of these is today" is one refactor away from getting it wrong.
+     */
+    val today: DateString = "",
     val dateStrip: List<DateCellState> = emptyList(),
     val groups: List<CategoryGroupState> = emptyList(),
+    /**
+     * The header's one line: which day is on screen and how much of it is
+     * written down.
+     *
+     * Assembled here, with the rest, because it needs a [Locale] to name a
+     * browsed day — and a `Locale.getDefault()` reached for inside a composable
+     * is a formatting decision no test can hold.
+     */
+    val eyebrow: JournalEyebrow = JournalEyebrow.Today(LoggedTally(0, 0)),
     val emptyState: JournalEmptyState? = null,
     val syncStatus: SyncStatus = SyncStatus.GRAY,
     /**
@@ -64,6 +83,12 @@ enum class JournalEmptyState { NO_TRACKERS, NONE_SCHEDULED }
 data class DateCellState(
     val date: DateString,
     val dayName: String,
+    /**
+     * The single letter drawn over the day number — the locale's own narrow
+     * weekday, not a slice of the English [dayName], which is what the strip
+     * would otherwise show a non-English reader.
+     */
+    val initial: String,
     val dayNum: Int,
     val isToday: Boolean,
     val isSelected: Boolean,
@@ -102,8 +127,35 @@ data class TrackerRowState(
     val isAccumulator: Boolean,
     val targetProgress: TargetProgress?,
     val lastUpdatedCaption: String?,
+    /**
+     * The row's seven days as the state model judged them.
+     *
+     * Kept beside [marks] rather than replaced by them, because the two are not
+     * the same statement: the today-open rule suspends a verdict the model still
+     * has to make, so a day can be `MISSED` here and an open dot there. This is
+     * the model's answer; [marks] is what the page draws.
+     */
     val dots: List<DayDot>,
-    val avoidPolarity: Boolean,
+    /** [dots] drawn — the notation, with the today-open suspension applied. */
+    val marks: List<RowMark>,
+    /**
+     * The whole run as one sentence, or null when there is no run.
+     *
+     * Derived here rather than in the composable for the reason the eyebrow's
+     * date is: it needs a [Locale], and a silent `getDefault()` inside a
+     * `semantics {}` block is a formatting decision no test could reach.
+     */
+    val marksDescription: String?,
+    /**
+     * The tracker is not scheduled on the selected day, yet the row is visible —
+     * which by `shouldShowTracker` can only mean something was logged against it
+     * anyway.
+     *
+     * The row says so with a mono label rather than by fading: an off-schedule
+     * day is a non-day, not a failure, and an entry filed on one is a fact the
+     * log should state plainly.
+     */
+    val offSchedule: Boolean,
     /**
      * Whether an entry row exists for this tracker on the selected day.
      *
@@ -153,6 +205,7 @@ fun buildJournalUiState(
         DateCellState(
             date = cell.date,
             dayName = cell.dayName,
+            initial = dayInitial(cell.date, locale),
             dayNum = cell.dayNum,
             isToday = cell.isToday,
             isSelected = cell.date == date,
@@ -176,6 +229,7 @@ fun buildJournalUiState(
                     entry = dayLog[tracker.id],
                     entriesByDate = entriesByDate,
                     date = date,
+                    today = todayStr,
                     editable = editable,
                     windowStart = windowStart,
                     valueUpdatedTimes = valueUpdatedTimes,
@@ -188,8 +242,16 @@ fun buildJournalUiState(
 
     return JournalUiState(
         selectedDate = date,
+        today = todayStr,
         dateStrip = dateStrip,
         groups = groups,
+        eyebrow = journalEyebrow(
+            selectedDate = date,
+            today = todayStr,
+            tally = loggedTally(groups),
+            editable = editable,
+            locale = locale,
+        ),
         emptyState = when {
             trackers.isEmpty() -> JournalEmptyState.NO_TRACKERS
             visible.isEmpty() -> JournalEmptyState.NONE_SCHEDULED
@@ -206,6 +268,7 @@ private fun buildTrackerRowState(
     entry: EntryDto?,
     entriesByDate: Map<DateString, Map<String, EntryDto>>,
     date: DateString,
+    today: DateString,
     editable: Boolean,
     windowStart: DateString,
     valueUpdatedTimes: Map<String, String>,
@@ -217,6 +280,12 @@ private fun buildTrackerRowState(
     val displayed = displayedValue(tracker, entry, type)
     val displayedNumber = coerceNumericValue(displayed)
     val status = dayStatus(tracker, date, entry)
+    val rowClass = trackerClass(tracker, status)
+    // The dot row ends on the SELECTED date, not today, so browsing back shows
+    // that day's week. Days older than the local window are muted: their logs
+    // are pruned, and absence there is unknown, not missed.
+    val dots = recentDayStates(tracker, date, entriesByDate, DOT_ROW_DAYS, windowStart)
+    val marks = rowMarks(dots = dots, trackerClass = rowClass, hasEntry = status.hasEntry, today = today)
 
     return TrackerRowState(
         id = tracker.id,
@@ -240,13 +309,12 @@ private fun buildTrackerRowState(
         } else {
             null
         },
-        // The dot row ends on the SELECTED date, not today, so browsing back
-        // shows that day's week. Days older than the local window are muted:
-        // their logs are pruned, and absence there is unknown, not missed.
-        dots = recentDayStates(tracker, date, entriesByDate, DOT_ROW_DAYS, windowStart),
-        avoidPolarity = tracker.polarity == "negative",
+        dots = dots,
+        marks = marks,
+        marksDescription = describeRowMarks(marks, locale),
+        offSchedule = !isExpectedOn(tracker, date),
         hasEntry = status.hasEntry,
-        trackerClass = trackerClass(tracker, status),
+        trackerClass = rowClass,
     )
 }
 

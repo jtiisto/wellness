@@ -1,27 +1,24 @@
 package dev.jtiisto.wellness.feature.coach
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import dev.jtiisto.wellness.core.ui.hr.HrCaptureDisplay
 import dev.jtiisto.wellness.core.ui.hr.HrToneDot
 import dev.jtiisto.wellness.core.ui.hr.logbookColor
+import dev.jtiisto.wellness.core.ui.theme.InkButton
+import dev.jtiisto.wellness.core.ui.theme.InkOutlineButton
 import dev.jtiisto.wellness.core.ui.theme.LogbookShapes
+import dev.jtiisto.wellness.core.ui.theme.LogbookSheetHandle
 import dev.jtiisto.wellness.core.ui.theme.LogbookSpace
 import dev.jtiisto.wellness.core.ui.theme.LogbookTheme
 
@@ -46,7 +43,7 @@ internal fun ConnectStrapSheet(prompt: StrapPrompt, onConnect: () -> Unit, onSki
         containerColor = palette.paper,
         contentColor = palette.ink,
         shape = LogbookShapes.square,
-        dragHandle = { SheetHandle() },
+        dragHandle = { LogbookSheetHandle() },
     ) {
         Column(
             modifier = Modifier
@@ -106,7 +103,7 @@ internal fun CaptureStatusSheet(
         containerColor = palette.paper,
         contentColor = palette.ink,
         shape = LogbookShapes.square,
-        dragHandle = { SheetHandle() },
+        dragHandle = { LogbookSheetHandle() },
     ) {
         Column(
             modifier = Modifier
@@ -169,36 +166,8 @@ internal fun CaptureStatusSheet(
     }
 }
 
-/**
- * The sheet's top edge: a `ruleStrong` hairline, then a short ink rule to drag.
- *
- * M3's handle is a rounded grey lozenge on a raised surface. Neither survives
- * here — the sheet is the same paper as the page, so the boundary has to be
- * drawn, and the handle is a mark rather than a pill.
- */
-@Composable
-private fun SheetHandle() {
-    val palette = LogbookTheme.palette
-    Column(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        HorizontalDivider(thickness = LogbookSpace.hairline, color = palette.ruleStrong)
-        Box(
-            modifier = Modifier
-                .padding(vertical = LogbookSpace.grid * 2.5f)
-                .width(HANDLE_WIDTH)
-                .height(HANDLE_HEIGHT)
-                .clip(LogbookShapes.soft)
-                .background(palette.ink),
-        )
-    }
-}
-
 private val SHEET_PADDING = 20.dp
 private val SHEET_BOTTOM = 24.dp
-private val HANDLE_WIDTH = 28.dp
-private val HANDLE_HEIGHT = 2.dp
 
 /** The capture surfaces' copy, gathered so the tests can assert it. */
 internal object CaptureCopy {

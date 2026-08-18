@@ -224,6 +224,34 @@ fun describeRowMarks(marks: List<RowMark>, locale: Locale): String? {
     return "Last ${marks.size} days: $days"
 }
 
+/**
+ * The one quiet line under the header that teaches the grammar.
+ *
+ * Coach's legend is load-bearing because plate colours are assigned
+ * *positionally* — the same word is red in one workout and blue in the next, so
+ * a dot without the legend says nothing. The journal's marks are fixed rather
+ * than positional, but shape is a vocabulary a reader has to be handed once, and
+ * this is where they are handed it: each entry is a mark beside the word
+ * [a11yLabel] already gives it, so what is drawn and what is spoken cannot drift
+ * apart.
+ *
+ * Seven of the nine marks, in the order a row reads them. The two omitted are
+ * the *negated* forms of entries already present — [WeekMark.SLASHED_HOOP] is
+ * the held hoop struck through, [WeekMark.OUTLINE_DIAMOND] the noted diamond
+ * hollowed — and the slash and the hollow are the same two modifiers the dot
+ * half of the line has already taught by the time they appear. Naming all nine
+ * would double the line's length to repeat a rule it has just made.
+ */
+val JOURNAL_SHAPE_LEGEND: List<WeekMark> = listOf(
+    WeekMark.FILLED_DOT,
+    WeekMark.HALF_DOT,
+    WeekMark.OPEN_DOT,
+    WeekMark.SLASHED_DOT,
+    WeekMark.HOOP,
+    WeekMark.FILLED_DIAMOND,
+    WeekMark.DASH,
+)
+
 // ---- the rollup cluster --------------------------------------------------------
 
 /** The cluster's observation half: the diamond, and the count set beside it. */
@@ -392,5 +420,14 @@ fun journalEyebrow(
  * Natural-cased, like the eyebrow: the callsite sets it mono-caps and does the
  * uppercasing, which is the app's one casing convention.
  */
-fun DateCellState.dayInitial(locale: Locale): String =
+fun DateCellState.dayInitial(locale: Locale): String = dayInitial(date, locale)
+
+/**
+ * The same letter, off a bare date.
+ *
+ * The strip is assembled before its cells exist, so the state builder needs this
+ * form; the extension above is the one a reader of a cell reaches for. One
+ * implementation, so the two can never answer differently.
+ */
+fun dayInitial(date: DateString, locale: Locale): String =
     LocalDate.parse(date).dayOfWeek.getDisplayName(TextStyle.NARROW, locale)

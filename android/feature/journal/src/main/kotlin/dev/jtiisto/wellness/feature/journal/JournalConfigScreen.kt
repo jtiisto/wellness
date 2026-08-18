@@ -1,41 +1,41 @@
 package dev.jtiisto.wellness.feature.journal
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuAnchorType
-import androidx.compose.material3.FilterChip
+import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -48,24 +48,31 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.error
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.jtiisto.wellness.core.data.journal.ALL_DAYS
 import dev.jtiisto.wellness.core.data.journal.TrackerType
 import dev.jtiisto.wellness.core.data.journal.formatScheduleSummary
 import dev.jtiisto.wellness.core.data.journal.formatTarget
-import dev.jtiisto.wellness.core.ui.theme.WellnessDefaults
+import dev.jtiisto.wellness.core.ui.theme.DenseFieldSkin
+import dev.jtiisto.wellness.core.ui.theme.InkButton
+import dev.jtiisto.wellness.core.ui.theme.InkMark
+import dev.jtiisto.wellness.core.ui.theme.LogbookShapes
+import dev.jtiisto.wellness.core.ui.theme.LogbookSheetHandle
+import dev.jtiisto.wellness.core.ui.theme.LogbookSpace
+import dev.jtiisto.wellness.core.ui.theme.LogbookTheme
 import dev.jtiisto.wellness.core.ui.theme.WellnessDenseField
-import dev.jtiisto.wellness.core.ui.theme.WellnessShape
-import dev.jtiisto.wellness.core.ui.theme.WellnessSpace
-import dev.jtiisto.wellness.core.ui.theme.WellnessTheme
 import org.koin.androidx.compose.koinViewModel
 
 /** Weekday toggles, Monday-first for display. The values stay 0=Sun..6=Sat. */
@@ -88,7 +95,13 @@ private val TYPE_OPTIONS = listOf(
     TrackerType.NOTE to "Note (Yes/No + Text)",
 )
 
-/** Tracker CRUD: the grouped list, the form sheet, and the delete confirmation. */
+/**
+ * Tracker CRUD: the grouped list, the form sheet, and the delete confirmation.
+ *
+ * The same paper as the day view, and the same rule about decisions — every
+ * seeding, validation and assembly rule lives in `TrackerFormLogic` and the
+ * ViewModel, so this file only chooses type and ink.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun JournalConfigScreen(
@@ -96,20 +109,24 @@ fun JournalConfigScreen(
     viewModel: TrackerFormViewModel = koinViewModel(),
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
-    val palette = WellnessTheme.palette
+    val palette = LogbookTheme.palette
 
     Column(modifier = Modifier.fillMaxSize()) {
         TopAppBar(
-            title = { Text("Settings", style = WellnessTheme.type.headline) },
+            title = { Text("Settings".uppercase(), style = LogbookTheme.type.section) },
             colors = TopAppBarDefaults.topAppBarColors(
-                containerColor = palette.canvas,
-                titleContentColor = palette.textPrimary,
-                navigationIconContentColor = palette.textSecondary,
+                // Paper, like everything else — the bar is not a second surface.
+                containerColor = palette.paper,
+                titleContentColor = palette.ink,
+                navigationIconContentColor = palette.ink,
             ),
             windowInsets = WindowInsets(0),
             navigationIcon = {
                 IconButton(onClick = onBack) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back to journal")
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Outlined.ArrowBack,
+                        contentDescription = "Back to journal",
+                    )
                 }
             },
         )
@@ -117,64 +134,40 @@ fun JournalConfigScreen(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = WellnessSpace.md, vertical = WellnessSpace.sm),
+                .padding(horizontal = SCREEN_PADDING, vertical = LogbookSpace.grid * 2),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                text = "Trackers",
-                style = WellnessTheme.type.title,
-                color = palette.textPrimary,
+                text = "Trackers".uppercase(),
+                style = LogbookTheme.type.display,
+                color = palette.ink,
                 modifier = Modifier.weight(1f),
             )
-            Button(
-                onClick = viewModel::addTracker,
-                colors = WellnessDefaults.accentButtonColors(),
-                shape = WellnessShape.card,
-            ) {
-                Icon(Icons.Filled.Add, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.size(4.dp))
-                Text("Add", style = WellnessTheme.type.label)
-            }
+            InkButton(label = "Add", onClick = viewModel::addTracker)
         }
 
         if (state.isEmpty) {
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(WellnessSpace.xl),
+                    .padding(horizontal = SCREEN_PADDING, vertical = EMPTY_PADDING),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center,
             ) {
-                Icon(
-                    imageVector = Icons.Filled.Add,
-                    contentDescription = null,
-                    tint = palette.textFaint,
-                    modifier = Modifier.size(40.dp),
-                )
-                Spacer(Modifier.height(WellnessSpace.md))
-                Text(
-                    text = "No trackers configured yet.",
-                    style = WellnessTheme.type.title,
-                    color = palette.textPrimary,
-                )
-                Spacer(Modifier.height(WellnessSpace.sm))
-                Text(
-                    text = "Tap \"Add\" to create your first tracker.",
-                    style = WellnessTheme.type.secondary,
-                    color = palette.textSecondary,
-                )
+                EmptyText("No trackers configured yet.")
+                Spacer(Modifier.height(LogbookSpace.grid * 2))
+                EmptyText("Tap \"Add\" to create your first tracker.")
             }
         } else {
-            LazyColumn(contentPadding = PaddingValues(bottom = WellnessSpace.lg)) {
+            LazyColumn(contentPadding = PaddingValues(bottom = SCREEN_BOTTOM)) {
                 for (group in state.groups) {
                     item(key = "config-category-${group.name}") {
-                        Text(
-                            text = group.name,
-                            style = WellnessTheme.type.label,
-                            color = palette.textSecondary,
+                        SectionRule(
+                            label = group.name,
                             modifier = Modifier.padding(
-                                horizontal = WellnessSpace.md,
-                                vertical = WellnessSpace.sm,
+                                start = SCREEN_PADDING,
+                                end = SCREEN_PADDING,
+                                top = SECTION_GAP,
                             ),
                         )
                     }
@@ -202,27 +195,30 @@ fun JournalConfigScreen(
     }
 
     if (state.pendingDeleteId != null) {
+        // Left an AlertDialog on purpose: it inherits the Logbook M3 mapping —
+        // paper surface, 2dp corners, ink on it — so there is no per-callsite
+        // colour work to do, and the confirm button loses the error red because
+        // the system has no such colour to spend.
         AlertDialog(
             onDismissRequest = viewModel::cancelDelete,
-            // A dialog floats, so it takes the card surface — never the canvas,
-            // which would leave it indistinguishable from the page behind it.
-            containerColor = palette.card,
-            titleContentColor = palette.textPrimary,
-            textContentColor = palette.textSecondary,
-            shape = WellnessShape.floating,
-            title = { Text("Delete tracker?", style = WellnessTheme.type.title) },
-            text = { Text("Delete \"${state.pendingDeleteName}\"? This cannot be undone.") },
+            title = { Text("Delete tracker?", style = LogbookTheme.type.section) },
+            text = {
+                Text(
+                    text = "Delete \"${state.pendingDeleteName}\"? This cannot be undone.",
+                    style = LogbookTheme.type.body,
+                )
+            },
             confirmButton = {
                 TextButton(
                     onClick = viewModel::deleteConfirmed,
-                    colors = ButtonDefaults.textButtonColors(contentColor = palette.error),
-                ) { Text("Delete") }
+                    colors = ButtonDefaults.textButtonColors(contentColor = palette.ink),
+                ) { Text("DELETE", style = LogbookTheme.type.eyebrow) }
             },
             dismissButton = {
                 TextButton(
                     onClick = viewModel::cancelDelete,
-                    colors = WellnessDefaults.accentTextButtonColors(),
-                ) { Text("Cancel") }
+                    colors = ButtonDefaults.textButtonColors(contentColor = palette.inkSoft),
+                ) { Text("CANCEL", style = LogbookTheme.type.eyebrow) }
             },
         )
     }
@@ -230,37 +226,39 @@ fun JournalConfigScreen(
 
 @Composable
 private fun TrackerConfigItem(row: TrackerConfigRow, onEdit: () -> Unit, onDelete: () -> Unit) {
-    val palette = WellnessTheme.palette
+    val palette = LogbookTheme.palette
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = WellnessSpace.md, vertical = WellnessSpace.xs)
-            .clip(WellnessShape.card)
-            .background(palette.card)
-            .border(1.dp, palette.line, WellnessShape.card)
-            .padding(start = WellnessSpace.md, top = WellnessSpace.sm, bottom = WellnessSpace.sm),
+            .padding(horizontal = SCREEN_PADDING)
+            .hairlineBelow(palette.rule)
+            .padding(vertical = LogbookSpace.grid),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Column(modifier = Modifier.weight(1f)) {
-            Text(row.name, style = WellnessTheme.type.body, color = palette.textPrimary)
-            Text(
-                text = row.summary,
-                style = WellnessTheme.type.secondary,
-                color = palette.textSecondary,
-            )
+            Text(row.name, style = LogbookTheme.type.name, color = palette.ink)
+            // The summary is schedule and target — numbers and weekday names,
+            // which is the mono voice by definition.
+            Text(row.summary, style = LogbookTheme.type.meta, color = palette.inkSoft)
         }
-        IconButton(onClick = onEdit) {
+        IconButton(
+            onClick = onEdit,
+            colors = IconButtonDefaults.iconButtonColors(contentColor = palette.ink),
+        ) {
             Icon(
-                imageVector = Icons.Filled.Edit,
+                imageVector = Icons.Outlined.Edit,
                 contentDescription = "Edit ${row.name}",
-                tint = palette.textSecondary,
+                modifier = Modifier.size(GLYPH_SIZE),
             )
         }
-        IconButton(onClick = onDelete) {
+        IconButton(
+            onClick = onDelete,
+            colors = IconButtonDefaults.iconButtonColors(contentColor = palette.ink),
+        ) {
             Icon(
-                imageVector = Icons.Filled.Delete,
+                imageVector = Icons.Outlined.Delete,
                 contentDescription = "Delete ${row.name}",
-                tint = palette.textSecondary,
+                modifier = Modifier.size(GLYPH_SIZE),
             )
         }
     }
@@ -285,14 +283,14 @@ private fun TrackerFormSheet(
 ) {
     val errors = validateTrackerForm(form)
     val showErrors = form.submitAttempted
+    val palette = LogbookTheme.palette
 
-    val palette = WellnessTheme.palette
     ModalBottomSheet(
         onDismissRequest = onDismiss,
-        containerColor = palette.card,
-        contentColor = palette.textPrimary,
-        scrimColor = Color.Black.copy(alpha = SCRIM_ALPHA),
-        shape = RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp),
+        containerColor = palette.paper,
+        contentColor = palette.ink,
+        shape = LogbookShapes.square,
+        dragHandle = { LogbookSheetHandle() },
     ) {
         // Eleven fields and a Save button do not fit a short screen, a landscape
         // one, or a portrait one with the keyboard up — and a Save button you
@@ -301,29 +299,37 @@ private fun TrackerFormSheet(
             modifier = Modifier
                 .verticalScroll(rememberScrollState())
                 .imePadding()
-                .padding(horizontal = WellnessSpace.lg)
-                .padding(bottom = WellnessSpace.xl),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+                .padding(horizontal = SCREEN_PADDING)
+                .padding(bottom = SCREEN_BOTTOM),
+            verticalArrangement = Arrangement.spacedBy(LogbookSpace.grid * 3),
         ) {
             Text(
-                text = if (isEdit) "Edit Tracker" else "New Tracker",
-                style = WellnessTheme.type.headline,
-                color = palette.textPrimary,
+                text = (if (isEdit) "Edit tracker" else "New tracker").uppercase(),
+                style = LogbookTheme.type.section,
+                color = palette.ink,
             )
 
-            WellnessDenseField(
-                value = form.name,
-                onValueChange = { next -> onChange { it.copy(name = next) } },
-                label = "Name",
-                placeholder = "e.g. Meditation",
-                isError = showErrors && errors.name != null,
-                supportingText = errors.name?.takeIf { showErrors },
-                modifier = Modifier.fillMaxWidth(),
-            )
+            val nameError = errors.name.takeIf { showErrors }
+            FormField(label = "Name", error = nameError) {
+                WellnessDenseField(
+                    value = form.name,
+                    onValueChange = { next -> onChange { it.copy(name = next) } },
+                    skin = DenseFieldSkin.NAKED,
+                    placeholder = "e.g. Meditation",
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .fieldSemantics("Name", nameError),
+                )
+            }
 
             CategoryField(form, categories, errors.category.takeIf { showErrors }, onChange)
 
-            TypeField(form.type) { next -> onChange { it.copy(type = next) } }
+            SelectField(
+                label = "Type",
+                value = TYPE_OPTIONS.first { it.first == form.type }.second,
+                options = TYPE_OPTIONS.map { it.second },
+                onSelect = { index -> onChange { it.copy(type = TYPE_OPTIONS[index].first) } },
+            )
 
             if (form.type == TrackerType.QUANTIFIABLE) {
                 QuantifiableFieldsSection(form, onChange)
@@ -331,21 +337,22 @@ private fun TrackerFormSheet(
 
             ScheduleSection(form, onChange)
 
-            PolarityField(form.polarity) { next -> onChange { it.copy(polarity = next) } }
+            SelectField(
+                label = "Polarity",
+                value = POLARITY_OPTIONS.first { it.first == form.polarity }.second,
+                options = POLARITY_OPTIONS.map { it.second },
+                onSelect = { index -> onChange { it.copy(polarity = POLARITY_OPTIONS[index].first) } },
+            )
 
-            Button(
+            InkButton(
+                label = if (isEdit) "Save changes" else "Add tracker",
                 onClick = onSubmit,
-                colors = WellnessDefaults.accentButtonColors(),
-                shape = WellnessShape.card,
                 modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text(if (isEdit) "Save Changes" else "Add Tracker", style = WellnessTheme.type.label)
-            }
+            )
         }
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun CategoryField(
     form: TrackerFormState,
@@ -353,87 +360,34 @@ private fun CategoryField(
     error: String?,
     onChange: ((TrackerFormState) -> TrackerFormState) -> Unit,
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(LogbookSpace.grid)) {
         if (categories.isNotEmpty() && !form.useNewCategory) {
-            var expanded by remember { mutableStateOf(false) }
-            ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }) {
-                WellnessDenseField(
-                    value = form.category,
-                    onValueChange = {},
-                    readOnly = true,
-                    label = "Category",
-                    placeholder = "Select category…",
-                    dropdownExpanded = expanded,
-                    isError = error != null,
-                    supportingText = error,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable),
-                )
-                ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-                    for (category in categories) {
-                        DropdownMenuItem(
-                            text = { Text(category) },
-                            onClick = {
-                                onChange { it.copy(category = category) }
-                                expanded = false
-                            },
-                        )
-                    }
-                }
-            }
-            TextButton(
-                onClick = { onChange { it.copy(useNewCategory = true) } },
-                colors = WellnessDefaults.accentTextButtonColors(),
-            ) {
-                Text("+ New Category")
+            SelectField(
+                label = "Category",
+                value = form.category.ifEmpty { "Select category…" },
+                options = categories,
+                error = error,
+                onSelect = { index -> onChange { it.copy(category = categories[index]) } },
+            )
+            QuietTextButton(label = "+ New category") {
+                onChange { it.copy(useNewCategory = true) }
             }
         } else {
-            WellnessDenseField(
-                value = form.newCategory,
-                onValueChange = { next -> onChange { it.copy(newCategory = next) } },
-                label = "Category",
-                placeholder = "e.g. Supplements",
-                isError = error != null,
-                supportingText = error,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            if (categories.isNotEmpty()) {
-                TextButton(
-                    onClick = { onChange { it.copy(useNewCategory = false) } },
-                    colors = WellnessDefaults.accentTextButtonColors(),
-                ) {
-                    Text("Use Existing")
-                }
-            }
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun TypeField(type: TrackerType, onSelect: (TrackerType) -> Unit) {
-    var expanded by remember { mutableStateOf(false) }
-    ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }) {
-        WellnessDenseField(
-            value = TYPE_OPTIONS.first { it.first == type }.second,
-            onValueChange = {},
-            readOnly = true,
-            label = "Type",
-            dropdownExpanded = expanded,
-            modifier = Modifier
-                .fillMaxWidth()
-                .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable),
-        )
-        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            for ((value, label) in TYPE_OPTIONS) {
-                DropdownMenuItem(
-                    text = { Text(label) },
-                    onClick = {
-                        onSelect(value)
-                        expanded = false
-                    },
+            FormField(label = "Category", error = error) {
+                WellnessDenseField(
+                    value = form.newCategory,
+                    onValueChange = { next -> onChange { it.copy(newCategory = next) } },
+                    skin = DenseFieldSkin.NAKED,
+                    placeholder = "e.g. Supplements",
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .fieldSemantics("Category", error),
                 )
+            }
+            if (categories.isNotEmpty()) {
+                QuietTextButton(label = "Use existing") {
+                    onChange { it.copy(useNewCategory = false) }
+                }
             }
         }
     }
@@ -444,29 +398,48 @@ private fun QuantifiableFieldsSection(
     form: TrackerFormState,
     onChange: ((TrackerFormState) -> TrackerFormState) -> Unit,
 ) {
-    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        WellnessDenseField(
-            value = form.unit,
-            onValueChange = { next -> onChange { it.copy(unit = next) } },
-            label = "Unit Label",
-            placeholder = "e.g. mg, min",
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(LogbookSpace.grid * 3),
+        // Bottom-aligned so the two input boxes share one line: top-aligned, a
+        // label that wraps pushes only its own field down and the pair reads as
+        // two different rows.
+        verticalAlignment = Alignment.Bottom,
+    ) {
+        FormField(label = "Unit label", modifier = Modifier.weight(1f)) {
+            WellnessDenseField(
+                value = form.unit,
+                onValueChange = { next -> onChange { it.copy(unit = next) } },
+                skin = DenseFieldSkin.NAKED,
+                placeholder = "e.g. mg, min",
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .semantics { contentDescription = "Unit Label" },
+            )
+        }
+        FormField(
+            label = "Default value",
+            error = form.defaultValueError,
             modifier = Modifier.weight(1f),
-        )
-        val defaultValueError = form.defaultValueError
-        WellnessDenseField(
-            value = form.defaultValue,
-            onValueChange = { next -> onChange { it.copy(defaultValue = next) } },
-            label = "Default Value",
-            placeholder = "e.g. 30",
-            numeric = true,
-            isError = defaultValueError != null,
-            supportingText = defaultValueError,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal, imeAction = ImeAction.Next),
-            modifier = Modifier.weight(1f),
-        )
+        ) {
+            WellnessDenseField(
+                value = form.defaultValue,
+                onValueChange = { next -> onChange { it.copy(defaultValue = next) } },
+                skin = DenseFieldSkin.NAKED,
+                numeric = true,
+                textAlign = TextAlign.Start,
+                placeholder = "e.g. 30",
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Decimal,
+                    imeAction = ImeAction.Next,
+                ),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .fieldSemantics("Default Value", form.defaultValueError),
+            )
+        }
     }
 
-    LabelledCheckbox(
+    MarkCheckbox(
         checked = form.accumulator,
         label = "Running total (accumulator) — tap + to add throughout the day",
         onCheckedChange = { next -> onChange { it.copy(accumulator = next) } },
@@ -476,21 +449,24 @@ private fun QuantifiableFieldsSection(
     // how the entered text will actually be read under the current polarity.
     val liveError = form.targetError
     val parsedTarget = form.targetParse.target
-    WellnessDenseField(
-        value = form.targetInput,
-        onValueChange = { next -> onChange { it.copy(targetInput = next) } },
-        label = "Target",
-        placeholder = "e.g. 150 or 150-170",
-        isError = liveError != null,
-        supportingText = when {
-            liveError != null -> liveError
-            parsedTarget != null -> "Target: ${formatTarget(parsedTarget, form.unit)}"
-            else -> null
-        },
-        modifier = Modifier
-            .fillMaxWidth()
-            .semantics { contentDescription = "Target value or range" },
-    )
+    FormField(label = "Target", error = liveError) {
+        WellnessDenseField(
+            value = form.targetInput,
+            onValueChange = { next -> onChange { it.copy(targetInput = next) } },
+            skin = DenseFieldSkin.NAKED,
+            placeholder = "e.g. 150 or 150-170",
+            modifier = Modifier
+                .fillMaxWidth()
+                .fieldSemantics("Target value or range", liveError),
+        )
+        if (liveError == null && parsedTarget != null) {
+            Text(
+                text = "Target: ${formatTarget(parsedTarget, form.unit)}",
+                style = LogbookTheme.type.meta,
+                color = LogbookTheme.palette.inkSoft,
+            )
+        }
+    }
 }
 
 @Composable
@@ -498,112 +474,323 @@ private fun ScheduleSection(
     form: TrackerFormState,
     onChange: ((TrackerFormState) -> TrackerFormState) -> Unit,
 ) {
-    val palette = WellnessTheme.palette
-    Text("Scheduled days", style = WellnessTheme.type.label, color = palette.textPrimary)
+    val palette = LogbookTheme.palette
+    Column(verticalArrangement = Arrangement.spacedBy(LogbookSpace.grid * 2)) {
+        SectionRule(label = "Scheduled days")
 
-    LabelledCheckbox(
-        checked = form.paused,
-        label = "Paused",
-        onCheckedChange = { next -> onChange { it.copy(paused = next) } },
-    )
-    Text(
-        text = "Hidden from the daily view; adherence pauses. History is kept.",
-        style = WellnessTheme.type.secondary,
-        color = palette.textSecondary,
-    )
+        MarkCheckbox(
+            checked = form.paused,
+            label = "Paused",
+            onCheckedChange = { next -> onChange { it.copy(paused = next) } },
+        )
+        // Free prose is marginalia, never a hint on a control's baseline — the
+        // lesson the coach round learned on a device.
+        Marginalia("Hidden from the daily view; adherence pauses. History is kept.")
 
-    // Paused dims the picker rather than hiding it: the schedule is still worth
-    // reading, it is simply not in effect.
-    Column(
-        modifier = Modifier.alpha(if (form.paused) PAUSED_ALPHA else 1f),
-        verticalArrangement = Arrangement.spacedBy(WellnessSpace.sm),
-    ) {
-        Row(horizontalArrangement = Arrangement.spacedBy(WellnessSpace.xs)) {
-            for ((day, label) in WEEKDAY_PICKER) {
-                FilterChip(
-                    selected = day in form.days,
-                    enabled = !form.paused,
-                    onClick = { onChange { it.toggleDay(day) } },
-                    label = { Text(label, style = WellnessTheme.type.label) },
-                    shape = WellnessShape.card,
-                    colors = WellnessDefaults.filterChipColors(),
-                    border = WellnessDefaults.filterChipBorder(
-                        enabled = !form.paused,
-                        selected = day in form.days,
-                    ),
-                    modifier = Modifier.semantics { contentDescription = DAY_FULL_NAMES[day] },
+        // Paused dims the picker rather than hiding it: the schedule is still
+        // worth reading, it is simply not in effect. Ink-faint says exactly
+        // that, and it says it in the palette's own vocabulary.
+        WeekdayPicker(
+            selected = form.days,
+            enabled = !form.paused,
+            onToggle = { day -> onChange { it.toggleDay(day) } },
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(LogbookSpace.grid * 2)) {
+            QuietTextButton(label = "Daily", enabled = !form.paused) {
+                onChange { it.copy(days = ALL_DAYS) }
+            }
+            QuietTextButton(label = "Weekdays", enabled = !form.paused) {
+                onChange { it.copy(days = WEEKDAY_PRESET) }
+            }
+        }
+        Text(
+            text = if (form.paused) "Paused" else formatScheduleSummary(form.days.ifEmpty { ALL_DAYS }),
+            style = LogbookTheme.type.meta,
+            color = if (form.paused) palette.inkFaint else palette.inkSoft,
+        )
+    }
+}
+
+/**
+ * Seven mono initials over seven toggleable ink marks.
+ *
+ * The mark language rather than `FilterChip`s: a chip is a Material object with
+ * its own container, and the page has one surface. A selected day is a filled
+ * mark, an unselected one the same hollow outline every unfilled mark in the
+ * system uses — so a schedule reads like the week marks it will eventually
+ * produce.
+ */
+@Composable
+private fun WeekdayPicker(selected: List<Int>, enabled: Boolean, onToggle: (Int) -> Unit) {
+    val palette = LogbookTheme.palette
+    Row(modifier = Modifier.fillMaxWidth()) {
+        for ((day, label) in WEEKDAY_PICKER) {
+            val isSelected = day in selected
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .heightIn(min = LogbookSpace.touchTarget)
+                    .toggleable(
+                        value = isSelected,
+                        enabled = enabled,
+                        role = Role.Checkbox,
+                        onValueChange = { onToggle(day) },
+                    )
+                    .semantics { contentDescription = DAY_FULL_NAMES[day] },
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+            ) {
+                Text(
+                    text = label,
+                    style = LogbookTheme.type.eyebrow,
+                    color = if (enabled) palette.inkSoft else palette.inkFaint,
+                )
+                Box(
+                    modifier = Modifier
+                        .padding(top = LogbookSpace.grid)
+                        .size(DAY_MARK_SIZE)
+                        .then(
+                            when {
+                                isSelected && enabled -> Modifier.background(palette.ink, LogbookShapes.soft)
+                                isSelected -> Modifier.background(palette.inkFaint, LogbookShapes.soft)
+                                else -> Modifier.border(
+                                    LogbookSpace.hairline,
+                                    palette.inkFaint,
+                                    LogbookShapes.soft,
+                                )
+                            },
+                        ),
                 )
             }
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(WellnessSpace.sm)) {
-            TextButton(
-                onClick = { onChange { it.copy(days = ALL_DAYS) } },
-                enabled = !form.paused,
-                colors = WellnessDefaults.accentTextButtonColors(),
-            ) {
-                Text("Daily")
-            }
-            TextButton(
-                onClick = { onChange { it.copy(days = listOf(1, 2, 3, 4, 5)) } },
-                enabled = !form.paused,
-                colors = WellnessDefaults.accentTextButtonColors(),
-            ) { Text("Weekdays") }
-        }
     }
-    Text(
-        text = if (form.paused) "Paused" else formatScheduleSummary(form.days.ifEmpty { ALL_DAYS }),
-        style = WellnessTheme.type.secondary,
-        color = if (form.paused) palette.textFaint else palette.textSecondary,
-    )
 }
 
+/**
+ * A dropdown as a line of the form rather than as a text field.
+ *
+ * The naked skin draws no box and no chevron — being bare is its whole
+ * definition — so a select has to say "there is a menu behind this" itself: the
+ * value in ink, a chevron in ink-faint, and the hairline the rest of the form
+ * already stands on.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun PolarityField(polarity: String, onSelect: (String) -> Unit) {
+private fun SelectField(
+    label: String,
+    value: String,
+    options: List<String>,
+    onSelect: (Int) -> Unit,
+    error: String? = null,
+) {
     var expanded by remember { mutableStateOf(false) }
-    ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }) {
-        WellnessDenseField(
-            value = POLARITY_OPTIONS.first { it.first == polarity }.second,
-            onValueChange = {},
-            readOnly = true,
-            label = "Polarity",
-            dropdownExpanded = expanded,
-            modifier = Modifier
-                .fillMaxWidth()
-                .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable)
-                .semantics { contentDescription = "Polarity" },
-        )
-        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            for ((value, label) in POLARITY_OPTIONS) {
-                DropdownMenuItem(
-                    text = { Text(label) },
-                    onClick = {
-                        onSelect(value)
-                        expanded = false
-                    },
+    val palette = LogbookTheme.palette
+    FormField(label = label, error = error) {
+        ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable)
+                    .heightIn(min = LogbookSpace.touchTarget)
+                    .hairlineBelow(palette.rule)
+                    .fieldSemantics(label, error),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = value,
+                    style = LogbookTheme.type.body,
+                    color = palette.ink,
+                    modifier = Modifier.weight(1f),
                 )
+                Icon(
+                    imageVector = Icons.Outlined.ExpandMore,
+                    contentDescription = null,
+                    tint = palette.inkFaint,
+                    modifier = Modifier.size(GLYPH_SIZE),
+                )
+            }
+            ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                options.forEachIndexed { index, option ->
+                    DropdownMenuItem(
+                        text = { Text(option, style = LogbookTheme.type.body, color = palette.ink) },
+                        onClick = {
+                            onSelect(index)
+                            expanded = false
+                        },
+                    )
+                }
             }
         }
     }
 }
 
+/** A field under its mono-caps name, with its error line beneath. */
 @Composable
-private fun LabelledCheckbox(checked: Boolean, label: String, onCheckedChange: (Boolean) -> Unit) {
+private inline fun FormField(
+    label: String,
+    modifier: Modifier = Modifier,
+    error: String? = null,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    Column(modifier = modifier) {
+        Text(
+            text = label.uppercase(),
+            style = LogbookTheme.type.eyebrow,
+            color = LogbookTheme.palette.inkSoft,
+        )
+        content()
+        error?.let { FieldError(it) }
+    }
+}
+
+/**
+ * A form error, in ink.
+ *
+ * There is no error colour in Logbook and this is not a place to invent one: a
+ * `!` beside the sentence carries the same urgency. The spoken half lives on
+ * the *field's* node via [fieldSemantics], not here — this row is where the
+ * error is drawn, but the field is where a reader is standing when they need
+ * to hear it.
+ */
+@Composable
+private fun FieldError(message: String) {
+    val palette = LogbookTheme.palette
+    Row(
+        modifier = Modifier.padding(top = LogbookSpace.grid),
+        horizontalArrangement = Arrangement.spacedBy(LogbookSpace.grid),
+    ) {
+        Text(text = "!", style = LogbookTheme.type.meta, color = palette.ink)
+        Text(text = message, style = LogbookTheme.type.body, color = palette.ink)
+    }
+}
+
+/**
+ * An input's spoken identity, with its live error riding the same node.
+ *
+ * The drawn error line sits below the field, but a reader focusing the field
+ * hears the field's node alone — an error announced only from a sibling row is
+ * an error the form never actually tells them about.
+ */
+private fun Modifier.fieldSemantics(description: String, errorMessage: String? = null): Modifier =
+    semantics {
+        contentDescription = description
+        errorMessage?.let { error(it) }
+    }
+
+/** A toggle in the mark language: the same ink square the log uses everywhere else. */
+@Composable
+private fun MarkCheckbox(checked: Boolean, label: String, onCheckedChange: (Boolean) -> Unit) {
+    val palette = LogbookTheme.palette
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .toggleable(value = checked, onValueChange = onCheckedChange),
+            .toggleable(value = checked, role = Role.Checkbox, onValueChange = onCheckedChange)
+            .heightIn(min = LogbookSpace.touchTarget),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Checkbox(
-            checked = checked,
-            onCheckedChange = null,
-            colors = WellnessDefaults.checkboxColors(),
+        Box(
+            modifier = Modifier.size(LogbookSpace.touchTarget),
+            contentAlignment = Alignment.Center,
+        ) { InkMark(checked) }
+        Text(
+            text = label,
+            style = LogbookTheme.type.body,
+            color = palette.ink,
+            modifier = Modifier.weight(1f),
         )
-        Spacer(Modifier.size(WellnessSpace.sm))
-        Text(label, style = WellnessTheme.type.secondary, color = WellnessTheme.palette.textPrimary)
     }
 }
 
-private const val SCRIM_ALPHA = 0.6f
-private const val PAUSED_ALPHA = 0.45f
+/** The form's secondary actions: ink words, no container. */
+@Composable
+private fun QuietTextButton(label: String, enabled: Boolean = true, onClick: () -> Unit) {
+    val palette = LogbookTheme.palette
+    TextButton(
+        onClick = onClick,
+        enabled = enabled,
+        colors = ButtonDefaults.textButtonColors(
+            contentColor = palette.ink,
+            disabledContentColor = palette.inkFaint,
+        ),
+    ) { Text(label.uppercase(), style = LogbookTheme.type.eyebrow) }
+}
+
+/** A section label over the 1.5dp ink rule that groups what follows it. */
+@Composable
+private fun SectionRule(label: String, modifier: Modifier = Modifier) {
+    val palette = LogbookTheme.palette
+    Text(
+        text = label.uppercase(),
+        style = LogbookTheme.type.section,
+        color = palette.ink,
+        modifier = modifier
+            .fillMaxWidth()
+            .drawBehind {
+                val stroke = LogbookSpace.sectionUnderline.toPx()
+                drawLine(
+                    color = palette.ink,
+                    start = Offset(0f, size.height - stroke / 2f),
+                    end = Offset(size.width, size.height - stroke / 2f),
+                    strokeWidth = stroke,
+                )
+            }
+            .padding(bottom = SECTION_UNDERLINE_GAP),
+    )
+}
+
+/** Guidance the app is giving the user: italic prose behind a rail, never a hint. */
+@Composable
+private fun Marginalia(text: String) {
+    val palette = LogbookTheme.palette
+    Text(
+        text = text,
+        style = LogbookTheme.type.body.copy(fontStyle = FontStyle.Italic),
+        color = palette.inkSoft,
+        modifier = Modifier
+            .fillMaxWidth()
+            .drawBehind {
+                val stroke = MARGINALIA_RAIL.toPx()
+                drawLine(
+                    color = palette.ruleStrong,
+                    start = Offset(stroke / 2f, 0f),
+                    end = Offset(stroke / 2f, size.height),
+                    strokeWidth = stroke,
+                )
+            }
+            .padding(start = MARGINALIA_INSET),
+    )
+}
+
+@Composable
+private fun EmptyText(text: String) {
+    Text(
+        text = text,
+        style = LogbookTheme.type.body.copy(fontStyle = FontStyle.Italic),
+        color = LogbookTheme.palette.inkFaint,
+        textAlign = TextAlign.Center,
+    )
+}
+
+/** The system's one divider: a 1dp line along the bottom edge, drawn not laid out. */
+private fun Modifier.hairlineBelow(color: Color): Modifier = this.drawBehind {
+    val stroke = LogbookSpace.hairline.toPx()
+    drawLine(
+        color = color,
+        start = Offset(0f, size.height - stroke / 2f),
+        end = Offset(size.width, size.height - stroke / 2f),
+        strokeWidth = stroke,
+    )
+}
+
+/** Monday through Friday, in the store's 0=Sun numbering. */
+private val WEEKDAY_PRESET = listOf(1, 2, 3, 4, 5)
+
+private val SCREEN_PADDING = 20.dp
+private val SCREEN_BOTTOM = 40.dp
+private val SECTION_GAP = 26.dp
+private val SECTION_UNDERLINE_GAP = 6.dp
+private val GLYPH_SIZE = 18.dp
+private val DAY_MARK_SIZE = 18.dp
+private val MARGINALIA_RAIL = 2.dp
+private val MARGINALIA_INSET = 10.dp
+private val EMPTY_PADDING = 48.dp

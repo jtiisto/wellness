@@ -27,7 +27,7 @@ class ShellSystemTest {
         // for any wrong assignment. Migrating a tab to Logbook means editing
         // BOTH the destination table and this map, deliberately.
         val expected = mapOf(
-            "journal" to ShellSystem.GRAPHITE,
+            "journal" to ShellSystem.LOGBOOK, // flipped with its rendering phase
             "coach" to ShellSystem.LOGBOOK, // flipped with its rendering phase
             "trends" to ShellSystem.GRAPHITE,
             "analysis" to ShellSystem.GRAPHITE,
@@ -65,9 +65,21 @@ class ShellSystemTest {
         // the flip was. Coach's composables now read `LogbookTheme` directly —
         // under `WellnessTheme` they would find the Logbook locals unprovided
         // and fall back to defaults, which is tokens meaning something else
-        // rather than a degraded version of them. Journal, Trends, Analysis and
-        // Tools are the ones still waiting for their round.
+        // rather than a degraded version of them. Trends, Analysis and Tools are
+        // the ones still waiting for their round.
         assertEquals(ShellSystem.LOGBOOK, shellSystemFor("coach"))
+    }
+
+    @Test
+    @DisplayName("Journal is Logbook, and the start destination therefore opens on paper")
+    fun journalIsLogbook() {
+        // The same deliberate second pin coach got, and it carries more weight
+        // here: journal is the *start* tab, so this assignment is also what the
+        // launch window's `colors.xml` has to agree with. Flipping one without
+        // the other is a frame of the wrong paper on every cold start — visible
+        // on a device, invisible in a diff.
+        assertEquals(ShellSystem.LOGBOOK, shellSystemFor("journal"))
+        assertEquals(ShellSystem.LOGBOOK, startTab.system)
     }
 
     @Test

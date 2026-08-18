@@ -72,9 +72,11 @@ enum class DenseFieldSkin {
      * stay Graphite's.
      *
      * Being bare is the whole definition, so `label`, `supportingText`,
-     * `isError`, `italic`, `hint` and `dropdownExpanded` have nothing to draw and
-     * are ignored — a Logbook callsite sets its own mono-caps label above the
-     * field, and a ghost is a colour rather than a dialect.
+     * `isError`, `hint` and `dropdownExpanded` have nothing to draw and are
+     * ignored — a Logbook callsite sets its own mono-caps label above the field
+     * and writes its own error line. `ghostValue` is the one styling flag it
+     * does honour, and it honours it in ink rather than in italics: a ghost
+     * recedes by colour here.
      */
     NAKED,
 }
@@ -135,8 +137,12 @@ enum class DenseFieldHint {
  *   it — a floating label needs the 56dp this component exists to avoid.
  * @param numeric centres the text and switches to the tabular ramp, for cells
  *   whose digits have to line up down a column.
- * @param italic renders the *value* italic — a journal default that is not yet
- *   the user's own. Distinct from [DenseFieldHint.GHOST], which is placeholder text.
+ * @param ghostValue the value shown is a default rather than something the user
+ *   logged — "not yet yours". Each system says it in its own voice: Graphite's
+ *   skins render it italic, [DenseFieldSkin.NAKED] renders it in `inkFaint`,
+ *   because saying it twice on paper would make a default a different *kind* of
+ *   value rather than a fainter one. Distinct from [DenseFieldHint.GHOST], which
+ *   styles placeholder text — this one styles a value that is really there.
  * @param dropdownExpanded non-null draws a chevron and rotates it; the menu
  *   itself belongs to the caller's `ExposedDropdownMenuBox`.
  */
@@ -154,7 +160,7 @@ fun WellnessDenseField(
     supportingText: String? = null,
     isError: Boolean = false,
     numeric: Boolean = false,
-    italic: Boolean = false,
+    ghostValue: Boolean = false,
     multiLine: Boolean = false,
     dropdownExpanded: Boolean? = null,
     keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
@@ -176,6 +182,7 @@ fun WellnessDenseField(
             readOnly = readOnly,
             placeholder = placeholder,
             numeric = numeric,
+            ghostValue = ghostValue,
             multiLine = multiLine,
             keyboardOptions = keyboardOptions,
             keyboardActions = keyboardActions,
@@ -200,7 +207,7 @@ fun WellnessDenseField(
             isError = isError,
             errorDescription = null,
             numeric = numeric,
-            italic = italic,
+            ghostValue = ghostValue,
             multiLine = multiLine,
             dropdownExpanded = dropdownExpanded,
             keyboardOptions = keyboardOptions,
@@ -232,7 +239,7 @@ fun WellnessDenseField(
             isError = isError,
             errorDescription = supportingText,
             numeric = numeric,
-            italic = italic,
+            ghostValue = ghostValue,
             multiLine = multiLine,
             dropdownExpanded = dropdownExpanded,
             keyboardOptions = keyboardOptions,
@@ -263,7 +270,7 @@ private fun DenseInput(
     isError: Boolean,
     errorDescription: String?,
     numeric: Boolean,
-    italic: Boolean,
+    ghostValue: Boolean,
     multiLine: Boolean,
     dropdownExpanded: Boolean?,
     keyboardOptions: KeyboardOptions,
@@ -308,7 +315,8 @@ private fun DenseInput(
     }
     val textStyle = baseStyle.copy(
         color = if (enabled) palette.textPrimary else palette.textFaint,
-        fontStyle = if (italic) FontStyle.Italic else FontStyle.Normal,
+        // Graphite's voice for "not yet yours": the value leans rather than fades.
+        fontStyle = if (ghostValue) FontStyle.Italic else FontStyle.Normal,
     )
     val hintStyle = baseStyle.copy(
         fontStyle = if (hint == DenseFieldHint.PLAIN) FontStyle.Normal else FontStyle.Italic,
@@ -418,6 +426,7 @@ private fun NakedInput(
     readOnly: Boolean,
     placeholder: String?,
     numeric: Boolean,
+    ghostValue: Boolean,
     multiLine: Boolean,
     keyboardOptions: KeyboardOptions,
     keyboardActions: KeyboardActions,
@@ -436,11 +445,11 @@ private fun NakedInput(
     val baseStyle = if (numeric) type.data.copy(textAlign = textAlign ?: TextAlign.End) else type.body
     // Ink whether or not it can be edited: a value logged on a past day is not
     // a fainter value, and "indistinguishable from the read-only text" is the
-    // whole contract of the skin. Absence is what recedes, not read-only-ness.
-    val textStyle = baseStyle.copy(color = palette.ink)
-    // A ghost recedes by colour alone. Italic is Graphite's convention and
-    // saying it twice here would make last session's number a different *kind*
-    // of thing rather than a fainter one.
+    // whole contract of the skin. Read-only-ness never recedes — only a value
+    // that is not the user's own does, and it recedes by colour alone. Italic is
+    // Graphite's convention for that, and saying it twice here would make a
+    // default a different *kind* of value rather than a fainter one.
+    val textStyle = baseStyle.copy(color = if (ghostValue) palette.inkFaint else palette.ink)
     val hintStyle = baseStyle.copy(color = palette.inkFaint)
 
     val selectionColors = remember(palette.ink) {
