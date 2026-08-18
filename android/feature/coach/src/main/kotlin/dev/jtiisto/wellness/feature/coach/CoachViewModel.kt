@@ -132,23 +132,36 @@ class CoachViewModel(
     )
 
     init {
-        // The hook machine follows the session on screen. Distinct-until-changed
-        // is what makes the fetch one-shot: recomposition, a log write, or a plan
-        // pull that leaves the session alone must not re-request the status.
+        // The hook machine follows the session on screen. ONE collector feeds it
+        // both the session and the data flag, in that order, because they used
+        // to arrive on two independent collectors — and on a cold start the logs
+        // half could land first, after which onSession's reset wiped dataExists
+        // while the logs side, deduplicated on an unchanged (date, exists) pair,
+        // never spoke again. The visible symptom was a fired Start that kept its
+        // Undo after sets were logged: the fired→locked promotion had lost its
+        // reactive half to the race (device-found 2026-08-17).
+        //
+        // The session pair is deduplicated by hand rather than by the flow —
+        // that is what keeps the status fetch one-shot: recomposition, a log
+        // write, or a plan pull that leaves the session alone must not
+        // re-request the status. The data flag rides every emission; the holder
+        // absorbs repeats.
         viewModelScope.launch {
-            combine(selectedDate, plans, refresh) { date, plansByDate, _ ->
-                plansByDate?.get(date)?.sessionId to (date == today().toString())
-            }.distinctUntilChanged().collect { (sessionId, editable) ->
-                hooks.onSession(sessionId, editable)
+            var lastSession: Pair<Long?, Boolean>? = null
+            combine(selectedDate, plans, refresh, logs) { date, plansByDate, _, logsByDate ->
+                Triple(
+                    plansByDate?.get(date)?.sessionId,
+                    date == today().toString(),
+                    hasAnyProgress(logsByDate?.get(date)),
+                )
+            }.distinctUntilChanged().collect { (sessionId, editable, dataExists) ->
+                val session = sessionId to editable
+                if (session != lastSession) {
+                    lastSession = session
+                    hooks.onSession(sessionId, editable)
+                }
+                hooks.onDataExists(dataExists)
             }
-        }
-        viewModelScope.launch {
-            // Keyed by date as well as by the flag: a session change clears the
-            // holder's copy, and two consecutive days that both have data would
-            // otherwise be deduplicated away, leaving it stuck at false.
-            combine(selectedDate, logs) { date, logsByDate -> date to hasAnyProgress(logsByDate?.get(date)) }
-                .distinctUntilChanged()
-                .collect { (_, exists) -> hooks.onDataExists(exists) }
         }
     }
 

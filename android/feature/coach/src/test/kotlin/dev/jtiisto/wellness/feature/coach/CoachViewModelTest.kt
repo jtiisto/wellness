@@ -8,6 +8,8 @@ import dev.jtiisto.wellness.core.data.coach.CoachSyncStore
 import dev.jtiisto.wellness.core.data.coach.CompletionToggle
 import dev.jtiisto.wellness.core.data.coach.EXTRA_SESSION_KEY
 import dev.jtiisto.wellness.core.data.coach.HookAction
+import dev.jtiisto.wellness.core.data.coach.HookButtonState
+import dev.jtiisto.wellness.core.data.coach.HookResultDto
 import dev.jtiisto.wellness.core.data.coach.PlanDto
 import dev.jtiisto.wellness.core.data.coach.WorkoutStatusDto
 import dev.jtiisto.wellness.core.data.hr.HrCaptureStore
@@ -31,6 +33,7 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
@@ -586,6 +589,50 @@ class CoachViewModelTest {
         runCurrent()
 
         coVerify(exactly = 1) { api.workoutStatus(1) }
+    }
+
+    @Test
+    @DisplayName("a fired start locks even when the log lands before the plan at startup")
+    fun lockSurvivesLogsBeforePlans() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        coEvery { api.workoutStatus(any()) } returns WorkoutStatusDto(
+            start = HookResultDto(firedAt = "t1", exitCode = 0),
+            actionsAvailable = dev.jtiisto.wellness.core.data.coach.HookAvailabilityDto(
+                start = true,
+                end = true,
+            ),
+        )
+        // The device-found race (2026-08-17): the day's log — real data in it —
+        // is published before the plan, the shape a cold start takes when Room
+        // answers the smaller query first. Two independent collectors let
+        // onSession's reset erase a dataExists the logs side had already
+        // delivered and would never repeat; the fired Start then kept its Undo
+        // with sets logged under it. One ordered collector makes this
+        // impossible, and this test pins the exact sequence that broke.
+        logsFlow.tryEmit(
+            mapOf(
+                todayString to dayLog(
+                    "ex_1",
+                    buildJsonObject {
+                        put(
+                            "sets",
+                            buildJsonArray { add(buildJsonObject { put("set_num", 1); put("weight", 60) }) },
+                        )
+                    },
+                ),
+            ),
+        )
+        val viewModel = viewModel()
+        backgroundScope.launch { viewModel.uiState.collect { } }
+        runCurrent()
+
+        plansFlow.tryEmit(todaysPlan())
+        runCurrent()
+
+        val day = viewModel.uiState.value.day as WorkoutDayState.Planned
+        val start = day.controls?.start
+        assertEquals(HookButtonState.LOCKED, start?.state, "fired + data must be locked")
+        assertFalse(start?.canUndo == true, "a locked start offers no undo")
     }
 
     @Test
