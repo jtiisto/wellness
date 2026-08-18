@@ -48,6 +48,13 @@ data class JournalUiState(
     val groups: List<CategoryGroupState> = emptyList(),
     val emptyState: JournalEmptyState? = null,
     val syncStatus: SyncStatus = SyncStatus.GRAY,
+    /**
+     * `isDayEditable` for the selected day, hoisted to the screen.
+     *
+     * The rows already carry it, but the header has to say *why* they are all
+     * disabled and an empty day has no rows to ask.
+     */
+    val dayEditable: Boolean = true,
 )
 
 /** The two "nothing to show" cases, which need different words. */
@@ -97,6 +104,20 @@ data class TrackerRowState(
     val lastUpdatedCaption: String?,
     val dots: List<DayDot>,
     val avoidPolarity: Boolean,
+    /**
+     * Whether an entry row exists for this tracker on the selected day.
+     *
+     * Presence, never `completed` — the journal's load-bearing distinction. It
+     * feeds two presentation rules that both need "has anything been written
+     * here", the header tally and the week marks' today-open suspension.
+     */
+    val hasEntry: Boolean,
+    /**
+     * What the tracker asks of you *on the selected day*, which is what picks
+     * its mark vocabulary. Derived here because it needs the day's `dayStatus`,
+     * which no composable has.
+     */
+    val trackerClass: TrackerClass,
 )
 
 /** Evaluation sliders start mid-scale when nothing has been logged. */
@@ -175,6 +196,7 @@ fun buildJournalUiState(
             else -> null
         },
         syncStatus = syncStatus,
+        dayEditable = editable,
     )
 }
 
@@ -194,6 +216,7 @@ private fun buildTrackerRowState(
     val quantifiable = type == TrackerType.QUANTIFIABLE
     val displayed = displayedValue(tracker, entry, type)
     val displayedNumber = coerceNumericValue(displayed)
+    val status = dayStatus(tracker, date, entry)
 
     return TrackerRowState(
         id = tracker.id,
@@ -208,7 +231,7 @@ private fun buildTrackerRowState(
         unit = tracker.unitOrNull(),
         isAccumulator = quantifiable && tracker.isAccumulator(),
         targetProgress = if (quantifiable) {
-            formatTargetProgress(dayStatus(tracker, date, entry), tracker.unitOrNull())
+            formatTargetProgress(status, tracker.unitOrNull())
         } else {
             null
         },
@@ -222,6 +245,8 @@ private fun buildTrackerRowState(
         // their logs are pruned, and absence there is unknown, not missed.
         dots = recentDayStates(tracker, date, entriesByDate, DOT_ROW_DAYS, windowStart),
         avoidPolarity = tracker.polarity == "negative",
+        hasEntry = status.hasEntry,
+        trackerClass = trackerClass(tracker, status),
     )
 }
 

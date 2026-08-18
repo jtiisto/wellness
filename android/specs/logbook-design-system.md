@@ -332,11 +332,44 @@ is never a filled "success" dot. A mono **shape legend** renders once under
 the header (as mocked); it is one quiet line and it is what makes the grammar
 self-describing.
 
+**Three rules the table above cannot express** (found while deriving it, pinned
+in `JournalNotationTest`; the mockup shows all three):
+
+1. **Row class, not tracker type, picks the vocabulary.** A row is a habit, an
+   avoidance or an observation *on the selected day* — the same three-way split
+   `categoryRollup` makes, off the same `isActionable` predicate — because a
+   tracker changes class over time (a goal added today leaves last week's days
+   unjudged) and a row drawn in two vocabularies reads as noise.
+2. **`quiet` is ambiguous and the row class resolves it**: outline diamond on an
+   observation row, ink-faint open dot on a habit or avoidance row. Quiet appears
+   legitimately mid-row on habit rows — a day before the tracker's target came
+   into effect was non-actionable *that day* — and must not turn a run of dots
+   into a run of diamonds.
+3. **The today-open honesty rule.** When the run ends on the real today and the
+   tracker has **no entry row** for it, a habit or avoidance row draws the open
+   dot in place of the judged mark. The state model must answer for every day, so
+   it says missed for an unlogged habit and held for an unlogged avoidance — but
+   the day is not over and neither verdict is earned (the same principle as the
+   app's irreversible-today streak rule). Any entry restores the judged mark.
+   Observation rows are exempt: the outline diamond already says exactly this.
+   Off-schedule and noted days are exempt too — only a verdict can be suspended.
+   The rule **does not propagate to the rollup cluster**, which counts the
+   category as `categoryRollup` reported it: the cluster speaks for a category,
+   not for the one tracker whose day is still open.
+
 ### Screen structure
 - Header: eyebrow (`TODAY · N OF M LOGGED` — derived, mono caps) · display-caps
-  `JOURNAL` · the 7-day strip.
+  `JOURNAL` · the 7-day strip. **N counts entry *presence*** (a row exists for
+  the tracker that day — journal-ui.md's load-bearing semantic — never
+  `completed`); **M is what is visible** that day, so an off-schedule tracker is
+  not an omission. A browsed day swaps the date in for `TODAY`; a browsed day the
+  dirty-tracker rule has locked appends `· LOCKED` (the rows are all disabled and
+  the reason is nowhere near them); a day with nothing visible drops the tally
+  rather than reading `0 OF 0 LOGGED`.
 - **Date strip**: 7 mono columns (day initial in eyebrow style over day number
-  in data mono), selected day = 2dp ink underline + ink numeral; locked days
+  in data mono — the initial is the *locale's* narrow weekday, not a slice of
+  the hard-coded English `dayName`), selected day = 2dp ink underline + ink
+  numeral; locked days
   (dirty-tracker rule, unchanged) render ink-faint with a small ink-faint lock
   glyph; today's column is tappable always.
 - **Categories become sections**: display-caps head + 1.5dp ink underline; the
@@ -360,7 +393,13 @@ self-describing.
   eyebrow label (`off`-style) instead of any tint.
 - Second line, indented past the mark column: the target bar (3dp hairline
   track in `rule`, ink fill, only when `fillPct != null` — at-most targets get
-  no bar, exactly as today) and the 7-day week marks right-aligned.
+  no bar, exactly as today) and the 7-day week marks right-aligned. The run is
+  **one spoken node**: `describeRowMarks` names each day's drawn mark aloud
+  (`Last 7 days: Mon done, Tue missed, …`), with each shape's word pinned by
+  `a11yLabel` in the cluster's vocabulary (held/broken/noted). It speaks the
+  *drawn* marks, not the states, so the today-open suspension survives aloud by
+  construction — an open day is never read as "missed" to the one audience that
+  cannot see the difference.
 - Third line when present: the last-updated caption in faint mono.
 - Widgets keep their contracts: quantifiable = NAKED numeric field
   (form-aligned Start), note = quiet multiline with the mono-caps label voice,

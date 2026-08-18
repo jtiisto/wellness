@@ -158,7 +158,16 @@ fun isDayEditable(dateStr: DateString, today: DateString, dirtyTrackerCount: Int
 /** The category a tracker with none falls into. */
 const val UNCATEGORIZED = "Uncategorized"
 
-private fun isActionable(tracker: TrackerDto?, status: DayStatus): Boolean {
+/**
+ * Whether a tracker has a goal to be on track against on the day [status]
+ * describes: a non-neutral polarity, or a target in effect. Everything else is
+ * an observation — logged, never judged.
+ *
+ * Public because the presentation layer has to split a row into the same three
+ * classes [categoryRollup] does, and two predicates for "is this judged today"
+ * would be one predicate too many.
+ */
+fun isActionable(tracker: TrackerDto?, status: DayStatus): Boolean {
     val polarity = tracker?.polarity
     return (polarity != null && polarity.isNotEmpty() && polarity != "neutral") || status.hasTarget
 }

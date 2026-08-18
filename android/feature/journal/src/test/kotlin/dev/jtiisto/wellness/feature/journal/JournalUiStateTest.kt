@@ -102,6 +102,19 @@ class JournalUiStateTest {
     }
 
     @Test
+    @DisplayName("the day's own editability is hoisted to the screen, for the header to explain")
+    fun dayEditableIsHoisted() {
+        // The rows carry it already; a day with no rows at all has nothing to
+        // ask, and that is exactly the day the header has to speak for.
+        assertTrue(build(listOf(simple("t")), dirtyTrackerCount = 1).dayEditable, "today always")
+        assertFalse(
+            build(listOf(simple("t")), dirtyTrackerCount = 1, selectedDate = yesterday).dayEditable,
+        )
+        assertTrue(build(emptyList(), selectedDate = yesterday).dayEditable)
+        assertFalse(build(emptyList(), dirtyTrackerCount = 1, selectedDate = yesterday).dayEditable)
+    }
+
+    @Test
     @DisplayName("a selected date outside the strip is clamped to today")
     fun staleSelectionIsClamped() {
         val state = build(listOf(simple("t")), selectedDate = "2020-01-01")
@@ -355,6 +368,70 @@ class JournalUiStateTest {
         val state = build(listOf(simple("v", polarity = "negative")))
         assertTrue(row(state, "v").avoidPolarity)
         assertFalse(row(build(listOf(simple("p", polarity = "positive"))), "p").avoidPolarity)
+    }
+
+    @Test
+    @DisplayName("hasEntry is the row existing, not the checkbox being true")
+    fun entryPresenceIsRowExistence() {
+        val entries = mapOf(
+            todayStr to mapOf(
+                "done" to EntryDto(value = JsonPrimitive(1), completed = true),
+                // A row that exists and says "not done" is still something
+                // written down today — the distinction the whole journal keys
+                // off, and what the header tally counts.
+                "open" to EntryDto(value = null, completed = false),
+            ),
+        )
+        val state = build(listOf(simple("done"), simple("open"), simple("bare")), entriesByDate = entries)
+
+        assertTrue(row(state, "done").hasEntry)
+        assertTrue(row(state, "open").hasEntry)
+        assertFalse(row(state, "bare").hasEntry)
+    }
+
+    @Test
+    @DisplayName("each row is classed for the selected day, the same way the rollup classes it")
+    fun rowsCarryTheirClass() {
+        val state = build(
+            listOf(
+                simple("noticed"),
+                simple("habit", polarity = "positive"),
+                simple("avoided", polarity = "negative"),
+                quantifiable("targeted", target = TargetDto(min = 8.0)),
+            ),
+        )
+
+        assertEquals(TrackerClass.OBSERVATION, row(state, "noticed").trackerClass)
+        assertEquals(TrackerClass.HABIT, row(state, "habit").trackerClass)
+        assertEquals(TrackerClass.AVOIDANCE, row(state, "avoided").trackerClass)
+        assertEquals(TrackerClass.HABIT, row(state, "targeted").trackerClass)
+    }
+
+    @Test
+    @DisplayName("the class follows the day: a goal added today leaves yesterday an observation")
+    fun classIsResolvedPerDay() {
+        // The shape the config form writes when a target is added to a tracker
+        // that had none: a cleared genesis segment, then the goal. It has to be
+        // spelled out — `selectSegmentForDate` falls back to the *earliest*
+        // segment for a pre-history date, so a lone segment dated today would
+        // reach backwards and target the whole week.
+        val tracker = TrackerDto(
+            id = "q",
+            name = "q",
+            category = "Habits",
+            type = "quantifiable",
+            targetHistory = listOf(
+                TargetSegmentDto(SCHEDULE_GENESIS_DATE, target = null),
+                TargetSegmentDto(todayStr, TargetDto(min = 8.0)),
+            ),
+        )
+
+        assertEquals(TrackerClass.HABIT, row(build(listOf(tracker)), "q").trackerClass)
+        assertEquals(
+            TrackerClass.OBSERVATION,
+            row(build(listOf(tracker), selectedDate = yesterday), "q").trackerClass,
+            "before the goal existed there was nothing to be on track against",
+        )
     }
 
     @Test
