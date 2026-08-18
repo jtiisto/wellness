@@ -286,7 +286,12 @@ private fun ExtraSessionSection(state: ExtraSessionState, actions: CoachActions)
             } else {
                 Section {
                     ExtraSessionHead()
-                    Row(horizontalArrangement = Arrangement.spacedBy(LogbookSpace.grid * 2)) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(LogbookSpace.grid * 2),
+                        // Same rule as CardioFields: the boxes share a line,
+                        // labels float above at their own heights.
+                        verticalAlignment = Alignment.Bottom,
+                    ) {
                         LabelledField(label = "Duration (min)", modifier = Modifier.weight(1f)) {
                             NumericField(
                                 value = current.durationMin,
@@ -1275,7 +1280,13 @@ private fun CardioFields(
     enabled: Boolean,
     onCommit: (String, String) -> Unit,
 ) {
-    Row(horizontalArrangement = Arrangement.spacedBy(LogbookSpace.grid * 3)) {
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(LogbookSpace.grid * 3),
+        // Bottom-aligned so the three input boxes share one line: top-aligned,
+        // a label that wraps ("Duration (min)" at a third of the screen) pushes
+        // only its own field down and the row reads as three different rows.
+        verticalAlignment = Alignment.Bottom,
+    ) {
         LabelledField(label = "Duration (min)", modifier = Modifier.weight(1f)) {
             NumericField(
                 value = durationText,
