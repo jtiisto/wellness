@@ -58,7 +58,12 @@ marks) to the tested state layer and restructures composables above it.
 | Journal, Trends, Analysis, Tools | Graphite Signal — [design-system.md](design-system.md) stays their authority |
 
 Each nav destination is wrapped in its own theme; the Scaffold container color
-follows the active destination's canvas. Launch-window `colors.xml` keeps the
+follows the active destination's canvas. Phases land incrementally *inside*
+the round: the shell moved first while Coach stays wrapped in Graphite until
+its rendering phases land — flipping it earlier would render Graphite-styled
+composables against Logbook locals, i.e. tokens that mean something else. The
+shell test pins Coach's current system so the flip is a deliberate edit, and
+the table above describes the end-of-round state. Launch-window `colors.xml` keeps the
 Graphite canvas values until the journal round (start destination is journal;
 flipping early reintroduces the launch flash). Graphite tokens retire
 module-by-module; the Graphite spec shrinks as modules leave it.

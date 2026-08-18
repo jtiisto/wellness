@@ -50,14 +50,17 @@ fun LogbookTheme(
     CompositionLocalProvider(
         LocalLogbookPalette provides palette,
         LocalLogbookTypography provides LogbookType,
-        LocalIndication provides indication,
     ) {
         MaterialTheme(
             colorScheme = colorScheme,
             typography = LogbookM3Typography,
             shapes = LogbookM3Shapes,
-            content = content,
-        )
+        ) {
+            // Provided INSIDE MaterialTheme's content: M3 re-provides
+            // LocalIndication with its own ripple, so an outer provider is
+            // silently shadowed and every press ripples anyway.
+            CompositionLocalProvider(LocalIndication provides indication, content = content)
+        }
     }
 }
 

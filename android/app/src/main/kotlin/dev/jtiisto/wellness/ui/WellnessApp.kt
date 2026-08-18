@@ -4,11 +4,11 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Analytics
-import androidx.compose.material.icons.filled.Checklist
-import androidx.compose.material.icons.filled.FitnessCenter
-import androidx.compose.material.icons.filled.Insights
-import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.outlined.Analytics
+import androidx.compose.material.icons.outlined.Checklist
+import androidx.compose.material.icons.outlined.FitnessCenter
+import androidx.compose.material.icons.outlined.Insights
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -20,6 +20,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -46,10 +47,15 @@ import dev.jtiisto.wellness.core.data.network.ServerBootstrap
 import dev.jtiisto.wellness.core.data.network.ServerResolution
 import dev.jtiisto.wellness.core.data.sync.SyncErrorEvents
 import dev.jtiisto.wellness.core.ui.motion.WellnessMotion
+import dev.jtiisto.wellness.core.ui.theme.DarkPalette
+import dev.jtiisto.wellness.core.ui.theme.LightPalette
 import dev.jtiisto.wellness.core.ui.theme.LocalModuleAccent
+import dev.jtiisto.wellness.core.ui.theme.LogbookDark
+import dev.jtiisto.wellness.core.ui.theme.LogbookLight
+import dev.jtiisto.wellness.core.ui.theme.LogbookSpace
+import dev.jtiisto.wellness.core.ui.theme.LogbookTheme
 import dev.jtiisto.wellness.core.ui.theme.ModuleAccent
 import dev.jtiisto.wellness.core.ui.theme.WellnessTheme
-import dev.jtiisto.wellness.core.ui.theme.colors
 import dev.jtiisto.wellness.feature.analysis.ui.AnalysisScreen
 import dev.jtiisto.wellness.feature.coach.CoachScreen
 import dev.jtiisto.wellness.feature.journal.JournalTab
@@ -67,24 +73,96 @@ private const val TRENDS_ROUTE = "trends"
 private const val ANALYSIS_ROUTE = "analysis"
 private const val TOOLS_ROUTE = "tools"
 
-private data class TopLevelDestination(
+/**
+ * Which design system a destination's composables were written against.
+ *
+ * Logbook replaces Graphite Signal module by module, so for the length of the
+ * migration the two run side by side: the shell is Logbook and every screen
+ * carries its own system until its round lands. A screen rendered under the
+ * other system's locals does not degrade — it reads tokens that mean something
+ * else, which is why the theme is chosen per destination rather than once.
+ */
+internal enum class ShellSystem { LOGBOOK, GRAPHITE }
+
+/** What the Scaffold paints under a destination, so a tab switch never flashes the other system's page. */
+@Immutable
+internal data class ShellChrome(val canvas: Color, val content: Color)
+
+internal fun ShellSystem.chrome(isDark: Boolean): ShellChrome = when (this) {
+    ShellSystem.LOGBOOK -> ShellChrome(
+        canvas = if (isDark) LogbookDark.paper else LogbookLight.paper,
+        content = if (isDark) LogbookDark.ink else LogbookLight.ink,
+    )
+    ShellSystem.GRAPHITE -> ShellChrome(
+        canvas = if (isDark) DarkPalette.canvas else LightPalette.canvas,
+        content = if (isDark) DarkPalette.textPrimary else LightPalette.textPrimary,
+    )
+}
+
+@Immutable
+internal data class TopLevelDestination(
     val route: String,
     val label: String,
     val icon: ImageVector,
     val accent: ModuleAccent,
+    val system: ShellSystem,
 )
 
-private val topLevelDestinations = listOf(
-    TopLevelDestination(JOURNAL_ROUTE, "Journal", Icons.Filled.Checklist, ModuleAccent.JOURNAL),
-    TopLevelDestination(COACH_ROUTE, "Coach", Icons.Filled.FitnessCenter, ModuleAccent.COACH),
-    TopLevelDestination(TRENDS_ROUTE, "Trends", Icons.Filled.Insights, ModuleAccent.TRENDS),
-    TopLevelDestination(ANALYSIS_ROUTE, "Analysis", Icons.Filled.Analytics, ModuleAccent.ANALYSIS),
-    TopLevelDestination(TOOLS_ROUTE, "Tools", Icons.Filled.Settings, ModuleAccent.TOOLS),
+internal val topLevelDestinations = listOf(
+    TopLevelDestination(
+        route = JOURNAL_ROUTE,
+        label = "Journal",
+        icon = Icons.Outlined.Checklist,
+        accent = ModuleAccent.JOURNAL,
+        system = ShellSystem.GRAPHITE,
+    ),
+    TopLevelDestination(
+        route = COACH_ROUTE,
+        label = "Coach",
+        icon = Icons.Outlined.FitnessCenter,
+        accent = ModuleAccent.COACH,
+        system = ShellSystem.GRAPHITE,
+    ),
+    TopLevelDestination(
+        route = TRENDS_ROUTE,
+        label = "Trends",
+        icon = Icons.Outlined.Insights,
+        accent = ModuleAccent.TRENDS,
+        system = ShellSystem.GRAPHITE,
+    ),
+    TopLevelDestination(
+        route = ANALYSIS_ROUTE,
+        label = "Analysis",
+        icon = Icons.Outlined.Analytics,
+        accent = ModuleAccent.ANALYSIS,
+        system = ShellSystem.GRAPHITE,
+    ),
+    TopLevelDestination(
+        route = TOOLS_ROUTE,
+        label = "Tools",
+        icon = Icons.Outlined.Settings,
+        accent = ModuleAccent.TOOLS,
+        system = ShellSystem.GRAPHITE,
+    ),
 )
+
+/** The tab the app opens on; the nav graph and [shellSystemFor] read it from here so they cannot drift. */
+internal val startTab = topLevelDestinations.first()
+
+/**
+ * The system whose canvas the Scaffold paints for [route].
+ *
+ * A route that is not a top-level tab resolves to [startTab]'s system rather
+ * than the shell's own: the first frame composes before the nav host has
+ * committed a back stack entry, and answering with the shell's system there
+ * would show one frame of the wrong paper behind the start destination.
+ */
+internal fun shellSystemFor(route: String?): ShellSystem =
+    (topLevelDestinations.firstOrNull { it.route == route } ?: startTab).system
 
 @Composable
 fun WellnessApp() {
-    WellnessTheme {
+    LogbookTheme {
         val koin = getKoin()
         val resolution by koin.get<ServerBootstrap>().state.collectAsStateWithLifecycle()
         // Fail-closed: with no resolved server there is no HTTP client and no
@@ -93,14 +171,14 @@ fun WellnessApp() {
         // [ServerRecoveryScreen].
         (resolution as? ServerResolution.Failed)?.let { failure ->
             ServerRecoveryScreen(message = failure.message, onRetry = { bootWellness(koin) })
-            return@WellnessTheme
+            return@LogbookTheme
         }
 
         val navController = rememberNavController()
         val backStackEntry by navController.currentBackStackEntryAsState()
         val currentDestination = backStackEntry?.destination
         val snackbarHostState = remember { SnackbarHostState() }
-        val palette = WellnessTheme.palette
+        val palette = LogbookTheme.palette
 
         // Server-side sync failures, shown once each. The events arrive on a
         // channel rather than as state, so a rotation cannot re-raise a
@@ -140,28 +218,30 @@ fun WellnessApp() {
             }
         }
 
+        val chrome = shellSystemFor(currentDestination?.route).chrome(palette.isDark)
+
         Scaffold(
-            // The graphite canvas runs full-bleed behind the translucent system
-            // bars; the insets below keep the content itself clear of them.
-            containerColor = palette.canvas,
-            contentColor = palette.textPrimary,
+            // The active destination's canvas runs full-bleed behind the
+            // translucent system bars; the insets below keep the content itself
+            // clear of them.
+            containerColor = chrome.canvas,
+            contentColor = chrome.content,
             snackbarHost = { SnackbarHost(snackbarHostState) },
             bottomBar = {
                 NavigationBar(
-                    containerColor = palette.chrome,
-                    contentColor = palette.textSecondary,
+                    containerColor = palette.paper,
+                    contentColor = palette.ink,
                     modifier = Modifier.drawWithContent {
                         drawContent()
                         drawRect(
-                            color = palette.line,
-                            size = Size(size.width, 1.dp.toPx()),
+                            color = palette.rule,
+                            size = Size(size.width, LogbookSpace.hairline.toPx()),
                         )
                     },
                 ) {
                     topLevelDestinations.forEach { destination ->
                         val selected = currentDestination?.hierarchy
                             ?.any { it.route == destination.route } == true
-                        val accent = destination.accent.colors(palette)
                         NavigationBarItem(
                             selected = selected,
                             onClick = {
@@ -174,18 +254,28 @@ fun WellnessApp() {
                                 }
                             },
                             icon = { Icon(destination.icon, contentDescription = destination.label) },
-                            label = { Text(destination.label) },
+                            // Caps mono: the tabs of a paper logbook. With a
+                            // label present M3 drops the icon's description
+                            // from the merged node, so TalkBack reads this
+                            // text — five real words, whose pronunciation caps
+                            // do not change.
+                            label = {
+                                Text(
+                                    text = destination.label.uppercase(),
+                                    style = LogbookTheme.type.eyebrow,
+                                )
+                            },
                             colors = NavigationBarItemDefaults.colors(
-                                selectedIconColor = accent.text,
-                                selectedTextColor = accent.text,
-                                unselectedIconColor = palette.textSecondary,
-                                unselectedTextColor = palette.textSecondary,
-                                // The M3 pill would put a fifth surface tone in
-                                // the chrome; the underline below says the same
-                                // thing in the module's own colour.
+                                selectedIconColor = palette.ink,
+                                selectedTextColor = palette.ink,
+                                unselectedIconColor = palette.inkSoft,
+                                unselectedTextColor = palette.inkSoft,
+                                // The M3 pill would be a second surface on a
+                                // page that has only one; the underline below
+                                // says the same thing in ink.
                                 indicatorColor = Color.Transparent,
                             ),
-                            modifier = Modifier.selectionUnderline(selected, accent.text),
+                            modifier = Modifier.selectionUnderline(selected, palette.ink),
                         )
                     }
                 }
@@ -193,7 +283,7 @@ fun WellnessApp() {
         ) { innerPadding ->
             NavHost(
                 navController = navController,
-                startDestination = JOURNAL_ROUTE,
+                startDestination = startTab.route,
                 modifier = Modifier.padding(innerPadding),
                 // Fade-through between tabs: they are siblings, so nothing
                 // should slide in from a direction that implies hierarchy.
@@ -204,18 +294,7 @@ fun WellnessApp() {
             ) {
                 topLevelDestinations.forEach { destination ->
                     composable(destination.route) {
-                        // One accent per tab, provided at its root: nothing below
-                        // here has to know which module it is drawing.
-                        CompositionLocalProvider(LocalModuleAccent provides destination.accent) {
-                            when (destination.route) {
-                                JOURNAL_ROUTE -> JournalTab()
-                                COACH_ROUTE -> CoachScreen()
-                                TRENDS_ROUTE -> TrendsScreen()
-                                ANALYSIS_ROUTE -> AnalysisScreen()
-                                TOOLS_ROUTE -> ToolsScreen(snackbarHostState)
-                                else -> StubScreen(destination.label)
-                            }
-                        }
+                        DestinationContent(destination, snackbarHostState)
                     }
                 }
             }
@@ -224,7 +303,48 @@ fun WellnessApp() {
 }
 
 /**
- * The 14×3dp accent bar under the active tab.
+ * A destination's content under the theme its own composables read.
+ *
+ * The shell above is already Logbook, so a Graphite screen has to re-establish
+ * its palette here rather than inherit one; the module accent rides along with
+ * it, since accents exist only in Graphite Signal.
+ */
+@Composable
+private fun DestinationContent(
+    destination: TopLevelDestination,
+    snackbarHostState: SnackbarHostState,
+) {
+    when (destination.system) {
+        ShellSystem.LOGBOOK -> LogbookTheme {
+            DestinationScreen(destination, snackbarHostState)
+        }
+        ShellSystem.GRAPHITE -> WellnessTheme {
+            // One accent per tab, provided at its root: nothing below here has
+            // to know which module it is drawing.
+            CompositionLocalProvider(LocalModuleAccent provides destination.accent) {
+                DestinationScreen(destination, snackbarHostState)
+            }
+        }
+    }
+}
+
+@Composable
+private fun DestinationScreen(
+    destination: TopLevelDestination,
+    snackbarHostState: SnackbarHostState,
+) {
+    when (destination.route) {
+        JOURNAL_ROUTE -> JournalTab()
+        COACH_ROUTE -> CoachScreen()
+        TRENDS_ROUTE -> TrendsScreen()
+        ANALYSIS_ROUTE -> AnalysisScreen()
+        TOOLS_ROUTE -> ToolsScreen(snackbarHostState)
+        else -> StubScreen(destination.label)
+    }
+}
+
+/**
+ * The 14×3dp bar under the active tab.
  *
  * Drawn as an overlay on the stock `NavigationBarItem` rather than as a custom
  * nav component: the accessibility surface — role, selected state, merged
