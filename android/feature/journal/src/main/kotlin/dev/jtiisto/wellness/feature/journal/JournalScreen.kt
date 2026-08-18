@@ -703,38 +703,12 @@ private fun NumericField(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(LogbookSpace.grid),
     ) {
-        WellnessDenseField(
-            value = text,
-            onValueChange = { text = it },
-            skin = DenseFieldSkin.NAKED,
-            numeric = true,
-            // A default nobody has committed to yet is not the user's number.
-            // On paper that recedes in ink rather than leaning into italics.
-            ghostValue = !row.committed,
-            // Start, the form convention: the value sits under the words naming
-            // it, which here is the tracker's own name to its left.
-            textAlign = TextAlign.Start,
-            modifier = Modifier
-                .width(VALUE_FIELD_WIDTH)
-                .onFocusChanged { focusState ->
-                    if (focused && !focusState.isFocused) commit()
-                    focused = focusState.isFocused
-                }
-                .semantics { contentDescription = "${row.name} value" },
-            keyboardOptions = KeyboardOptions(
-                keyboardType = KeyboardType.Decimal,
-                imeAction = ImeAction.Done,
-            ),
-            keyboardActions = KeyboardActions(onDone = { commit() }),
-        )
-        row.unit?.let {
-            Text(
-                text = it,
-                style = LogbookTheme.type.meta,
-                color = palette.inkSoft,
-            )
-        }
         if (row.isAccumulator) {
+            // The "+" leads the cluster rather than trailing it, so every row's
+            // value ends against its unit at the same trailing edge whether or
+            // not it has one — trailing, it pushed only its own row's numbers
+            // leftward and the column read as three unrelated stops
+            // (device-found, 2026-08-18).
             IconButton(
                 onClick = onOpenAccumulator,
                 // No explicit size: M3's own 48dp is the target Android asks
@@ -754,6 +728,40 @@ private fun NumericField(
                     modifier = Modifier.size(GLYPH_SIZE),
                 )
             }
+        }
+        WellnessDenseField(
+            value = text,
+            onValueChange = { text = it },
+            skin = DenseFieldSkin.NAKED,
+            numeric = true,
+            // A default nobody has committed to yet is not the user's number.
+            // On paper that recedes in ink rather than leaning into italics.
+            ghostValue = !row.committed,
+            // End, the table convention — the device pass overruled the spec's
+            // Start here: these rows stack into a column read down the page,
+            // and Start-aligned digits in a fixed field left a gulf between
+            // each number and its own unit. End welds the pair into the one
+            // right-aligned token the mockups draw ("22 min", never "22   min").
+            textAlign = TextAlign.End,
+            modifier = Modifier
+                .width(VALUE_FIELD_WIDTH)
+                .onFocusChanged { focusState ->
+                    if (focused && !focusState.isFocused) commit()
+                    focused = focusState.isFocused
+                }
+                .semantics { contentDescription = "${row.name} value" },
+            keyboardOptions = KeyboardOptions(
+                keyboardType = KeyboardType.Decimal,
+                imeAction = ImeAction.Done,
+            ),
+            keyboardActions = KeyboardActions(onDone = { commit() }),
+        )
+        row.unit?.let {
+            Text(
+                text = it,
+                style = LogbookTheme.type.meta,
+                color = palette.inkSoft,
+            )
         }
     }
 }

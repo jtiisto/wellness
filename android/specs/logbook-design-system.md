@@ -406,8 +406,14 @@ in `JournalNotationTest`; the mockup shows all three):
   construction — an open day is never read as "missed" to the one audience that
   cannot see the difference.
 - Third line when present: the last-updated caption in faint mono.
-- Widgets keep their contracts: quantifiable = NAKED numeric field
-  (form-aligned Start), note = quiet multiline with the mono-caps label voice,
+- Widgets keep their contracts: quantifiable = NAKED numeric field, **End-aligned
+  — the table convention** (the device pass overruled this spec's original
+  "form-aligned Start": the rows stack into a value column read down the page,
+  and Start left a gulf between each number and its own unit; End welds the
+  pair into the one right-aligned token the mockups draw. An accumulator's `+`
+  *leads* its cluster for the same reason — trailing, it pushed only its own
+  row's numbers out of the column). Note = quiet multiline with the mono-caps
+  label voice,
   evaluation = M3 Slider restyled to ink track/thumb via explicit colors,
   accumulator = paper sheet in the capture-sheet treatment. Checkbox semantics
   (default-write on ABSENT only) untouched.
