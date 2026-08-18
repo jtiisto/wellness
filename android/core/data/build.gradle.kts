@@ -1,5 +1,3 @@
-import java.util.Properties
-
 plugins {
     id("wellness.android.library")
     alias(libs.plugins.kotlin.serialization)
@@ -10,24 +8,8 @@ ksp {
     arg("room.schemaLocation", "$projectDir/schemas")
 }
 
-// Server base URL: `wellness.baseUrl` in local.properties overrides the
-// tailscale-serve endpoint. Read through a Provider so the configuration cache
-// treats local.properties as a tracked input.
-val defaultBaseUrl = "https://pop-os.tailexample.ts.net:9443/wellness"
-val wellnessBaseUrl: String = providers
-    .fileContents(layout.settingsDirectory.file("local.properties"))
-    .asText
-    .map { text ->
-        Properties().apply { load(text.reader()) }.getProperty("wellness.baseUrl") ?: defaultBaseUrl
-    }
-    .getOrElse(defaultBaseUrl)
-
 android {
-    buildFeatures {
-        buildConfig = true
-    }
     defaultConfig {
-        buildConfigField("String", "WELLNESS_BASE_URL", "\"$wellnessBaseUrl\"")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     sourceSets {

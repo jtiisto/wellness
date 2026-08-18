@@ -19,7 +19,10 @@ class WellnessApplication : Application() {
             androidLogger()
             androidContext(this@WellnessApplication)
             modules(
-                coreDataModule,
+                // The built-in server is this app variant's own: the dev
+                // install is born pointing at the test server, and :core:data
+                // is compiled once for both.
+                coreDataModule(BuildConfig.WELLNESS_BASE_URL),
                 // After :core:data, which binds the sample sink and the BLE
                 // diagnostics bridge this module resolves.
                 bleModule,

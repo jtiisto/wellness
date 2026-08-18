@@ -1,8 +1,35 @@
+import java.util.Properties
+
 plugins {
     id("wellness.android.application")
 }
 
 val appVersionName = "0.2.0"
+
+// Which server a build is born pointing at. Read through a Provider so the
+// configuration cache treats local.properties as a tracked input; the tracked
+// defaults are placeholders, so a real build MUST set the key for its variant.
+val localProperties = providers
+    .fileContents(layout.settingsDirectory.file("local.properties"))
+    .asText
+    .map { text -> Properties().apply { load(text.reader()) } }
+
+// A missing file or key compiles in the placeholder: a clean public clone must
+// still build, it just reaches no server. A key someone SET but left blank is
+// always a mistake, so that one fails the build instead of shipping an APK
+// that dials "".
+fun localBaseUrl(key: String, default: String): String {
+    val value = localProperties.map { it.getProperty(key) ?: default }.getOrElse(default).trim()
+    require(value.isNotEmpty()) {
+        "local.properties sets $key to a blank value — set a real URL or drop the line to use the placeholder default"
+    }
+    return value
+}
+
+val prodBaseUrl = localBaseUrl("wellness.baseUrl", "https://pop-os.tailexample.ts.net:9443/wellness")
+// The dev build type's own key: it targets the disposable test server, and
+// sharing `wellness.baseUrl` would make one install's server change move both.
+val devBaseUrl = localBaseUrl("wellness.dev.baseUrl", "http://pop-os.tailexample.ts.net:9001/wellness")
 
 android {
     namespace = "dev.jtiisto.wellness"
@@ -23,9 +50,27 @@ android {
     buildTypes {
         debug {
             buildConfigField("String", "BUILD_STAMP", "\"${buildStamp(appVersionName, isRelease = false)}\"")
+            buildConfigField("String", "WELLNESS_BASE_URL", "\"$prodBaseUrl\"")
         }
         release {
             buildConfigField("String", "BUILD_STAMP", "\"${buildStamp(appVersionName, isRelease = true)}\"")
+            buildConfigField("String", "WELLNESS_BASE_URL", "\"$prodBaseUrl\"")
+        }
+        // Installs alongside the daily driver: the suffixed applicationId is
+        // what gives it its own Room database, DataStore, WorkManager queue,
+        // server address book and FileProvider authority, so device-testing a
+        // UI round cannot touch the production install or its data.
+        // See specs/dev-app-variant.md.
+        create("dev") {
+            initWith(getByName("debug"))
+            applicationIdSuffix = ".dev"
+            versionNameSuffix = "-dev"
+            // Only :app has this build type; the libraries keep their two, and
+            // this is what points the dev variant at their debug ones.
+            matchingFallbacks += "debug"
+            signingConfig = signingConfigs.getByName("debug")
+            buildConfigField("String", "BUILD_STAMP", "\"${buildStamp(appVersionName, isRelease = false)}\"")
+            buildConfigField("String", "WELLNESS_BASE_URL", "\"$devBaseUrl\"")
         }
     }
 }

@@ -1,9 +1,18 @@
 # Copy this to local.properties and set your Android SDK path
 sdk.dir=/home/YOUR_USER/android-sdk
 
-# Optional: override the Wellness server base URL compiled into
-# BuildConfig.WELLNESS_BASE_URL (:core:data). Must include the /wellness path
-# prefix — endpoint paths are appended to it.
+# Server base URL compiled into BuildConfig.WELLNESS_BASE_URL (:app). Unset,
+# the placeholder default compiles in — the build succeeds but the app reaches
+# no server — so a working build MUST set the key for its variant; a key set
+# to a blank value fails the build. Must include the /wellness path prefix —
+# endpoint paths are appended to it.
 # Default (unset, tailscale serve prod): https://pop-os.tailexample.ts.net:9443/wellness
 # Dev server (disposable data, plain HTTP over the tailnet):
 # wellness.baseUrl=http://pop-os.tailexample.ts.net:9001/wellness
+
+# The `dev` build type (./gradlew assembleDev — the parallel-installable app,
+# own applicationId and own data) reads its own key, so switching the daily
+# driver's server never drags the dev install along. Points at the test server
+# (bin/server.sh --test); same rule as above, the tracked default is a
+# placeholder and a dev build MUST set it.
+# wellness.dev.baseUrl=http://pop-os.tailexample.ts.net:9001/wellness

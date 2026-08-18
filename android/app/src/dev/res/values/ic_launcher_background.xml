@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The dev install's canvas. Same mark, deliberately un-black: the two
+         icons have to be told apart at launcher size, not read. Teal keeps the
+         amber foreground's contrast, which a mid-tone would not. -->
+    <color name="ic_launcher_background">#0B3B4C</color>
+</resources>

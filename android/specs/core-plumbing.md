@@ -50,7 +50,7 @@ class JournalApi(client: HttpClient, config: ServerConfig) {
 }
 ```
 - **URL joining rule**: endpoint paths are *appended to* the base URL's path, never replace it. Canonical result: `http://<host>:9000/wellness/api/journal/sync/status`. `JournalApiTest` asserts this exact URL (Ktor's leading-slash semantics would silently drop `/wellness` — this is the trap the test pins).
-- Base URL from `BuildConfig.WELLNESS_BASE_URL` on `:core:data` (`buildFeatures.buildConfig = true`), read from `local.properties` key `wellness.baseUrl`, default `https://pop-os.tailexample.ts.net:9443/wellness` (the tailscale-serve endpoint, verified live 2026-08-06). `usesCleartextTraffic` stays for now to allow an http:// override in dev; removing it is a Phase 8 cleanup.
+- Base URL from `BuildConfig.WELLNESS_BASE_URL` on **`:app`**, handed to `coreDataModule(builtInUrl)` at Koin startup — it is per-app-variant, and `:core:data` is compiled once for both (see [dev-app-variant.md](dev-app-variant.md)). Read from `local.properties` key `wellness.baseUrl` (`dev` build type: `wellness.dev.baseUrl`), default `https://pop-os.tailexample.ts.net:9443/wellness` (the tailscale-serve endpoint, verified live 2026-08-06). `usesCleartextTraffic` stays for now to allow an http:// override in dev; removing it is a Phase 8 cleanup.
 - `typealias SyncStamp = String` — opaque, lexically compared, never parsed. Local clocks (`ts`, `fetchedAt`) are epoch millis `Long` — the two must not be conflated.
 
 ### Room (`db/`)

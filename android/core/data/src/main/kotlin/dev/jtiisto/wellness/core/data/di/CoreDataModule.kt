@@ -3,7 +3,6 @@ package dev.jtiisto.wellness.core.data.di
 import androidx.room.Room
 import dev.jtiisto.wellness.core.ble.BleLog
 import dev.jtiisto.wellness.core.ble.buffer.HrSampleSink
-import dev.jtiisto.wellness.core.data.BuildConfig
 import dev.jtiisto.wellness.core.data.WellnessJson
 import dev.jtiisto.wellness.core.data.analysis.AnalysisEvents
 import dev.jtiisto.wellness.core.data.analysis.AnalysisRepository
@@ -86,7 +85,17 @@ val AnalysisControlContext = named("analysisControlContext")
 /** The app's `versionName`, supplied by `:app` — the export's `client` field. */
 val AppVersionName = named("appVersionName")
 
-val coreDataModule = module {
+/**
+ * The data layer's singletons, built around the server `:app` was born on.
+ *
+ * @param builtInUrl the compiled-in address, handed down rather than read from
+ * a `BuildConfig` here: it varies per *app* variant — the parallel-installable
+ * dev app targets the test server — while this module is compiled once, for a
+ * library that only has debug and release. A parameter and not a qualified
+ * single, so the one value whose absence would strand boot at the recovery
+ * screen cannot be forgotten at a call site.
+ */
+fun coreDataModule(builtInUrl: String) = module {
     single<CoroutineScope>(AppScope) { CoroutineScope(SupervisorJob() + Dispatchers.Default) }
     single<CoroutineScope>(DebugLogScope) { CoroutineScope(SupervisorJob() + Dispatchers.IO) }
     single<CoroutineContext>(AnalysisControlContext) {
@@ -114,7 +123,7 @@ val coreDataModule = module {
     single { get<WellnessDatabase>().hrSampleDao() }
     single { get<WellnessDatabase>().setEventDao() }
 
-    single { ServerBootstrap(dao = get(), builtInUrl = BuildConfig.WELLNESS_BASE_URL) }
+    single { ServerBootstrap(dao = get(), builtInUrl = builtInUrl) }
     // Resolved, never constructed from BuildConfig directly: which server this
     // process talks to is a boot decision, and asking for this before that
     // decision has been made is a bug worth crashing on.
