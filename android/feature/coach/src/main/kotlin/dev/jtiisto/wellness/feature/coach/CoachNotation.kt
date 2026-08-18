@@ -285,19 +285,6 @@ fun exerciseRowDescription(
         .joinToString(", ")
 }
 
-// ---- section heads -------------------------------------------------------------------
-
-/**
- * The one mono hint a section head may carry, right-aligned on its baseline.
- *
- * A block can say two things about how it runs — its interval timing and its
- * rest guidance — and the head has room for one line, so they share it. Either
- * may be absent, and both being absent is the common case: the result is empty
- * and the head draws nothing beside its label.
- */
-fun sectionHint(timing: String, restGuidance: String): String =
-    listOf(timing, restGuidance).filter { it.isNotBlank() }.joinToString(" · ")
-
 // ---- the prescription meta line -----------------------------------------------------
 
 /**

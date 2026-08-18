@@ -620,7 +620,18 @@ private fun BlockSection(
     actions: CoachActions,
 ) {
     Column(modifier = Modifier.padding(top = SECTION_GAP)) {
-        SectionHead(label = block.title, hint = sectionHint(block.timing, block.restGuidance))
+        // Timing is the one baseline hint — it is short by construction
+        // (formatInterval). Rest guidance is free coaching prose that can run
+        // to sentences, and prose cannot share a baseline with the label: it
+        // reads as a section marginalia below the head, the mockups' own
+        // pattern for section-level instruction.
+        SectionHead(label = block.title, hint = block.timing)
+        if (block.restGuidance.isNotBlank()) {
+            Marginalia(
+                text = block.restGuidance,
+                modifier = Modifier.padding(top = LogbookSpace.grid * 2),
+            )
+        }
 
         for (item in block.items) {
             when (item) {
@@ -667,20 +678,24 @@ private fun SectionHead(label: String, hint: String) {
             }
             .padding(bottom = SECTION_UNDERLINE_GAP),
     ) {
+        // Measurement order is the layout rule here: the label is unweighted so
+        // it measures FIRST at its own width and can never be crushed into a
+        // letter column; the weighted hint takes whatever remains and wraps on
+        // the right if it must. The inverse arrangement hands a long hint the
+        // whole row first — one letter of label per line.
         Text(
             text = label.uppercase(),
             style = LogbookTheme.type.section,
             color = palette.ink,
-            modifier = Modifier
-                .weight(1f)
-                .alignByBaseline(),
+            modifier = Modifier.alignByBaseline(),
         )
-        if (hint.isNotEmpty()) {
+        if (hint.isNotBlank()) {
             Text(
                 text = hint,
                 style = LogbookTheme.type.meta,
                 color = palette.inkSoft,
                 modifier = Modifier
+                    .weight(1f)
                     .padding(start = LogbookSpace.grid * 2)
                     .alignByBaseline(),
                 textAlign = TextAlign.End,

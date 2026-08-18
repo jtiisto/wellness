@@ -207,8 +207,13 @@ Required whenever any dot is visible on screen.
 
 ### Sections
 Display-caps label with a 1.5dp ink underline; optional mono hint right-aligned
-on the same baseline (rest guidance moves here). Section-level execution notes
-render as marginalia directly under the head. `UnreadablePlanDay` keeps its
+on the same baseline. **The hint is the block's timing only** — short by
+construction (`formatInterval`). Rest guidance is free coaching prose that can
+run to sentences and cannot share a baseline with the label; it renders as a
+section marginalia below the head (device-found 2026-08-17: joining it into
+the hint collapsed the label into a one-letter-per-line column — the label
+also measures first now, so no future hint can crush it). Section-level
+execution notes render as marginalia directly under the head. `UnreadablePlanDay` keeps its
 banner *content* but restyles as marginalia + ink glyph (no `band` fill, no
 error rail).
 

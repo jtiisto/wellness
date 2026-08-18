@@ -334,17 +334,6 @@ class CoachNotationTest {
 
     // ---- section heads ----------------------------------------------------------------
 
-    @Test
-    @DisplayName("a section head carries one hint, however many things the block has to say")
-    fun sectionHints() {
-        assertEquals("3 rounds · rest 60s", sectionHint("3 rounds", "rest 60s"))
-        assertEquals("3 rounds", sectionHint("3 rounds", ""))
-        assertEquals("rest 60s", sectionHint("", "rest 60s"))
-        // Empty is how the head draws nothing beside its label — the common case.
-        assertEquals("", sectionHint("", ""))
-        assertEquals("", sectionHint("   ", ""))
-    }
-
     // ---- the prescription meta line -------------------------------------------------
 
     @Test
