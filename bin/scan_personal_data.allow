@@ -28,4 +28,5 @@
 c19df0c7bc510763  # generic mineral name — MCP docstring example
 d28d5dd75b88e3d9  # generic sports-supplement name — CSS comment
 dd8db322cac13ff8  # a shipped coach FEATURE name (protocol banner + toggle), not a log
+abb3002e94f17e4b  # generic macronutrient word — fixture name across e2e/trends/MCP/form tests since long before the same word became a tracker (user-ruled coincidence, 2026-08-18)
 f833d11cef924479  # generic habit word — journal UI copy + sync fixtures
