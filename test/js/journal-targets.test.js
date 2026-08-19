@@ -12,6 +12,7 @@ import {
     targetStatus,
     dayStatus,
     entryCountsAsLogged,
+    noteEntryPatch,
     formatTargetProgress,
 } from '../../public/js/journal/utils.js';
 
@@ -249,8 +250,28 @@ test('entryCountsAsLogged: an entry counts iff it asserts something', () => {
     // Either half is an assertion on its own.
     assert.equal(entryCountsAsLogged({ completed: true }), true);
     assert.equal(entryCountsAsLogged({ value: 0 }), true);          // zero is a value
-    assert.equal(entryCountsAsLogged({ value: '' }), true);         // so is empty text
+    // Empty text is a value too — which is why the note widget must CLEAR on a
+    // blank edit rather than store '' (see noteEntryPatch). Rows that stored ''
+    // before that rule are deliberately left as they are: still logged, until
+    // the field is blanked once more.
+    assert.equal(entryCountsAsLogged({ value: '' }), true);
     assert.equal(entryCountsAsLogged({ completed: false, value: 3 }), true);
+});
+
+test('noteEntryPatch: a blank note retracts, a written one commits', () => {
+    // Twin of Android's EntryPatch.note. Emptying the field clears the value —
+    // the numeric field's convention extended to text — because '' counts as
+    // logged above, so writing it back made a cleared note irretractable.
+    assert.deepEqual(noteEntryPatch(''), { value: null, completed: false });
+    assert.deepEqual(noteEntryPatch('   '), { value: null, completed: false });
+    assert.deepEqual(noteEntryPatch('\n\t '), { value: null, completed: false });
+    // A cleared entry judges as no entry, which is the point of the clear.
+    assert.equal(entryCountsAsLogged(noteEntryPatch('  ')), false);
+
+    // Text is stored verbatim: trim decides blankness, it does not edit input.
+    assert.deepEqual(noteEntryPatch('slept badly'), { value: 'slept badly', completed: true });
+    assert.deepEqual(noteEntryPatch(' slept badly '), { value: ' slept badly ', completed: true });
+    assert.equal(entryCountsAsLogged(noteEntryPatch('slept badly')), true);
 });
 
 test('dayStatus: an emptied row judges as no row, so an uncheck can be retracted', () => {

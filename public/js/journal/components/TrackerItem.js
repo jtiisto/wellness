@@ -13,7 +13,7 @@ import {
     markValueUpdated,
 } from '../store.js';
 import { NumericInput } from '../../shared/numeric-input.js';
-import { dayStatus, formatTargetProgress, recentDayStates, localDataWindowStart, coerceNumericValue } from '../utils.js';
+import { dayStatus, formatTargetProgress, recentDayStates, localDataWindowStart, coerceNumericValue, noteEntryPatch } from '../utils.js';
 
 const html = htm.bind(h);
 
@@ -127,8 +127,10 @@ export function TrackerItem({ tracker }) {
     };
 
     const handleNoteChange = (e) => {
-        const noteValue = e.target.value;
-        updateEntry(date, tracker.id, { value: noteValue, completed: noteValue.trim() !== '' });
+        // Blanking the field retracts the note (clears the value) rather than
+        // storing '' — see noteEntryPatch. The textarea is controlled by the
+        // stored value, so a whitespace-only edit visibly clears as it is typed.
+        updateEntry(date, tracker.id, noteEntryPatch(e.target.value));
     };
 
     const handleNumericChange = (v) => {

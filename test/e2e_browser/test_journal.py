@@ -488,12 +488,17 @@ def test_note_text_sets_completed_and_clearing_unsets(journal_with_extras, app_s
     entry = resp.json().get("days", {}).get(today, {}).get("tracker-reflection")
     assert entry is not None and entry.get("completed") is True
 
-    # Clearing the note should flip completed to False
+    # Clearing the note retracts it: completed flips to False AND the value is
+    # cleared rather than stored as "". An empty string is a value, so writing
+    # it back would leave the row counting as logged forever (the emptiness
+    # rule) with an empty textarea on screen — the retraction has to reach the
+    # value column, which is what makes the row judge as no entry.
     refl_row.locator("textarea").fill("")
     page.wait_for_timeout(3500)
     resp = http_requests.get(f"{app_server['url']}/api/journal/sync/delta")
     entry = resp.json().get("days", {}).get(today, {}).get("tracker-reflection")
     assert entry is not None and entry.get("completed") is False
+    assert entry.get("value") is None
 
 
 def test_stale_upload_recovers_in_cycle_via_server_row(

@@ -339,6 +339,29 @@ export function entryCountsAsLogged(entry) {
 }
 
 /**
+ * The note widget's atomic write: text plus the checkbox it implies.
+ *
+ * A blank note is a RETRACTION, not an empty string. By the rule above a stored
+ * value counts as logged all by itself, and `''` is a value — writing the blank
+ * text back left a cleared note asserting a logged day forever, with nothing on
+ * screen to show for it and no gesture left to take it back. Clearing the field
+ * clears the value (explicit null, this client's clear convention — the server
+ * stores NULL for it exactly as for an omitted value), which is what emptying a
+ * numeric field already did; the two write paths had simply drifted.
+ *
+ * Blankness is `trim()`, the same test that already decided `completed` here —
+ * Android's twin (`EntryPatch.note`) uses Kotlin's `isBlank()`, and the two can
+ * only disagree on exotic unicode whitespace.
+ *
+ * @param {string} text - The textarea's current contents
+ * @returns {{value: (string|null), completed: boolean}} Patch for updateEntry
+ */
+export function noteEntryPatch(text) {
+    const committed = text.trim() !== '';
+    return { value: committed ? text : null, completed: committed };
+}
+
+/**
  * Resolve a tracker's status on a given date from that day's log entry, using the
  * target in effect (targetForDate) and polarity — the single-day judgment the
  * grid and (later) the category summary roll up. Mirrors how adherence.py judges

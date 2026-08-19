@@ -760,8 +760,9 @@ table, read the columns directly:
   forward; absent = no target.
 
 **IMPORTANT — completion vs. adherence:** `get_journal_summary`'s
-`completion_rate` (and any `SUM(completed)/COUNT(*)` you write) is
-**entries-based** — the fraction of *logged entries* marked completed. It is
+`completion_rate` (and any completed-over-entries ratio you write — gate its
+denominator on entry presence, see Common Queries) is **entries-based** — the
+fraction of *present entries* marked completed. It is
 **not** schedule adherence, and for value trackers it systematically
 **undercounts** (value logging never sets the `completed` checkbox — see Data
 epochs). For schedule adherence, use the **`get_schedule_adherence`** tool — it
@@ -802,6 +803,15 @@ before them:
 
 ## Common Queries
 
+**Gate every judgment on entry presence.** Unchecking a box does not delete the
+entry row — the client writes `{completed: 0}` and keeps it, and clearing a
+value column leaves the row behind too — so a row can exist while asserting
+nothing. An entry counts as present iff `completed = 1 OR value IS NOT NULL`;
+an all-empty row must judge exactly like no row. `COUNT(*)` over raw `entries`
+therefore over-counts denominators (this is why the tools below build their
+counts with that predicate). Raw *listings* are a different question and stay
+raw — every stored row is real data to show.
+
 ### Active trackers by category (UI-visible only)
 ```sql
 SELECT category, name, type FROM trackers
@@ -818,13 +828,20 @@ ORDER BY category, name
 ### even if it has been retired
 ```sql
 SELECT t.name, t.deleted,
-       COUNT(*) as total_days,
-       SUM(completed) as completed_days,
-       ROUND(100.0 * SUM(completed) / COUNT(*), 1) as completion_rate
+       COUNT(*) as logged_days,
+       SUM(CASE WHEN e.completed = 1 THEN 1 ELSE 0 END) as completed_days,
+       ROUND(100.0 * SUM(CASE WHEN e.completed = 1 THEN 1 ELSE 0 END)
+             / COUNT(*), 1) as completion_rate
 FROM entries e JOIN trackers t ON e.tracker_id = t.id
 WHERE t.name = 'Exercise'
+  AND (e.completed = 1 OR e.value IS NOT NULL)   -- entry present; see above
 GROUP BY t.id, t.name, t.deleted
 ```
+The denominator counts *present* entries, not stored rows. `completed` is
+nullable, so it is always compared explicitly (`completed = 1`) rather than
+truth-tested or summed bare — in SQLite `NULL OR …` is not false, which is the
+trap the presence predicate above is written around. Still entries-based, not
+schedule adherence — for that, use `get_schedule_adherence`.
 
 ### Daily summary for a date (active trackers only)
 ```sql

@@ -23,9 +23,19 @@ data class EntryPatch(
         fun numeric(value: Double): EntryPatch =
             EntryPatch(value = EntryField.Set(journalNumberJson(value)))
 
-        /** The note widget's atomic write: text plus the checkbox it implies. */
+        /**
+         * The note widget's atomic write: text plus the checkbox it implies.
+         *
+         * A blank note is a **retraction**, not an empty string. Under the
+         * emptiness rule a stored value counts as logged all by itself, and
+         * `""` is a value — writing the blank text back left a cleared note
+         * asserting a logged day forever, with nothing on screen to show for
+         * it and no gesture left to take it back. Clearing the field clears
+         * the value to ABSENT, which is what emptying a numeric field already
+         * did (`numericCommitPatch`); the two write paths had simply drifted.
+         */
         fun note(text: String): EntryPatch = EntryPatch(
-            value = EntryField.Set(JsonPrimitive(text)),
+            value = EntryField.Set(if (text.isBlank()) null else JsonPrimitive(text)),
             completed = EntryField.Set(text.isNotBlank()),
         )
 

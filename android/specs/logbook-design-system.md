@@ -517,7 +517,14 @@ Everything the section above did not settle, decided while building it.
    the checkbox's own seeded default** — the seed outliving the uncheck kept
    every quantifiable-with-default tracker (most medications and supplements)
    reading noted/broken, the exact symptom the rule was built to fix; a value
-   that differs from the seed still survives the uncheck. Full rule in
+   that differs from the seed still survives the uncheck. Third device pass:
+   **blanking a note retracts it too** — the note commit wrote the text back
+   unconditionally, so clearing the field stored `""`, and under this very rule
+   an empty string is still a value: the row went on asserting a logged day
+   forever with nothing on screen to show for it, and no gesture in the UI
+   could take it back. A blank note now clears the value instead of writing it,
+   which is the numeric field's own convention (emptying clears to absent)
+   extended to text — the two write paths had simply drifted. Full rule in
    docs/ARCHITECTURE.md.
 10. **The day lock retires; every day in the strip is editable** *(user
    decision, device pass — both clients)*. Past days locked on the device. The

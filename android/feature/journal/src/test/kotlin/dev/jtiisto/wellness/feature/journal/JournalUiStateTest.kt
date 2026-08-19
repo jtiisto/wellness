@@ -680,6 +680,29 @@ class JournalUiStateTest {
     }
 
     @Test
+    @DisplayName("blanking a note clears the value back to absent, as emptying a numeric field does")
+    fun noteClear() {
+        // The twin of numericCommitClear. Writing the blank text back stored
+        // "", which counts as logged all by itself — the cleared note kept
+        // asserting a logged day with nothing on screen to show for it.
+        assertEquals(EntryField.Set<JsonElement?>(null), EntryPatch.note("").value)
+        assertEquals(EntryField.Set(false), EntryPatch.note("").completed)
+
+        // Whitespace-only is blank: isBlank, the same test that already decided
+        // the checkbox half of this patch.
+        assertEquals(EntryField.Set<JsonElement?>(null), EntryPatch.note("   ").value)
+        assertEquals(EntryField.Set<JsonElement?>(null), EntryPatch.note("\n\t ").value)
+
+        // Text is stored verbatim — surrounding whitespace is not trimmed away,
+        // only used to decide blankness.
+        assertEquals(
+            EntryField.Set<JsonElement?>(JsonPrimitive(" felt good ")),
+            EntryPatch.note(" felt good ").value,
+        )
+        assertEquals(EntryField.Set(true), EntryPatch.note(" felt good ").completed)
+    }
+
+    @Test
     @DisplayName("only quantifiable values are stamped")
     fun stampingRules() {
         assertTrue(stampsLastUpdated(TrackerType.QUANTIFIABLE))

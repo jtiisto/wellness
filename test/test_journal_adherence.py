@@ -14,6 +14,7 @@ from modules.journal_adherence import (
     compute_adherence,
     compute_streaks,
     day_status,
+    entry_present,
     target_band_segments,
 )
 
@@ -44,6 +45,34 @@ NEXT_MON = "2026-07-13"
 
 
 @pytest.mark.unit
+class TestEntryPresence:
+    """The emptiness rule itself: what makes a stored row assert something."""
+
+    def test_empty_row_asserts_nothing(self):
+        assert entry_present(0, None) is False
+        assert entry_present(None, None) is False
+
+    def test_either_half_is_an_assertion(self):
+        assert entry_present(1, None) is True
+        assert entry_present(0, 12) is True
+        assert entry_present(0, 0) is True          # zero is a value
+
+    def test_cleared_note_is_absent(self):
+        # Blanking a note clears the value on both clients (Android to absent,
+        # the PWA to an explicit null; the server stores NULL for either), so a
+        # retracted note reads as no entry — the whole point of the clear.
+        assert entry_present(0, None) is False
+        assert entry_present(0, "slept badly") is True
+
+    def test_legacy_empty_string_still_counts(self):
+        # Deliberate stance: rows that stored "" before the note widget learned
+        # to clear are left alone — no migration, no read-time rewrite. "" is a
+        # value, so such a row keeps counting as logged until the user blanks
+        # the field once more, which now sticks.
+        assert entry_present(0, "") is True
+
+
+@pytest.mark.unit
 class TestComputeAdherence:
     def test_positive_adherence_math(self):
         # Mon–Fri schedule over Mon..Sun. Logged Mon,Tue; Wed carries an emptied
@@ -68,6 +97,18 @@ class TestComputeAdherence:
         assert r["logged_days"] == 0
         assert r["done_days"] == 0
         assert r["adherence_rate"] == 0.0
+        assert r["coverage_rate"] == 0.0
+
+    def test_blanked_note_row_is_not_logged(self):
+        # A note is retracted by clearing the field, and both clients now clear
+        # the VALUE on a blank edit rather than storing "" — so the row left
+        # behind carries nothing and must judge exactly like no row. (Storing
+        # "" instead made the retraction impossible: see the legacy case in
+        # TestEntryPresence.)
+        r = compute_adherence(MON_FRI, "positive", "simple", {MON: 0}, MON, MON,
+                              values={MON: None})
+        assert r["logged_days"] == 0
+        assert r["done_days"] == 0
         assert r["coverage_rate"] == 0.0
 
     def test_value_keeps_an_unchecked_row_logged(self):
