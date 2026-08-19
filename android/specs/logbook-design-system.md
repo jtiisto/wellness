@@ -1,12 +1,14 @@
-# Spec: Logbook Design System (Rounds 1–3: shell, Coach, Journal, Trends)
+# Spec: Logbook Design System (Rounds 1–4: shell, Coach, Journal, Trends, Analysis+Tools)
 
-Status: **Rounds 1 (shell + Coach) and 2 (Journal) shipped, device-accepted and
-pushed 2026-08-18** on `feature/logbook-design`. **Round 3 (Trends) designed
-2026-08-18** — the user chose plates-for-series-identity from two mockups
-(`plans/logbook-design/trends-logbook-{plates,ink}.html`; the ink variant is
-the kept-rejected option); the "Components — Trends" section below is its
-committed form, awaiting implementation. Analysis and Tools stay on Graphite
-Signal until their rounds.
+Status: **Rounds 1 (shell + Coach), 2 (Journal) and 3 (Trends) shipped,
+device-accepted and pushed** on `feature/logbook-design` (Round 3 accepted
+2026-08-19; its per-chart `ChartInk` resolution is recorded under
+"Implementation shape"). **Round 4 (Analysis + Tools) designed 2026-08-19** —
+mockup `plans/logbook-design/analysis-logbook.html` user-approved; the
+"Components — Analysis & Tools" section below is its committed form, awaiting
+implementation. Round 4 is the final round: flipping the last two Graphite
+destinations retires Graphite Signal entirely (retirement phase runs after
+device acceptance).
 
 ## Goal
 
@@ -59,8 +61,8 @@ marks) to the tested state layer and restructures composables above it.
 | Shell (nav bar, snackbar, `ServerRecoveryScreen`) | **Logbook** (Round 1) |
 | Coach | **Logbook** (Round 1) |
 | Journal (day view + tracker config) | **Logbook** (Round 2) |
-| Trends (all five sub-screens) | **Logbook** (Round 3 — designed, in implementation) |
-| Analysis, Tools | Graphite Signal — [design-system.md](design-system.md) stays their authority |
+| Trends (all five sub-screens) | **Logbook** (Round 3) |
+| Analysis, Tools | **Logbook** (Round 4 — designed, in implementation); [design-system.md](design-system.md) retires with the round's retirement phase |
 
 Each nav destination is wrapped in its own theme; the Scaffold container color
 follows the active destination's canvas. Phases land incrementally *inside*
@@ -618,6 +620,121 @@ Graphite rendering clause) and nothing else.
   as the primary series — plausible and wrong, so the flip lands only with the
   full restyle); the card wrapper must stay `inline` (Kover); trends.md's
   deviation 2 is rewritten to point here in the same commit.
+
+## Components — Analysis & Tools (Round 4; mockup: `analysis-logbook.html`)
+
+The last two Graphite destinations, so the round that retires Graphite Signal
+entirely (user decision 2026-08-19: full scope — Analysis, Tools, then the
+retirement as its own phase after device acceptance). Analysis draws no
+charts: the design surface is the **markdown report renderer** — LLM-authored
+content on paper — plus the run/history chrome and Tools' card stack.
+Behavior contracts in [analysis.md](analysis.md) and
+[tools-hardening.md](tools-hardening.md) are untouchable except the clauses
+this section names.
+
+### Status markers (cross-stack: the wire serves judgment as data)
+
+User decision 2026-08-19: the server serves content with status as neutral
+data and **each client owns its representation** — the PWA keeps its emoji
+look, Android draws ink. Today's colored status emoji are the model's own
+house style (no prompt in this repo asks for them), so the vocabulary is
+created, not changed:
+
+- **Three tokens: `[ok]` / `[watch]` / `[act]`.** The wire authority is a
+  vocabulary table in ARCHITECTURE.md (landing with the protocol commit —
+  ONE atomic commit across server, PWA, Android). The analysis query prompts
+  gain an output-contract clause naming the tokens.
+- **The server normalizes at read time**: a pure function over
+  `response_markdown` in the two body-serving endpoints rewrites the
+  recognized legacy emoji/word status forms into tokens. Stored rows stay
+  untouched (non-destructive, revisable), every legacy report serves in the
+  one format, and the same function absorbs model non-compliance with the
+  new prompt clause.
+- **PWA**: token → emoji expansion in the same pre-parse slot that collapses
+  today (`[ok]`→✅, `[watch]`→🟡, `[act]`→🔴) — the current look preserved,
+  and the expansion gets real tests (the collapse never had any).
+- **Android**: token → a new status inline in the report model, drawn as
+  **ink mark + mono caps word** — filled dot `OK`, half dot `WATCH`, open
+  dot + mono `!` `ACT` — the journal shape grammar turned onto content, with
+  the marks' spoken words as the semantics. A thin legacy emoji→status
+  mapping stays for stale device caches (payload_cache serves pre-change
+  bodies after an upgrade); it feeds the same node.
+- **Plain `✓` passes through untouched** (among the most common markers in
+  the real corpus, and already monochrome ink — it needs no fix). Unknown
+  tokens render as their literal text — degradation is readable. Most real
+  reports carry no marker at all: unmarked prose is the normal case, not an
+  edge.
+- This supersedes analysis.md's collapse-regex contract (rewritten in the
+  protocol commit, when it stops being true).
+
+### Report renderer
+
+- **Headings**: the top content level renders display-caps (~15sp) over a
+  `rule-strong` hairline; the next level body semibold; deeper levels body
+  medium. LLM structure reads as Logbook sections.
+- **Quote blocks = marginalia** (italic ink-soft, 2dp `rule-strong` left
+  border) — the execution-note treatment: an aside speaking to the reader.
+- **Code blocks**: mono between top/bottom hairline rules, no fill, no box.
+  **Inline code**: mono with a `rule-strong` underline — no tinted chip.
+- **GFM tables = the set-table treatment**: mono cells, faint mono caps
+  header over a `rule-strong` hairline, hairline row rules, no cell
+  backgrounds or zebra; first column body-face Start-aligned, numeric
+  columns End-aligned (table alignment is the caller's statement).
+- Lists: en-dash ink-soft markers (the `•` retires); thematic break =
+  `rule-strong` hairline; status lines per the token section.
+- Failed report: ink + mono `!` (never `palette.error`); Try Again =
+  outlined ink button.
+
+### Run view and chrome
+
+- The Run / Past-reports **pill switcher → the mono-caps tab strip** (the
+  trends idiom; pills are an anti-pattern).
+- **Query rows go text-only** (user decision: `queryIcon` and its test
+  retire — the coach meta-row precedent). Title body 500, description
+  ink-soft; the location field takes the NAKED dense-field skin (quiet
+  underlined mono); Run = outlined ink button.
+- **Progress**: mono elapsed clock over a hairline ink sweep — the accent
+  spinner retires. Cancel = quiet ink button (settled, not disabled).
+- **History rows**: mark · title · mono time · `✕` delete. Completed =
+  filled dot; failed = open dot + mono `!` — never green/red. The delete
+  confirm dialog stays M3, rendered through the Logbook adapter.
+- Analysis snackbars keep their shell-level collection (the poll must
+  outlive every sub-view — analysis.md's design). Do not move them.
+
+### Tools
+
+- The four cards (server status, actions, servers, strap) → **sections**;
+  `ToolsCard`'s replacement stays `inline` (it already is).
+- `palette.warning`/`palette.error` words → ink + mono `!`; the
+  `accent.wash` active-server row → an ink selection marker (the nav
+  underline idiom, not a tinted fill); the tonal accent icon button →
+  outlined ink; the debug log stays mono; the six AlertDialogs render
+  through the Logbook M3 adapter, behavior unchanged.
+
+### Flip, and the retirement (its own phase, after device acceptance)
+
+- **Flip = deliberate four-place edit**: both `WellnessApp` destination
+  entries, the GRAPHITE `DestinationContent` branch (with its
+  `LocalModuleAccent` provider), the `ShellSystemTest` map, and new
+  `analysisIsLogbook`/`toolsIsLogbook` pins.
+- **Retirement (after the device pass accepts the flip — Graphite must
+  still exist if the pass wants something back)**: `ShellSystem`/`ShellChrome`
+  collapse to one member; `graphiteChrome` and `systemsAreDistinguishable`
+  retire as vacuous; `WellnessTheme`, `WellnessDefaults`, `ModuleAccent`/
+  `LocalModuleAccent` and the already-unreachable `StubScreen` delete;
+  `WellnessDenseField` keeps only the NAKED skin (BOXED/WELL/OUTLINED lose
+  their last consumers); **the two live-signal exceptions (`HrBpmChip`,
+  `SyncStatusDot`) extract their semantic color pairs into a Logbook-owned
+  holder BEFORE `WellnessPalette` deletes** — `WellnessPaletteTest`'s
+  semantic assertions move with them rather than dying. The two
+  cross-system leaks fix first (`WellnessDenseField`'s NAKED path reads a
+  Graphite spacing token; `HrBpmChip` reads `WellnessShape.pill`).
+  [design-system.md](design-system.md) retires; the staleness sweep takes
+  `values/themes.xml`'s comment with it.
+- Known traps: Tools lives in `:app` (the module with no meaningful JVM
+  coverage — watch the Kover aggregate); every new section wrapper is
+  `inline`; report content arrives from a server pipeline — synthetic
+  examples only in every fixture this round touches.
 
 ## Behavior
 
