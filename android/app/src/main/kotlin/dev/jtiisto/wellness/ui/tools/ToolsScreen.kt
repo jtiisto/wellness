@@ -182,7 +182,8 @@ private fun ServerSection(state: ToolsUiState, onPing: () -> Unit, modifier: Mod
         Text(
             text = "Build ${state.buildStamp}",
             style = LogbookTheme.type.meta,
-            color = palette.inkFaint,
+            // Read when it matters (which build is this?) — prose floor, not ghost.
+            color = palette.inkSoft,
         )
     }
 }
@@ -231,7 +232,7 @@ private fun ServersSection(state: ToolsUiState, actions: ToolsActions, modifier:
             Text(
                 text = ToolsCopy.EMPTY_PROFILES,
                 style = LogbookTheme.type.body.copy(fontStyle = FontStyle.Italic),
-                color = palette.inkFaint,
+                color = palette.inkSoft,
             )
         }
         state.servers.forEach { row ->
@@ -525,7 +526,7 @@ private fun LazyListScope.debugLogItems(entries: List<DebugLogEntity>) {
             Text(
                 text = "No entries in the last hour.",
                 style = LogbookTheme.type.body.copy(fontStyle = FontStyle.Italic),
-                color = LogbookTheme.palette.inkFaint,
+                color = LogbookTheme.palette.inkSoft,
             )
         }
         return

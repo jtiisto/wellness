@@ -797,6 +797,23 @@ Everything the section above did not settle, decided while building it.
    replaced was also the *only* thing marking the row; the word means the
    state now survives being read aloud. (The strap half arrived in the review
    round — the first cut ruled the strap row and labeled only the server's.)
+10. **ink-faint is a ghost tier, not a prose tier** (Round 4 device pass, dark
+    mode). Dark `inkFaint` measures 2.56:1 *by design* — ghost values recede —
+    and the first cut spent it on sentences: the report table's header row,
+    the tools build stamp, every italic empty-state and hint line, the history
+    `✕` control. On dark paper they read as barely-there. The rule the pass
+    produced: **text meant to be read sets in ink-soft or above; a control
+    keeps the 3:1 non-text floor; ink-faint keeps ghosts, unfilled marks,
+    placeholders, and the deliberate in-flight/inactive recede** (a submitting
+    query row, an inactive tab — transient or duplicated states, not reading
+    material). Empty states keep their italic (the quietness) and take
+    ink-soft (the legibility). Coach/journal/trends carry the same italic
+    ink-faint empty-state pattern from their accepted rounds — aligning them
+    rides the retirement phase's consistency sweep, not this fix round.
+11. **The in-flight history row stacks its trailing cluster** — status word
+    over timestamp, End-aligned. Side by side, the two unweighted texts
+    out-measured the weighted title and crushed it to a letter column: the
+    Round 1 Rows-measure-unweighted-first lesson, relearned on a device.
 
 ## Behavior
 

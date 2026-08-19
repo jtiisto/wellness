@@ -261,7 +261,9 @@ private fun ReportTable(table: ReportBlock.Table) {
                         inlines = cell,
                         index = index,
                         style = LogbookTheme.type.tableHeader,
-                        color = palette.inkFaint,
+                        // inkSoft: column names are read, not ghosted — dark
+                        // inkFaint (2.56:1) failed the device pass here.
+                        color = palette.inkSoft,
                         caps = true,
                     )
                 }

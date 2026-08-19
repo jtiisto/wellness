@@ -183,13 +183,19 @@ private fun LocationField(
     }
 }
 
-/** The system's voice for absence: italic, faint, and saying only what is missing. */
+/**
+ * The system's voice for absence: italic, quiet, saying only what is missing.
+ *
+ * inkSoft, not inkFaint — a sentence meant to be read has a prose floor, and
+ * dark inkFaint is the 2.56:1 ghost tier (Round 4 device pass). The italic
+ * carries the quietness; the color has to stay legible.
+ */
 @Composable
 internal fun EmptyLine(text: String, modifier: Modifier = Modifier) {
     Text(
         text = text,
         style = LogbookTheme.type.body.copy(fontStyle = FontStyle.Italic),
-        color = LogbookTheme.palette.inkFaint,
+        color = LogbookTheme.palette.inkSoft,
         modifier = modifier.padding(vertical = LogbookSpace.grid * 2),
     )
 }

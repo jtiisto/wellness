@@ -114,7 +114,7 @@ private fun StrapContent(
             Text(
                 text = StrapCopy.EMPTY,
                 style = LogbookTheme.type.body.copy(fontStyle = FontStyle.Italic),
-                color = palette.inkFaint,
+                color = palette.inkSoft,
             )
         }
         state.known.forEach { device ->
@@ -205,7 +205,8 @@ private fun CaptureControls(state: StrapUiState, onStartCapture: () -> Unit, onS
         Text(
             text = StrapCopy.CAPTURE_HINT,
             style = LogbookTheme.type.body,
-            color = palette.inkFaint,
+            // A hint is read, not ghosted — prose floor (Round 4 device pass).
+            color = palette.inkSoft,
         )
     }
 }

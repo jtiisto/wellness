@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
@@ -102,20 +103,33 @@ private fun HistoryRow(
             modifier = Modifier.weight(1f),
         )
         if (mark == HistoryMark.PENDING) {
+            // The word stacks OVER the stamp: side by side, the two unweighted
+            // texts out-measure the weighted title and crush it to a letter
+            // column (Rows measure unweighted children first — the Round 1
+            // lesson, relearned on this row in the Round 4 device pass).
+            Column(horizontalAlignment = Alignment.End) {
+                Text(
+                    text = AnalysisUiLogic.statusLabel(row.status),
+                    style = LogbookTheme.type.eyebrow,
+                    color = palette.inkSoft,
+                    // Already spoken by the mark beside it.
+                    modifier = Modifier.clearAndSetSemantics { },
+                )
+                Text(
+                    text = AnalysisFormat.formatTimestamp(row.createdAt, zone),
+                    style = LogbookTheme.type.meta,
+                    color = palette.inkSoft,
+                    maxLines = 1,
+                )
+            }
+        } else {
             Text(
-                text = AnalysisUiLogic.statusLabel(row.status),
-                style = LogbookTheme.type.eyebrow,
+                text = AnalysisFormat.formatTimestamp(row.createdAt, zone),
+                style = LogbookTheme.type.meta,
                 color = palette.inkSoft,
-                // Already spoken by the mark beside it.
-                modifier = Modifier.clearAndSetSemantics { },
+                maxLines = 1,
             )
         }
-        Text(
-            text = AnalysisFormat.formatTimestamp(row.createdAt, zone),
-            style = LogbookTheme.type.meta,
-            color = palette.inkSoft,
-            maxLines = 1,
-        )
         // Hidden for exactly the two statuses the server refuses to delete. A
         // status neither side recognises stays deletable — otherwise the row
         // could never be removed at all.
@@ -127,7 +141,9 @@ private fun HistoryRow(
                     .semantics { contentDescription = "Delete report" },
                 contentAlignment = Alignment.Center,
             ) {
-                Text(text = DELETE_GLYPH, style = LogbookTheme.type.data, color = palette.inkFaint)
+                // inkSoft, not inkFaint: a control has a 3:1 floor and dark
+                // inkFaint is the 2.56:1 ghost tier.
+                Text(text = DELETE_GLYPH, style = LogbookTheme.type.data, color = palette.inkSoft)
             }
         } else {
             // Keeps the row's right edge in the same place whether the control
