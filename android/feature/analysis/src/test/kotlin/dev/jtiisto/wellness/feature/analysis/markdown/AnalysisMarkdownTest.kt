@@ -22,6 +22,8 @@ class AnalysisMarkdownTest {
 
     private fun render(markdown: String) = AnalysisMarkdown.render(markdown)
 
+    private fun statusInlines(text: String) = AnalysisMarkdown.statusInlines(text)
+
     /** Every inline in a block tree, flattened, for structural assertions. */
     private fun inlinesOf(blocks: List<ReportBlock>): List<ReportInline> =
         blocks.flatMap { block ->
@@ -131,64 +133,133 @@ class AnalysisMarkdownTest {
         assertEquals(2, table.rows.single().size)
     }
 
-    // ---- collapseStatusText ------------------------------------------------
+    // ---- status markers: the wire's three tokens ----------------------------
 
     @Test
-    @DisplayName("a dot followed by its word collapses to the dot")
-    fun dotThenWordCollapses() {
-        assertEquals("🟢", AnalysisMarkdown.collapseStatusText("🟢 OK"))
-        assertEquals("🟡", AnalysisMarkdown.collapseStatusText("🟡 YELLOW"))
-        assertEquals("🔴", AnalysisMarkdown.collapseStatusText("🔴 RED"))
-        assertEquals("✅", AnalysisMarkdown.collapseStatusText("✅ PASS"))
-        assertEquals("❌", AnalysisMarkdown.collapseStatusText("❌ FAIL"))
-        assertEquals("⚠️", AnalysisMarkdown.collapseStatusText("⚠️ GREEN"))
+    @DisplayName("each token becomes the status node it names, and nothing else")
+    fun tokensBecomeStatusNodes() {
+        assertEquals(listOf(ReportInline.Status(StatusMarker.OK)), statusInlines("[ok]"))
+        assertEquals(listOf(ReportInline.Status(StatusMarker.WATCH)), statusInlines("[watch]"))
+        assertEquals(listOf(ReportInline.Status(StatusMarker.ACT)), statusInlines("[act]"))
     }
 
     @Test
-    @DisplayName("the word first collapses too — the pair reads in both orders")
-    fun wordThenDotCollapses() {
-        assertEquals("🟢", AnalysisMarkdown.collapseStatusText("OK 🟢"))
-        assertEquals("🔴", AnalysisMarkdown.collapseStatusText("RED 🔴"))
-        assertEquals("⚠️", AnalysisMarkdown.collapseStatusText("FAIL ⚠️"))
-    }
-
-    @Test
-    @DisplayName("matching is case-insensitive and global, in prose and in table cells alike")
-    fun collapseIsCaseInsensitiveAndGlobal() {
-        assertEquals("🟢", AnalysisMarkdown.collapseStatusText("🟢 ok"))
-        assertEquals("🟢", AnalysisMarkdown.collapseStatusText("🟢 Ok"))
+    @DisplayName("a marker keeps the prose either side of it — a run can hold several")
+    fun markersSplitTheirOwnRun() {
         assertEquals(
-            "| Sleep | 🟢 | Load | 🔴 |",
-            AnalysisMarkdown.collapseStatusText("| Sleep | 🟢 OK | Load | FAIL 🔴 |"),
-        )
-        assertEquals(
-            "Recovery is 🟢 and readiness is 🟡.",
-            AnalysisMarkdown.collapseStatusText("Recovery is GREEN 🟢 and readiness is 🟡 YELLOW."),
+            listOf(
+                ReportInline.Text("Recovery is "),
+                ReportInline.Status(StatusMarker.OK),
+                ReportInline.Text(" and load is "),
+                ReportInline.Status(StatusMarker.ACT),
+                ReportInline.Text("."),
+            ),
+            statusInlines("Recovery is [ok] and load is [act]."),
         )
     }
 
     @Test
-    @DisplayName("a longer word starting with a status word is left alone")
-    fun collapseRespectsWordBoundaries() {
-        assertEquals("🟢 OKAY", AnalysisMarkdown.collapseStatusText("🟢 OKAY"))
-        assertEquals("REDACTED 🔴", AnalysisMarkdown.collapseStatusText("REDACTED 🔴"))
+    @DisplayName("a token the model shouted still reads — the output contract is not enforced upstream")
+    fun tokenMatchingIsCaseInsensitive() {
+        assertEquals(listOf(ReportInline.Status(StatusMarker.OK)), statusInlines("[OK]"))
+        assertEquals(listOf(ReportInline.Status(StatusMarker.WATCH)), statusInlines("[Watch]"))
     }
 
     @Test
-    @DisplayName("text with no status pair passes through untouched")
-    fun collapseLeavesOrdinaryTextAlone() {
-        val prose = "The session went well and the numbers held."
-        assertEquals(prose, AnalysisMarkdown.collapseStatusText(prose))
+    @DisplayName("a token outside the vocabulary stays the literal text it was written as")
+    fun unknownTokensAreLeftAlone() {
+        assertEquals(listOf(ReportInline.Text("[flag] and [ok2]")), statusInlines("[flag] and [ok2]"))
+    }
+
+    // ---- status markers: the legacy grammar device caches still speak -------
+
+    @Test
+    @DisplayName("every legacy emoji maps onto the same three nodes")
+    fun legacyEmojiMapToStatusNodes() {
+        assertEquals(listOf(ReportInline.Status(StatusMarker.OK)), statusInlines("✅"))
+        assertEquals(listOf(ReportInline.Status(StatusMarker.OK)), statusInlines("🟢"))
+        assertEquals(listOf(ReportInline.Status(StatusMarker.WATCH)), statusInlines("🟡"))
+        assertEquals(listOf(ReportInline.Status(StatusMarker.WATCH)), statusInlines("⚠️"))
+        // The same marker without its variation selector.
+        assertEquals(listOf(ReportInline.Status(StatusMarker.WATCH)), statusInlines("⚠"))
+        assertEquals(listOf(ReportInline.Status(StatusMarker.ACT)), statusInlines("🔴"))
+        assertEquals(listOf(ReportInline.Status(StatusMarker.ACT)), statusInlines("❌"))
     }
 
     @Test
-    @DisplayName("the collapse runs before parsing, so a rendered table cell shows only the dot")
-    fun collapseAppliesToRenderedOutput() {
-        val blocks = render("| Metric | Status |\n|---|---|\n| Sleep | 🟢 OK |")
+    @DisplayName("the redundant word beside the emoji is absorbed, in either order and any case")
+    fun legacyPairsAreAbsorbed() {
+        for (pair in listOf("✅ OK", "OK ✅", "✅ PASS", "✅ green", "GREEN ✅")) {
+            assertEquals(listOf(ReportInline.Status(StatusMarker.OK)), statusInlines(pair), pair)
+        }
+        for (pair in listOf("🔴 RED", "RED 🔴", "🔴 FAIL", "FAIL 🔴", "🔴 Red")) {
+            assertEquals(listOf(ReportInline.Status(StatusMarker.ACT)), statusInlines(pair), pair)
+        }
+        assertEquals(listOf(ReportInline.Status(StatusMarker.WATCH)), statusInlines("🟡 YELLOW"))
+    }
 
-        val table = blocks.filterIsInstance<ReportBlock.Table>().single()
-        val cell = table.rows.single()[1].joinToString("") { (it as ReportInline.Text).text }
-        assertEquals("🟢", cell.trim())
+    @Test
+    @DisplayName("the emoji decides the verdict, never the word beside it")
+    fun theEmojiWinsTheContradiction() {
+        // The collapse this replaced let the dot win, and reports have been
+        // read that way since 2026-07: inheriting it beats inventing a
+        // tie-break nobody has seen.
+        assertEquals(listOf(ReportInline.Status(StatusMarker.WATCH)), statusInlines("⚠️ GREEN"))
+    }
+
+    @Test
+    @DisplayName("a longer word starting with a status word keeps its letters")
+    fun markersRespectWordBoundaries() {
+        assertEquals(
+            listOf(ReportInline.Status(StatusMarker.OK), ReportInline.Text(" OKAY")),
+            statusInlines("✅ OKAY"),
+        )
+        assertEquals(
+            listOf(ReportInline.Text("REDACTED "), ReportInline.Status(StatusMarker.ACT)),
+            statusInlines("REDACTED 🔴"),
+        )
+    }
+
+    @Test
+    @DisplayName("a bare status word is prose, and a plain check mark is left alone")
+    fun unmarkedTextPassesThrough() {
+        val prose = "The session went well, readiness is OK and the numbers held."
+        assertEquals(listOf(ReportInline.Text(prose)), statusInlines(prose))
+        assertEquals(listOf(ReportInline.Text("✓ Zone 2 held")), statusInlines("✓ Zone 2 held"))
+        assertEquals(listOf(ReportInline.Text("🚩 flagged")), statusInlines("🚩 flagged"))
+    }
+
+    // ---- status markers: through the whole pipeline -------------------------
+
+    @Test
+    @DisplayName("a table cell carrying a marker renders as the status node, token or legacy")
+    fun markersSurviveIntoRenderedCells() {
+        val blocks = render(
+            "| Metric | Status |\n|---|---|\n| Sleep | [ok] |\n| Load | 🔴 RED |",
+        )
+
+        val rows = blocks.filterIsInstance<ReportBlock.Table>().single().rows
+        assertEquals(ReportInline.Status(StatusMarker.OK), rows[0][1].single())
+        assertEquals(ReportInline.Status(StatusMarker.ACT), rows[1][1].single())
+    }
+
+    @Test
+    @DisplayName("markers inside emphasis and prose reach the model too")
+    fun markersSurviveInsideOtherInlines() {
+        val blocks = render("**[watch]** readiness, and load is [act].")
+
+        val strong = inlinesOf(blocks).filterIsInstance<ReportInline.Strong>().single()
+        assertEquals(ReportInline.Status(StatusMarker.WATCH), strong.children.single())
+        assertTrue(inlinesOf(blocks).contains(ReportInline.Status(StatusMarker.ACT)))
+    }
+
+    @Test
+    @DisplayName("a token written as code is the token itself, not a status")
+    fun codeSpansAreNotScanned() {
+        val blocks = render("Write `[ok]` in the cell.")
+
+        assertEquals("[ok]", inlinesOf(blocks).filterIsInstance<ReportInline.Code>().single().text)
+        assertTrue(inlinesOf(blocks).none { it is ReportInline.Status })
     }
 
     // ---- inline mapping ----------------------------------------------------
@@ -362,9 +433,22 @@ class AnalysisMarkdownTest {
         assertTrue(text.contains("<b onmouseover=\"alert(1)\">"), "the inline vector must be visible text")
         assertFalse(text.contains("&lt;"), "nothing in this pipeline escapes, because nothing interprets")
         assertTrue(text.contains("[image: fixture alt]"), text)
-        // Both orders of the status pair collapsed on the way in.
-        assertFalse(text.contains("OK"), "the dot-then-word pair should have collapsed")
-        assertFalse(text.contains("RED"), "the word-then-dot pair should have collapsed")
+
+        // The status column: two tokens as the server now serves them, and one
+        // legacy pair as a cached body still says it — all three arriving as
+        // the same node, none of them left as characters in the text.
+        assertEquals(
+            listOf(
+                ReportInline.Status(StatusMarker.OK),
+                ReportInline.Status(StatusMarker.ACT),
+                ReportInline.Status(StatusMarker.OK),
+            ),
+            inlinesOf(blocks).filterIsInstance<ReportInline.Status>(),
+        )
+        assertFalse(text.contains("[ok]"), "a token must not survive as text")
+        assertFalse(text.contains("[act]"), "a token must not survive as text")
+        assertFalse(text.contains("🟢"), "a legacy emoji must not survive as text")
+        assertFalse(text.contains("OK"), "the word beside the legacy emoji is absorbed with it")
     }
 
     private fun goldenFixture(): String =

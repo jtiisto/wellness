@@ -5,6 +5,7 @@ LLM-powered analysis reports with async execution.
 import asyncio
 import json
 import os
+import re
 import shutil
 from pathlib import Path
 
@@ -22,6 +23,67 @@ from .background import spawn
 # Grace added to the largest registered query timeout before a non-terminal
 # report can be reaped as stale at runtime (see create_report_if_idle).
 STALE_REPORT_GRACE_SECONDS = 120
+
+
+# ==================== Status Markers ====================
+
+# A report serves judgment as *data*: the wire vocabulary is three neutral
+# tokens and each client draws them in its own notation (the query `icon`
+# pattern — see docs/ARCHITECTURE.md, "Status marker vocabulary"). The coloured
+# emoji in existing reports are the model's own house style, not something any
+# prompt in this repo asked for, so the tokens are a vocabulary being created
+# rather than one being changed.
+STATUS_MARKER_WORD = r"(?:OK|RED|YELLOW|GREEN|PASS|FAIL)"
+
+# The emoji the corpus actually contains, mapped to their token. A plain ✓ is
+# deliberately absent: it is the second most common marker there is, already
+# monochrome, and needs no fix. 🟢 and ❌ are absent because they have never
+# appeared in a report — the clients' own legacy mapping still reads them, so
+# passing them through costs nothing.
+STATUS_MARKER_TOKENS = {
+    "✅": "[ok]",
+    "🟡": "[watch]",
+    "⚠": "[watch]",
+    "🔴": "[act]",
+}
+
+# Spelled as a regex escape rather than pasted in, because the character is
+# invisible in source: the emoji variation selector, which is what makes ⚠ and
+# ⚠️ the one marker they read as.
+_VARIATION_SELECTOR = "\\ufe0f"
+
+# A marker is the emoji plus — optionally, in either order — the word saying
+# the same thing again, which is the pair grammar both clients have collapsed
+# on the way to the renderer since 2026-07 (public/js/analysis/utils.js). The
+# word is only ever recognized *beside* an emoji, because "OK" on its own is
+# prose; `\b` keeps OKAY and REDACTED whole for the same reason.
+STATUS_MARKER_RE = re.compile(
+    rf"(?:\b{STATUS_MARKER_WORD}\s+)?"
+    rf"({'|'.join(STATUS_MARKER_TOKENS)}){_VARIATION_SELECTOR}?"
+    rf"(?:\s+{STATUS_MARKER_WORD}\b)?",
+    re.IGNORECASE,
+)
+
+
+def normalize_status_markers(markdown: str | None) -> str | None:
+    """Rewrite legacy status markers in a report body into the wire's tokens.
+
+    Pure, and applied at *read* time only — the stored row keeps whatever the
+    CLI wrote, so the mapping stays revisable and no report is ever rewritten
+    in place. Anything unrecognized (🚩, 🔼, a bare ✓, a body with no marker at
+    all — which is the common case) passes through verbatim.
+    """
+    if not markdown:
+        return markdown
+    return STATUS_MARKER_RE.sub(lambda m: STATUS_MARKER_TOKENS[m.group(1)], markdown)
+
+
+def _served_report(report: dict) -> dict:
+    """A report row on its way out, its markers in the wire vocabulary."""
+    body = report.get("response_markdown")
+    if not body:
+        return report
+    return {**report, "response_markdown": normalize_status_markers(body)}
 
 
 # ==================== Claude CLI Execution ====================
@@ -203,7 +265,8 @@ def create_router(db_path: Path) -> APIRouter:
 
     @router.get("/reports/pending")
     def api_pending_reports():
-        return JSONResponse(content=get_pending_reports(db_path_str))
+        return JSONResponse(content=[
+            _served_report(r) for r in get_pending_reports(db_path_str)])
 
     @router.get("/reports")
     def api_list_reports():
@@ -218,7 +281,7 @@ def create_router(db_path: Path) -> APIRouter:
         report = get_report(db_path_str, report_id)
         if not report:
             raise HTTPException(status_code=404, detail="Report not found")
-        return JSONResponse(content=report)
+        return JSONResponse(content=_served_report(report))
 
     @router.delete("/reports/{report_id}")
     def api_delete_report(report_id: int):

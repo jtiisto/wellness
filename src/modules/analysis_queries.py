@@ -61,6 +61,15 @@ _JOURNAL_SCHEMA = (
     "name, category, type ('simple' or 'quantifiable').\n"
 )
 
+_STATUS_CONTRACT = (
+    "Output contract — status markers: when a line, table cell or verdict "
+    "carries a status, write it as exactly one of these three tokens: "
+    "`[ok]` (on plan / in range), `[watch]` (worth attention), "
+    "`[act]` (needs action now). Never use status emoji and never use a "
+    "colour word — the apps render the tokens in their own notation. "
+    "Most lines need no marker at all; leave those unmarked.\n"
+)
+
 _PARALLEL_HINT = (
     "IMPORTANT: After the Garmin sync, issue ALL of the data-fetching tool "
     "calls listed below in a SINGLE response — do NOT call them one at a "
@@ -96,7 +105,8 @@ QUERIES = list(_USER_QUERIES) + [
             "Were rest periods adequate based on HR recovery?\n\n"
             "## Recommendations\n"
             "2-3 specific, actionable items for the next session based on today's performance.\n\n"
-            "Use actual data from the MCP tools. If today's workout data is not available, say so clearly."
+            "Use actual data from the MCP tools. If today's workout data is not available, say so clearly.\n\n"
+            + _STATUS_CONTRACT
         ),
     },
     {
@@ -129,7 +139,8 @@ QUERIES = list(_USER_QUERIES) + [
             "## Watch For\n"
             "1-2 things to monitor during the session (e.g., 'knee sensitivity during squats', "
             "'keep HR below X during Zone 2').\n\n"
-            "Use actual data from the MCP tools. Be direct and specific."
+            "Use actual data from the MCP tools. Be direct and specific.\n\n"
+            + _STATUS_CONTRACT
         ),
     },
     {
@@ -171,7 +182,8 @@ QUERIES = list(_USER_QUERIES) + [
             "## Priorities for Next Week\n"
             "3 specific priorities based on the data (e.g., 'increase squat weight by 5 lbs', "
             "'add a Zone 2 session', 'improve sleep consistency').\n\n"
-            "Use actual data from the MCP tools. Include specific numbers where available."
+            "Use actual data from the MCP tools. Include specific numbers where available.\n\n"
+            + _STATUS_CONTRACT
         ),
     },
 ]

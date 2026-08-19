@@ -131,15 +131,22 @@ System back: PROGRESS → `openQueries()` (poll continues; only Cancel abandons)
 
 ### `:feature:analysis` — Markdown pipeline (§ the round's corrected contract)
 
-Pipeline: `collapseStatusText` (1:1 regex port — word set `OK|RED|YELLOW|GREEN|PASS|FAIL`, dot set 🟢🟡🔴✅❌⚠️, both orders, case-insensitive, global, prose and table cells) → commonmark-java parse (gfm-tables, **source spans enabled**) → recursive render model:
+Pipeline: commonmark-java parse (gfm-tables, **source spans enabled**) → recursive render model, with `statusInlines` reading the status markers out of each text run on the way (the text-mangling `collapseStatusText` pre-pass retired with the status-marker protocol change):
 
 ```kotlin
 sealed ReportBlock { Heading(level: Int /*1..6*/, inlines), Paragraph(inlines), BulletList(items: List<List<ReportBlock>>),
                      OrderedList(start: Int, items: List<List<ReportBlock>>), Quote(children: List<ReportBlock>),
                      CodeBlock(text), Table(header: List<List<ReportInline>>, rows: List<List<List<ReportInline>>>), Rule }
 sealed ReportInline { Text(text), Code(text), Strong(children: List<ReportInline>), Emphasis(children: List<ReportInline>),
-                      Link(children: List<ReportInline>, destination: String) }
+                      Status(status: StatusMarker /*OK|WATCH|ACT*/), Link(children: List<ReportInline>, destination: String) }
 ```
+
+**Status markers (§ the protocol change, 2026-08-19).** The wire serves judgment as data — three tokens, each client drawing them in its own notation; the vocabulary and the server's read-time normalizer are specified in `../../docs/ARCHITECTURE.md` ("Status marker vocabulary"), and the design in `specs/logbook-design-system.md` ("Status markers"). This client's rules:
+
+- `[ok]` / `[watch]` / `[act]` (case-insensitive) in any text run → `ReportInline.Status`. They fall in table cells almost always and in prose occasionally, so they are read wherever they appear, splitting their run into prose and marker. A code span is **not** scanned: `` `[ok]` `` is a reader asking to see the token. A token outside the vocabulary is not a marker and stays its own literal text.
+- **Legacy grammar, same node**: the emoji ✅🟢 → OK, 🟡⚠️(⚠) → WATCH, 🔴❌ → ACT, each optionally paired with `OK|RED|YELLOW|GREEN|PASS|FAIL` in either order, case-insensitive, `\b`-protected (`OKAY`, `REDACTED` survive). The emoji decides the verdict, never the word — inherited from the collapse this replaced. It stays because `payload_cache` serves pre-change bodies that are never re-fetched; the server would have normalized ✅🟡⚠️🔴 already, and 🟢/❌ are the pair it passes through.
+- Plain `✓` is deliberately untouched — already monochrome ink, and the second most common marker in the corpus.
+- Rendered (`ReportBody`) as **ink mark + mono caps word**: filled dot `OK`, half dot `WATCH`, open dot + mono `!` `ACT`. The mark is inline content over a blank placeholder and the word is the text, so a screen reader announces the verdict once. Monochrome from the screen's own primary text colour — it must read as ink under either theme.
 
 Mapping rules, exhaustive:
 - **Raw HTML (`HtmlBlock`/`HtmlInline`) → `ReportInline.Text(rawLexeme)` — UNESCAPED.** Compose `Text` has no HTML interpretation, so the raw source (`<img onerror=…>`) renders as inert visible text. Entity-escaping (`&lt;img`) was the PWA's innerHTML-world mechanism and would display literally wrong here. The 4 JS vectors translate **semantically**: (a/b/c) no HTML render node exists anywhere in the model and the original tag text appears as inert `Text`; (d) H1/strong/code/table still produce their typed nodes.
@@ -164,7 +171,7 @@ Composables: `ReportBody(blocks)`, `QueryCard` (icon map, inline location field,
 
 | Suite | Module | Cases |
 |---|---|---|
-| `AnalysisMarkdownTest` — 4 JS vectors translated semantically (no HTML node in model + raw lexeme inert + H1/strong/code/table nodes present); collapseStatusText matrix; link URL preservation; image fallback; nested strong/code inside table cells; multi-level lists; blockquote; unknown-node source-span fallback; soft/hard breaks | :feature:analysis | ~22 |
+| `AnalysisMarkdownTest` — 4 JS vectors translated semantically (no HTML node in model + raw lexeme inert + H1/strong/code/table nodes present); status-marker matrix (tokens, legacy emoji/pair grammar, word boundaries, unknown-token and `✓` passthrough, code spans unscanned, markers through the whole pipeline); link URL preservation; image fallback; nested strong/code inside table cells; multi-level lists; blockquote; unknown-node source-span fallback; soft/hard breaks | :feature:analysis | ~28 |
 | `AnalysisFormatTest` — timestamp (valid/fractional/null/blank/**malformed**, DST boundary, non-UTC injected zone); elapsed (0/59/60/61/3600/5400, negative-skew clamp, malformed→0) | :feature:analysis | ~12 |
 | `AnalysisStoreTest` (virtual time; injected single-thread control context = test scheduler) — the FULL matrix above, plus the race pins: superseded tick after `cancelActive` commits nothing; old-report terminal tick vs newly adopted report (generation mismatch); foreground immediate tick vs background-era completion ordering; duplicate `initialize()` awaits one Deferred; atomic submit guard under two rapid calls; `openReport(nonterminal)` → PROGRESS + poll; delete-vs-in-flight-tick (generation invalidated first); terminal tick in QUERIES and in REPORT; poll-404 stop; UNKNOWN ceiling; pause/resume immediate tick; init offline-with-cache → HISTORY / offline-bare → QUERIES+error; foreground re-init after failed init; pre-init foreground latch. `runCurrent`/bounded `advanceTimeBy` only — `advanceUntilIdle` cannot settle an infinite poll loop | :feature:analysis | ~34 |
 | `AnalysisRepositoryTest` — five-row matrix per call; terminal-only cache predicate incl. UNKNOWN-not-cached; history silent fallback; prune-to-50 (active id survives); delete cache maintenance best-effort (DAO throw doesn't fail delete); `AnalysisHttpException` detail extraction (string / non-JSON / 422-array → null detail); corrupted cache rethrows original | :core:data | ~18 |

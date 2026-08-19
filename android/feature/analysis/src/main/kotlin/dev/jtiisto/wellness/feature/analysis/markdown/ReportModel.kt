@@ -1,6 +1,16 @@
 package dev.jtiisto.wellness.feature.analysis.markdown
 
 /**
+ * The wire's three status markers.
+ *
+ * Deliberately a closed vocabulary of *judgments*, not of colours or glyphs:
+ * the server serves the token, the renderer decides what it looks like. A
+ * token outside this set is not a status — it stays the literal text it was
+ * written as, which is a degradation a reader can still read.
+ */
+enum class StatusMarker { OK, WATCH, ACT }
+
+/**
  * A run of text inside a block.
  *
  * There is deliberately **no HTML node**. Report bodies are model-produced and a
@@ -15,6 +25,17 @@ sealed interface ReportInline {
     data class Code(val text: String) : ReportInline
     data class Strong(val children: List<ReportInline>) : ReportInline
     data class Emphasis(val children: List<ReportInline>) : ReportInline
+
+    /**
+     * A status marker, as judgment rather than as characters.
+     *
+     * The wire carries `[ok]` / `[watch]` / `[act]` and each client draws them
+     * in its own notation (see docs/ARCHITECTURE.md, "Status marker
+     * vocabulary"); this client's notation is an ink mark and a mono word, so
+     * the marker has to survive as a *node* — a coloured emoji sitting in a
+     * text run is precisely what it stops being.
+     */
+    data class Status(val status: StatusMarker) : ReportInline
 
     /**
      * A link, with its destination kept.

@@ -1,22 +1,35 @@
 package dev.jtiisto.wellness.feature.analysis.ui
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.InlineTextContent
+import androidx.compose.foundation.text.appendInlineContent
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.Placeholder
+import androidx.compose.ui.text.PlaceholderVerticalAlign
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -31,6 +44,7 @@ import dev.jtiisto.wellness.core.ui.theme.WellnessSpace
 import dev.jtiisto.wellness.core.ui.theme.WellnessTheme
 import dev.jtiisto.wellness.feature.analysis.markdown.ReportBlock
 import dev.jtiisto.wellness.feature.analysis.markdown.ReportInline
+import dev.jtiisto.wellness.feature.analysis.markdown.StatusMarker
 
 /**
  * A parsed report, drawn.
@@ -58,6 +72,7 @@ private fun Block(block: ReportBlock) {
             text = inlineText(block.inlines),
             style = headingStyle(block.level),
             color = palette.textPrimary,
+            inlineContent = statusMarks(),
             modifier = Modifier.padding(top = if (block.level <= 2) WellnessSpace.sm else 2.dp),
         )
 
@@ -65,6 +80,7 @@ private fun Block(block: ReportBlock) {
             text = inlineText(block.inlines),
             style = type.body,
             color = palette.textPrimary,
+            inlineContent = statusMarks(),
         )
 
         is ReportBlock.BulletList -> Column(
@@ -168,6 +184,7 @@ private fun Cell(inlines: List<ReportInline>, style: TextStyle, color: Color) {
         text = inlineText(inlines),
         style = style,
         color = color,
+        inlineContent = statusMarks(),
         modifier = Modifier
             .width(CELL_WIDTH)
             .padding(horizontal = WellnessSpace.sm, vertical = CELL_PADDING),
@@ -195,6 +212,7 @@ private fun AnnotatedString.Builder.appendInlines(
     inlines.forEach { inline ->
         when (inline) {
             is ReportInline.Text -> append(inline.text)
+            is ReportInline.Status -> appendStatus(inline.status)
             is ReportInline.Code -> withStyle(
                 SpanStyle(fontFamily = FontFamily.Monospace, background = codeBackground),
             ) { append(inline.text) }
@@ -214,6 +232,83 @@ private fun AnnotatedString.Builder.appendInlines(
     }
 }
 
+/**
+ * A status marker: the mark, then the word it is spoken as.
+ *
+ * The wire serves judgment as a token and this client draws it — the journal's
+ * shape grammar turned onto content, so a verdict is read as a filled, half or
+ * open mark rather than as a colour. The word is not decoration: it is what a
+ * screen reader announces (the mark itself occupies a blank placeholder, so
+ * nothing is spoken twice), and it is what makes the three marks legible to a
+ * reader who has never been given a legend. The `!` on [StatusMarker.ACT] is
+ * the system's alarm — ink and a mono bang, never red.
+ */
+private fun AnnotatedString.Builder.appendStatus(status: StatusMarker) {
+    appendInlineContent(statusMarkId(status), STATUS_MARK_ALT)
+    withStyle(
+        SpanStyle(
+            fontFamily = FontFamily.Monospace,
+            fontWeight = FontWeight(STRONG_WEIGHT),
+            letterSpacing = STATUS_TRACKING,
+        ),
+    ) {
+        append(statusWord(status))
+    }
+}
+
+private fun statusWord(status: StatusMarker): String = when (status) {
+    StatusMarker.OK -> "OK"
+    StatusMarker.WATCH -> "WATCH"
+    StatusMarker.ACT -> "! ACT"
+}
+
+private fun statusMarkId(status: StatusMarker): String = "status-${status.name}"
+
+/**
+ * The three marks, as inline content the running text holds a place for.
+ *
+ * Monochrome, from the screen's own primary text colour: Analysis is still
+ * drawn in Graphite and the mark has to read as ink on paper under either
+ * system, so it takes no palette token that belongs to one of them.
+ */
+@Composable
+private fun statusMarks(): Map<String, InlineTextContent> {
+    val ink = WellnessTheme.palette.textPrimary
+    return StatusMarker.entries.associate { status ->
+        statusMarkId(status) to InlineTextContent(
+            Placeholder(STATUS_MARK_BOX, STATUS_MARK_SIZE, PlaceholderVerticalAlign.TextCenter),
+        ) { _ ->
+            // The box is wider than the mark it holds, and the difference is
+            // the gap before the word.
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.CenterStart) {
+                Canvas(modifier = Modifier.fillMaxHeight().aspectRatio(1f)) {
+                    drawStatusMark(status, ink)
+                }
+            }
+        }
+    }
+}
+
+/** Filled, half, open — the same three verdicts the week marks draw. */
+private fun DrawScope.drawStatusMark(status: StatusMarker, ink: Color) {
+    val hairline = MARK_STROKE.toPx()
+    val radius = size.minDimension / 2f
+    when (status) {
+        StatusMarker.OK -> drawCircle(color = ink)
+
+        StatusMarker.WATCH -> {
+            clipRect(right = center.x) { drawCircle(color = ink) }
+            drawCircle(color = ink, radius = radius - hairline / 2f, style = Stroke(hairline))
+        }
+
+        StatusMarker.ACT -> drawCircle(
+            color = ink,
+            radius = radius - hairline / 2f,
+            style = Stroke(hairline),
+        )
+    }
+}
+
 @Composable
 private fun headingStyle(level: Int) = when (level) {
     1 -> WellnessTheme.type.headline
@@ -222,6 +317,13 @@ private fun headingStyle(level: Int) = when (level) {
 }
 
 private const val STRONG_WEIGHT = 650
+
+/** One blank the mark is drawn over, so the reader hears the word and not it. */
+private const val STATUS_MARK_ALT = " "
+private val STATUS_MARK_SIZE = 10.sp
+private val STATUS_MARK_BOX = 14.sp
+private val STATUS_TRACKING = 0.5.sp
+private val MARK_STROKE = 1.dp
 private val MARKER_GUTTER = 20.dp
 private val CELL_WIDTH = 140.dp
 private val CELL_PADDING = 6.dp

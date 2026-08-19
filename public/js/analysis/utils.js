@@ -24,11 +24,29 @@ export function formatTimestamp(isoStr) {
     });
 }
 
+// The wire carries status as neutral data — three tokens, each client drawing
+// them in its own notation (docs/ARCHITECTURE.md, "Status marker vocabulary").
+// This client's notation is the emoji it has always shown, so the tokens are
+// expanded straight back into it, in the same pre-parse slot the collapse has
+// always run in. An unknown token is left as its own literal text: a reader
+// can still read "[flag]", which is more than a swallowed marker gives them.
+const STATUS_TOKEN_EMOJI = { '[ok]': '✅', '[watch]': '🟡', '[act]': '🔴' };
+
+function expandStatusTokens(md) {
+    return md.replace(/\[(?:ok|watch|act)\]/gi, m => STATUS_TOKEN_EMOJI[m.toLowerCase()]);
+}
+
 // Status cells in report tables often render as "🟢 OK" / "🟡 YELLOW" /
 // "🔴 RED" — the color emoji and the word carry the same information, so
 // the text is pure visual noise. Collapse the redundant pair (in either
 // order) to emoji-only so the status column scans cleanly. Applied to the
 // raw markdown before parsing so it also catches prose, not just cells.
+//
+// The server normalizes these pairs into tokens now, but this stays: report
+// bodies are cached in LocalForage, so after a deploy every device keeps
+// serving itself pre-change markdown out of its own cache, and the pairs
+// would come back looking exactly as noisy as they did before. It runs after
+// the expansion, so it also tidies a body that mixes the two vocabularies.
 function collapseStatusText(md) {
     const word = '(?:OK|RED|YELLOW|GREEN|PASS|FAIL)';
     const dot = '[🟢🟡🔴✅❌⚠️]';
@@ -39,7 +57,7 @@ function collapseStatusText(md) {
 
 export function markdownToHtml(md) {
     if (!md) return '';
-    const cleaned = collapseStatusText(md);
+    const cleaned = collapseStatusText(expandStatusTokens(md));
     return marked.parse(cleaned).replace(/<table>/g, '<div class="table-wrap"><table>')
                                 .replace(/<\/table>/g, '</table></div>');
 }

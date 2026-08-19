@@ -3,10 +3,12 @@ import asyncio
 import threading
 
 import pytest
+from modules.analysis import normalize_status_markers
 from modules.analysis_db import (
     create_report, update_report_running, update_report_completed,
     update_report_failed, get_report, list_reports, has_active_report
 )
+from modules.db import get_db
 
 
 def _run_async(coro):
@@ -202,6 +204,117 @@ class TestApiPendingReports:
         resp = client.get("/api/analysis/reports/pending")
         assert resp.status_code == 200
         assert resp.json() == []
+
+
+# ==================== Status markers ====================
+
+class TestNormalizeStatusMarkers:
+    """The read-time rewrite of legacy status markers into the wire's three
+    tokens. Pure function: no database, no endpoint, no report."""
+
+    @pytest.mark.parametrize("body,expected", [
+        ("✅", "[ok]"),
+        ("🟡", "[watch]"),
+        ("⚠️", "[watch]"),
+        ("⚠", "[watch]"),          # the same marker without its variation selector
+        ("🔴", "[act]"),
+    ])
+    def test_each_emoji_maps_to_its_token(self, body, expected):
+        assert normalize_status_markers(body) == expected
+
+    @pytest.mark.parametrize("body,expected", [
+        ("✅ OK", "[ok]"),
+        ("✅ GREEN", "[ok]"),
+        ("✅ PASS", "[ok]"),
+        ("🟡 YELLOW", "[watch]"),
+        ("🔴 RED", "[act]"),
+        ("🔴 FAIL", "[act]"),
+    ])
+    def test_the_word_beside_the_emoji_is_absorbed(self, body, expected):
+        assert normalize_status_markers(body) == expected
+
+    def test_the_pair_reads_in_both_orders(self):
+        assert normalize_status_markers("OK ✅") == "[ok]"
+        assert normalize_status_markers("FAIL 🔴") == "[act]"
+
+    def test_matching_is_case_insensitive(self):
+        assert normalize_status_markers("✅ ok") == "[ok]"
+        assert normalize_status_markers("✅ Pass") == "[ok]"
+        assert normalize_status_markers("red 🔴") == "[act]"
+
+    def test_the_emoji_decides_the_token_not_the_word(self):
+        # The clients' collapse has always let the dot win over a
+        # contradicting word; the rewrite inherits that rather than
+        # inventing a tie-break nobody has been reading reports under.
+        assert normalize_status_markers("⚠️ GREEN") == "[watch]"
+
+    def test_a_longer_word_starting_with_a_status_word_survives(self):
+        assert normalize_status_markers("✅ OKAY") == "[ok] OKAY"
+        assert normalize_status_markers("REDACTED 🔴") == "REDACTED [act]"
+
+    def test_a_bare_status_word_is_prose(self):
+        prose = "Readiness is OK and the plan passed."
+        assert normalize_status_markers(prose) == prose
+
+    def test_plain_check_mark_is_deliberately_untouched(self):
+        assert normalize_status_markers("✓ Zone 2 held") == "✓ Zone 2 held"
+
+    def test_unrecognized_markers_pass_through(self):
+        assert normalize_status_markers("🚩 flag and 🔼 up") == "🚩 flag and 🔼 up"
+        # Never seen in a report; the clients' own legacy mapping reads them.
+        assert normalize_status_markers("🟢 OK") == "🟢 OK"
+        assert normalize_status_markers("❌ FAIL") == "❌ FAIL"
+
+    def test_a_body_with_no_marker_is_unchanged(self):
+        body = "## Training Volume\n\nFour sessions, same as last week.\n"
+        assert normalize_status_markers(body) == body
+
+    def test_markers_are_rewritten_everywhere_they_appear(self):
+        body = (
+            "| Metric | Status |\n|---|---|\n| Sleep | ✅ OK |\n| Load | RED 🔴 |\n\n"
+            "Recovery is 🟡 YELLOW this week."
+        )
+        assert normalize_status_markers(body) == (
+            "| Metric | Status |\n|---|---|\n| Sleep | [ok] |\n| Load | [act] |\n\n"
+            "Recovery is [watch] this week."
+        )
+
+    def test_empty_bodies_survive_their_own_absence(self):
+        assert normalize_status_markers(None) is None
+        assert normalize_status_markers("") == ""
+
+
+class TestServedBodiesAreNormalized:
+    """The two endpoints that serve a body serve it in the wire vocabulary —
+    while the stored row keeps exactly what the CLI wrote."""
+
+    def test_get_report_normalizes_and_leaves_the_row_raw(self, client, analysis_initialized_db):
+        raw = "| Sleep | ✅ OK |\n\nLoad is 🔴 RED."
+        report_id = create_report(analysis_initialized_db, "test", "Test", "prompt")
+        update_report_completed(analysis_initialized_db, report_id, raw)
+
+        served = client.get(f"/api/analysis/reports/{report_id}").json()
+        assert served["response_markdown"] == "| Sleep | [ok] |\n\nLoad is [act]."
+        assert get_report(analysis_initialized_db, report_id)["response_markdown"] == raw
+
+    def test_get_report_without_a_body_is_untouched(self, client, analysis_initialized_db):
+        report_id = create_report(analysis_initialized_db, "test", "Test", "prompt")
+        served = client.get(f"/api/analysis/reports/{report_id}").json()
+        assert served["response_markdown"] is None
+
+    def test_pending_reports_normalize_too(self, client, analysis_initialized_db):
+        # A non-terminal row carrying a body is not a state the pipeline
+        # produces — only update_report_completed writes markdown. It is
+        # written by hand here because what is under test is the wiring: this
+        # endpoint serves whole rows, so it must normalize like the other one.
+        report_id = create_report(analysis_initialized_db, "test", "Test", "prompt")
+        with get_db(analysis_initialized_db) as conn:
+            conn.execute("UPDATE reports SET response_markdown=? WHERE id=?",
+                         ("Readiness ⚠️ YELLOW", report_id))
+            conn.commit()
+
+        served = client.get("/api/analysis/reports/pending").json()
+        assert served[0]["response_markdown"] == "Readiness [watch]"
 
 
 @pytest.mark.integration

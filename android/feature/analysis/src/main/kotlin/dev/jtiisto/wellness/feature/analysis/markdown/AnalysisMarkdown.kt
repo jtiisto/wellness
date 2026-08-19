@@ -32,12 +32,12 @@ import org.commonmark.parser.Parser
 /**
  * Report markdown, turned into something Compose can draw.
  *
- * The pipeline is: collapse the redundant status pairs, parse with
- * commonmark-java, then walk the AST into [ReportBlock]s. **No HTML is produced
- * at any point** — there is no renderer in the dependency, no `WebView`, and no
- * node type in the model that could carry markup. That is a stronger guarantee
- * than the PWA's escaping, which existed only because its output went to
- * `innerHTML`.
+ * The pipeline is: parse with commonmark-java, then walk the AST into
+ * [ReportBlock]s, reading the status markers out of the text runs as they go.
+ * **No HTML is produced at any point** — there is no renderer in the
+ * dependency, no `WebView`, and no node type in the model that could carry
+ * markup. That is a stronger guarantee than the PWA's escaping, which existed
+ * only because its output went to `innerHTML`.
  *
  * Source spans are on so nothing can vanish: a node type this mapper does not
  * know is emitted as the literal text it came from, rather than being skipped.
@@ -52,28 +52,76 @@ object AnalysisMarkdown {
     /** Empty in, empty out — the PWA returns `''` for a missing body. */
     fun render(markdown: String?): List<ReportBlock> {
         if (markdown.isNullOrEmpty()) return emptyList()
-        val source = collapseStatusText(markdown).replace("\r\n", "\n")
+        val source = markdown.replace("\r\n", "\n")
         val document = parser.parse(source)
         return Mapper(SourceText(source)).blocks(document)
     }
 
     /**
-     * Collapse `🟢 OK` (and `OK 🟢`) to just the dot.
+     * A text run, split into the prose and the status markers inside it.
      *
-     * Status cells in report tables carry the colour and the word, which say the
-     * same thing twice and make the column impossible to scan. Applied to the
-     * raw markdown before parsing, so it catches prose as well as cells — a 1:1
-     * port of the PWA's two regexes, word set and dot set included.
+     * Markers live in table cells almost always and in prose occasionally, so
+     * this reads them wherever they fall rather than assuming a whole cell is
+     * one. A run carrying no marker comes back as the single [ReportInline.Text]
+     * it was, which is the common case: most report bodies have no marker at all.
+     *
+     * Two grammars feed the one node. The tokens are what the server serves
+     * (docs/ARCHITECTURE.md, "Status marker vocabulary"). The legacy emoji —
+     * optionally paired with the word saying the same thing again, in either
+     * order — is what a body cached in `payload_cache` before the protocol
+     * change still says, and that cache is never re-fetched from the server, so
+     * the mapping stays until nothing on any device can still be serving one.
+     * A token outside the vocabulary is not matched at all and stays its own
+     * literal text.
      */
-    fun collapseStatusText(markdown: String): String = markdown
-        .replace(DOT_THEN_WORD, "$1")
-        .replace(WORD_THEN_DOT, "$1")
+    fun statusInlines(text: String): List<ReportInline> {
+        val markers = MARKER.findAll(text).toList()
+        if (markers.isEmpty()) return listOf(ReportInline.Text(text))
+        val inlines = mutableListOf<ReportInline>()
+        var cursor = 0
+        for (marker in markers) {
+            if (marker.range.first > cursor) {
+                inlines += ReportInline.Text(text.substring(cursor, marker.range.first))
+            }
+            inlines += ReportInline.Status(statusOf(marker))
+            cursor = marker.range.last + 1
+        }
+        if (cursor < text.length) inlines += ReportInline.Text(text.substring(cursor))
+        return inlines
+    }
+
+    private fun statusOf(marker: MatchResult): StatusMarker {
+        val token = marker.groupValues[1]
+        if (token.isNotEmpty()) {
+            return when (token.lowercase()) {
+                "ok" -> StatusMarker.OK
+                "watch" -> StatusMarker.WATCH
+                else -> StatusMarker.ACT
+            }
+        }
+        return when (marker.groupValues[2]) {
+            "✅", "🟢" -> StatusMarker.OK
+            "🟡", "⚠" -> StatusMarker.WATCH
+            else -> StatusMarker.ACT
+        }
+    }
 
     private const val WORD = "(?:OK|RED|YELLOW|GREEN|PASS|FAIL)"
-    private const val DOT = "[🟢🟡🔴✅❌⚠️]"
 
-    private val DOT_THEN_WORD = Regex("($DOT)\\s+$WORD\\b", RegexOption.IGNORE_CASE)
-    private val WORD_THEN_DOT = Regex("\\b$WORD\\s+($DOT)", RegexOption.IGNORE_CASE)
+    /** The legacy dot set, kept whole: the emoji decides, never the word. */
+    private const val DOT = "(?:🟢|🟡|🔴|✅|❌|⚠)"
+
+    /**
+     * Spelled as an escape rather than pasted in, because the character is
+     * invisible in source: the variation selector that makes ⚠ and ⚠️ one marker.
+     */
+    private const val VARIATION_SELECTOR = "\\uFE0F"
+
+    private val MARKER = Regex(
+        "\\[(ok|watch|act)]" +
+            "|(?:\\b$WORD\\s+)?($DOT)$VARIATION_SELECTOR?(?:\\s+$WORD\\b)?",
+        RegexOption.IGNORE_CASE,
+    )
 }
 
 /**
@@ -142,19 +190,26 @@ private class Mapper(private val source: SourceText) {
     private fun cells(row: TableRow): List<List<ReportInline>> =
         row.children().filterIsInstance<TableCell>().map(::inlines)
 
-    fun inlines(parent: Node): List<ReportInline> = parent.children().mapNotNull(::inline)
+    fun inlines(parent: Node): List<ReportInline> = parent.children().flatMap(::inline)
 
-    private fun inline(node: Node): ReportInline? = when (node) {
-        is Text -> ReportInline.Text(node.literal)
-        is Code -> ReportInline.Code(node.literal)
-        is StrongEmphasis -> ReportInline.Strong(inlines(node))
-        is Emphasis -> ReportInline.Emphasis(inlines(node))
-        is Link -> ReportInline.Link(inlines(node), node.destination.orEmpty())
-        is Image -> ReportInline.Text("[image: ${plainText(node)}] (${node.destination.orEmpty()})")
-        is SoftLineBreak -> ReportInline.Text(" ")
-        is HardLineBreak -> ReportInline.Text("\n")
-        is HtmlInline -> ReportInline.Text(node.literal)
-        else -> source.of(node).takeIf { it.isNotBlank() }?.let(ReportInline::Text)
+    // A text run can hold several markers and the prose between them, so one
+    // node maps to a list. Code spans are deliberately not scanned: `[ok]`
+    // written as code is a reader asking to see the token itself.
+    private fun inline(node: Node): List<ReportInline> = when (node) {
+        is Text -> AnalysisMarkdown.statusInlines(node.literal)
+        is Code -> listOf(ReportInline.Code(node.literal))
+        is StrongEmphasis -> listOf(ReportInline.Strong(inlines(node)))
+        is Emphasis -> listOf(ReportInline.Emphasis(inlines(node)))
+        is Link -> listOf(ReportInline.Link(inlines(node), node.destination.orEmpty()))
+        is Image -> listOf(
+            ReportInline.Text("[image: ${plainText(node)}] (${node.destination.orEmpty()})"),
+        )
+        is SoftLineBreak -> listOf(ReportInline.Text(" "))
+        is HardLineBreak -> listOf(ReportInline.Text("\n"))
+        is HtmlInline -> listOf(ReportInline.Text(node.literal))
+        else -> listOfNotNull(
+            source.of(node).takeIf { it.isNotBlank() }?.let(ReportInline::Text),
+        )
     }
 
     /** An image's alt text: whatever plain words are nested inside it. */

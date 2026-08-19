@@ -4,7 +4,7 @@
   "query_label": "Fixture Weekly Review",
   "prompt_sent": "Fixture prompt text the client never models.",
   "status": "completed",
-  "response_markdown": "# Fixture Weekly Review\n\nIntro paragraph with **bold**, *emphasis*, `inline code`, a soft\nbreak, and a [fixture link](https://example.invalid/fixture).\n\n## Status Table\n\n| Metric | Status | Note |\n|---|---|---|\n| **Fixture Alpha** | 🟢 OK | `fx-1` |\n| Fixture Beta | RED 🔴 | see below |\n\n### Findings\n\n- First fixture finding\n  - Nested fixture finding\n- Second fixture finding\n\n1. Fixture step one\n2. Fixture step two\n\n> A fixture quotation.\n\n```text\nfixture code block\n```\n\n---\n\n<img src=x onerror=\"alert(1)\">\n\nTrailing prose with an inline <b onmouseover=\"alert(1)\">tag</b> and an image ![fixture alt](https://example.invalid/fx.png).\n",
+  "response_markdown": "# Fixture Weekly Review\n\nIntro paragraph with **bold**, *emphasis*, `inline code`, a soft\nbreak, and a [fixture link](https://example.invalid/fixture).\n\n## Status Table\n\n| Metric | Status | Note |\n|---|---|---|\n| **Fixture Alpha** | [ok] | `fx-1` |\n| Fixture Beta | [act] | see below |\n| Fixture Gamma | 🟢 OK | legacy pair, as a cached body still says it |\n\n### Findings\n\n- First fixture finding\n  - Nested fixture finding\n- Second fixture finding\n\n1. Fixture step one\n2. Fixture step two\n\n> A fixture quotation.\n\n```text\nfixture code block\n```\n\n---\n\n<img src=x onerror=\"alert(1)\">\n\nTrailing prose with an inline <b onmouseover=\"alert(1)\">tag</b> and an image ![fixture alt](https://example.invalid/fx.png).\n",
   "created_at": "2031-03-04T09:15:00.123456Z",
   "completed_at": "2031-03-04T09:18:42.654321Z",
   "error_message": null,

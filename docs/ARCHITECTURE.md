@@ -887,6 +887,24 @@ The Analysis module bridges the web app with Claude Code CLI:
 
 Default allowed tools for analysis queries: `mcp__journal-localdb__*`, `mcp__coach-localdb__*`, `mcp__garmy-localdb__*`, `Read`, `Glob`, `Grep`. Individual queries can grant additional tools via `extra_allowed_tools`.
 
+#### Status marker vocabulary
+
+A report body serves judgment as **data**: three neutral tokens, each client rendering them in its own notation — the same split the query `icon` field uses. The built-in query prompts state the tokens as an output contract (`_STATUS_CONTRACT` in `analysis_queries.py`); custom queries in `user_queries.py` should say the same thing if they ask for statuses at all.
+
+| Token | Meaning | PWA renders | Android renders |
+|-------|---------|-------------|-----------------|
+| `[ok]` | On plan / in range | ✅ | Filled ink dot + mono `OK` |
+| `[watch]` | Worth attention, no action yet | 🟡 | Half ink dot + mono `WATCH` |
+| `[act]` | Needs action now | 🔴 | Open ink dot + mono `!` + mono `ACT` |
+
+**Read-time normalization.** The coloured emoji in existing reports are the model's own house style — no prompt in this repo ever asked for them — so the tokens are a vocabulary being *created*, and every report written before it existed still has to render. `normalize_status_markers()` rewrites the legacy forms into tokens in the two endpoints that serve a body (`GET /reports/{id}` and `GET /reports/pending`); `GET /reports` projects the body out and is unaffected. The rewrite is **read-time only** — the stored row keeps exactly what the CLI wrote, so nothing is destroyed and the mapping stays revisable — and it doubles as the fallback for a model that ignores the output contract.
+
+What it recognizes: ✅ → `[ok]`, 🟡 and ⚠️ → `[watch]`, 🔴 → `[act]`, each optionally paired (in either order) with the word saying the same thing again — `OK|RED|YELLOW|GREEN|PASS|FAIL`, case-insensitive, word-boundary protected so `OKAY` and `REDACTED` survive. The emoji decides the token; a bare word with no emoji beside it is prose and is left alone. Everything else passes through verbatim: a plain `✓` (the second most common marker in the corpus, and already monochrome — it needs no fix), 🚩/🔼, and the 🟢/❌ that no report has ever contained. Most report bodies carry no marker at all, and pass through untouched.
+
+Both clients keep a **legacy path** regardless, because report bodies are cached on-device (PWA LocalForage, Android `payload_cache`): after a deploy every device keeps serving itself pre-change markdown out of its own cache, which never passes through the server again. The PWA collapses the emoji/word pair to the emoji; Android maps the same pair onto the same status node the tokens produce. An unrecognized token renders as its own literal text on both clients — a reader can still read `[flag]`.
+
+**Accepted tradeoff — code spans.** Normalization (and the PWA's expansion) is raw-text substitution, blind to markdown structure; Android's mapper is AST-aware and deliberately never reads a status out of a code span. A marker-shaped string *quoted as code* in a report therefore renders differently per client (the PWA shows a code-styled emoji, Android the literal token text). Accepted 2026-08-19: the case has never appeared in the corpus, degradation is readable on both clients, and respecting span boundaries server-side would mean parsing markdown on the server for no observed benefit.
+
 ### Custom Analysis Queries
 
 Analysis queries are split into two files in `src/modules/`:
