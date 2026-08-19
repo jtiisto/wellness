@@ -2,35 +2,48 @@
 
 ## Overview
 
-Wellness is a modular, self-hosted health application: four modules with a tab in the PWA, plus one headless (API-only) module, sharing a unified backend and frontend shell. A module owns its own SQLite database, API router, sync protocol, and frontend state — with two deliberate, documented departures: Trends owns no database (it reads the others' through read-only accessors), and HR has no frontend at all (its client is the native Android app).
+Wellness is a modular, self-hosted health application: four user-facing modules plus one headless (API-only) module, sharing a unified backend, and **two full clients** — an offline-capable PWA and a native Android app — speaking the same protocols against the same server. A module owns its own SQLite database, API router, sync protocol, and frontend state — with two deliberate, documented departures: Trends owns no database (it reads the others' through read-only accessors), and HR has no PWA surface at all (its writing client is the Android app; its readers are a CLI and an MCP server).
 
 ```
-        ┌──────────────────────────────┐      ┌──────────────────┐
-        │         PWA Frontend         │      │  Native Android  │
-        │  Journal · Coach · Trends ·  │      │      client      │
-        │           Analysis           │      │   (HR capture)   │
-        │   LocalForage (IndexedDB)    │      └────────┬─────────┘
-        └───────────────┬──────────────┘               │
-                HTTP sync / fetch                HTTP batch POST
-                        │                              │
-┌───────────────────────┼──────────────────────────────┼─────────────┐
-│                       ▼                              ▼             │
-│  ┌─────────┐ ┌───────┐ ┌────────┐ ┌──────────┐ ┌────────────────┐  │
-│  │  /api/  │ │ /api/ │ │ /api/  │ │  /api/   │ │    /api/hr     │  │
-│  │ journal │ │ coach │ │ trends │ │ analysis │ │   (headless)   │  │
-│  └────┬────┘ └───┬───┘ └────┬───┘ └────┬─────┘ └───────┬────────┘  │
-│  journal.db  coach.db    (no DB —  analysis.db      hr.db          │
-│                          read-only     │                           │
-│                          accessors)  Claude Code CLI               │
-│                                        │                           │
-│                             ┌──────────┴─────────┐                 │
-│                             │     MCP Tools      │                 │
-│                             │  journal · coach   │                 │
-│                             │    hr · garmin     │                 │
-│                             └────────────────────┘                 │
-│                        FastAPI + Uvicorn                           │
-└────────────────────────────────────────────────────────────────────┘
+  ┌──────────────────────────────┐      ┌──────────────────────────────┐
+  │         PWA Frontend         │      │    Native Android client     │
+  │  Journal · Coach · Trends ·  │      │  Journal · Coach · Trends ·  │
+  │           Analysis           │      │  Analysis · Tools            │
+  │   LocalForage (IndexedDB)    │      │  Room (SQLite) · BLE strap   │
+  └───────────────┬──────────────┘      └───────────────┬──────────────┘
+          HTTP sync / fetch                HTTP sync / fetch + HR batch POST
+                  │                                     │
+┌─────────────────┼─────────────────────────────────────┼───────────────┐
+│                 ▼                                     ▼               │
+│  ┌─────────┐ ┌───────┐ ┌────────┐ ┌──────────┐ ┌────────────────┐     │
+│  │  /api/  │ │ /api/ │ │ /api/  │ │  /api/   │ │    /api/hr     │     │
+│  │ journal │ │ coach │ │ trends │ │ analysis │ │   (headless)   │     │
+│  └────┬────┘ └───┬───┘ └────┬───┘ └────┬─────┘ └───────┬────────┘     │
+│  journal.db  coach.db    (no DB —  analysis.db       hr.db            │
+│                          read-only     │                              │
+│                          accessors)  Claude Code CLI                  │
+│                                        │                              │
+│                             ┌──────────┴─────────┐                    │
+│                             │     MCP Tools      │                    │
+│                             │  journal · coach   │                    │
+│                             │    hr · garmin     │                    │
+│                             └────────────────────┘                    │
+│                        FastAPI + Uvicorn                              │
+└────────────────────────────────────────────────────────────────────────┘
 ```
+
+## The Two Clients
+
+|  | PWA (`public/`) | Android (`android/`) |
+|---|---|---|
+| Stack | Preact + Signals + HTM, no build step | Kotlin, Jetpack Compose, Room, Ktor |
+| Offline store | LocalForage (IndexedDB) | Room, `isDirty` + `dirtyGeneration` flags |
+| Tabs | Journal · Coach · Trends · Analysis, plus a Tools menu (force sync, data export, debug log) | The same four, plus a **Tools** tab: the menu's functions plus a **server address book** (multi-server switching) and **HR-strap pairing** — the two genuinely client-exclusive pieces |
+| HR capture | — | The only capture client: Garmin chest strap over BLE → the `/api/hr` batch endpoints |
+| Report status markers | Wire tokens render as emoji | The same tokens render as monochrome ink marks + mono words |
+| Visual design | Dark-theme CSS | The Logbook design language (paper/ink; `android/specs/logbook-design-system.md`) |
+
+Everything protocol-level is **identical by construction**, not by coincidence: sync logic is ported as pure functions with mirrored test suites (the `test/js` suites and their Kotlin unit-test twins pin the same cases), shared judgment rules get exactly one predicate per stack (see the emptiness rule below), and the HR wire contract is pinned by one golden-fixture directory both test suites read (`test/hr/golden/`). The server is the single arbiter for both clients, and a protocol change lands as **one atomic commit** across server, PWA, and Android — the repo's git hooks are path-scoped so such a commit runs both toolchains' gates. The Android tree is self-contained for build and workflow concerns (`android/CLAUDE.md`, `android/specs/`) and defers to this document for every wire contract.
 
 ## Design Principles
 
@@ -75,10 +88,9 @@ The Journal tracks fine-grained daily data (supplements taken, habits checked) f
 **Sync status:** green (clean), red (dirty data), gray (offline / never synced).
 
 **Key design choices:**
-- No user-visible conflict UI: conflicts resolve silently, server-side. (Originally a
-  single-client deployment; the native Android client made it two-client in 2026-08,
-  which is what motivated the per-record arbitration, watermark-overlap and
-  missing-rejection hardening documented below)
+- No user-visible conflict UI: conflicts resolve silently, server-side. The
+  per-record arbitration, watermark-overlap and missing-rejection rules below
+  are what make that safe with two clients editing concurrently
 - Server is the only arbiter; the client never compares two client-generated timestamps
 - Soft deletes via `deleted` flag — entries persist server-side even after their tracker is soft-deleted, so MCP queries can analyze historical data
 - Tracker IDs are UUIDs (`crypto.randomUUID()`), so creating a new tracker with the same name as a deleted one mints a distinct row — old and new histories stay structurally separate
@@ -350,9 +362,9 @@ column. An exercise's completion is computed at read time from its logged data
 (`{done, target}`). Rules by type: strength/circuit/weighted_time → done-sets vs `target_sets`;
 checklist → logged items vs planned items; duration/interval → `duration_min` vs
 `target_duration_min`. Sessions roll up to "fully completed" when every planned exercise is
-completed. The legacy per-exercise `completed` flag was dropped (2026-05) because it was a manual
-PWA checkbox decoupled from data entry and read false on real, fully-logged work; only the
-per-set `set_logs.completed` "done" tick is retained, as an input to the derivation.
+completed. There is deliberately no stored exercise-level flag: a manual checkbox decoupled from
+data entry reads false on real, fully-logged work; only the per-set `set_logs.completed` "done"
+tick exists, as an input to the derivation.
 
 **Off-plan (extra) sessions.** The PWA's rest-day empty state (today only —
 the standard `isEditable` rule) offers an **"Add Zone 2 session"** button:
@@ -484,8 +496,7 @@ module stays maintained and tested regardless of the toggle.
 
 Trends is the "what happened" surface: deterministic chart aggregates over
 coach + journal + Garmin data — zero LLM, no prose insights (interpretation
-lives in interactive Claude sessions against the MCP servers). Product spec
-and decisions: `plans/trends-module-feature-set.md` (local-only).
+lives in interactive Claude sessions against the MCP servers).
 
 **The deliberate exception to module DB isolation.** Trends owns NO database.
 Its registry entry has no `db_env`/`db_default`; `create_app` calls its
@@ -574,8 +585,7 @@ to the plot edge), dot coloring uses the LAB's own H/L flag (never a
 recomputed range), detection-limit prefixes (`<0.5`) chart at their numeric
 value but display with the prefix, and sub-2-observation or qualitative
 results fall back to a latest-value table. Labs stay local: read-only
-accessor, rendered only in the PWA.
-Design record: `plans/trends-v2-design-2026-07-09.md` (local).
+accessor, never uploaded anywhere.
 
 **Frontend** (`public/js/trends/`): hand-rolled SVG charts — all
 data→geometry math is PURE in `chart-logic.js` (node:test target, the
@@ -605,11 +615,9 @@ no bidirectional sync. The client pushes; the server stores; nothing flows back
 but counts. Everything that *reads* the data does so out of band, through the
 `hr_analysis` CLI and the HR MCP server (both below).
 
-**This section is the protocol's home.** The contract was drafted in the
-Android client's `android/specs/hr-protocol.md` (a separate repo at the time)
-while the server side was built; that file now defers here, matching how every
-other protocol is documented. The golden fixtures below are what keep the two
-test suites honest about it.
+**This section is the protocol's home.** `android/specs/hr-protocol.md` defers
+here, matching how every other protocol is documented. The golden fixtures
+below are what keep the two test suites honest about it.
 
 **Headless modules.** The `config.MODULES` entry carries `"headless": True` and
 no `name`/`icon`/`color`. `create_app`'s mount loop is untouched — a headless
@@ -670,12 +678,12 @@ its queues, so an interval or a toggle may legitimately name a session whose row
 has not been uploaded yet — and since analysis reads the capture off
 `intervals`, such a session is still fully analysable.
 
-`seq` earns its place in the `intervals` key. The pulse-bridge capture stack
-made timestamps unique by bumping a colliding beat forward a millisecond, which
-corrupted the very inter-beat deltas this data exists to measure; `seq`
-disambiguates beats sharing a receipt millisecond without editing their
-timestamps. That makes `ORDER BY (timestamp_ms, seq)` the **only** ordering
-authority — nothing re-sorts beats in Python downstream.
+`seq` earns its place in the `intervals` key: it disambiguates beats sharing a
+receipt millisecond **without editing their timestamps** — the tempting
+alternative, bumping a colliding beat forward a millisecond, corrupts the very
+inter-beat deltas this data exists to measure. That makes
+`ORDER BY (timestamp_ms, seq)` the **only** ordering authority — nothing
+re-sorts beats in Python downstream.
 
 `set_events` is keyed on the client-generated `event_id`, and an `uncheck` is
 **undo-as-data**: nothing is ever deleted, and a consumer folds the stream in
@@ -758,25 +766,20 @@ at the real endpoints and compare responses byte-for-byte — key order and
 separators, not merely parsed equality — while the Android `HrGoldenFixtureTest`
 reads the same files off its unit-test classpath (a Gradle Sync task in
 `android/core/data` stages them there). A protocol change edits one file both
-suites see in the same commit; the pre-merge two-copy pact is retired.
+suites see in the same commit — there is never a second copy to drift.
 **Every calendar date in them is far-future (2030+)**, and that is a convention
 to keep: this repo is public and its pre-commit personal-data guard scans staged
 literals against the live health databases, where any plausible *past* date can
-collide with a real lab, scan or workout date (it caught exactly that in this
-spec's first draft).
+collide with a real lab, scan or workout date.
 
 **Key design choices:**
-- **Fresh start, no import.** History begins with this module (2026-08); the
-  pulse-bridge server's database stays a frozen archive, queryable in place.
-  Because `hr.db` is greenfield, migration 1 uses plain `CREATE TABLE` rather
-  than the defensive `IF NOT EXISTS` of the older modules — there is no
-  pre-registry unversioned database to adopt.
-- **The pulse-bridge server keeps running in parallel** as a fallback until
-  explicitly retired: separate process, separate port, separate database.
-  Nothing here decommissions it.
-- **Garmin-only.** No Polar path, no accelerometer or diagnostics endpoints, no
-  `X-Environment` header. `sensor_type` exists so a future source could be told
-  apart, and defaults to `garmin_hrm`.
+- **Greenfield database.** `hr.db` was born inside the module registry, so
+  migration 1 uses plain `CREATE TABLE` rather than the defensive
+  `IF NOT EXISTS` of the older modules — there is no pre-registry unversioned
+  database to adopt, and history begins at the first accepted capture batch.
+- **Garmin-only.** No Polar path, no accelerometer or diagnostics endpoints.
+  `sensor_type` exists so a future source could be told apart, and defaults to
+  `garmin_hrm`.
 - **No server-side pruning.** The server keeps everything; retention is a
   client-local concern. Nothing is ever overwritten either, so there is no
   archive table and no counterpart to the coach/journal 14-day recovery window.
@@ -802,13 +805,14 @@ chart.
 `hr_analysis/quality.py` carries a **⚠ PARITY** block: its five signal-quality
 thresholds (20% ectopic deviation, 1.5 omission factor, ≤5% artifact fraction,
 0.95–1.05 coverage) and the 120 s DFA window are mirrored *live on-device* by
-the Kotlin `SignalQualityTracker` behind the capture app's "DFA signal: Good"
-indicator, and no test can prove the two implementations agree across languages.
-`test/hr/analysis/test_parity_constants.py` does the one thing this repo can —
-assert the documented values, plus the behaviour the ectopic threshold implies —
-so a threshold cannot be edited on this side unnoticed. The Kotlin file
-currently sits in the frozen pulse-bridge repo and is migrating to
-wellness-native's `core/ble`; both comments repoint when it lands.
+the Kotlin `SignalQualityTracker`
+(`android/core/ble/.../quality/SignalQualityTracker.kt`) behind the capture
+UI's signal indicator. No single test can prove the two implementations agree
+across languages, so each side pins its own: `test/hr/analysis/
+test_parity_constants.py` asserts the documented values (plus the behaviour the
+ectopic threshold implies) on the Python side, the Android unit suite pins the
+Kotlin side, and the two files' PARITY comments point at each other — a
+threshold cannot be edited on either side unnoticed.
 
 ## Shared Frontend Utilities
 
@@ -871,9 +875,9 @@ Three **FastMCP** servers expose wellness data to LLMs:
 
 - **Journal MCP** - Strictly read-only. Opens SQLite in read-only mode (`?mode=ro`). Validates all queries to ensure only SELECT/WITH statements run. Auto-applies row limits. Exposes `get_schedule_adherence`, which computes schedule adherence server-side (in Python, over the canonical `schedule_json` / `polarity` / `target_json` columns): per tracker over a window it counts scheduled vs. logged/done days and reports a per-polarity metric (`adherence` / `avoidance` / `coverage`). When a tracker has a **target** in effect on a day, "done" for that day is whether the day's *value* meets the effective-dated target (not the `completed` checkbox — this fixes the accumulator undercount, where value logging never sets the checkbox); the result then adds `target` (echoed as of window end), `target_met_days`, `target_partial_days` (both targeted-day-only), and `blended_met_days` — the per-polarity rate's numerator, which on days *before* a target took effect falls back to that day's untargeted criterion (positive → checkbox, negative → no-entry avoided), so a window spanning the target's introduction isn't misread as failed. Weekly Trends buckets display `blended_met_days` for the same reason. **No-entry rule:** a scheduled day with no entry counts as *met* for negative-polarity trackers (absence = avoided) and *missed* for positive/neutral. "No entry" here is the emptiness rule above — `entry_present`, not row existence — so a row an uncheck emptied restores the avoided verdict. Non-numeric values (a tracker converted from/to type `note` shares the `entries.value` column) coerce to "no usable value" → *missed*, mirrored in the client twin (`_coerce_numeric` / `coerceNumericValue` — a raw NaN comparison silently read as in-range). An un-normalized legacy weekly tracker (`schedule_json` NULL, `meta_json` `frequency`/`weeklyDay`) is judged weekly via the same fallback the client uses, not daily. The default window is `days` calendar days inclusive of both ends (days=7 → today + 6 prior, matching the PWA dot row); a tracker whose entries all precede the window is still reported (an abandoned habit at 0% is signal), while never-used / first-active-after-window trackers are omitted. `get_journal_summary` stays entries-based — completion and adherence are deliberately separate — but its entry counts (`total_entries`, `active_days`, per-category and per-tracker counts) go through the emptiness rule: an emptied row is not an entry anywhere the tool counts. The `completed = 1` numerator is unchanged by construction, so `completion_rate_percent` reads against *present* entries — a dataset with retracted rows reports a (correctly) higher rate than it did before the rule (pinned by `test_get_journal_summary_ignores_emptied_rows`).
 - **Coach MCP** - Read-only for queries and logs. Write access for workout plan management (creating/updating/deleting/moving plans). Deleting a plan is guarded: plans with workout logs attached cannot be deleted, preserving training history integrity. Rescheduling is a single atomic tool, `move_workout_plan(from_date, to_date, swap)` — the session row moves with its identity and children intact (never delete-and-recreate), the vacated date gets a sync tombstone, the destination sheds any stale one, and `swap=true` exchanges two days' plans without tombstoning either. Its worked-plan guard is deliberately narrower than delete's date-based one: only a log *belonging to the plan* (session-linked, or with exercise rows referencing its planned exercises) pins it — an off-plan extra-Zone-2 log is a resident of the date, not the plan, and never blocks a move. Uses a mode-switching connection manager. Workout logs include pre/post workout stats (readiness metrics, recovery data) when available.
-- **HR MCP** - Read-only, five tools over captured heart-rate sessions: `list_sessions`, `get_session_report`, `get_latest_session_report`, `get_aligned_timeseries` (compact HR buckets, the fallback when automatic bout detection disagrees with what you expected), and `get_vo2_summary` (a planned interval structure matched against detected bouts). **Results are lean by default** — an hour-long session's full form exceeded the MCP tool-result limit, so the standard shapes carry the core the analysis actually reads: the HR curve plus `set_events`, the offset-aligned set-completion markers captured during the workout (present in both the report and the timeseries, cropped with the analysis window, optional identity fields omitted-never-null). The RR-quality detail is opt-in: `include_windows=true` restores the report's per-window DFA array (~85% of its bytes; the quality block's trusted/total counts summarize it), and `include_quality=true` restores the timeseries' full rows (RR coverage, artifact fraction, beat counts — roughly 3× the size); `get_vo2_summary`'s embedded fallback series is always lean. The package contains **no SQL at all** — every read delegates to `hr_analysis.db`, so an MCP report and a `python -m hr_analysis` report of the same session agree by construction, and read-only becomes a *structural* property of the code rather than a promise: the connections are the shared `mode=ro` accessor's, so nothing here can write `hr.db` or create one. Two tests pin that shape — an AST guard asserting no module in the package imports sqlite3 or calls a connection method, and a hash check that the database file is byte-identical after every tool has run. Unlike coach/journal it **starts without its database**: HR history starts empty by design and `hr.db` appears only when the first capture batch is accepted, so absence is reported per call (the same sentence the CLI prints) instead of the server refusing to launch — an existing path that is not a file stays a hard configuration error. `list_sessions`' time window selects whole sessions that **overlap** it rather than filtering individual beats, so a listing describes what a follow-up analysis call would actually analyse; the pulse-bridge original reported a window-cropped beat count next to a session the report tool then read in full. `flags.analysis_window_uncertain` on the report shape is always `false` — a dead field kept for wire compatibility with existing consumers.
+- **HR MCP** - Read-only, five tools over captured heart-rate sessions: `list_sessions`, `get_session_report`, `get_latest_session_report`, `get_aligned_timeseries` (compact HR buckets, the fallback when automatic bout detection disagrees with what you expected), and `get_vo2_summary` (a planned interval structure matched against detected bouts). **Results are lean by default** — an hour-long session's full form exceeded the MCP tool-result limit, so the standard shapes carry the core the analysis actually reads: the HR curve plus `set_events`, the offset-aligned set-completion markers captured during the workout (present in both the report and the timeseries, cropped with the analysis window, optional identity fields omitted-never-null). The RR-quality detail is opt-in: `include_windows=true` restores the report's per-window DFA array (~85% of its bytes; the quality block's trusted/total counts summarize it), and `include_quality=true` restores the timeseries' full rows (RR coverage, artifact fraction, beat counts — roughly 3× the size); `get_vo2_summary`'s embedded fallback series is always lean. The package contains **no SQL at all** — every read delegates to `hr_analysis.db`, so an MCP report and a `python -m hr_analysis` report of the same session agree by construction, and read-only becomes a *structural* property of the code rather than a promise: the connections are the shared `mode=ro` accessor's, so nothing here can write `hr.db` or create one. Two tests pin that shape — an AST guard asserting no module in the package imports sqlite3 or calls a connection method, and a hash check that the database file is byte-identical after every tool has run. Unlike coach/journal it **starts without its database**: HR history starts empty by design and `hr.db` appears only when the first capture batch is accepted, so absence is reported per call (the same sentence the CLI prints) instead of the server refusing to launch — an existing path that is not a file stays a hard configuration error. `list_sessions`' time window selects whole sessions that **overlap** it rather than filtering individual beats, so a listing describes what a follow-up analysis call would actually analyse — a window-cropped beat count beside a session the report tool then reads in full would misstate it. `flags.analysis_window_uncertain` on the report shape is always `false` — a dead field kept for wire compatibility with existing consumers.
 
-All three run over stdio transport when invoked by Claude Code CLI. They can also be configured for HTTP/SSE transport (default ports 8000 journal, 8002 coach, 8004 HR — 8003 is left to the parallel pulse-bridge MCP until it is retired).
+All three run over stdio transport when invoked by Claude Code CLI. They can also be configured for HTTP/SSE transport (default ports 8000 journal, 8002 coach, 8004 HR).
 
 ### Analysis Pipeline
 

@@ -1,6 +1,18 @@
 # Wellness
 
-A personal health and fitness dashboard that unifies daily habit tracking, workout planning, and AI-powered analysis into a single self-hosted application. Two clients share the server: the offline-capable PWA served from `public/`, and a native Android app living in `android/` with its full history (a former sibling repo, grafted in 2026-08 so protocol changes land as one atomic commit across server, PWA, and Android).
+A personal health and fitness dashboard that unifies daily habit tracking, workout planning, progress charts, and AI-powered analysis into a single self-hosted application. One FastAPI server, two full clients: an offline-capable PWA served from `public/`, and a native Android app in `android/`. Both speak the same sync protocols against the same server — a protocol change lands as one atomic commit across server, PWA, and Android, and the git hooks run both toolchains' test gates on such a commit.
+
+## The two clients
+
+| | PWA | Android |
+|---|---|---|
+| Stack | Preact + Signals + HTM — no build step | Kotlin, Jetpack Compose, Room, Ktor |
+| Works offline | Yes (service worker + IndexedDB) | Yes (Room, same sync semantics) |
+| Tabs | Journal · Coach · Trends · Analysis, plus a Tools menu (force sync, data export, debug log) | The same four, plus a **Tools** tab: the menu's functions plus a server address book and HR-strap pairing |
+| Heart-rate capture | — | Yes: Garmin chest strap over BLE, uploaded to the headless HR module |
+| Visual design | Dark-theme CSS | The **Logbook** design language — paper and ink, color reserved for meaning (`android/specs/logbook-design-system.md`) |
+
+Sync behavior is identical by construction: the pure logic is ported function-for-function with mirrored test suites, and shared wire contracts are pinned by golden fixtures both test suites read. `docs/ARCHITECTURE.md` is the authority for every protocol; `android/CLAUDE.md` covers the Android build and workflow.
 
 ## Modules
 
