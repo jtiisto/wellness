@@ -60,7 +60,7 @@ fun ServerRecoveryScreen(message: String, onRetry: () -> Unit) {
         Text(
             text = "Nothing has been synced or changed. Fix the saved server list and try again.",
             style = type.body,
-            color = palette.inkFaint,
+            color = palette.inkSoft,
             textAlign = TextAlign.Center,
         )
         OutlinedButton(

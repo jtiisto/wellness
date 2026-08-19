@@ -27,6 +27,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.jtiisto.wellness.core.ui.theme.LogbookSection
 import dev.jtiisto.wellness.core.ui.theme.LogbookSpace
 import dev.jtiisto.wellness.core.ui.theme.LogbookTheme
 import dev.jtiisto.wellness.core.ui.theme.WeekMarkGlyph
@@ -97,7 +98,7 @@ fun OverviewTrendsScreen(
         if (weight != null && weight.available && weight.series.isNotEmpty()) {
             val card = remember(weight) { weightCardModel(weight.series) }
             if (card != null) {
-                TrendsSection(title = "Body weight", sub = "kg", trailing = {
+                LogbookSection(title = "Body weight", sub = "kg", trailing = {
                     Text(
                         text = card.latest,
                         style = LogbookTheme.type.meta.copy(fontWeight = FontWeight.Medium),
@@ -162,14 +163,14 @@ private fun RowScope.StatTile(tile: StatTileModel, onClick: () -> Unit) {
         // The delta rides inside the model's own line and carries its sign
         // there: direction needs no colour and no arrow.
         tile.avgLine?.let { Text(it, style = LogbookTheme.type.meta, color = palette.ink) }
-        Text(tile.soFarLine, style = LogbookTheme.type.meta, color = palette.inkFaint)
+        Text(tile.soFarLine, style = LogbookTheme.type.meta, color = palette.inkSoft)
         Sparkline(points = tile.sparkline, modifier = Modifier.height(SPARKLINE_HEIGHT))
     }
 }
 
 @Composable
 private fun PrTile(model: PrTileModel) {
-    TrendsSection(title = prBadgeText(model.badge)) {
+    LogbookSection(title = prBadgeText(model.badge)) {
         model.latest?.let {
             Text(it, style = LogbookTheme.type.meta, color = LogbookTheme.palette.inkSoft)
         }
@@ -188,7 +189,7 @@ private fun PrTile(model: PrTileModel) {
 @Composable
 private fun FocusSection(rows: List<FocusRowModel>) {
     val palette = LogbookTheme.palette
-    TrendsSection(title = "Adherence focus", sub = "weakest · 14d") {
+    LogbookSection(title = "Adherence focus", sub = "weakest · 14d") {
         for (row in rows) {
             Column(verticalArrangement = Arrangement.spacedBy(LogbookSpace.grid + 2.dp)) {
                 Row(
@@ -204,7 +205,7 @@ private fun FocusSection(rows: List<FocusRowModel>) {
                         Text(
                             text = "DROPPING",
                             style = LogbookTheme.type.eyebrow,
-                            color = palette.inkFaint,
+                            color = palette.inkSoft,
                         )
                     }
                 }

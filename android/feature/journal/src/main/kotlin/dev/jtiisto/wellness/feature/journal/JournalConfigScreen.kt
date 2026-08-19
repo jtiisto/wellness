@@ -65,7 +65,6 @@ import dev.jtiisto.wellness.core.data.journal.ALL_DAYS
 import dev.jtiisto.wellness.core.data.journal.TrackerType
 import dev.jtiisto.wellness.core.data.journal.formatScheduleSummary
 import dev.jtiisto.wellness.core.data.journal.formatTarget
-import dev.jtiisto.wellness.core.ui.theme.DenseFieldSkin
 import dev.jtiisto.wellness.core.ui.theme.InkButton
 import dev.jtiisto.wellness.core.ui.theme.InkMark
 import dev.jtiisto.wellness.core.ui.theme.LogbookShapes
@@ -314,7 +313,6 @@ private fun TrackerFormSheet(
                 WellnessDenseField(
                     value = form.name,
                     onValueChange = { next -> onChange { it.copy(name = next) } },
-                    skin = DenseFieldSkin.NAKED,
                     placeholder = "e.g. Meditation",
                     modifier = Modifier
                         .fillMaxWidth()
@@ -377,7 +375,6 @@ private fun CategoryField(
                 WellnessDenseField(
                     value = form.newCategory,
                     onValueChange = { next -> onChange { it.copy(newCategory = next) } },
-                    skin = DenseFieldSkin.NAKED,
                     placeholder = "e.g. Supplements",
                     modifier = Modifier
                         .fillMaxWidth()
@@ -409,7 +406,6 @@ private fun QuantifiableFieldsSection(
             WellnessDenseField(
                 value = form.unit,
                 onValueChange = { next -> onChange { it.copy(unit = next) } },
-                skin = DenseFieldSkin.NAKED,
                 placeholder = "e.g. mg, min",
                 modifier = Modifier
                     .fillMaxWidth()
@@ -424,7 +420,6 @@ private fun QuantifiableFieldsSection(
             WellnessDenseField(
                 value = form.defaultValue,
                 onValueChange = { next -> onChange { it.copy(defaultValue = next) } },
-                skin = DenseFieldSkin.NAKED,
                 numeric = true,
                 textAlign = TextAlign.Start,
                 placeholder = "e.g. 30",
@@ -453,7 +448,6 @@ private fun QuantifiableFieldsSection(
         WellnessDenseField(
             value = form.targetInput,
             onValueChange = { next -> onChange { it.copy(targetInput = next) } },
-            skin = DenseFieldSkin.NAKED,
             placeholder = "e.g. 150 or 150-170",
             modifier = Modifier
                 .fillMaxWidth()
@@ -488,8 +482,9 @@ private fun ScheduleSection(
         Marginalia("Hidden from the daily view; adherence pauses. History is kept.")
 
         // Paused dims the picker rather than hiding it: the schedule is still
-        // worth reading, it is simply not in effect. Ink-faint says exactly
-        // that, and it says it in the palette's own vocabulary.
+        // worth reading, it is simply not in effect. The picker itself carries
+        // that — it is genuinely disabled — while the line under it stays
+        // legible, because "Paused" is the word that explains the dimming.
         WeekdayPicker(
             selected = form.days,
             enabled = !form.paused,
@@ -506,7 +501,7 @@ private fun ScheduleSection(
         Text(
             text = if (form.paused) "Paused" else formatScheduleSummary(form.days.ifEmpty { ALL_DAYS }),
             style = LogbookTheme.type.meta,
-            color = if (form.paused) palette.inkFaint else palette.inkSoft,
+            color = palette.inkSoft,
         )
     }
 }
@@ -605,7 +600,9 @@ private fun SelectField(
                 Icon(
                     imageVector = Icons.Outlined.ExpandMore,
                     contentDescription = null,
-                    tint = palette.inkFaint,
+                    // The affordance that says this line opens: a control glyph
+                    // keeps the 3:1 non-text floor.
+                    tint = palette.inkSoft,
                     modifier = Modifier.size(GLYPH_SIZE),
                 )
             }
@@ -766,7 +763,7 @@ private fun EmptyText(text: String) {
     Text(
         text = text,
         style = LogbookTheme.type.body.copy(fontStyle = FontStyle.Italic),
-        color = LogbookTheme.palette.inkFaint,
+        color = LogbookTheme.palette.inkSoft,
         textAlign = TextAlign.Center,
     )
 }

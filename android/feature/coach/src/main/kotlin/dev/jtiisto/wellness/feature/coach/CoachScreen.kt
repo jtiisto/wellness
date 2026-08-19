@@ -360,7 +360,7 @@ private fun CalendarCard(calendar: CalendarState, actions: CoachActions, onDismi
                     Text(
                         text = label.uppercase(),
                         style = LogbookTheme.type.tableHeader,
-                        color = palette.inkFaint,
+                        color = palette.inkSoft,
                         textAlign = TextAlign.Center,
                         modifier = Modifier.weight(1f),
                     )

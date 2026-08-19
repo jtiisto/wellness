@@ -22,6 +22,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.jtiisto.wellness.core.ui.theme.LogbookSection
 import dev.jtiisto.wellness.core.ui.theme.LogbookSpace
 import dev.jtiisto.wellness.core.ui.theme.LogbookTheme
 import dev.jtiisto.wellness.feature.trends.JournalTrendsViewModel
@@ -88,7 +89,7 @@ fun JournalTrendsScreen(onRange: (String) -> Unit, modifier: Modifier = Modifier
         (state.detail as? Slice.Ready)?.value?.let { detail ->
             if (detail.tracker.type == "quantifiable") {
                 val card = remember(detail) { valueTargetCardModel(detail) }
-                TrendsSection(title = card.title, sub = card.subtitle.takeIf { it.isNotEmpty() }) {
+                LogbookSection(title = card.title, sub = card.subtitle.takeIf { it.isNotEmpty() }) {
                     when {
                         card.constant != null -> ConstantSeries(card.constant)
                         card.plot != null -> PlotCanvas(
@@ -105,7 +106,7 @@ fun JournalTrendsScreen(onRange: (String) -> Unit, modifier: Modifier = Modifier
                 // The streaks say themselves in mono — `run 3 · best 14`. The
                 // flame retires with the rest of the colour emoji: a run is a
                 // number, and a number here is Plex Mono.
-                TrendsSection(
+                LogbookSection(
                     title = card.title,
                     sub = streakLine(card.currentStreak, card.bestStreak),
                 ) {
@@ -120,7 +121,7 @@ fun JournalTrendsScreen(onRange: (String) -> Unit, modifier: Modifier = Modifier
 
             detail.weeklyUsage?.let { usage ->
                 val plot = remember(usage) { usageCardModel(usage) }
-                TrendsSection(title = "Usage", sub = "times per week") {
+                LogbookSection(title = "Usage", sub = "times per week") {
                     if (plot == null) {
                         ChartEmpty("No data in range")
                     } else {

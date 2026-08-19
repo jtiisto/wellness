@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Logbook dark `paper`; see values/colors.xml for why this tracks journal. -->
+    <!-- Logbook dark `paper`; see values/colors.xml for what this has to match. -->
     <color name="window_background">#141517</color>
 </resources>

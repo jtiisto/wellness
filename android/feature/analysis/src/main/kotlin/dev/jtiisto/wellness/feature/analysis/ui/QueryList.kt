@@ -22,7 +22,6 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import dev.jtiisto.wellness.core.data.analysis.AnalysisQueryDto
 import dev.jtiisto.wellness.core.ui.motion.WellnessMotion
-import dev.jtiisto.wellness.core.ui.theme.DenseFieldSkin
 import dev.jtiisto.wellness.core.ui.theme.InkNotice
 import dev.jtiisto.wellness.core.ui.theme.InkOutlineButton
 import dev.jtiisto.wellness.core.ui.theme.LogbookSpace
@@ -170,12 +169,11 @@ private fun LocationField(
             modifier = Modifier
                 .fillMaxWidth()
                 .bottomRule(palette.ruleStrong)
-                // The skin draws no label, so the field's own node carries the
-                // name — the drawn one above it is not on the node a reader
-                // lands on when they focus the input.
+                // The field draws no label, so its own node carries the name —
+                // the drawn one above it is not on the node a reader lands on
+                // when they focus the input.
                 .semantics { contentDescription = LOCATION_LABEL },
             enabled = enabled,
-            skin = DenseFieldSkin.NAKED,
             placeholder = LOCATION_PLACEHOLDER,
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
             keyboardActions = KeyboardActions(onDone = { onDone() }),

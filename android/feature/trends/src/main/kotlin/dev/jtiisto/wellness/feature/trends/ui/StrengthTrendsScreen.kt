@@ -23,6 +23,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.jtiisto.wellness.core.ui.theme.LogbookSection
 import dev.jtiisto.wellness.core.ui.theme.LogbookSpace
 import dev.jtiisto.wellness.core.ui.theme.LogbookTheme
 import dev.jtiisto.wellness.feature.trends.Slice
@@ -86,7 +87,7 @@ fun StrengthTrendsScreen(onRange: (String) -> Unit, modifier: Modifier = Modifie
 
         (state.detail as? Slice.Ready)?.value?.let { detail ->
             val card = remember(detail, state.showRpe) { progressionCardModel(detail, state.showRpe) }
-            TrendsSection(title = card.title, sub = card.subtitle) {
+            LogbookSection(title = card.title, sub = card.subtitle) {
                 if (card.plot == null) {
                     ChartEmpty("No sessions in range")
                 } else {
@@ -116,7 +117,7 @@ fun StrengthTrendsScreen(onRange: (String) -> Unit, modifier: Modifier = Modifie
 
         (state.volume as? Slice.Ready)?.value?.let { volume ->
             val card = remember(volume) { volumeCardModel(volume.weeks) }
-            TrendsSection(title = "Weekly volume", sub = "kg") {
+            LogbookSection(title = "Weekly volume", sub = "kg") {
                 if (card.plot == null) {
                     ChartEmpty("No data in range")
                 } else {
@@ -132,7 +133,7 @@ fun StrengthTrendsScreen(onRange: (String) -> Unit, modifier: Modifier = Modifie
 
         if (exercises != null && exercises.isNotEmpty()) {
             val rows = remember(exercises) { prBoardRows(exercises) }
-            TrendsSection(title = "Records", sub = "best e1RM") {
+            LogbookSection(title = "Records", sub = "best e1RM") {
                 for (row in rows) PrRow(row)
             }
         }
@@ -172,10 +173,10 @@ private fun PrRow(row: PrRowModel) {
             ) {
                 Text(row.name, style = LogbookTheme.type.name, color = palette.ink)
                 if (row.plateau) {
-                    Text("PLATEAU", style = LogbookTheme.type.eyebrow, color = palette.inkFaint)
+                    Text("PLATEAU", style = LogbookTheme.type.eyebrow, color = palette.inkSoft)
                 }
             }
-            Text(row.slug, style = LogbookTheme.type.meta, color = palette.inkFaint)
+            Text(row.slug, style = LogbookTheme.type.meta, color = palette.inkSoft)
         }
         if (row.best != null) {
             Column(
@@ -188,7 +189,7 @@ private fun PrRow(row: PrRowModel) {
                     color = palette.ink,
                 )
                 row.detail?.let {
-                    Text(it, style = LogbookTheme.type.meta, color = palette.inkFaint)
+                    Text(it, style = LogbookTheme.type.meta, color = palette.inkSoft)
                 }
             }
         }

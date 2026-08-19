@@ -129,7 +129,7 @@ fun ChartScrubTooltip(
                 Text(
                     text = label,
                     style = LogbookTheme.type.eyebrow,
-                    color = palette.inkFaint,
+                    color = palette.inkSoft,
                 )
                 for ((series, value) in values) {
                     Row(horizontalArrangement = Arrangement.spacedBy(LogbookSpace.grid * 2)) {

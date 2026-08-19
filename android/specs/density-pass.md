@@ -8,6 +8,11 @@ Status: **shipped & device-accepted 2026-08-09** (commit `ccada51`; user: "looks
 > ink underline on focus). The 48dp interactive / smaller-visual split and the
 > commit semantics defined here carry over unchanged; Journal keeps the filled
 > skin until its round.
+>
+> **2026-08-19:** Journal moved too (Round 2), and Round 4's retirement then
+> removed the skins altogether — every field in the app is the bare one, so
+> `DenseFieldSkin` and the outlined/filled boxes described below are history.
+> The density argument that produced them stands; the boxes do not.
 
 ## Goal
 

@@ -36,8 +36,9 @@ import kotlinx.coroutines.launch
  * - [LocalIndication], replaced with a quiet ink press so nothing in a Logbook
  *   subtree can spread a Material ripple across the paper.
  *
- * Applied per nav destination during the migration: Logbook subtrees get this,
- * the modules still on Graphite Signal keep `WellnessTheme`.
+ * Applied once, at the shell's root. It was per-destination for the length of
+ * the migration, while Graphite Signal still rendered some tabs; with that
+ * system retired there is one theme and one page.
  */
 @Composable
 fun LogbookTheme(
@@ -67,8 +68,8 @@ fun LogbookTheme(
 /**
  * Token access from a composable: `LogbookTheme.palette.paper`.
  *
- * Mirrors `MaterialTheme`'s and `WellnessTheme`'s object-beside-function shape,
- * so a file that reads both systems during the migration reads them alike.
+ * Mirrors `MaterialTheme`'s object-beside-function shape, so a file that reads
+ * both reads them alike.
  */
 object LogbookTheme {
     val palette: LogbookPalette

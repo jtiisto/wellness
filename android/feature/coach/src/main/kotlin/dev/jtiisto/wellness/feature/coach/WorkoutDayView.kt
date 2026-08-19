@@ -80,7 +80,6 @@ import dev.jtiisto.wellness.core.data.coach.RxToken
 import dev.jtiisto.wellness.core.data.coach.SetColumn
 import dev.jtiisto.wellness.core.data.coach.TallyMarks
 import dev.jtiisto.wellness.core.ui.motion.WellnessMotion
-import dev.jtiisto.wellness.core.ui.theme.DenseFieldSkin
 import dev.jtiisto.wellness.core.ui.theme.InkButton
 import dev.jtiisto.wellness.core.ui.theme.InkGlyph
 import dev.jtiisto.wellness.core.ui.theme.InkMark
@@ -209,13 +208,15 @@ private fun Marginalia(text: String, modifier: Modifier = Modifier, glyph: Image
     }
 }
 
-/** Whatever is not there yet, said in the italic ink-faint voice reserved for absence. */
+/** Whatever is not there yet, said in the italic voice reserved for absence. */
 @Composable
 private fun EmptyStateText(text: String, modifier: Modifier = Modifier) {
     Text(
         text = text,
         style = LogbookTheme.type.body.copy(fontStyle = FontStyle.Italic),
-        color = LogbookTheme.palette.inkFaint,
+        // Italic makes it quiet; ink-soft keeps it legible. An empty state is a
+        // sentence to be read, so it sits above the ghost tier.
+        color = LogbookTheme.palette.inkSoft,
         modifier = modifier,
     )
 }
@@ -888,7 +889,8 @@ private fun ExerciseAccordion(
             Icon(
                 imageVector = Icons.Filled.ExpandMore,
                 contentDescription = null,
-                tint = palette.inkFaint,
+                // A control's own glyph, so it holds the 3:1 non-text floor.
+                tint = palette.inkSoft,
                 modifier = Modifier
                     .padding(start = LogbookSpace.grid)
                     .size(GLYPH_SIZE)
@@ -1108,7 +1110,7 @@ private fun SetTable(
             Text(
                 text = "Set".uppercase(),
                 style = LogbookTheme.type.tableHeader,
-                color = palette.inkFaint,
+                color = palette.inkSoft,
                 // Spoken in its natural case: TalkBack spells out a three-letter
                 // capital as letters, and this one is a word.
                 modifier = Modifier
@@ -1119,7 +1121,7 @@ private fun SetTable(
                 Text(
                     text = columnLabel(column),
                     style = LogbookTheme.type.tableHeader,
-                    color = palette.inkFaint,
+                    color = palette.inkSoft,
                     textAlign = TextAlign.End,
                     modifier = Modifier.weight(1f),
                 )
@@ -1197,7 +1199,7 @@ private fun SetTable(
                 // already written the way it should read.
                 text = it.label,
                 style = LogbookTheme.type.meta,
-                color = palette.inkFaint,
+                color = palette.inkSoft,
                 modifier = Modifier.padding(top = LogbookSpace.grid * 2.5f),
             )
         }
@@ -1492,9 +1494,6 @@ private fun NumericField(
         value = text,
         onValueChange = { text = it },
         enabled = enabled,
-        // Bare on paper: a cell at rest is indistinguishable from the read-only
-        // table it sits in, and the ghost recedes by colour alone.
-        skin = DenseFieldSkin.NAKED,
         numeric = true,
         textAlign = textAlign,
         placeholder = placeholder,
@@ -1536,7 +1535,6 @@ private fun NoteField(
             text = it
             onChange(it)
         },
-        skin = DenseFieldSkin.NAKED,
         multiLine = true,
         placeholder = placeholder,
         modifier = Modifier

@@ -2,11 +2,9 @@ package dev.jtiisto.wellness.feature.trends.ui
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -14,7 +12,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.material.icons.Icons
@@ -45,6 +42,8 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import dev.jtiisto.wellness.core.ui.theme.InkOutlineButton
+import dev.jtiisto.wellness.core.ui.theme.InkTab
+import dev.jtiisto.wellness.core.ui.theme.InkTabRow
 import dev.jtiisto.wellness.core.ui.theme.LogbookShapes
 import dev.jtiisto.wellness.core.ui.theme.LogbookSheetHandle
 import dev.jtiisto.wellness.core.ui.theme.LogbookSpace
@@ -74,126 +73,22 @@ import dev.jtiisto.wellness.feature.trends.chart.staleBadgeText
  * count as untested code that no test can reach.
  */
 
-/**
- * A section: head, rule, content.
- *
- * [sub] is the qualifier the head carries on its own baseline — a unit, a
- * window, what the dots are. It measures first and the title wraps, because the
- * title is the free-running half of the pair here (a tracker or exercise name),
- * which is the reverse of coach's sections and the same rule underneath: the
- * bounded sibling gets its width, the unbounded one wraps.
- */
-@Composable
-inline fun TrendsSection(
-    title: String,
-    sub: String? = null,
-    modifier: Modifier = Modifier,
-    noinline trailing: (@Composable () -> Unit)? = null,
-    content: @Composable ColumnScope.() -> Unit,
-) {
-    Column(
-        modifier = modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(LogbookSpace.grid * 2),
-    ) {
-        SectionHead(title = title, sub = sub, trailing = trailing)
-        content()
-    }
-}
-
-@Composable
-fun SectionHead(title: String, sub: String?, trailing: (@Composable () -> Unit)? = null) {
-    val palette = LogbookTheme.palette
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .drawBehind {
-                val stroke = LogbookSpace.sectionUnderline.toPx()
-                drawLine(
-                    color = palette.ink,
-                    start = Offset(0f, size.height - stroke / 2f),
-                    end = Offset(size.width, size.height - stroke / 2f),
-                    strokeWidth = stroke,
-                )
-            }
-            .padding(bottom = HEAD_UNDERLINE_GAP),
-        verticalAlignment = Alignment.Bottom,
-    ) {
-        Text(
-            text = title.uppercase(),
-            style = LogbookTheme.type.section,
-            color = palette.ink,
-            modifier = Modifier.weight(1f),
-        )
-        sub?.let {
-            Text(
-                text = it.uppercase(),
-                style = LogbookTheme.type.eyebrow,
-                color = palette.inkSoft,
-                modifier = Modifier.padding(start = LogbookSpace.grid * 2),
-            )
-        }
-        trailing?.invoke()
-    }
-}
-
 // ---- Tabs and ranges -----------------------------------------------------------
 
 /**
- * The five sub-screens, as the strip idiom: mono caps over a hairline, the
- * active one in ink with a 2dp rule under it.
+ * The five sub-screens, in the system's one tab strip.
  *
- * Scrollable rather than squeezed — five words at a fixed tracking are wider
- * than a narrow phone in a large display size, and a tab that ellipsised would
- * lose the only word it has.
+ * Trends drew its own copy of the strip for a round — it was the first surface
+ * to need one — and the copy retired when Round 4 hoisted [InkTabRow] into
+ * `core/ui` for Analysis and Tools. The only thing that came back with the
+ * shared one is 2dp of air on each side of the active tab's rule: the words sit
+ * exactly where they did, because the strip's own 2dp padding replaces 4dp of
+ * the gap between them.
  */
 @Composable
 fun ScreenTabs(selected: String, onSelect: (String) -> Unit, modifier: Modifier = Modifier) {
-    val palette = LogbookTheme.palette
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .drawBehind {
-                val stroke = LogbookSpace.hairline.toPx()
-                drawLine(
-                    color = palette.rule,
-                    start = Offset(0f, size.height - stroke / 2f),
-                    end = Offset(size.width, size.height - stroke / 2f),
-                    strokeWidth = stroke,
-                )
-            }
-            .horizontalScroll(rememberScrollState()),
-        horizontalArrangement = Arrangement.spacedBy(TAB_GAP),
-    ) {
-        for (screen in TREND_SCREENS) {
-            val active = screen.id == selected
-            Box(
-                modifier = Modifier
-                    .heightIn(min = LogbookSpace.touchTarget)
-                    .selectable(
-                        selected = active,
-                        role = Role.Tab,
-                        onClick = { onSelect(screen.id) },
-                    )
-                    .drawBehind {
-                        if (!active) return@drawBehind
-                        val stroke = TAB_UNDERLINE.toPx()
-                        drawLine(
-                            color = palette.ink,
-                            start = Offset(0f, size.height - stroke / 2f),
-                            end = Offset(size.width, size.height - stroke / 2f),
-                            strokeWidth = stroke,
-                        )
-                    },
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    text = screen.label.uppercase(),
-                    style = LogbookTheme.type.eyebrow,
-                    color = if (active) palette.ink else palette.inkFaint,
-                )
-            }
-        }
-    }
+    val tabs = remember { TREND_SCREENS.map { InkTab(id = it.id, label = it.label) } }
+    InkTabRow(tabs = tabs, selectedId = selected, onSelect = onSelect, modifier = modifier)
 }
 
 /**
@@ -315,7 +210,7 @@ fun StaleCaption(stamps: List<Long>, modifier: Modifier = Modifier) {
     Text(
         text = text.uppercase(),
         style = LogbookTheme.type.eyebrow,
-        color = LogbookTheme.palette.inkFaint,
+        color = LogbookTheme.palette.inkSoft,
         modifier = modifier.semantics { contentDescription = "Offline — showing cached data" },
     )
 }
@@ -499,7 +394,8 @@ fun PickerField(
             Icon(
                 imageVector = Icons.Filled.ExpandMore,
                 contentDescription = null,
-                tint = palette.inkFaint,
+                // The picker's own affordance — a control glyph keeps 3:1.
+                tint = palette.inkSoft,
                 modifier = Modifier.size(CHEVRON_SIZE),
             )
         }
@@ -565,7 +461,7 @@ fun ChartEmpty(text: String, modifier: Modifier = Modifier) {
     Text(
         text = text,
         style = LogbookTheme.type.body.copy(fontStyle = FontStyle.Italic),
-        color = LogbookTheme.palette.inkFaint,
+        color = LogbookTheme.palette.inkSoft,
         modifier = modifier.padding(vertical = LogbookSpace.grid * 2),
     )
 }
@@ -605,9 +501,6 @@ fun ScreenError(text: String, onRetry: () -> Unit, modifier: Modifier = Modifier
     }
 }
 
-private val HEAD_UNDERLINE_GAP = 5.dp
-private val TAB_GAP = 18.dp
-private val TAB_UNDERLINE = 2.dp
 private val SEGMENT_GAP = 10.dp
 private val SEGMENT_UNDERLINE = 1.5.dp
 

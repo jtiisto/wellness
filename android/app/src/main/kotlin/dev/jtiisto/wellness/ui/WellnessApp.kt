@@ -1,7 +1,5 @@
 package dev.jtiisto.wellness.ui
 
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Analytics
@@ -19,12 +17,10 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.CornerRadius
@@ -47,15 +43,10 @@ import dev.jtiisto.wellness.core.data.network.ServerBootstrap
 import dev.jtiisto.wellness.core.data.network.ServerResolution
 import dev.jtiisto.wellness.core.data.sync.SyncErrorEvents
 import dev.jtiisto.wellness.core.ui.motion.WellnessMotion
-import dev.jtiisto.wellness.core.ui.theme.DarkPalette
-import dev.jtiisto.wellness.core.ui.theme.LightPalette
-import dev.jtiisto.wellness.core.ui.theme.LocalModuleAccent
 import dev.jtiisto.wellness.core.ui.theme.LogbookDark
 import dev.jtiisto.wellness.core.ui.theme.LogbookLight
 import dev.jtiisto.wellness.core.ui.theme.LogbookSpace
 import dev.jtiisto.wellness.core.ui.theme.LogbookTheme
-import dev.jtiisto.wellness.core.ui.theme.ModuleAccent
-import dev.jtiisto.wellness.core.ui.theme.WellnessTheme
 import dev.jtiisto.wellness.feature.analysis.ui.AnalysisScreen
 import dev.jtiisto.wellness.feature.coach.CoachScreen
 import dev.jtiisto.wellness.feature.journal.JournalTab
@@ -74,91 +65,38 @@ private const val ANALYSIS_ROUTE = "analysis"
 private const val TOOLS_ROUTE = "tools"
 
 /**
- * Which design system a destination's composables were written against.
+ * What the Scaffold paints behind a destination.
  *
- * Logbook replaces Graphite Signal module by module, so for the length of the
- * migration the two run side by side: the shell is Logbook and every screen
- * carries its own system until its round lands. A screen rendered under the
- * other system's locals does not degrade — it reads tokens that mean something
- * else, which is why the theme is chosen per destination rather than once.
+ * One page for every tab now — Logbook paper and its ink. It is still resolved
+ * here rather than read off the palette at the callsite because the Scaffold's
+ * canvas is what a tab switch shows for the frame before the new screen draws,
+ * and that frame is the one thing about the shell worth pinning by test.
  */
-internal enum class ShellSystem { LOGBOOK, GRAPHITE }
-
-/** What the Scaffold paints under a destination, so a tab switch never flashes the other system's page. */
 @Immutable
 internal data class ShellChrome(val canvas: Color, val content: Color)
 
-internal fun ShellSystem.chrome(isDark: Boolean): ShellChrome = when (this) {
-    ShellSystem.LOGBOOK -> ShellChrome(
-        canvas = if (isDark) LogbookDark.paper else LogbookLight.paper,
-        content = if (isDark) LogbookDark.ink else LogbookLight.ink,
-    )
-    ShellSystem.GRAPHITE -> ShellChrome(
-        canvas = if (isDark) DarkPalette.canvas else LightPalette.canvas,
-        content = if (isDark) DarkPalette.textPrimary else LightPalette.textPrimary,
-    )
-}
+internal fun shellChrome(isDark: Boolean): ShellChrome = ShellChrome(
+    canvas = if (isDark) LogbookDark.paper else LogbookLight.paper,
+    content = if (isDark) LogbookDark.ink else LogbookLight.ink,
+)
 
 @Immutable
 internal data class TopLevelDestination(
     val route: String,
     val label: String,
     val icon: ImageVector,
-    val accent: ModuleAccent,
-    val system: ShellSystem,
 )
 
 internal val topLevelDestinations = listOf(
-    TopLevelDestination(
-        route = JOURNAL_ROUTE,
-        label = "Journal",
-        icon = Icons.Outlined.Checklist,
-        accent = ModuleAccent.JOURNAL,
-        system = ShellSystem.LOGBOOK,
-    ),
-    TopLevelDestination(
-        route = COACH_ROUTE,
-        label = "Coach",
-        icon = Icons.Outlined.FitnessCenter,
-        accent = ModuleAccent.COACH,
-        system = ShellSystem.LOGBOOK,
-    ),
-    TopLevelDestination(
-        route = TRENDS_ROUTE,
-        label = "Trends",
-        icon = Icons.Outlined.Insights,
-        accent = ModuleAccent.TRENDS,
-        system = ShellSystem.LOGBOOK,
-    ),
-    TopLevelDestination(
-        route = ANALYSIS_ROUTE,
-        label = "Analysis",
-        icon = Icons.Outlined.Analytics,
-        accent = ModuleAccent.ANALYSIS,
-        system = ShellSystem.LOGBOOK,
-    ),
-    TopLevelDestination(
-        route = TOOLS_ROUTE,
-        label = "Tools",
-        icon = Icons.Outlined.Settings,
-        accent = ModuleAccent.TOOLS,
-        system = ShellSystem.LOGBOOK,
-    ),
+    TopLevelDestination(route = JOURNAL_ROUTE, label = "Journal", icon = Icons.Outlined.Checklist),
+    TopLevelDestination(route = COACH_ROUTE, label = "Coach", icon = Icons.Outlined.FitnessCenter),
+    TopLevelDestination(route = TRENDS_ROUTE, label = "Trends", icon = Icons.Outlined.Insights),
+    TopLevelDestination(route = ANALYSIS_ROUTE, label = "Analysis", icon = Icons.Outlined.Analytics),
+    TopLevelDestination(route = TOOLS_ROUTE, label = "Tools", icon = Icons.Outlined.Settings),
 )
 
-/** The tab the app opens on; the nav graph and [shellSystemFor] read it from here so they cannot drift. */
+/** The tab the app opens on; the nav graph reads it from here so the two cannot drift. */
 internal val startTab = topLevelDestinations.first()
-
-/**
- * The system whose canvas the Scaffold paints for [route].
- *
- * A route that is not a top-level tab resolves to [startTab]'s system rather
- * than the shell's own: the first frame composes before the nav host has
- * committed a back stack entry, and answering with the shell's system there
- * would show one frame of the wrong paper behind the start destination.
- */
-internal fun shellSystemFor(route: String?): ShellSystem =
-    (topLevelDestinations.firstOrNull { it.route == route } ?: startTab).system
 
 @Composable
 fun WellnessApp() {
@@ -218,7 +156,7 @@ fun WellnessApp() {
             }
         }
 
-        val chrome = shellSystemFor(currentDestination?.route).chrome(palette.isDark)
+        val chrome = shellChrome(palette.isDark)
 
         Scaffold(
             // The active destination's canvas runs full-bleed behind the
@@ -294,7 +232,7 @@ fun WellnessApp() {
             ) {
                 topLevelDestinations.forEach { destination ->
                     composable(destination.route) {
-                        DestinationContent(destination, snackbarHostState)
+                        DestinationScreen(destination, snackbarHostState)
                     }
                 }
             }
@@ -303,31 +241,12 @@ fun WellnessApp() {
 }
 
 /**
- * A destination's content under the theme its own composables read.
+ * The screen behind a tab.
  *
- * The shell above is already Logbook, so a Graphite screen has to re-establish
- * its palette here rather than inherit one; the module accent rides along with
- * it, since accents exist only in Graphite Signal.
+ * No per-destination theme wrapper any more: the shell established
+ * [LogbookTheme] once at the top, and with Graphite Signal retired there is no
+ * second system for a screen to re-establish.
  */
-@Composable
-private fun DestinationContent(
-    destination: TopLevelDestination,
-    snackbarHostState: SnackbarHostState,
-) {
-    when (destination.system) {
-        ShellSystem.LOGBOOK -> LogbookTheme {
-            DestinationScreen(destination, snackbarHostState)
-        }
-        ShellSystem.GRAPHITE -> WellnessTheme {
-            // One accent per tab, provided at its root: nothing below here has
-            // to know which module it is drawing.
-            CompositionLocalProvider(LocalModuleAccent provides destination.accent) {
-                DestinationScreen(destination, snackbarHostState)
-            }
-        }
-    }
-}
-
 @Composable
 private fun DestinationScreen(
     destination: TopLevelDestination,
@@ -339,7 +258,11 @@ private fun DestinationScreen(
         TRENDS_ROUTE -> TrendsScreen()
         ANALYSIS_ROUTE -> AnalysisScreen()
         TOOLS_ROUTE -> ToolsScreen(snackbarHostState)
-        else -> StubScreen(destination.label)
+        // Unreachable by construction: the NavHost registers exactly the routes
+        // in [topLevelDestinations], so a route with no screen is a table that
+        // was edited in one place only. Loud rather than a blank page, which is
+        // what the placeholder screen here used to be.
+        else -> error("No screen for route '${destination.route}'")
     }
 }
 
@@ -364,17 +287,3 @@ private fun Modifier.selectionUnderline(selected: Boolean, color: Color): Modifi
             cornerRadius = CornerRadius(height / 2f),
         )
     }
-
-@Composable
-private fun StubScreen(name: String) {
-    Box(
-        modifier = Modifier.fillMaxSize(),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text = name,
-            style = WellnessTheme.type.headline,
-            color = WellnessTheme.palette.textFaint,
-        )
-    }
-}

@@ -42,7 +42,6 @@ import dev.jtiisto.wellness.core.data.db.DebugLogEntity
 import dev.jtiisto.wellness.core.data.db.ServerProfileEntity
 import dev.jtiisto.wellness.core.data.sync.DebugLogLogic
 import dev.jtiisto.wellness.core.data.sync.ForceSyncCopy
-import dev.jtiisto.wellness.core.ui.theme.DenseFieldSkin
 import dev.jtiisto.wellness.core.ui.theme.InkButton
 import dev.jtiisto.wellness.core.ui.theme.InkNotice
 import dev.jtiisto.wellness.core.ui.theme.InkOutlineButton
@@ -429,13 +428,12 @@ private fun ProfileEditorDialog(dialog: ToolsDialog.EditProfile, actions: ToolsA
 }
 
 /**
- * A naked field with the label and the message the skin deliberately does not
- * draw.
+ * A bare field with the label and the message it deliberately does not draw.
  *
- * [DenseFieldSkin.NAKED] is bare by definition — it ignores `label`,
- * `supportingText` and `isError` — so a Logbook form states them itself. The
- * error rides the field's **own** semantics node: announced only from a sibling
- * line, it is an error the form never tells a screen-reader user about.
+ * [WellnessDenseField] is bare by definition — no label, no supporting text, no
+ * error state — so a Logbook form states them itself. The error rides the
+ * field's **own** semantics node: announced only from a sibling line, it is an
+ * error the form never tells a screen-reader user about.
  */
 @Composable
 private fun LogbookField(
@@ -465,7 +463,6 @@ private fun LogbookField(
                 .fieldSemantics(label, error),
             enabled = enabled,
             readOnly = readOnly,
-            skin = DenseFieldSkin.NAKED,
             placeholder = placeholder,
         )
         error?.let { InkNotice(text = it, modifier = Modifier.padding(top = LogbookSpace.grid)) }

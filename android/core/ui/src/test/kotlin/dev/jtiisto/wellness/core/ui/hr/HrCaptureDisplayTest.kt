@@ -4,8 +4,8 @@ import dev.jtiisto.wellness.core.ble.capture.HrCaptureState
 import dev.jtiisto.wellness.core.ble.model.ConnectionState
 import dev.jtiisto.wellness.core.ble.quality.SignalQuality
 import dev.jtiisto.wellness.core.ble.quality.SignalQualityLevel
-import dev.jtiisto.wellness.core.ui.theme.DarkPalette
-import dev.jtiisto.wellness.core.ui.theme.LightPalette
+import dev.jtiisto.wellness.core.ui.theme.LiveSignalDark
+import dev.jtiisto.wellness.core.ui.theme.LiveSignalLight
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -53,16 +53,16 @@ class HrCaptureDisplayTest {
     }
 
     @Test
-    @DisplayName("one tone→semantic table, whichever design system is asking")
+    @DisplayName("one tone→colour table, and it is the live-signal exception's own")
     fun toneColours() {
-        // Both systems resolve the tone here: Graphite from the system's mode,
-        // Logbook from its own palette's — the dot's colour is the design's
-        // documented live-signal exception, and it must mean the same thing on
-        // paper as it does on graphite.
-        for (palette in listOf(LightPalette, DarkPalette)) {
-            assertEquals(palette.success, HrTone.LIVE.colorOn(palette))
-            assertEquals(palette.warning, HrTone.WAITING.colorOn(palette))
-            assertEquals(palette.error, HrTone.LOST.colorOn(palette))
+        // The dot's colour is the design's documented live-signal exception —
+        // the one thing on the page that is measured rather than judged — so
+        // the mapping is pinned here rather than left to a composable only a
+        // device could inspect.
+        for (colors in listOf(LiveSignalLight, LiveSignalDark)) {
+            assertEquals(colors.live, HrTone.LIVE.colorOn(colors))
+            assertEquals(colors.waiting, HrTone.WAITING.colorOn(colors))
+            assertEquals(colors.attention, HrTone.LOST.colorOn(colors))
         }
     }
 

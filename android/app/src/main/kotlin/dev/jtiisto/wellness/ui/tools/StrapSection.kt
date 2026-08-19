@@ -25,7 +25,6 @@ import dev.jtiisto.wellness.core.ble.device.KnownDevice
 import dev.jtiisto.wellness.core.ble.scanner.DiscoveredDevice
 import dev.jtiisto.wellness.core.ui.hr.HrToneDot
 import dev.jtiisto.wellness.core.ui.hr.hrCaptureDisplay
-import dev.jtiisto.wellness.core.ui.hr.logbookColor
 import dev.jtiisto.wellness.core.ui.theme.InkButton
 import dev.jtiisto.wellness.core.ui.theme.InkNotice
 import dev.jtiisto.wellness.core.ui.theme.InkOutlineButton
@@ -175,7 +174,7 @@ private fun CaptureControls(state: StrapUiState, onStartCapture: () -> Unit, onS
             // The documented live-signal exception, resolved against the
             // Logbook palette's own mode: whether the instrument is still
             // reading is the one thing on this page worth a colour.
-            HrToneDot(tone = display.tone, color = display.tone.logbookColor())
+            HrToneDot(tone = display.tone)
             Text(
                 text = "${display.bpmText} bpm · ${display.connectionText}",
                 style = LogbookTheme.type.body,

@@ -1,15 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!--
-      The launch window, painted before Compose has a frame. It is the *start
-      destination's* canvas, which is journal's — and journal moved to Logbook
-      with its round, so this is Logbook `paper` (light here, dark in
-      values-night). The handoff into the real theme is invisible in both.
+      The launch window, painted before Compose has a frame. It is the start
+      destination's canvas — Logbook `paper`, light here and dark in
+      values-night — so the handoff into the real theme is invisible in both.
 
-      Flipping it is bound to the destination table's journal entry: paint the
-      other system's canvas here and every cold start opens with one frame of
-      the wrong page. `ShellSystemTest.journalIsLogbook` is the pin on the other
-      half of that pair.
+      It used to be bound specifically to journal's entry in the destination
+      table, back when a tab could still be on the other design system and
+      painting the wrong one here meant a frame of the wrong page on every cold
+      start. With Graphite Signal retired every destination is paper, so this
+      value tracks the palette rather than a route. `ShellChromeTest` pins the
+      other half: the Scaffold canvas these two colours have to match.
     -->
     <color name="window_background">#FBFAF7</color>
 </resources>

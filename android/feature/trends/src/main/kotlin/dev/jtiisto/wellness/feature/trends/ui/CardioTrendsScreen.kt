@@ -14,6 +14,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.jtiisto.wellness.core.ui.theme.LogbookSection
 import dev.jtiisto.wellness.feature.trends.CardioViewModel
 import dev.jtiisto.wellness.feature.trends.Slice
 import dev.jtiisto.wellness.feature.trends.chart.AEROBIC_EMPTY_TEXT
@@ -50,7 +51,7 @@ fun CardioTrendsScreen(onRange: (String) -> Unit, modifier: Modifier = Modifier)
             Slice.Loading -> ScreenLoading()
             is Slice.Ready -> {
                 val zone2 = remember(slice.value) { zone2CardModel(slice.value) }
-                TrendsSection(title = "Weekly Zone 2", sub = "min") {
+                LogbookSection(title = "Weekly Zone 2", sub = "min") {
                     if (zone2.plot == null) {
                         ChartEmpty("No data in range")
                     } else {
@@ -64,7 +65,7 @@ fun CardioTrendsScreen(onRange: (String) -> Unit, modifier: Modifier = Modifier)
                 }
 
                 val proxy = remember(slice.value) { aerobicProxyModel(slice.value.steadySessions) }
-                TrendsSection(title = "Steady-session HR", sub = "avg bpm · dot = duration") {
+                LogbookSection(title = "Steady-session HR", sub = "avg bpm · dot = duration") {
                     if (proxy == null) {
                         ChartEmpty(AEROBIC_EMPTY_TEXT)
                     } else {

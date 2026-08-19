@@ -28,6 +28,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.jtiisto.wellness.core.data.trends.RecoveryDay
+import dev.jtiisto.wellness.core.ui.theme.LogbookSection
 import dev.jtiisto.wellness.core.ui.theme.LogbookSpace
 import dev.jtiisto.wellness.core.ui.theme.LogbookTheme
 import dev.jtiisto.wellness.feature.trends.HealthViewModel
@@ -123,7 +124,7 @@ fun HealthTrendsScreen(onRange: (String) -> Unit, modifier: Modifier = Modifier)
         if (weight != null && weight.available && weight.series.isNotEmpty()) {
             val card = remember(weight, scans) { bodyCardModel(weight.series, scans) }
             if (card != null) {
-                TrendsSection(title = "Body", sub = "kg") {
+                LogbookSection(title = "Body", sub = "kg") {
                     LegendRow(card.legend, chart = ChartInk.BODY)
                     PlotCanvas(
                         model = card.plot,
@@ -137,7 +138,7 @@ fun HealthTrendsScreen(onRange: (String) -> Unit, modifier: Modifier = Modifier)
         if (scans.isNotEmpty()) {
             val card = remember(scans) { compositionCardModel(scans) }
             if (card != null) {
-                TrendsSection(title = "Composition", sub = "DEXA · all scans") {
+                LogbookSection(title = "Composition", sub = "DEXA · all scans") {
                     for (metric in card.metrics) MiniMetric(metric, pinEpoch)
                     PlotCanvas(
                         model = card.axis,
@@ -153,7 +154,7 @@ fun HealthTrendsScreen(onRange: (String) -> Unit, modifier: Modifier = Modifier)
         if (labs != null && labs.available && labs.panels.isNotEmpty()) {
             val section = remember(labs, state.labPanel) { labsSectionModel(labs.panels, state.labPanel) }
             if (section != null) {
-                TrendsSection(title = "Labs", sub = "ref band from latest") {
+                LogbookSection(title = "Labs", sub = "ref band from latest") {
                     PickerField(
                         title = "Panel",
                         options = section.panelOptions,
@@ -181,7 +182,7 @@ fun HealthTrendsScreen(onRange: (String) -> Unit, modifier: Modifier = Modifier)
 @Composable
 private fun RecoveryCards(days: List<RecoveryDay>, range: String, pinEpoch: Int) {
     Column(verticalArrangement = Arrangement.spacedBy(SECTION_GAP)) {
-        TrendsSection(title = "HRV", sub = "ms · overnight") {
+        LogbookSection(title = "HRV", sub = "ms · overnight") {
             val model = remember(days) { hrvCardModel(days) }
             if (model == null) {
                 ChartEmpty(NO_HRV_TEXT)
@@ -190,7 +191,7 @@ private fun RecoveryCards(days: List<RecoveryDay>, range: String, pinEpoch: Int)
                 PlotCanvas(model = model, identity = listOf("hrv", range, pinEpoch))
             }
         }
-        TrendsSection(title = "Resting HR", sub = "bpm") {
+        LogbookSection(title = "Resting HR", sub = "bpm") {
             val model = remember(days) { rhrCardModel(days) }
             if (model == null) {
                 ChartEmpty(NO_RHR_TEXT)
@@ -199,7 +200,7 @@ private fun RecoveryCards(days: List<RecoveryDay>, range: String, pinEpoch: Int)
                 PlotCanvas(model = model, identity = listOf("rhr", range, pinEpoch))
             }
         }
-        TrendsSection(title = "Sleep", sub = "h · score right") {
+        LogbookSection(title = "Sleep", sub = "h · score right") {
             val model = remember(days) { sleepCardModel(days) }
             if (model == null) {
                 ChartEmpty(NO_SLEEP_TEXT)
@@ -288,7 +289,7 @@ private fun BoneTableRow(row: BoneRow) {
     ) {
         Column {
             Text("Bone (total)", style = LogbookTheme.type.name, color = LogbookTheme.palette.ink)
-            Text(row.date, style = LogbookTheme.type.meta, color = LogbookTheme.palette.inkFaint)
+            Text(row.date, style = LogbookTheme.type.meta, color = LogbookTheme.palette.inkSoft)
         }
         Column(horizontalAlignment = Alignment.End) {
             Text(
@@ -296,7 +297,7 @@ private fun BoneTableRow(row: BoneRow) {
                 style = LogbookTheme.type.meta.copy(fontWeight = FontWeight.Medium),
                 color = LogbookTheme.palette.ink,
             )
-            Text(row.tScore, style = LogbookTheme.type.meta, color = LogbookTheme.palette.inkFaint)
+            Text(row.tScore, style = LogbookTheme.type.meta, color = LogbookTheme.palette.inkSoft)
         }
     }
 }
@@ -320,7 +321,7 @@ private fun LabTableRow(row: LabRowModel) {
                 if (row.flagged) FlagGlyph()
                 Text(row.name, style = LogbookTheme.type.name, color = LogbookTheme.palette.ink)
             }
-            Text(row.subLabel, style = LogbookTheme.type.meta, color = LogbookTheme.palette.inkFaint)
+            Text(row.subLabel, style = LogbookTheme.type.meta, color = LogbookTheme.palette.inkSoft)
         }
         Text(
             text = row.value,

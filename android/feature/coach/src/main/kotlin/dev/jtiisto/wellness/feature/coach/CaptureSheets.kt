@@ -14,7 +14,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import dev.jtiisto.wellness.core.ui.hr.HrCaptureDisplay
 import dev.jtiisto.wellness.core.ui.hr.HrToneDot
-import dev.jtiisto.wellness.core.ui.hr.logbookColor
 import dev.jtiisto.wellness.core.ui.theme.InkButton
 import dev.jtiisto.wellness.core.ui.theme.InkOutlineButton
 import dev.jtiisto.wellness.core.ui.theme.LogbookShapes
@@ -123,7 +122,7 @@ internal fun CaptureStatusSheet(
             ) {
                 // The one dot on the page that carries a colour, and it carries
                 // it for the documented reason: this is an instrument reading.
-                HrToneDot(tone = display.tone, color = display.tone.logbookColor())
+                HrToneDot(tone = display.tone)
                 Text(
                     text = "${display.bpmText} bpm · ${display.connectionText}",
                     style = LogbookTheme.type.meta,
@@ -160,7 +159,7 @@ internal fun CaptureStatusSheet(
             Text(
                 text = CaptureCopy.STOP_HINT,
                 style = LogbookTheme.type.body,
-                color = palette.inkFaint,
+                color = palette.inkSoft,
             )
         }
     }

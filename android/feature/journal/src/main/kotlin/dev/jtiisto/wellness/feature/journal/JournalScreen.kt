@@ -66,7 +66,6 @@ import dev.jtiisto.wellness.core.data.journal.TargetProgress
 import dev.jtiisto.wellness.core.data.journal.TrackerType
 import dev.jtiisto.wellness.core.data.journal.describeCategoryRollup
 import dev.jtiisto.wellness.core.ui.SyncStatusDot
-import dev.jtiisto.wellness.core.ui.theme.DenseFieldSkin
 import dev.jtiisto.wellness.core.ui.theme.InkButton
 import dev.jtiisto.wellness.core.ui.theme.InkMarkToggle
 import dev.jtiisto.wellness.core.ui.theme.LogbookShapes
@@ -241,10 +240,8 @@ private fun JournalHeader(
             )
             // The one thing on the page carrying colour, and it carries it for
             // the documented reason: the sync state is transient device truth,
-            // not decoration. It draws no text, so there is no Graphite
-            // typography to override — and its colours already resolve from the
-            // system's dark-mode setting rather than from `LocalWellnessPalette`,
-            // which on this paper would have answered with the dark palette.
+            // not decoration. It draws no text, and its four colours are the
+            // live-signal set — resolved against this page's own mode.
             SyncStatusDot(state.syncStatus, modifier = Modifier.padding(end = LogbookSpace.grid))
             IconButton(
                 onClick = onOpenConfig,
@@ -375,7 +372,7 @@ private fun DateCell(cell: DateCellState, onClick: () -> Unit, modifier: Modifie
             Text(
                 text = cell.initial.uppercase(),
                 style = LogbookTheme.type.eyebrow,
-                color = palette.inkFaint,
+                color = palette.inkSoft,
                 modifier = Modifier.clearAndSetSemantics { },
             )
             Text(
@@ -569,7 +566,7 @@ private fun TrackerRow(
                     Text(
                         text = OFF_SCHEDULE_LABEL.uppercase(),
                         style = LogbookTheme.type.eyebrow,
-                        color = palette.inkFaint,
+                        color = palette.inkSoft,
                         modifier = Modifier.padding(start = LogbookSpace.grid * 1.5f),
                     )
                 }
@@ -605,7 +602,7 @@ private fun TrackerRow(
             Text(
                 text = "Last updated $it",
                 style = LogbookTheme.type.meta,
-                color = palette.inkFaint,
+                color = palette.inkSoft,
                 modifier = Modifier.padding(start = MARK_COLUMN, top = LogbookSpace.grid),
             )
         }
@@ -735,7 +732,6 @@ private fun NumericField(
         WellnessDenseField(
             value = text,
             onValueChange = { text = it },
-            skin = DenseFieldSkin.NAKED,
             numeric = true,
             // A default nobody has committed to yet is not the user's number.
             // On paper that recedes in ink rather than leaning into italics.
@@ -850,7 +846,6 @@ private fun NoteField(row: TrackerRowState, onNote: (String, String) -> Unit) {
             text = it
             onNote(row.id, it)
         },
-        skin = DenseFieldSkin.NAKED,
         multiLine = true,
         placeholder = "Add note…",
         modifier = Modifier
@@ -895,7 +890,6 @@ private fun AccumulatorSheet(row: TrackerRowState, onDismiss: () -> Unit, onAdd:
             WellnessDenseField(
                 value = input,
                 onValueChange = { input = it },
-                skin = DenseFieldSkin.NAKED,
                 numeric = true,
                 textAlign = TextAlign.Start,
                 placeholder = "e.g. 25",
@@ -931,7 +925,7 @@ private fun EmptyState(title: String, detail: String?) {
         Text(
             text = title,
             style = LogbookTheme.type.body.copy(fontStyle = FontStyle.Italic),
-            color = palette.inkFaint,
+            color = palette.inkSoft,
             textAlign = TextAlign.Center,
         )
         detail?.let {
@@ -939,7 +933,7 @@ private fun EmptyState(title: String, detail: String?) {
             Text(
                 text = it,
                 style = LogbookTheme.type.body.copy(fontStyle = FontStyle.Italic),
-                color = palette.inkFaint,
+                color = palette.inkSoft,
                 textAlign = TextAlign.Center,
             )
         }

@@ -1,16 +1,14 @@
 # Spec: Logbook Design System (Rounds 1–4: shell, Coach, Journal, Trends, Analysis+Tools)
 
-Status: **Rounds 1 (shell + Coach), 2 (Journal) and 3 (Trends) shipped,
-device-accepted and pushed** on `feature/logbook-design` (Round 3 accepted
-2026-08-19; its per-chart `ChartInk` resolution is recorded under
-"Implementation shape"). **Round 4 (Analysis + Tools) designed 2026-08-19** —
-mockup `plans/logbook-design/analysis-logbook.html` user-approved; the
-"Components — Analysis & Tools" section below is its committed form. **P1a
-(status markers, cross-stack) and P1b (the Analysis + Tools restyle and the
-final theme flip) are implemented and awaiting device acceptance** — no
-destination selects Graphite any more, though Graphite itself deliberately still
-exists. Round 4 is the final round: its **retirement phase** (Phase 3, after
-device acceptance) takes Graphite Signal down.
+Status: **COMPLETE.** Rounds 1 (shell + Coach), 2 (Journal), 3 (Trends) and 4
+(Analysis + Tools) are all shipped and device-accepted on
+`feature/logbook-design` (Round 3 accepted 2026-08-19; Round 4 accepted
+2026-08-19 after one fix round). Round 4's mockup was
+`plans/logbook-design/analysis-logbook.html`; the "Components — Analysis &
+Tools" section below is its committed form. **Round 4 Phase 3 — the retirement —
+has landed**: Graphite Signal is gone from the tree (theme, palette, defaults,
+type/shape/space, module accents, the dual-system shell), `design-system.md` is
+deleted, and the app draws in one design language. The whole app is Logbook.
 
 ## Goal
 
@@ -19,8 +17,9 @@ training-log system whose governing metaphor is a coach's paper logbook: one
 flat surface, tabular numerals, coach's notation, ink — with color reserved for
 exactly one meaning. The language is destined for the whole app; this round
 converts the **app shell and the Coach feature**. Journal, Trends, Analysis and
-Tools migrate in later rounds and remain on Graphite Signal
-([design-system.md](design-system.md)) until theirs.
+Tools migrated in later rounds — the last of them in Round 4, whose retirement
+phase then deleted Graphite Signal and its spec outright. Nothing in the tree
+draws Graphite now.
 
 Design source: `DESIGN-LANGUAGE.md` + `logbook-mockup.html` (past state) +
 `logbook-scheduled.html` (scheduled state), local-only at the repo root's
@@ -64,20 +63,25 @@ marks) to the tested state layer and restructures composables above it.
 | Coach | **Logbook** (Round 1) |
 | Journal (day view + tracker config) | **Logbook** (Round 2) |
 | Trends (all five sub-screens) | **Logbook** (Round 3) |
-| Analysis, Tools | **Logbook** (Round 4 — flipped, awaiting device acceptance); [design-system.md](design-system.md) retires with the round's retirement phase |
+| Analysis, Tools | **Logbook** (Round 4 — shipped, device-accepted 2026-08-19) |
+| *Graphite Signal* | **retired** (Round 4 Phase 3) — theme, palette, defaults, type/shape/space, module accents and `design-system.md` all deleted |
 
-Each nav destination is wrapped in its own theme; the Scaffold container color
-follows the active destination's canvas. Phases land incrementally *inside*
-each round: the shell moved first while Coach stayed wrapped in Graphite until
-its rendering phases landed — flipping it earlier would render Graphite-styled
-composables against Logbook locals, i.e. tokens that mean something else. The
-shell test pins each destination's current system twice (once in the route
-table, once in its own named case) so a flip is always a deliberate multi-place
-edit. Launch-window `colors.xml` **flipped to Logbook paper in Round 2**, with
-journal — it is the start destination, so it is the one whose canvas the launch
-window has to match, and `ShellSystemTest.journalIsLogbook` is the pin on the
-other half of that pair. Graphite tokens retire module-by-module; the Graphite
-spec shrinks as modules leave it.
+**This table is history now.** For the length of the migration each nav
+destination was wrapped in its own theme and the Scaffold container color
+followed the active destination's canvas, because the two systems genuinely
+coexisted: a screen rendered under the other system's locals does not degrade,
+it reads tokens that mean something else. Phases landed incrementally *inside*
+each round — the shell moved first while Coach stayed wrapped in Graphite until
+its rendering phases landed — and `ShellSystemTest` pinned each destination's
+system twice (once in the route table, once in its own named case) so a flip was
+always a deliberate multi-place edit.
+
+The retirement collapsed all of it: one theme applied once at the shell's root,
+`ShellSystem`/`shellSystemFor` gone with the field they read, and the test cut
+down to what still means something (`ShellChromeTest` — the canvas is paper and
+ink in both modes, the five routes, the start tab). Launch-window `colors.xml`
+**flipped to Logbook paper in Round 2** with journal, the start destination;
+every destination being paper now makes that agreement automatic.
 
 ## Tokens (`core/ui/theme/` — new `LogbookPalette.kt`, `LogbookType.kt`, `LogbookTheme.kt`; package stays `dev.jtiisto.wellness.core.ui.theme`, the Kover-excluded package)
 
@@ -719,8 +723,9 @@ created, not changed:
   entries, the GRAPHITE `DestinationContent` branch (with its
   `LocalModuleAccent` provider), the `ShellSystemTest` map, and new
   `analysisIsLogbook`/`toolsIsLogbook` pins.
-- **Retirement (after the device pass accepts the flip — Graphite must
-  still exist if the pass wants something back)**: `ShellSystem`/`ShellChrome`
+- **Retirement — LANDED 2026-08-19** (after the device pass accepted the flip;
+  Graphite had to still exist in case the pass wanted something back):
+  `ShellSystem`/`ShellChrome`
   collapse to one member; `graphiteChrome` and `systemsAreDistinguishable`
   retire as vacuous; `WellnessTheme`, `WellnessDefaults`, `ModuleAccent`/
   `LocalModuleAccent` and the already-unreachable `StubScreen` delete;
@@ -731,7 +736,7 @@ created, not changed:
   semantic assertions move with them rather than dying. The two
   cross-system leaks fix first (`WellnessDenseField`'s NAKED path reads a
   Graphite spacing token; `HrBpmChip` reads `WellnessShape.pill`).
-  [design-system.md](design-system.md) retires; the staleness sweep takes
+  `design-system.md` retires (deleted); the staleness sweep takes
   `values/themes.xml`'s comment with it.
 - Known traps: Tools lives in `:app` (the module with no meaningful JVM
   coverage — watch the Kover aggregate); every new section wrapper is
@@ -814,6 +819,58 @@ Everything the section above did not settle, decided while building it.
     over timestamp, End-aligned. Side by side, the two unweighted texts
     out-measured the weighted title and crushed it to a letter column: the
     Round 1 Rows-measure-unweighted-first lesson, relearned on a device.
+
+### Round 4 retirement resolutions (2026-08-19, P3)
+
+The judgement calls the retirement itself needed.
+
+1. **The live-signal exception gets its own file, not a corner of the palette.**
+   `LiveSignalColors` (`core/ui/theme`) holds four colours — `live`, `waiting`,
+   `attention`, `idle` — and has exactly two consumers, the HR tone dot and the
+   sync dot. Naming them for the *reading* rather than for Graphite's semantics
+   (`success`/`warning`/`error`/`syncIdle`) is the point: they are not a semantic
+   palette that anything else may reach for, they are the instrument lights on a
+   page that otherwise judges in ink. The values came across unchanged but were
+   **re-measured against Logbook paper** rather than inherited on faith — all
+   four clear the 3:1 graphical floor in both modes (the tightest is dark `idle`
+   at 3.78:1). `LiveSignalColorsTest` carries the assertions;
+   `WellnessPaletteTest`'s 4.5:1 *text* assertions deliberately did **not** come
+   with them, because under Graphite these colours were also drawn as words and
+   on paper they are only ever dots.
+2. **Both dots resolve their mode from `LogbookTheme.palette.isDark`**, not from
+   `isSystemInDarkTheme()`. The two used to disagree, for a good reason that
+   expired: reading the system setting was how a component shared by both design
+   systems avoided a Graphite local that would answer `DarkPalette` by default.
+   With one theme, the theme is the authority — and a theme told to be dark on a
+   light device now gets a dark-mode dot instead of a light one on dark paper.
+3. **`DenseFieldSkin` collapses out of existence, not down to one member.** All
+   twelve callsites passed `NAKED`; `FILLED` had already lost its last consumer
+   (journal config wears the bare field like everything else). A one-member enum
+   is the same vacuousness the shell's `ShellSystem` had, so the parameter goes
+   with the branches, and `DenseFieldHint`, `columnHeaderStyle()` and the well
+   fill go with them. The component **keeps its name** — `Wellness` is the app,
+   not the retired system, and the historical specs that describe it by that name
+   are describing it correctly.
+4. **The trends strip adopts `InkTabRow`'s 2dp of tab padding.** Trends drew the
+   first copy of the strip (Round 3); Round 4 hoisted the shared one and gave it
+   2dp of horizontal padding per tab, so the active rule has a little air rather
+   than ending exactly at the word. Collapsing the duplicate adopts that: with
+   the strip's gap at 14dp instead of trends' 18dp the **words do not move at
+   all**, and the only rendered difference is the active tab's underline running
+   2dp past each end. Recorded rather than silent, because it is a change on a
+   device-accepted surface — a deliberate refinement, not a regression, but the
+   next device pass should see it named.
+5. **The ink-faint sweep reached one file outside its stated scope.**
+   `ServerRecoveryScreen`'s reassurance sentence ("Nothing has been synced or
+   changed…") is prose in `:app` that neither Analysis nor Tools' fix round
+   covered. It is the screen a failed server resolution leaves you on, which is
+   the worst place to have a sentence you cannot read.
+6. **Chevrons are controls, and controls keep 3:1.** The three expand/dropdown
+   glyphs (coach's accordion, journal's select field, trends' metric picker) moved
+   to `inkSoft` for the reason the analysis history's `✕` did in fix round 1: a
+   glyph that identifies a control is non-text contrast, not decoration. A
+   *disabled* control keeps `inkFaint` — an inactive component is exempt, and
+   fading is how it says so.
 
 ## Behavior
 
