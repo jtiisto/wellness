@@ -70,6 +70,23 @@ object ToolsCopy {
 
     const val BUILT_IN = "Built-in"
 
+    /**
+     * The mono label on the row the app is actually talking to.
+     *
+     * It used to be a tint plus the words " · active" welded onto the nickname.
+     * The tint retired with the cards — an active row is ruled under in ink now
+     * — and the label became its own mark so the nickname stays the nickname.
+     */
+    const val ACTIVE_LABEL = "active"
+
+    /**
+     * The hook-button language's note for a control that is mid-flight.
+     *
+     * A button that says what it is doing replaces the spinner beside it, which
+     * is one fewer thing that can disagree with the button's own state.
+     */
+    const val WORKING = "working…"
+
     const val FORCE_SYNC = "Force sync"
     const val FORCE_SYNC_CONFIRM_TITLE = "Force sync?"
     const val EXPORT = "Export all data"

@@ -1,17 +1,14 @@
 package dev.jtiisto.wellness.feature.analysis
 
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Bolt
-import androidx.compose.material.icons.filled.CalendarMonth
-import androidx.compose.material.icons.filled.Description
-import androidx.compose.material.icons.filled.FitnessCenter
-import androidx.compose.material.icons.filled.MonitorHeart
-import androidx.compose.material.icons.filled.TrendingUp
 import dev.jtiisto.wellness.core.data.analysis.ActiveReport
 import dev.jtiisto.wellness.core.data.analysis.AnalysisQueryDto
+import dev.jtiisto.wellness.core.data.analysis.AnalysisView
 import dev.jtiisto.wellness.core.data.analysis.ReportDetailDto
+import dev.jtiisto.wellness.feature.analysis.markdown.ReportBlock
+import dev.jtiisto.wellness.feature.analysis.markdown.ReportInline
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
@@ -81,21 +78,114 @@ class AnalysisUiLogicTest {
     }
 
     @Test
-    @DisplayName("every server icon name maps, and anything else falls back to a document")
-    fun iconMapping() {
-        assertEquals(Icons.Filled.FitnessCenter, AnalysisUiLogic.queryIcon("dumbbell"))
-        assertEquals(Icons.Filled.Bolt, AnalysisUiLogic.queryIcon("zap"))
-        assertEquals(Icons.Filled.CalendarMonth, AnalysisUiLogic.queryIcon("calendar"))
-        assertEquals(Icons.Filled.MonitorHeart, AnalysisUiLogic.queryIcon("heart-pulse"))
-        assertEquals(Icons.Filled.TrendingUp, AnalysisUiLogic.queryIcon("trending-up"))
-        assertEquals(Icons.Filled.Description, AnalysisUiLogic.queryIcon("document"))
+    @DisplayName("the eyebrow carries the count the view stands on, never the module's own name")
+    fun headerEyebrows() {
         assertEquals(
-            Icons.Filled.Description,
-            AnalysisUiLogic.queryIcon(null),
-            "a user query registered without an icon still has to render",
+            "4 queries",
+            AnalysisUiLogic.headerEyebrow(AnalysisView.QUERIES, 4, 12, null),
         )
-        assertEquals(Icons.Filled.Description, AnalysisUiLogic.queryIcon("no-such-glyph"))
+        assertEquals(
+            "12 kept",
+            AnalysisUiLogic.headerEyebrow(AnalysisView.HISTORY, 4, 12, null),
+        )
+        assertEquals("running", AnalysisUiLogic.headerEyebrow(AnalysisView.PROGRESS, 4, 12, null))
+        assertEquals("report", AnalysisUiLogic.headerEyebrow(AnalysisView.REPORT, 4, 12, null))
+
+        // The two empties read as sentences rather than as "0 QUERIES", and a
+        // module the server has switched off says so instead of counting zero.
+        assertEquals("no queries", AnalysisUiLogic.headerEyebrow(AnalysisView.QUERIES, 0, 0, null))
+        assertEquals("no reports", AnalysisUiLogic.headerEyebrow(AnalysisView.HISTORY, 0, 0, null))
+        assertEquals(
+            "unavailable",
+            AnalysisUiLogic.headerEyebrow(AnalysisView.QUERIES, 0, 3, "Analysis is disabled on the server"),
+        )
     }
+
+    @Test
+    @DisplayName("a section head's qualifier disappears rather than reading zero")
+    fun sectionSubs() {
+        assertEquals("4 available", AnalysisUiLogic.queriesSub(4))
+        assertEquals("12 kept", AnalysisUiLogic.historySub(12))
+        assertNull(AnalysisUiLogic.queriesSub(0))
+        assertNull(AnalysisUiLogic.historySub(0))
+
+        // The running head takes the query's own name, and takes nothing at all
+        // rather than qualifying "running" with the progress fallback.
+        assertEquals(
+            "Fixture Weekly Review",
+            AnalysisUiLogic.progressSub(ActiveReport.Stub(45, "fixture-a", "Fixture Weekly Review")),
+        )
+        assertNull(AnalysisUiLogic.progressSub(ActiveReport.Stub(45, "fixture-a", "")))
+        assertNull(AnalysisUiLogic.progressSub(null))
+    }
+
+    @Test
+    @DisplayName("history judges in three shapes, and an unknown status is in flight rather than failed")
+    fun historyMarks() {
+        assertEquals(HistoryMark.DONE, AnalysisUiLogic.historyMark("completed"))
+        assertEquals(HistoryMark.FAILED, AnalysisUiLogic.historyMark("failed"))
+        assertEquals(HistoryMark.PENDING, AnalysisUiLogic.historyMark("pending"))
+        assertEquals(HistoryMark.PENDING, AnalysisUiLogic.historyMark("running"))
+        assertEquals(
+            HistoryMark.PENDING,
+            AnalysisUiLogic.historyMark("queued"),
+            "a status this client has never seen is not a failure",
+        )
+    }
+
+    @Test
+    @DisplayName("each mark is spoken: the two verdicts as words, an in-flight row as its own status")
+    fun historyMarksSpeak() {
+        assertEquals("Completed", AnalysisUiLogic.historyMarkDescription("completed"))
+        assertEquals("Failed", AnalysisUiLogic.historyMarkDescription("failed"))
+        assertEquals("RUNNING", AnalysisUiLogic.historyMarkDescription("running"))
+        assertEquals("QUEUED", AnalysisUiLogic.historyMarkDescription("queued"))
+    }
+
+    @Test
+    @DisplayName("the report's own shallowest heading is its top level, wherever it is nested")
+    fun topHeadingLevels() {
+        val opensAtOne = listOf(heading(1), heading(2), heading(3))
+        assertEquals(1, AnalysisUiLogic.topHeadingLevel(opensAtOne))
+
+        // The common model output: no `#` at all, sections at `##`. Those are
+        // the report's top sections and must set like them.
+        val opensAtTwo = listOf(ReportBlock.Paragraph(emptyList()), heading(2), heading(4))
+        assertEquals(2, AnalysisUiLogic.topHeadingLevel(opensAtTwo))
+
+        val nested = listOf(
+            ReportBlock.Quote(listOf(heading(3))),
+            ReportBlock.BulletList(listOf(listOf(heading(2)))),
+        )
+        assertEquals(2, AnalysisUiLogic.topHeadingLevel(nested), "a nested heading still counts")
+
+        assertEquals(
+            1,
+            AnalysisUiLogic.topHeadingLevel(listOf(ReportBlock.Paragraph(emptyList()))),
+            "a report with no headings has nothing to rank",
+        )
+    }
+
+    @Test
+    @DisplayName("headings rank relative to that top, and everything deeper than two shares a face")
+    fun headingRanks() {
+        assertEquals(0, AnalysisUiLogic.headingRank(level = 2, topLevel = 2))
+        assertEquals(1, AnalysisUiLogic.headingRank(level = 3, topLevel = 2))
+        assertEquals(2, AnalysisUiLogic.headingRank(level = 4, topLevel = 2))
+        assertEquals(
+            2,
+            AnalysisUiLogic.headingRank(level = 6, topLevel = 2),
+            "the ramp bottoms out; an H6 is not a fourth kind of heading",
+        )
+        assertEquals(
+            0,
+            AnalysisUiLogic.headingRank(level = 1, topLevel = 2),
+            "nothing can rank above the top, even if a caller passes a stale one",
+        )
+    }
+
+    private fun heading(level: Int) =
+        ReportBlock.Heading(level, listOf(ReportInline.Text("Fixture heading")))
 
     private companion object {
         const val CREATED = "2031-03-04T09:15:00.000000Z"

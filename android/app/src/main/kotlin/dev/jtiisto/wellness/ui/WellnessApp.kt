@@ -135,14 +135,14 @@ internal val topLevelDestinations = listOf(
         label = "Analysis",
         icon = Icons.Outlined.Analytics,
         accent = ModuleAccent.ANALYSIS,
-        system = ShellSystem.GRAPHITE,
+        system = ShellSystem.LOGBOOK,
     ),
     TopLevelDestination(
         route = TOOLS_ROUTE,
         label = "Tools",
         icon = Icons.Outlined.Settings,
         accent = ModuleAccent.TOOLS,
-        system = ShellSystem.GRAPHITE,
+        system = ShellSystem.LOGBOOK,
     ),
 )
 

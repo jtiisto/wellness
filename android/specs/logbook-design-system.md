@@ -5,10 +5,12 @@ device-accepted and pushed** on `feature/logbook-design` (Round 3 accepted
 2026-08-19; its per-chart `ChartInk` resolution is recorded under
 "Implementation shape"). **Round 4 (Analysis + Tools) designed 2026-08-19** —
 mockup `plans/logbook-design/analysis-logbook.html` user-approved; the
-"Components — Analysis & Tools" section below is its committed form, awaiting
-implementation. Round 4 is the final round: flipping the last two Graphite
-destinations retires Graphite Signal entirely (retirement phase runs after
-device acceptance).
+"Components — Analysis & Tools" section below is its committed form. **P1a
+(status markers, cross-stack) and P1b (the Analysis + Tools restyle and the
+final theme flip) are implemented and awaiting device acceptance** — no
+destination selects Graphite any more, though Graphite itself deliberately still
+exists. Round 4 is the final round: its **retirement phase** (Phase 3, after
+device acceptance) takes Graphite Signal down.
 
 ## Goal
 
@@ -62,7 +64,7 @@ marks) to the tested state layer and restructures composables above it.
 | Coach | **Logbook** (Round 1) |
 | Journal (day view + tracker config) | **Logbook** (Round 2) |
 | Trends (all five sub-screens) | **Logbook** (Round 3) |
-| Analysis, Tools | **Logbook** (Round 4 — designed, in implementation); [design-system.md](design-system.md) retires with the round's retirement phase |
+| Analysis, Tools | **Logbook** (Round 4 — flipped, awaiting device acceptance); [design-system.md](design-system.md) retires with the round's retirement phase |
 
 Each nav destination is wrapped in its own theme; the Scaffold container color
 follows the active destination's canvas. Phases land incrementally *inside*
@@ -735,6 +737,66 @@ created, not changed:
   coverage — watch the Kover aggregate); every new section wrapper is
   `inline`; report content arrives from a server pipeline — synthetic
   examples only in every fixture this round touches.
+
+### Round 4 implementation resolutions (2026-08-19, P1b)
+
+Everything the section above did not settle, decided while building it.
+
+1. **Four pieces of furniture hoist into `core/ui/theme/`** — the round needed
+   the same section head and the same tab strip in a *feature* module and in
+   `:app`, and features never depend on each other: `LogbookSection` /
+   `LogbookSectionHead` (both `inline`, so a caller's capturing `@Composable`
+   lambda is inlined rather than compiled into a class Kover's `@Composable`
+   filter cannot see past — Round 3's `SectionHead.trailing` finding, not
+   repeated), `InkTabRow`, `InkJudgment` + `InkNotice`, and
+   `InkOutlineButton.quiet`. Trends keeps its own copy of the head and the strip
+   for now: Round 3 is **device-accepted**, and re-drawing an accepted surface to
+   remove a duplicate is a risk with no user on the other end of it — the
+   collapse belongs to the retirement phase, with the rest of the sweep.
+   Journal's head stays its own either way (its measurement order is deliberately
+   the reverse — resolution 8 of Round 2).
+2. **`InkJudgment` is the judgment vocabulary in ink**, and it is one vocabulary:
+   the report body's status markers and the history rows' verdicts are the same
+   four shapes (filled, half, open, faint-open) drawn from one place. P1a's
+   private mark drawing retires into it — which also moves that drawing code out
+   of a counted module and into the Kover-excluded theme package, where the rest
+   of the system's geometry already lives.
+3. **`InkNotice` is the one shape for "read this line"**, and it replaced every
+   `palette.error` and `palette.warning` on both destinations: the mono bang in
+   its own gutter, the sentence in ink beside it, the bang dropped from the
+   spoken node. A failed ping, a failed query, a strap warning, a bad URL and a
+   disabled module are all it now.
+4. **The header eyebrow is derived, not the module's name.** The mockup draws
+   `ANALYSIS` twice — eyebrow and display title — which on a device reads as a
+   bug. The eyebrow carries what the tab in force is standing on instead
+   (`4 QUERIES`, `12 KEPT`, `RUNNING`, `REPORT`), which is the journal header's
+   own rule; the section heads keep the mockup's counts as their qualifiers.
+5. **The location field sets in the body face, not mono.** The mockup draws it
+   mono because it drew it inside a row of values; principle 3 says numbers are
+   mono and words are sans, and a town is words. It keeps the NAKED skin, a
+   mono-caps label above it and a `ruleStrong` hairline under it — an empty naked
+   field with no rule is not visibly a place to write.
+6. **Inline code's underline takes the text's own ink.** Compose's `SpanStyle`
+   has no colour for its decoration, so the mockup's `rule-strong` underline
+   under ink text is not expressible in one span. Accepted rather than worked
+   around: the alternative (setting the code itself in ink-soft) fades the one
+   run on the line that is a literal value.
+7. **A heading ranks against the report's own shallowest heading**, not against
+   its absolute level (`topHeadingLevel` / `headingRank`, both pinned). A model
+   that opens its outline at `##` means by it exactly what one opening at `#`
+   does, and ranking absolutely would set the second one's sections in the
+   third-tier face for no reason the reader can see.
+8. **Tools takes no display title.** Every other destination has one because it
+   has one subject; Tools is five unrelated sections, and a 34sp `TOOLS` over a
+   17sp `SERVER` would be a title for the tab bar's benefit rather than the
+   reader's. The section heads carry the page.
+9. **The active row is ruled under in ink** — the nav-underline idiom, in the
+   server list and on a capturing strap alike — with a mono word beside the
+   name saying the state: `ACTIVE` on the server row, `CAPTURING` on the strap
+   row (its state is not "active"; the word says what is true). The wash it
+   replaced was also the *only* thing marking the row; the word means the
+   state now survives being read aloud. (The strap half arrived in the review
+   round — the first cut ruled the strap row and labeled only the server's.)
 
 ## Behavior
 

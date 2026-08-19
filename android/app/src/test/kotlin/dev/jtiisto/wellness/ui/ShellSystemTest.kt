@@ -6,6 +6,7 @@ import dev.jtiisto.wellness.core.ui.theme.LogbookDark
 import dev.jtiisto.wellness.core.ui.theme.LogbookLight
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotEquals
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 
@@ -30,8 +31,8 @@ class ShellSystemTest {
             "journal" to ShellSystem.LOGBOOK, // flipped with its rendering phase
             "coach" to ShellSystem.LOGBOOK, // flipped with its rendering phase
             "trends" to ShellSystem.LOGBOOK, // flipped with its rendering phase
-            "analysis" to ShellSystem.GRAPHITE,
-            "tools" to ShellSystem.GRAPHITE,
+            "analysis" to ShellSystem.LOGBOOK, // flipped with its rendering phase
+            "tools" to ShellSystem.LOGBOOK, // flipped with its rendering phase
         )
         assertEquals(expected.keys, topLevelDestinations.map { it.route }.toSet(), "route set")
         expected.forEach { (route, system) ->
@@ -65,8 +66,7 @@ class ShellSystemTest {
         // the flip was. Coach's composables now read `LogbookTheme` directly —
         // under `WellnessTheme` they would find the Logbook locals unprovided
         // and fall back to defaults, which is tokens meaning something else
-        // rather than a degraded version of them. Analysis and Tools are the
-        // ones still waiting for their round.
+        // rather than a degraded version of them.
         assertEquals(ShellSystem.LOGBOOK, shellSystemFor("coach"))
     }
 
@@ -96,6 +96,34 @@ class ShellSystemTest {
     }
 
     @Test
+    @DisplayName("Analysis is Logbook: the report renderer draws on paper, not on a Graphite card")
+    fun analysisIsLogbook() {
+        // The fourth deliberate second pin. Analysis carries the same trap
+        // Trends did and one of its own: every mark in the report body — the
+        // status dots, the table rules, the marginalia rail — resolves from
+        // `LogbookTheme.palette`, and `LocalWellnessPalette` answers with a
+        // silent *dark* Graphite default when it is not provided. A half-done
+        // flip would therefore have rendered plausibly and wrongly rather than
+        // failing outright, which is the whole reason the flip lands with the
+        // restyle in one commit.
+        assertEquals(ShellSystem.LOGBOOK, shellSystemFor("analysis"))
+    }
+
+    @Test
+    @DisplayName("Tools is Logbook, and with it the last Graphite destination is gone")
+    fun toolsIsLogbook() {
+        // The fifth and final pin. Nothing renders under `WellnessTheme` any
+        // more — but Graphite is deliberately still *here* (the enum member,
+        // its chrome, the theme files) until the device pass has accepted this
+        // round and can ask for something back. Its retirement is its own phase.
+        assertEquals(ShellSystem.LOGBOOK, shellSystemFor("tools"))
+        assertTrue(
+            topLevelDestinations.all { it.system == ShellSystem.LOGBOOK },
+            "every destination is Logbook once Analysis and Tools flip",
+        )
+    }
+
+    @Test
     @DisplayName("Logbook destinations get paper and ink, in both modes")
     fun logbookChrome() {
         assertEquals(LogbookLight.paper, ShellSystem.LOGBOOK.chrome(isDark = false).canvas)
@@ -105,8 +133,11 @@ class ShellSystemTest {
     }
 
     @Test
-    @DisplayName("Graphite destinations keep the canvas and ink they had before the shell moved")
+    @DisplayName("Graphite still answers with its own canvas, though no destination asks any more")
     fun graphiteChrome() {
+        // Kept deliberately after the last flip: Graphite exists until the
+        // device pass has accepted Round 4 and can ask for something back. This
+        // and `systemsAreDistinguishable` retire with it, as one decision.
         assertEquals(LightPalette.canvas, ShellSystem.GRAPHITE.chrome(isDark = false).canvas)
         assertEquals(LightPalette.textPrimary, ShellSystem.GRAPHITE.chrome(isDark = false).content)
         assertEquals(DarkPalette.canvas, ShellSystem.GRAPHITE.chrome(isDark = true).canvas)

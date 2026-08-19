@@ -1,33 +1,27 @@
 package dev.jtiisto.wellness.feature.analysis.ui
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.ui.Alignment
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.jtiisto.wellness.core.data.analysis.AnalysisView
-import dev.jtiisto.wellness.core.ui.theme.WellnessShape
-import dev.jtiisto.wellness.core.ui.theme.WellnessSpace
-import dev.jtiisto.wellness.core.ui.theme.WellnessTheme
+import dev.jtiisto.wellness.core.ui.theme.InkTab
+import dev.jtiisto.wellness.core.ui.theme.InkTabRow
+import dev.jtiisto.wellness.core.ui.theme.LogbookSection
+import dev.jtiisto.wellness.core.ui.theme.LogbookSpace
+import dev.jtiisto.wellness.core.ui.theme.LogbookTheme
+import dev.jtiisto.wellness.feature.analysis.AnalysisUiLogic
 import dev.jtiisto.wellness.feature.analysis.AnalysisViewModel
 import org.koin.androidx.compose.koinViewModel
 
@@ -61,10 +55,16 @@ fun AnalysisScreen(modifier: Modifier = Modifier) {
     Column(
         modifier = modifier
             .fillMaxSize()
-            .padding(horizontal = WellnessSpace.card),
-        verticalArrangement = Arrangement.spacedBy(WellnessSpace.sm),
+            .padding(horizontal = SCREEN_PADDING),
+        verticalArrangement = Arrangement.spacedBy(SECTION_GAP),
     ) {
         AnalysisHeader(
+            eyebrow = AnalysisUiLogic.headerEyebrow(
+                view = state.view,
+                queryCount = state.queries.size,
+                historyCount = state.history.size,
+                queriesError = state.queriesError,
+            ),
             view = state.view,
             onRun = viewModel::openQueries,
             onHistory = viewModel::openHistory,
@@ -72,15 +72,20 @@ fun AnalysisScreen(modifier: Modifier = Modifier) {
 
         val content = Modifier.weight(1f)
         when {
-            state.isLoading -> LoadingState(content)
+            state.isLoading -> LoadingLine(content)
 
-            state.view == AnalysisView.PROGRESS -> ProgressView(
-                active = state.active,
-                unknownStalled = state.unknownStalled,
-                onCancel = viewModel::cancelActive,
-                onRecheck = viewModel::recheck,
+            state.view == AnalysisView.PROGRESS -> LogbookSection(
+                title = "Running",
+                sub = AnalysisUiLogic.progressSub(state.active),
                 modifier = content,
-            )
+            ) {
+                ProgressView(
+                    active = state.active,
+                    unknownStalled = state.unknownStalled,
+                    onCancel = viewModel::cancelActive,
+                    onRecheck = viewModel::recheck,
+                )
+            }
 
             // The reading slot, never the polling one: a query finishing in the
             // background must not swap the page out from under the reader.
@@ -92,25 +97,41 @@ fun AnalysisScreen(modifier: Modifier = Modifier) {
                 modifier = content,
             )
 
-            state.view == AnalysisView.HISTORY -> HistoryList(
-                history = state.history,
-                zone = viewModel.zone,
-                onOpen = viewModel::openReport,
-                onDelete = viewModel::askDelete,
+            state.view == AnalysisView.HISTORY -> LogbookSection(
+                title = "Past reports",
+                sub = AnalysisUiLogic.historySub(state.history.size),
                 modifier = content,
-            )
-
-            else -> Column(modifier = content.verticalScroll(rememberScrollState())) {
-                QueryList(
-                    queries = state.queries,
-                    expandedQueryId = ui.expandedQueryId,
-                    locations = ui.locations,
-                    submitInFlight = state.submitInFlight,
-                    queriesError = state.queriesError,
-                    onTap = viewModel::onQueryTap,
-                    onRun = viewModel::onRun,
-                    onLocationChange = viewModel::onLocationChange,
+            ) {
+                HistoryList(
+                    history = state.history,
+                    zone = viewModel.zone,
+                    onOpen = viewModel::openReport,
+                    onDelete = viewModel::askDelete,
+                    modifier = Modifier.weight(1f),
                 )
+            }
+
+            else -> LogbookSection(
+                title = "Queries",
+                sub = AnalysisUiLogic.queriesSub(state.queries.size),
+                modifier = content,
+            ) {
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .verticalScroll(rememberScrollState()),
+                ) {
+                    QueryList(
+                        queries = state.queries,
+                        expandedQueryId = ui.expandedQueryId,
+                        locations = ui.locations,
+                        submitInFlight = state.submitInFlight,
+                        queriesError = state.queriesError,
+                        onTap = viewModel::onQueryTap,
+                        onRun = viewModel::onRun,
+                        onLocationChange = viewModel::onLocationChange,
+                    )
+                }
             }
         }
     }
@@ -124,62 +145,57 @@ fun AnalysisScreen(modifier: Modifier = Modifier) {
 }
 
 /**
- * Title plus the two-way switch the PWA had.
+ * Eyebrow, title, and the two-way switch the PWA had.
  *
  * "Run" covers the query grid, the progress screen and a report: they are one
  * flow, and the tab should not appear to change under the user when a query
  * finishes.
  */
 @Composable
-private fun AnalysisHeader(view: AnalysisView, onRun: () -> Unit, onHistory: () -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(WellnessSpace.sm)) {
+private fun AnalysisHeader(
+    eyebrow: String,
+    view: AnalysisView,
+    onRun: () -> Unit,
+    onHistory: () -> Unit,
+) {
+    val tabs = remember { listOf(InkTab(TAB_RUN, "Run"), InkTab(TAB_HISTORY, "Past reports")) }
+    Column(modifier = Modifier.padding(top = LogbookSpace.grid * 2)) {
         Text(
-            text = "Analysis",
-            style = WellnessTheme.type.headline,
-            color = WellnessTheme.palette.textPrimary,
-            modifier = Modifier.padding(top = WellnessSpace.md),
+            text = eyebrow.uppercase(),
+            style = LogbookTheme.type.eyebrow,
+            color = LogbookTheme.palette.inkSoft,
         )
-        Row(horizontalArrangement = Arrangement.spacedBy(WellnessSpace.xs)) {
-            SwitchTab(label = "Run", selected = view != AnalysisView.HISTORY, onClick = onRun)
-            SwitchTab(label = "Past Reports", selected = view == AnalysisView.HISTORY, onClick = onHistory)
-        }
-    }
-}
-
-@Composable
-private fun SwitchTab(label: String, selected: Boolean, onClick: () -> Unit) {
-    val palette = WellnessTheme.palette
-    val accent = WellnessTheme.accent
-    Box(
-        modifier = Modifier
-            .clip(WellnessShape.pill)
-            .background(if (selected) accent.softFill else palette.band)
-            .border(
-                WellnessSpace.hairline,
-                if (selected) accent.border else palette.line,
-                WellnessShape.pill,
-            )
-            .clickable(onClick = onClick)
-            .padding(horizontal = WellnessSpace.md, vertical = TAB_PADDING),
-    ) {
         Text(
-            text = label,
-            style = WellnessTheme.type.label,
-            color = if (selected) accent.text else palette.textSecondary,
+            text = TITLE.uppercase(),
+            style = LogbookTheme.type.display,
+            color = LogbookTheme.palette.ink,
+            modifier = Modifier.padding(top = LogbookSpace.grid, bottom = LogbookSpace.grid * 2),
+        )
+        InkTabRow(
+            tabs = tabs,
+            selectedId = if (view == AnalysisView.HISTORY) TAB_HISTORY else TAB_RUN,
+            onSelect = { id -> if (id == TAB_HISTORY) onHistory() else onRun() },
         )
     }
 }
 
+/**
+ * Loading, in the voice reserved for absence.
+ *
+ * A spinner would be the only moving thing on a page whose premise is that
+ * nothing moves — and the wait here is the store settling, not a query running.
+ * The one place that genuinely waits on the server draws the clock and the
+ * sweep instead ([ProgressView]).
+ */
 @Composable
-private fun LoadingState(modifier: Modifier = Modifier) {
-    Box(modifier = modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-        CircularProgressIndicator(
-            color = WellnessTheme.accent.fill,
-            trackColor = WellnessTheme.palette.line,
-            modifier = Modifier.size(SPINNER_SIZE),
-        )
-    }
+private fun LoadingLine(modifier: Modifier = Modifier) {
+    EmptyLine(text = "Loading…", modifier = modifier.padding(top = LogbookSpace.grid * 2))
 }
 
-private val TAB_PADDING = 8.dp
-private val SPINNER_SIZE = 36.dp
+private const val TITLE = "Analysis"
+private const val TAB_RUN = "run"
+private const val TAB_HISTORY = "history"
+
+/** The page's own margin — the screen is the surface, so nothing insets inside it. */
+internal val SCREEN_PADDING = 20.dp
+private val SECTION_GAP = 22.dp

@@ -69,13 +69,22 @@ fun InkButton(
     ) { InkButtonLabel(label = label, glyph = glyph, note = note, state = stateDescription) }
 }
 
-/** The same button, hollow — everything that is not the primary call. */
+/**
+ * The same button, hollow — everything that is not the primary call.
+ *
+ * [quiet] draws it one step further back: a `ruleStrong` edge around ink-soft
+ * text, for a control that has to stay available without competing with the
+ * thing it stands beside (Cancel next to a running query, Share next to a log).
+ * It is **not** the disabled rendering — the button works, it is just not what
+ * the page is about.
+ */
 @Composable
 fun InkOutlineButton(
     label: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
+    quiet: Boolean = false,
     glyph: InkGlyph = InkGlyph.NONE,
     note: String? = null,
     stateDescription: String? = null,
@@ -89,9 +98,12 @@ fun InkOutlineButton(
         onClick = onClick,
         enabled = enabled,
         shape = LogbookShapes.soft,
-        border = BorderStroke(LogbookSpace.hairline, palette.ink),
+        border = BorderStroke(
+            LogbookSpace.hairline,
+            if (quiet) palette.ruleStrong else palette.ink,
+        ),
         colors = ButtonDefaults.outlinedButtonColors(
-            contentColor = palette.ink,
+            contentColor = if (quiet) palette.inkSoft else palette.ink,
             disabledContentColor = if (settled) palette.ink else palette.inkFaint,
         ),
     ) { InkButtonLabel(label = label, glyph = glyph, note = note, state = stateDescription) }

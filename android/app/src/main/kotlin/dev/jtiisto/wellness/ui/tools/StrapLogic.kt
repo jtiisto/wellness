@@ -99,6 +99,14 @@ object StrapCopy {
 
     const val UNNAMED = "Unnamed strap"
 
+    /**
+     * The word beside a capturing strap's name — the state has to survive being
+     * read aloud, and the underline alone is invisible to a screen reader. The
+     * server list's `ACTIVE` label is the same rule; this row's state is not
+     * "active", it is capturing, so the word says that.
+     */
+    const val CAPTURING_LABEL = "Capturing"
+
     const val SCAN = "Scan for straps"
     const val SCAN_STOP = "Stop scanning"
     const val SCANNING = "Scanning…"

@@ -16,7 +16,7 @@ import java.time.ZoneId
  * Screen-local state the store has no business holding.
  *
  * The typed location is deliberately not persisted and not in [AnalysisState]:
- * it belongs to one visit to one card, and a location remembered from last week
+ * it belongs to one visit to one query row, and a location remembered from last week
  * would silently change what a query means.
  */
 data class AnalysisUiState(
@@ -57,7 +57,7 @@ class AnalysisViewModel(
     }
 
     /**
-     * Tapping a card. A query that takes a location opens instead of running —
+     * Tapping a row. A query that takes a location opens instead of running —
      * there is a field to fill in first.
      */
     fun onQueryTap(query: AnalysisQueryDto) {
@@ -68,7 +68,7 @@ class AnalysisViewModel(
         }
     }
 
-    /** The Run button on an expanded card. A blank field is simply no location. */
+    /** The Run button on an expanded row. A blank field is simply no location. */
     fun onRun(query: AnalysisQueryDto) {
         store.submit(query.id, _ui.value.locations[query.id]?.takeIf { it.isNotBlank() })
         _ui.update { it.copy(expandedQueryId = null) }
