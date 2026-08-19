@@ -1,14 +1,12 @@
-# Spec: Logbook Design System (Rounds 1–2: shell, Coach, Journal)
+# Spec: Logbook Design System (Rounds 1–3: shell, Coach, Journal, Trends)
 
-Status: **Round 1 (shell + Coach) shipped 2026-08-18** — foundation, dual-theme
-shell, coach presentation state and rendering, five device-pass fix rounds all
-landed and pushed on `feature/logbook-design`. **Round 2 (Journal) built
-2026-08-18** — the user chose the pure-ink variant from two mockups
-(`plans/logbook-design/journal-logbook-{ink,accent}.html`); the
-"Components — Journal" section below is its committed form, and P1 (presentation
-state) and P2 (composables, shell flip, launch window) are implemented and
-green, awaiting the device acceptance pass. Trends, Analysis and Tools stay on
-Graphite Signal until their rounds.
+Status: **Rounds 1 (shell + Coach) and 2 (Journal) shipped, device-accepted and
+pushed 2026-08-18** on `feature/logbook-design`. **Round 3 (Trends) designed
+2026-08-18** — the user chose plates-for-series-identity from two mockups
+(`plans/logbook-design/trends-logbook-{plates,ink}.html`; the ink variant is
+the kept-rejected option); the "Components — Trends" section below is its
+committed form, awaiting implementation. Analysis and Tools stay on Graphite
+Signal until their rounds.
 
 ## Goal
 
@@ -61,7 +59,8 @@ marks) to the tested state layer and restructures composables above it.
 | Shell (nav bar, snackbar, `ServerRecoveryScreen`) | **Logbook** (Round 1) |
 | Coach | **Logbook** (Round 1) |
 | Journal (day view + tracker config) | **Logbook** (Round 2) |
-| Trends, Analysis, Tools | Graphite Signal — [design-system.md](design-system.md) stays their authority |
+| Trends (all five sub-screens) | **Logbook** (Round 3 — designed, in implementation) |
+| Analysis, Tools | Graphite Signal — [design-system.md](design-system.md) stays their authority |
 
 Each nav destination is wrapped in its own theme; the Scaffold container color
 follows the active destination's canvas. Phases land incrementally *inside*
@@ -525,6 +524,82 @@ Everything the section above did not settle, decided while building it.
    now-orphaned `.date-lock` CSS and dirty-tracker DAO counts. Entry writes
    still mark only the entry dirty — that half fed the sync engine, not the
    lock, and is untouched.
+
+## Components — Trends (Round 3; mockup: `trends-logbook-plates.html`)
+
+**Color identifies a series, never a judgment** — the round's governing
+resolution (user decision 2026-08-18, plates variant over pure ink). Principle
+2 generalizes: in coach a plate dot means tier; in trends a plate means *which
+series*, assigned **positionally per chart** in draw order exactly as coach
+assigns per workout, decoded by a **mandatory legend** (the load-bearing-legend
+rule applies to every chart showing a plate). No judgment — flagged, below
+floor, missed, off-plan — ever takes a hue. Behavioral contracts in
+[trends.md](trends.md) — geometry, ranges, caching, scrub, every pinned
+builder — are untouchable; this section replaces its *deviation 2* (the
+Graphite rendering clause) and nothing else.
+
+### Series ink and plates
+- **A chart's own subject is ink.** Single-series charts (weight, HRV, RHR,
+  usage, composition strips, sparklines, lab strips) spend no color at all.
+- **Derived means are annotations, not identities**: 7d mean = ink-soft dashed,
+  28d mean = ink-faint dashed. Raw readings sitting under their own mean
+  (`VALUE` tone) recede to ink-faint dots.
+- **Additional real series take plates positionally**: first extra series =
+  plate 1, second = plate 2 (progression: top-set ink, e1RM plate 1, RPE plate
+  2; sleep: hours ink-soft bars, score plate 1 dots; body: weight ink, DEXA
+  plate 1 rings + connecting line). Stacked bars: segments = plates 1–3 in
+  stack order, folded remainder (`other`) = ink-faint. Weeks in progress keep
+  today's 45% ink treatment.
+- **Dark-mode plates are the same tokens** — no chart-specific fork. Measured
+  (dataviz validator, 2026-08-18): light paper passes as a categorical set
+  (worst adjacent pair yellow↔green protan ΔE 7.0 — legal with the mandated
+  legend, and stacks never place those two adjacent); dark plate-yellow
+  `#C99A2A` sits above the categorical lightness band and will read bright as
+  a chart mark. **Accepted with rationale**: a plate must mean the same thing
+  on a coach tier dot and a trends series or color stops being one language;
+  the device pass judges the glow, and a dark-chart-only yellow step is the
+  recorded fallback if it fails there.
+
+### Judgment without color
+- Flagged lab observations and HRV days below the floor draw as **open dots**
+  (paper fill, ink outline) — the journal's "no verdict/attention" shape turned
+  outward — with a mono `!` beside the value and on flagged table rows. The
+  low floor itself is a dashed hairline.
+- The weekly adherence ribbon is a **sequential ink ramp**: met = ink, partial
+  = ink-soft, missed = rule, the in-progress lid = 45% ink over the cell — the
+  three-rect painter's stack survives with new fills. Streaks read
+  `run N · best M` in mono; the flame emoji retires.
+- Overview's focus ribbons reuse the **journal week-mark grammar verbatim**
+  (filled/half/open/slashed dots, dash for off) — `WeekMarkGlyph` hoists to
+  `core/ui` for it (features never depend on each other; the mark language is
+  the system's furniture).
+- Stat-tile deltas are signed mono text (`+12% vs 4w`); direction needs no
+  color and no glyph.
+
+### Chrome
+- Cards → **sections**: display-caps head + 1.5dp ink underline, mono
+  sub-label right-aligned in the head, legend as one quiet mono line under it.
+- The five-screen switcher → mono-caps tabs with the 2dp ink underline (the
+  strip idiom); range selector → mono segments, active underlined; the stale
+  badge → faint mono caption (`cached · 4m ago`), same slot, every state.
+- Bands (target, Garmin baseline, lab reference) = faint rule wash bounded by
+  hairline `rule-strong` edges; guides (8h sleep) = dashed hairlines; grid =
+  hairline rules with mono ink-faint tick labels; tooltip surface = paper with
+  a `rule-strong` hairline border, no shadow (the calendar-popup rule).
+- Pickers (exercise/tracker/panel) and the retry button follow the established
+  Logbook form/button patterns.
+
+### Implementation shape (from the 2026-08-18 survey — the seam is deliberate)
+- The entire color vocabulary is the `PlotTone` enum resolved in ONE place
+  (`rememberPlotColors`) plus `ChartTheme`. The re-theme re-answers the
+  resolution and the 328-line `TrendsComponents.kt` chrome; the 194 chart
+  tests and every builder stay untouched, except the open-dot judgment marks
+  (`WARN` gains a hollow style) and the `WeekMarkGlyph` focus-ribbon reuse.
+- Known traps: `LocalWellnessPalette`/`LocalModuleAccent` have **silent
+  defaults** (a partial flip renders Graphite-dark chrome with Journal amber
+  as the primary series — plausible and wrong, so the flip lands only with the
+  full restyle); the card wrapper must stay `inline` (Kover); trends.md's
+  deviation 2 is rewritten to point here in the same commit.
 
 ## Behavior
 
