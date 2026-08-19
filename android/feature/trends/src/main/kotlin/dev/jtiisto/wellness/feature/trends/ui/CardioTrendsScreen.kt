@@ -12,11 +12,12 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import dev.jtiisto.wellness.core.ui.theme.WellnessSpace
 import dev.jtiisto.wellness.feature.trends.CardioViewModel
 import dev.jtiisto.wellness.feature.trends.Slice
 import dev.jtiisto.wellness.feature.trends.chart.AEROBIC_EMPTY_TEXT
+import dev.jtiisto.wellness.feature.trends.chart.ChartInk
 import dev.jtiisto.wellness.feature.trends.chart.aerobicProxyModel
 import dev.jtiisto.wellness.feature.trends.chart.zone2CardModel
 import dev.jtiisto.wellness.feature.trends.staleStamps
@@ -36,7 +37,7 @@ fun CardioTrendsScreen(onRange: (String) -> Unit, modifier: Modifier = Modifier)
         modifier = modifier
             .fillMaxWidth()
             .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(WellnessSpace.md),
+        verticalArrangement = Arrangement.spacedBy(SECTION_GAP),
     ) {
         RangeToolbar(
             range = state.range,
@@ -49,26 +50,37 @@ fun CardioTrendsScreen(onRange: (String) -> Unit, modifier: Modifier = Modifier)
             Slice.Loading -> ScreenLoading()
             is Slice.Ready -> {
                 val zone2 = remember(slice.value) { zone2CardModel(slice.value) }
-                TrendsCard(title = "Weekly Zone 2", unit = "min") {
+                TrendsSection(title = "Weekly Zone 2", sub = "min") {
                     if (zone2.plot == null) {
                         ChartEmpty("No data in range")
                     } else {
-                        PlotCanvas(model = zone2.plot, identity = listOf("cardio", state.range))
-                        LegendRow(zone2.legend)
+                        LegendRow(zone2.legend, chart = ChartInk.CARDIO_ZONE2)
+                        PlotCanvas(
+                            model = zone2.plot,
+                            identity = listOf("cardio", state.range),
+                            chart = ChartInk.CARDIO_ZONE2,
+                        )
                     }
                 }
 
                 val proxy = remember(slice.value) { aerobicProxyModel(slice.value.steadySessions) }
-                TrendsCard(title = "Steady-session HR", unit = "avg bpm, ≥20 min · dot = duration") {
+                TrendsSection(title = "Steady-session HR", sub = "avg bpm · dot = duration") {
                     if (proxy == null) {
                         ChartEmpty(AEROBIC_EMPTY_TEXT)
                     } else {
-                        PlotCanvas(model = proxy, identity = listOf("aerobic", state.range))
+                        PlotCanvas(
+                            model = proxy,
+                            identity = listOf("aerobic", state.range),
+                            chart = ChartInk.AEROBIC,
+                        )
                     }
                 }
             }
         }
 
-        Box(modifier = Modifier.height(WellnessSpace.lg))
+        Box(modifier = Modifier.height(SCREEN_BOTTOM))
     }
 }
+
+private val SECTION_GAP = 26.dp
+private val SCREEN_BOTTOM = 40.dp

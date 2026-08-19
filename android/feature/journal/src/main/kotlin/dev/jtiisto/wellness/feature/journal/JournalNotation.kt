@@ -8,6 +8,8 @@ import dev.jtiisto.wellness.core.data.journal.DotState
 import dev.jtiisto.wellness.core.data.journal.TrackerDto
 import dev.jtiisto.wellness.core.data.journal.isActionable
 import dev.jtiisto.wellness.core.data.network.DateString
+import dev.jtiisto.wellness.core.ui.theme.WeekMark
+import dev.jtiisto.wellness.core.ui.theme.a11yLabel
 import java.time.LocalDate
 import java.time.format.TextStyle
 import java.util.Locale
@@ -38,25 +40,15 @@ import java.util.Locale
 // ---- the week-mark grammar -----------------------------------------------------
 
 /**
- * One drawn mark — the journal's whole visual vocabulary, shared by a row's
- * seven-day run and by the section head's rollup cluster (one language, two
- * sizes).
+ * The vocabulary itself — [WeekMark], its spoken twin and its glyph — lives in
+ * `core/ui` beside the rest of the design system's furniture, because Trends'
+ * focus ribbons draw the same marks and features never depend on each other.
+ * What stays here is the journal's own half: which mark a given day earns.
  *
- * [OPEN_DOT] is load-bearing and easy to mistake for [SLASHED_DOT]: it means *no
- * verdict exists*, which is a different statement from a miss, and the two are
- * reached by different paths below.
+ * [WeekMark.OPEN_DOT] is load-bearing and easy to mistake for
+ * [WeekMark.SLASHED_DOT]: it means *no verdict exists*, which is a different
+ * statement from a miss, and the two are reached by different paths below.
  */
-enum class WeekMark {
-    FILLED_DOT,
-    HALF_DOT,
-    OPEN_DOT,
-    SLASHED_DOT,
-    DASH,
-    HOOP,
-    SLASHED_HOOP,
-    FILLED_DIAMOND,
-    OUTLINE_DIAMOND,
-}
 
 /**
  * What a tracker asks of you, which is what picks its marks.
@@ -173,31 +165,6 @@ fun rowMarks(
         }
         RowMark(date = dot.date, mark = mark, ringed = index == dots.lastIndex)
     }
-}
-
-/**
- * What one drawn mark says. Every mark is geometry to a screen reader, and the
- * journal has retired the colours a reader also could not see — so these words
- * are now the only channel the mark grammar has besides shape. The vocabulary
- * deliberately matches the cluster's spoken twin (`describeCategoryRollup`):
- * held, broken, noted — one language whether a category or a single day is
- * speaking.
- *
- * [WeekMark.OPEN_DOT] says "open", not "missed": the whole point of the
- * today-open rule is that those are different statements, and a spoken twin
- * that collapsed them would undo the rule for exactly the users who cannot see
- * the difference drawn.
- */
-fun WeekMark.a11yLabel(): String = when (this) {
-    WeekMark.FILLED_DOT -> "done"
-    WeekMark.HALF_DOT -> "partial"
-    WeekMark.OPEN_DOT -> "open"
-    WeekMark.SLASHED_DOT -> "missed"
-    WeekMark.DASH -> "off schedule"
-    WeekMark.HOOP -> "held"
-    WeekMark.SLASHED_HOOP -> "broken"
-    WeekMark.FILLED_DIAMOND -> "noted"
-    WeekMark.OUTLINE_DIAMOND -> "not noted"
 }
 
 /**

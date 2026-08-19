@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
@@ -17,12 +18,16 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import dev.jtiisto.wellness.core.ui.theme.WellnessSpace
-import dev.jtiisto.wellness.core.ui.theme.WellnessTheme
+import dev.jtiisto.wellness.core.ui.theme.LogbookSpace
+import dev.jtiisto.wellness.core.ui.theme.LogbookTheme
 import dev.jtiisto.wellness.feature.trends.Slice
 import dev.jtiisto.wellness.feature.trends.StrengthViewModel
+import dev.jtiisto.wellness.feature.trends.chart.ChartInk
 import dev.jtiisto.wellness.feature.trends.chart.NamedItem
 import dev.jtiisto.wellness.feature.trends.chart.PrRowModel
 import dev.jtiisto.wellness.feature.trends.chart.pickerLabels
@@ -50,7 +55,7 @@ fun StrengthTrendsScreen(onRange: (String) -> Unit, modifier: Modifier = Modifie
         modifier = modifier
             .fillMaxWidth()
             .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(WellnessSpace.md),
+        verticalArrangement = Arrangement.spacedBy(SECTION_GAP),
     ) {
         val exercises = state.exercises.valueOrNull
         RangeToolbar(
@@ -63,7 +68,7 @@ fun StrengthTrendsScreen(onRange: (String) -> Unit, modifier: Modifier = Modifie
             val options = remember(exercises) {
                 pickerLabels(exercises.map { NamedItem(it.slug, it.name) })
             }
-            PillSelect(
+            PickerField(
                 title = "Exercise",
                 options = options,
                 value = state.selected,
@@ -81,72 +86,115 @@ fun StrengthTrendsScreen(onRange: (String) -> Unit, modifier: Modifier = Modifie
 
         (state.detail as? Slice.Ready)?.value?.let { detail ->
             val card = remember(detail, state.showRpe) { progressionCardModel(detail, state.showRpe) }
-            TrendsCard(title = card.title, unit = card.subtitle, trailing = {
-                Pill(label = "RPE", selected = state.showRpe, onClick = viewModel::toggleRpe)
-            }) {
+            TrendsSection(title = card.title, sub = card.subtitle) {
                 if (card.plot == null) {
                     ChartEmpty("No sessions in range")
                 } else {
+                    // The toggle sits with the legend rather than in the head:
+                    // it switches one of the entries beside it, and the head is
+                    // already carrying a name that can run long.
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        LegendRow(
+                            card.legend,
+                            modifier = Modifier.weight(1f),
+                            chart = ChartInk.PROGRESSION,
+                        )
+                        ToggleSegment(
+                            label = "RPE",
+                            on = state.showRpe,
+                            onToggle = viewModel::toggleRpe,
+                        )
+                    }
                     PlotCanvas(
                         model = card.plot,
                         identity = listOf("progression", state.range, state.selected, pinEpoch),
+                        chart = ChartInk.PROGRESSION,
                     )
-                    LegendRow(card.legend)
                 }
             }
         }
 
         (state.volume as? Slice.Ready)?.value?.let { volume ->
             val card = remember(volume) { volumeCardModel(volume.weeks) }
-            TrendsCard(title = "Weekly volume", unit = "kg") {
+            TrendsSection(title = "Weekly volume", sub = "kg") {
                 if (card.plot == null) {
                     ChartEmpty("No data in range")
                 } else {
-                    PlotCanvas(model = card.plot, identity = listOf("volume", state.range, pinEpoch))
-                    LegendRow(card.legend)
+                    LegendRow(card.legend, chart = ChartInk.VOLUME)
+                    PlotCanvas(
+                        model = card.plot,
+                        identity = listOf("volume", state.range, pinEpoch),
+                        chart = ChartInk.VOLUME,
+                    )
                 }
             }
         }
 
         if (exercises != null && exercises.isNotEmpty()) {
             val rows = remember(exercises) { prBoardRows(exercises) }
-            TrendsCard(title = "Records") {
+            TrendsSection(title = "Records", sub = "best e1RM") {
                 for (row in rows) PrRow(row)
             }
         }
 
-        Box(modifier = Modifier.height(WellnessSpace.lg))
+        Box(modifier = Modifier.height(SCREEN_BOTTOM))
     }
 }
 
+/**
+ * One record: the lift on the left, the number on the right, a hairline under
+ * both. A table row, so the number is mono and End-aligned — the column is read
+ * down the page.
+ */
 @Composable
 private fun PrRow(row: PrRowModel) {
-    val palette = WellnessTheme.palette
+    val palette = LogbookTheme.palette
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .drawBehind {
+                val stroke = LogbookSpace.hairline.toPx()
+                drawLine(
+                    color = palette.rule,
+                    start = Offset(0f, size.height - stroke / 2f),
+                    end = Offset(size.width, size.height - stroke / 2f),
+                    strokeWidth = stroke,
+                )
+            }
+            .padding(vertical = ROW_PADDING),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.Top,
     ) {
         Column(modifier = Modifier.weight(1f)) {
             Row(
-                horizontalArrangement = Arrangement.spacedBy(WellnessSpace.xs),
+                horizontalArrangement = Arrangement.spacedBy(LogbookSpace.grid * 2),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(row.name, style = WellnessTheme.type.body, color = palette.textPrimary)
+                Text(row.name, style = LogbookTheme.type.name, color = palette.ink)
                 if (row.plateau) {
-                    Text("plateau", style = WellnessTheme.type.micro, color = palette.warning)
+                    Text("PLATEAU", style = LogbookTheme.type.eyebrow, color = palette.inkFaint)
                 }
             }
-            Text(row.slug, style = WellnessTheme.type.micro, color = palette.textFaint)
+            Text(row.slug, style = LogbookTheme.type.meta, color = palette.inkFaint)
         }
         if (row.best != null) {
-            Column(horizontalAlignment = Alignment.End) {
-                Text(row.best, style = WellnessTheme.type.label, color = palette.textPrimary)
+            Column(
+                horizontalAlignment = Alignment.End,
+                modifier = Modifier.padding(start = LogbookSpace.grid * 2),
+            ) {
+                Text(
+                    text = row.best,
+                    style = LogbookTheme.type.meta.copy(fontWeight = FontWeight.Medium),
+                    color = palette.ink,
+                )
                 row.detail?.let {
-                    Text(it, style = WellnessTheme.type.micro, color = palette.textFaint)
+                    Text(it, style = LogbookTheme.type.meta, color = palette.inkFaint)
                 }
             }
         }
     }
-    Box(modifier = Modifier.height(4.dp))
 }
+
+private val SECTION_GAP = 26.dp
+private val SCREEN_BOTTOM = 40.dp
+private val ROW_PADDING = 9.dp

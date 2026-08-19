@@ -29,7 +29,7 @@ class ShellSystemTest {
         val expected = mapOf(
             "journal" to ShellSystem.LOGBOOK, // flipped with its rendering phase
             "coach" to ShellSystem.LOGBOOK, // flipped with its rendering phase
-            "trends" to ShellSystem.GRAPHITE,
+            "trends" to ShellSystem.LOGBOOK, // flipped with its rendering phase
             "analysis" to ShellSystem.GRAPHITE,
             "tools" to ShellSystem.GRAPHITE,
         )
@@ -65,9 +65,22 @@ class ShellSystemTest {
         // the flip was. Coach's composables now read `LogbookTheme` directly —
         // under `WellnessTheme` they would find the Logbook locals unprovided
         // and fall back to defaults, which is tokens meaning something else
-        // rather than a degraded version of them. Trends, Analysis and Tools are
-        // the ones still waiting for their round.
+        // rather than a degraded version of them. Analysis and Tools are the
+        // ones still waiting for their round.
         assertEquals(ShellSystem.LOGBOOK, shellSystemFor("coach"))
+    }
+
+    @Test
+    @DisplayName("Trends is Logbook, and its charts resolve their whole vocabulary from that palette")
+    fun trendsIsLogbook() {
+        // The third deliberate second pin. Trends carries the trap the other two
+        // did not: `ChartTheme` and `PlotColors` used to answer from
+        // `LocalWellnessPalette`, which has a silent *dark* Graphite default —
+        // so a half-done flip would not have failed, it would have drawn
+        // amber-on-graphite chrome over paper, plausible and wrong. Both now
+        // resolve from `LogbookTheme.palette`, which is only correct while this
+        // destination is Logbook.
+        assertEquals(ShellSystem.LOGBOOK, shellSystemFor("trends"))
     }
 
     @Test

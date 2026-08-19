@@ -15,6 +15,7 @@ import dev.jtiisto.wellness.core.data.journal.TrackerDto
 import dev.jtiisto.wellness.core.data.journal.TrackerType
 import dev.jtiisto.wellness.core.data.network.DateString
 import dev.jtiisto.wellness.core.data.sync.SyncStatus
+import dev.jtiisto.wellness.core.ui.theme.WeekMark
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject

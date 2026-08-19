@@ -10,6 +10,8 @@ import dev.jtiisto.wellness.core.data.journal.TargetSegmentDto
 import dev.jtiisto.wellness.core.data.journal.TrackerDto
 import dev.jtiisto.wellness.core.data.journal.dayStatus
 import dev.jtiisto.wellness.core.data.network.DateString
+import dev.jtiisto.wellness.core.ui.theme.WeekMark
+import dev.jtiisto.wellness.core.ui.theme.a11yLabel
 import kotlinx.serialization.json.JsonPrimitive
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull

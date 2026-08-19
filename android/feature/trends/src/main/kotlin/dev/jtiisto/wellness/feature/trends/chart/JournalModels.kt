@@ -187,7 +187,10 @@ const val USAGE_COUNT_KEY = "count"
 fun usageCardModel(weeks: List<UsageWeek>): PlotModel? = barChartModel(
     weeks = weeks.map { StackedWeek(it.weekStart, mapOf(USAGE_COUNT_KEY to it.count.toDouble())) },
     keys = listOf(USAGE_COUNT_KEY),
-    tones = mapOf(USAGE_COUNT_KEY to PlotTone.STACK_0),
+    // A plain bar, not a stack member: usage has one key, and a plate on a
+    // single-series chart would be a colour identifying nothing — with no
+    // legend to decode it, since the card carries none.
+    tones = mapOf(USAGE_COUNT_KEY to PlotTone.BAR),
     partial = weeks.map { it.partial },
     height = USAGE_HEIGHT,
     yFormat = { jsNumberString(jsRound(it).toDouble()) },

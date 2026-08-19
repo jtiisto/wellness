@@ -1,4 +1,4 @@
-package dev.jtiisto.wellness.feature.journal
+package dev.jtiisto.wellness.core.ui.theme
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.size
@@ -16,22 +16,60 @@ import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.rotate
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import dev.jtiisto.wellness.core.ui.theme.LogbookPalette
-import dev.jtiisto.wellness.core.ui.theme.LogbookTheme
 import kotlin.math.sqrt
 
 /**
+ * The mark language: nine shapes, no colour, one canvas.
+ *
+ * Written for the journal's seven-day runs and rollup clusters, and hoisted into
+ * `core/ui` when Trends' focus ribbons needed the *same* vocabulary — features
+ * never depend on each other, and a second copy of a shape grammar is how a
+ * language starts to drift. It lives beside [InkMark] and the [InkButton] pair
+ * for the same reason: these are the design system's furniture, not one screen's.
+ *
+ * Which shape a day earns is decided by the consuming feature (journal's
+ * `JournalNotation`, trends' `TrendsNotation`) — this only picks tokens and puts
+ * geometry on the page.
+ *
+ * The shapes are chosen so that the *modifiers* mean the same thing wherever they
+ * appear: a slash is "broken through", a hollow is "nothing here yet", a fill is
+ * "this happened". That is what lets a legend name seven marks and leave the
+ * reader able to read all nine.
+ */
+enum class WeekMark {
+    FILLED_DOT,
+    HALF_DOT,
+    OPEN_DOT,
+    SLASHED_DOT,
+    DASH,
+    HOOP,
+    SLASHED_HOOP,
+    FILLED_DIAMOND,
+    OUTLINE_DIAMOND,
+}
+
+/**
+ * The word for a drawn mark, so a screen reader hears what the page shows.
+ *
+ * [WeekMark.OPEN_DOT] says "open", not "missed": the whole point of the
+ * today-open rule is that those are different statements, and a spoken twin that
+ * collapsed them would undo the rule for exactly the users who cannot see the
+ * difference drawn.
+ */
+fun WeekMark.a11yLabel(): String = when (this) {
+    WeekMark.FILLED_DOT -> "done"
+    WeekMark.HALF_DOT -> "partial"
+    WeekMark.OPEN_DOT -> "open"
+    WeekMark.SLASHED_DOT -> "missed"
+    WeekMark.DASH -> "off schedule"
+    WeekMark.HOOP -> "held"
+    WeekMark.SLASHED_HOOP -> "broken"
+    WeekMark.FILLED_DIAMOND -> "noted"
+    WeekMark.OUTLINE_DIAMOND -> "not noted"
+}
+
+/**
  * One [WeekMark], drawn.
- *
- * The journal's whole vocabulary is here and nowhere else: nine shapes, no
- * colour, one canvas. Which shape a day earns was decided in `JournalNotation`
- * — this only picks tokens and puts geometry on the page, exactly as coach's
- * `DayMarkGlyph` does for its three.
- *
- * The shapes are chosen so that the *modifiers* mean the same thing wherever
- * they appear: a slash is "broken through", a hollow is "nothing here yet", a
- * fill is "this happened". That is what lets the header legend name seven marks
- * and leave the reader able to read all nine.
  *
  * [ringed] is the strip's "you are here", drawn as an offset ring **outside** the
  * mark's own bounds rather than as a bigger mark — a run whose last dot were

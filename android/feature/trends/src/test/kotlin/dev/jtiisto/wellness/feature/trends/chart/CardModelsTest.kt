@@ -531,6 +531,18 @@ class CardModelsTest {
         assertEquals(listOf(false, true), plot.rects.map { it.partial })
     }
 
+    @Test
+    @DisplayName("usage bars are plain, not stack members: one series earns no plate")
+    fun usageBarsCarryNoStackIdentity() {
+        // Colour identifies a series, and this card has exactly one — plus no
+        // legend to decode a plate with. `BAR` is the tone that says "a bar with
+        // no stack identity", and it resolves to ink.
+        val plot = requireNotNull(
+            usageCardModel(listOf(UsageWeek("2030-01-06", partial = false, count = 3))),
+        )
+        assertEquals(listOf(PlotTone.BAR), plot.rects.map { it.tone })
+    }
+
     // ---- adherence ---------------------------------------------------------
 
     @Test

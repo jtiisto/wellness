@@ -6,6 +6,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
@@ -17,14 +19,22 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.jtiisto.wellness.core.data.trends.RecoveryDay
-import dev.jtiisto.wellness.core.ui.theme.WellnessSpace
-import dev.jtiisto.wellness.core.ui.theme.WellnessTheme
+import dev.jtiisto.wellness.core.ui.theme.LogbookSpace
+import dev.jtiisto.wellness.core.ui.theme.LogbookTheme
 import dev.jtiisto.wellness.feature.trends.HealthViewModel
 import dev.jtiisto.wellness.feature.trends.Slice
 import dev.jtiisto.wellness.feature.trends.chart.BoneRow
+import dev.jtiisto.wellness.feature.trends.chart.ChartInk
+import dev.jtiisto.wellness.feature.trends.chart.FLAG_GLYPH
 import dev.jtiisto.wellness.feature.trends.chart.LabRowModel
 import dev.jtiisto.wellness.feature.trends.chart.LegendEntry
 import dev.jtiisto.wellness.feature.trends.chart.MiniLabModel
@@ -37,6 +47,7 @@ import dev.jtiisto.wellness.feature.trends.chart.bodyCardModel
 import dev.jtiisto.wellness.feature.trends.chart.compositionCardModel
 import dev.jtiisto.wellness.feature.trends.chart.hrvCardModel
 import dev.jtiisto.wellness.feature.trends.chart.labsSectionModel
+import dev.jtiisto.wellness.feature.trends.chart.latestIsFlagged
 import dev.jtiisto.wellness.feature.trends.chart.rhrCardModel
 import dev.jtiisto.wellness.feature.trends.chart.sleepCardModel
 import dev.jtiisto.wellness.feature.trends.staleStamps
@@ -46,7 +57,15 @@ import org.koin.androidx.compose.koinViewModel
 /** How much taller than its strip a mini chart's gesture area reaches. */
 private val STRIP_TOUCH_PADDING = 8.dp
 
+private val HRV_LEGEND = listOf(
+    LegendEntry("daily", PlotTone.VALUE),
+    LegendEntry("7d mean", PlotTone.PRIMARY),
+    LegendEntry("baseline", PlotTone.BAND),
+    LegendEntry("below floor", PlotTone.WARN),
+)
+
 private val MEANS_LEGEND = listOf(
+    LegendEntry("daily", PlotTone.VALUE),
     LegendEntry("7d mean", PlotTone.PRIMARY),
     LegendEntry("28d mean", PlotTone.ALT),
 )
@@ -54,6 +73,7 @@ private val MEANS_LEGEND = listOf(
 private val SLEEP_LEGEND = listOf(
     LegendEntry("hours", PlotTone.PRIMARY),
     LegendEntry("score", PlotTone.SECONDARY),
+    LegendEntry("8h guide", PlotTone.MUTED),
 )
 
 /**
@@ -61,9 +81,9 @@ private val SLEEP_LEGEND = listOf(
  *
  * Recovery is the only slice whose failure is the screen's failure. Weight,
  * DEXA scans and lab reports come from sources a given install may simply not
- * have, so their cards are absent rather than broken — but any of them serving
- * a cached copy still counts toward the stale badge, which is one thing this
- * screen does better than the PWA.
+ * have, so their sections are absent rather than broken — but any of them
+ * serving a cached copy still counts toward the stale note, which is one thing
+ * this screen does better than the PWA.
  */
 @Composable
 fun HealthTrendsScreen(onRange: (String) -> Unit, modifier: Modifier = Modifier) {
@@ -79,7 +99,7 @@ fun HealthTrendsScreen(onRange: (String) -> Unit, modifier: Modifier = Modifier)
         modifier = modifier
             .fillMaxWidth()
             .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(WellnessSpace.md),
+        verticalArrangement = Arrangement.spacedBy(SECTION_GAP),
     ) {
         RangeToolbar(
             range = state.range,
@@ -103,9 +123,13 @@ fun HealthTrendsScreen(onRange: (String) -> Unit, modifier: Modifier = Modifier)
         if (weight != null && weight.available && weight.series.isNotEmpty()) {
             val card = remember(weight, scans) { bodyCardModel(weight.series, scans) }
             if (card != null) {
-                TrendsCard(title = "Body weight + DEXA", unit = "kg · 7d mean · scan total mass") {
-                    PlotCanvas(model = card.plot, identity = listOf("body", state.range, pinEpoch))
-                    LegendRow(card.legend)
+                TrendsSection(title = "Body", sub = "kg") {
+                    LegendRow(card.legend, chart = ChartInk.BODY)
+                    PlotCanvas(
+                        model = card.plot,
+                        identity = listOf("body", state.range, pinEpoch),
+                        chart = ChartInk.BODY,
+                    )
                 }
             }
         }
@@ -113,7 +137,7 @@ fun HealthTrendsScreen(onRange: (String) -> Unit, modifier: Modifier = Modifier)
         if (scans.isNotEmpty()) {
             val card = remember(scans) { compositionCardModel(scans) }
             if (card != null) {
-                TrendsCard(title = "Composition", unit = "DEXA · all scans") {
+                TrendsSection(title = "Composition", sub = "DEXA · all scans") {
                     for (metric in card.metrics) MiniMetric(metric, pinEpoch)
                     PlotCanvas(
                         model = card.axis,
@@ -129,8 +153,8 @@ fun HealthTrendsScreen(onRange: (String) -> Unit, modifier: Modifier = Modifier)
         if (labs != null && labs.available && labs.panels.isNotEmpty()) {
             val section = remember(labs, state.labPanel) { labsSectionModel(labs.panels, state.labPanel) }
             if (section != null) {
-                TrendsCard(title = "Labs", unit = "all reports") {
-                    PillSelect(
+                TrendsSection(title = "Labs", sub = "ref band from latest") {
+                    PickerField(
                         title = "Panel",
                         options = section.panelOptions,
                         value = section.selectedPanel,
@@ -143,57 +167,70 @@ fun HealthTrendsScreen(onRange: (String) -> Unit, modifier: Modifier = Modifier)
             }
         }
 
-        Box(modifier = Modifier.height(WellnessSpace.lg))
+        Box(modifier = Modifier.height(SCREEN_BOTTOM))
     }
 }
 
 /**
- * The three recovery cards.
+ * The three recovery sections.
  *
- * Each renders its card unconditionally and puts its empty-state line inside:
- * a night the watch was off is a fact about that night, not a reason to hide
- * the whole card.
+ * Each renders its head unconditionally and puts its empty-state line inside: a
+ * night the watch was off is a fact about that night, not a reason to hide the
+ * whole section.
  */
 @Composable
 private fun RecoveryCards(days: List<RecoveryDay>, range: String, pinEpoch: Int) {
-    TrendsCard(title = "HRV", unit = "ms · last night · 7d mean · Garmin baseline") {
-        val model = remember(days) { hrvCardModel(days) }
-        if (model == null) {
-            ChartEmpty(NO_HRV_TEXT)
-        } else {
-            PlotCanvas(model = model, identity = listOf("hrv", range, pinEpoch))
+    Column(verticalArrangement = Arrangement.spacedBy(SECTION_GAP)) {
+        TrendsSection(title = "HRV", sub = "ms · overnight") {
+            val model = remember(days) { hrvCardModel(days) }
+            if (model == null) {
+                ChartEmpty(NO_HRV_TEXT)
+            } else {
+                LegendRow(HRV_LEGEND)
+                PlotCanvas(model = model, identity = listOf("hrv", range, pinEpoch))
+            }
         }
-    }
-    TrendsCard(title = "Resting HR", unit = "bpm · 7d & 28d means") {
-        val model = remember(days) { rhrCardModel(days) }
-        if (model == null) {
-            ChartEmpty(NO_RHR_TEXT)
-        } else {
-            PlotCanvas(model = model, identity = listOf("rhr", range, pinEpoch))
-            LegendRow(MEANS_LEGEND)
+        TrendsSection(title = "Resting HR", sub = "bpm") {
+            val model = remember(days) { rhrCardModel(days) }
+            if (model == null) {
+                ChartEmpty(NO_RHR_TEXT)
+            } else {
+                LegendRow(MEANS_LEGEND)
+                PlotCanvas(model = model, identity = listOf("rhr", range, pinEpoch))
+            }
         }
-    }
-    TrendsCard(title = "Sleep", unit = "hours · score (right) · 8h guide") {
-        val model = remember(days) { sleepCardModel(days) }
-        if (model == null) {
-            ChartEmpty(NO_SLEEP_TEXT)
-        } else {
-            PlotCanvas(model = model, identity = listOf("sleep", range, pinEpoch))
-            LegendRow(SLEEP_LEGEND)
+        TrendsSection(title = "Sleep", sub = "h · score right") {
+            val model = remember(days) { sleepCardModel(days) }
+            if (model == null) {
+                ChartEmpty(NO_SLEEP_TEXT)
+            } else {
+                LegendRow(SLEEP_LEGEND, chart = ChartInk.SLEEP)
+                PlotCanvas(
+                    model = model,
+                    identity = listOf("sleep", range, pinEpoch),
+                    chart = ChartInk.SLEEP,
+                )
+            }
         }
     }
 }
 
+/** A composition strip: name, the shape of it, and where it stands now. */
 @Composable
 private fun MiniMetric(metric: MiniMetricModel, pinEpoch: Int) {
-    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .hairlineBelow(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
         Text(
             text = metric.label,
-            style = WellnessTheme.type.micro,
-            color = WellnessTheme.palette.textSecondary,
-            modifier = Modifier.weight(0.28f),
+            style = LogbookTheme.type.name,
+            color = LogbookTheme.palette.ink,
+            modifier = Modifier.weight(0.30f),
         )
-        Box(modifier = Modifier.weight(0.52f)) {
+        Box(modifier = Modifier.weight(0.50f)) {
             PlotCanvas(
                 model = metric.plot,
                 identity = listOf("mini", metric.label, pinEpoch),
@@ -202,23 +239,36 @@ private fun MiniMetric(metric: MiniMetricModel, pinEpoch: Int) {
         }
         Text(
             text = metric.latest,
-            style = WellnessTheme.type.label,
-            color = WellnessTheme.palette.textPrimary,
+            style = LogbookTheme.type.meta.copy(fontWeight = FontWeight.Medium),
+            color = LogbookTheme.palette.ink,
+            textAlign = TextAlign.End,
             modifier = Modifier.weight(0.20f),
         )
     }
 }
 
+/**
+ * A lab strip. The `!` is the whole of "the lab flagged this" — read off the
+ * chart's own last dot, so the glyph and the open mark above it cannot disagree.
+ */
 @Composable
 private fun MiniLab(chart: MiniLabModel, panel: String, pinEpoch: Int) {
+    val flagged = remember(chart) { latestIsFlagged(chart.plot) }
     Column(modifier = Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(chart.name, style = WellnessTheme.type.micro, color = WellnessTheme.palette.textSecondary)
-            Text(chart.latest, style = WellnessTheme.type.label, color = WellnessTheme.palette.textPrimary)
+            Text(chart.name, style = LogbookTheme.type.name, color = LogbookTheme.palette.ink)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (flagged) FlagGlyph()
+                Text(
+                    text = chart.latest,
+                    style = LogbookTheme.type.meta.copy(fontWeight = FontWeight.Medium),
+                    color = LogbookTheme.palette.ink,
+                )
+            }
         }
         PlotCanvas(
             model = chart.plot,
@@ -230,29 +280,97 @@ private fun MiniLab(chart: MiniLabModel, panel: String, pinEpoch: Int) {
 
 @Composable
 private fun BoneTableRow(row: BoneRow) {
-    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .hairlineBelow(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
         Column {
-            Text("Bone (total)", style = WellnessTheme.type.body, color = WellnessTheme.palette.textPrimary)
-            Text(row.date, style = WellnessTheme.type.micro, color = WellnessTheme.palette.textFaint)
+            Text("Bone (total)", style = LogbookTheme.type.name, color = LogbookTheme.palette.ink)
+            Text(row.date, style = LogbookTheme.type.meta, color = LogbookTheme.palette.inkFaint)
         }
         Column(horizontalAlignment = Alignment.End) {
-            Text(row.bmd, style = WellnessTheme.type.label, color = WellnessTheme.palette.textPrimary)
-            Text(row.tScore, style = WellnessTheme.type.micro, color = WellnessTheme.palette.textFaint)
+            Text(
+                text = row.bmd,
+                style = LogbookTheme.type.meta.copy(fontWeight = FontWeight.Medium),
+                color = LogbookTheme.palette.ink,
+            )
+            Text(row.tScore, style = LogbookTheme.type.meta, color = LogbookTheme.palette.inkFaint)
         }
     }
 }
 
+/**
+ * One non-chartable test.
+ *
+ * A flagged row is marked, not tinted: the `!` says the lab called it out, and
+ * saying so in red would be this system claiming a verdict the lab did not give.
+ */
 @Composable
 private fun LabTableRow(row: LabRowModel) {
-    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .hairlineBelow(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
         Column(modifier = Modifier.weight(1f)) {
-            Text(row.name, style = WellnessTheme.type.body, color = WellnessTheme.palette.textPrimary)
-            Text(row.subLabel, style = WellnessTheme.type.micro, color = WellnessTheme.palette.textFaint)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (row.flagged) FlagGlyph()
+                Text(row.name, style = LogbookTheme.type.name, color = LogbookTheme.palette.ink)
+            }
+            Text(row.subLabel, style = LogbookTheme.type.meta, color = LogbookTheme.palette.inkFaint)
         }
         Text(
             text = row.value,
-            style = WellnessTheme.type.label,
-            color = if (row.flagged) WellnessTheme.palette.warning else WellnessTheme.palette.textPrimary,
+            style = LogbookTheme.type.meta.copy(
+                fontWeight = if (row.flagged) FontWeight.Medium else FontWeight.Normal,
+            ),
+            color = LogbookTheme.palette.ink,
+            textAlign = TextAlign.End,
+            modifier = Modifier.padding(start = LogbookSpace.grid * 2),
         )
     }
 }
+
+/**
+ * The attention mark, spoken once.
+ *
+ * Its own semantics node rather than a silent glyph: `!` is the only thing on
+ * the row saying the lab flagged the result, so a reader who cannot see it has
+ * to be told in words.
+ */
+@Composable
+private fun FlagGlyph() {
+    Text(
+        text = FLAG_GLYPH,
+        style = LogbookTheme.type.meta.copy(fontWeight = FontWeight.Medium),
+        color = LogbookTheme.palette.ink,
+        modifier = Modifier
+            .width(FLAG_COLUMN)
+            .clearAndSetSemantics { contentDescription = "Flagged" },
+    )
+}
+
+/** The row rule every table on this screen sits on. */
+@Composable
+private fun Modifier.hairlineBelow(): Modifier {
+    val rule = LogbookTheme.palette.rule
+    return this
+        .drawBehind {
+            val stroke = LogbookSpace.hairline.toPx()
+            drawLine(
+                color = rule,
+                start = Offset(0f, size.height - stroke / 2f),
+                end = Offset(size.width, size.height - stroke / 2f),
+                strokeWidth = stroke,
+            )
+        }
+        .padding(vertical = ROW_PADDING)
+}
+
+private val SECTION_GAP = 26.dp
+private val SCREEN_BOTTOM = 40.dp
+private val ROW_PADDING = 9.dp
+private val FLAG_COLUMN = 12.dp

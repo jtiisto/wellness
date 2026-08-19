@@ -9,63 +9,64 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import dev.jtiisto.wellness.core.ui.theme.ModuleAccent
-import dev.jtiisto.wellness.core.ui.theme.WellnessTheme
-import dev.jtiisto.wellness.core.ui.theme.colors
+import dev.jtiisto.wellness.core.ui.theme.LogbookTheme
 
 /**
- * How a chart is drawn.
+ * How a chart is drawn, in Logbook.
  *
- * The primary series is the module's accent, because a chart in the Trends tab
- * is Trends data; a second series borrows Analysis violet rather than inventing
- * a colour, so two lines never read as two modules. Everything else is
- * structure: grid, ticks, guides — all neutral, all quiet.
+ * Everything here is *structure* — grid, ticks, guides, the scrub marker, the
+ * tooltip's paper — and structure has no colour in this system. Which series a
+ * mark belongs to is decided one layer up, by `PlotTone`, and only ever answers
+ * in ink or in a plate; nothing on this side of the line ever does.
+ *
+ * Trends is the only consumer, so the whole theme moved with it rather than
+ * growing a second mode.
  */
 @Immutable
 data class ChartTheme(
+    /** A single-series stroke — the sparkline, which spends no colour at all. */
     val line: Color,
     val lineWidth: Dp,
-    val altLine: Color,
     val altLineWidth: Dp,
     val grid: Color,
     val gridWidth: Dp,
     val tickStyle: TextStyle,
     val tickColor: Color,
-    /** Fill under the line, and the band behind a highlighted range. */
-    val bandFill: Color,
     val guide: Color,
     val guideWidth: Dp,
-    /** The endpoint dot, and the scrub marker. */
+    /** The scrub marker: the vertical rule under the finger. */
     val point: Color,
-    val pointRadius: Dp,
-    val tooltipSurface: Color,
 )
 
 /** 5 on, 3 off — a guide you can tell from a series at a glance. */
 val chartGuideDash: PathEffect
     get() = PathEffect.dashPathEffect(floatArrayOf(5f, 3f))
 
+/** A 7-day mean: the dash a reader reads as "derived", not as a second reading. */
+val chartMeanDash: PathEffect
+    get() = PathEffect.dashPathEffect(floatArrayOf(4f, 3f))
+
+/** A 28-day mean: the same statement, further back. */
+val chartFaintMeanDash: PathEffect
+    get() = PathEffect.dashPathEffect(floatArrayOf(2f, 3f))
+
 @Composable
 @ReadOnlyComposable
 fun rememberChartTheme(): ChartTheme {
-    val palette = WellnessTheme.palette
-    val accent = WellnessTheme.accent
+    val palette = LogbookTheme.palette
     return ChartTheme(
-        line = accent.fill,
+        line = palette.ink,
         lineWidth = 1.5.dp,
-        altLine = ModuleAccent.ANALYSIS.colors(palette).fill.copy(alpha = 0.9f),
         altLineWidth = 1.25.dp,
-        grid = palette.line.copy(alpha = 0.6f),
-        gridWidth = 0.5.dp,
-        // Ticks are numbers, so they take the tabular label style rather than
-        // the uppercase taxonomy one, at the ramp's smallest size.
-        tickStyle = WellnessTheme.type.label.copy(fontSize = 11.sp),
-        tickColor = palette.textFaint,
-        bandFill = accent.chipFill,
-        guide = palette.line,
+        grid = palette.rule,
+        // One hairline, the same 1dp every rule in the system is drawn at.
+        gridWidth = 1.dp,
+        // Ticks are numbers, so they are mono — at the smallest size the ramp
+        // goes, because an axis label is the quietest number on the page.
+        tickStyle = LogbookTheme.type.meta.copy(fontSize = 9.5.sp, lineHeight = 12.sp),
+        tickColor = palette.inkFaint,
+        guide = palette.inkFaint,
         guideWidth = 1.dp,
-        point = accent.fill,
-        pointRadius = 3.dp,
-        tooltipSurface = palette.card,
+        point = palette.ink,
     )
 }

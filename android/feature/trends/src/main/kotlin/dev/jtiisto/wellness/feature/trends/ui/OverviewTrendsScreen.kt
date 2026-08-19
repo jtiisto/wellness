@@ -1,7 +1,5 @@
 package dev.jtiisto.wellness.feature.trends.ui
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -12,9 +10,7 @@ import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -23,13 +19,17 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import dev.jtiisto.wellness.core.ui.theme.WellnessShape
-import dev.jtiisto.wellness.core.ui.theme.WellnessSpace
-import dev.jtiisto.wellness.core.ui.theme.WellnessTheme
+import dev.jtiisto.wellness.core.ui.theme.LogbookSpace
+import dev.jtiisto.wellness.core.ui.theme.LogbookTheme
+import dev.jtiisto.wellness.core.ui.theme.WeekMarkGlyph
 import dev.jtiisto.wellness.feature.trends.OverviewViewModel
 import dev.jtiisto.wellness.feature.trends.Slice
 import dev.jtiisto.wellness.feature.trends.chart.FocusRowModel
@@ -37,8 +37,11 @@ import dev.jtiisto.wellness.feature.trends.chart.LegendEntry
 import dev.jtiisto.wellness.feature.trends.chart.PlotTone
 import dev.jtiisto.wellness.feature.trends.chart.PrTileModel
 import dev.jtiisto.wellness.feature.trends.chart.StatTileModel
+import dev.jtiisto.wellness.feature.trends.chart.describeFocusRibbon
+import dev.jtiisto.wellness.feature.trends.chart.focusMark
 import dev.jtiisto.wellness.feature.trends.chart.focusRowModels
 import dev.jtiisto.wellness.feature.trends.chart.overviewStatTiles
+import dev.jtiisto.wellness.feature.trends.chart.prBadgeText
 import dev.jtiisto.wellness.feature.trends.chart.prTileModel
 import dev.jtiisto.wellness.feature.trends.chart.weightCardModel
 import dev.jtiisto.wellness.feature.trends.staleStamps
@@ -68,7 +71,7 @@ fun OverviewTrendsScreen(
         modifier = modifier
             .fillMaxWidth()
             .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(WellnessSpace.md),
+        verticalArrangement = Arrangement.spacedBy(SECTION_GAP),
     ) {
         RangeToolbar(
             range = state.range,
@@ -81,12 +84,12 @@ fun OverviewTrendsScreen(
             Slice.Loading -> ScreenLoading()
             is Slice.Ready -> {
                 val tiles = remember(overview.value) { overviewStatTiles(overview.value) }
-                Row(horizontalArrangement = Arrangement.spacedBy(WellnessSpace.sm)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(TILE_GAP)) {
                     for (tile in tiles) StatTile(tile, onClick = { onNavigate(tile.target) })
                 }
                 remember(overview.value) { prTileModel(overview.value.prs) }?.let { PrTile(it) }
                 val focus = remember(overview.value) { focusRowModels(overview.value) }
-                if (focus.isNotEmpty()) FocusCard(focus)
+                if (focus.isNotEmpty()) FocusSection(focus)
             }
         }
 
@@ -94,115 +97,139 @@ fun OverviewTrendsScreen(
         if (weight != null && weight.available && weight.series.isNotEmpty()) {
             val card = remember(weight) { weightCardModel(weight.series) }
             if (card != null) {
-                TrendsCard(title = "Body weight", unit = "kg · 7d & 28d mean", trailing = {
-                    Text(card.latest, style = WellnessTheme.type.label, color = WellnessTheme.palette.textSecondary)
+                TrendsSection(title = "Body weight", sub = "kg", trailing = {
+                    Text(
+                        text = card.latest,
+                        style = LogbookTheme.type.meta.copy(fontWeight = FontWeight.Medium),
+                        color = LogbookTheme.palette.ink,
+                        modifier = Modifier.padding(start = LogbookSpace.grid * 2),
+                    )
                 }) {
-                    PlotCanvas(model = card.plot, identity = listOf("weight", state.range))
                     LegendRow(WEIGHT_LEGEND)
+                    PlotCanvas(model = card.plot, identity = listOf("weight", state.range))
                 }
             }
         }
 
-        Box(modifier = Modifier.height(WellnessSpace.lg))
+        Box(modifier = Modifier.height(SCREEN_BOTTOM))
     }
 }
 
 private val WEIGHT_LEGEND = listOf(
+    LegendEntry("daily", PlotTone.VALUE),
     LegendEntry("7d mean", PlotTone.PRIMARY),
     LegendEntry("28d mean", PlotTone.ALT),
 )
 
+/**
+ * A headline tile: label, number, how it compares, and the shape of the weeks
+ * behind it.
+ *
+ * No fill and no border — the whole page is one surface, so what separates the
+ * two tiles is the gap between them. The number is the only thing set large,
+ * and it is mono, because it is a number.
+ */
 @Composable
 private fun RowScope.StatTile(tile: StatTileModel, onClick: () -> Unit) {
-    val palette = WellnessTheme.palette
+    val palette = LogbookTheme.palette
     Column(
         modifier = Modifier
             .weight(1f)
-            .clip(WellnessShape.card)
-            .background(palette.card)
-            .border(WellnessSpace.hairline, palette.line, WellnessShape.card)
-            .clickable(onClick = onClick)
-            .padding(WellnessSpace.sm),
+            .clickable(role = Role.Button, onClick = onClick)
+            .semantics(mergeDescendants = true) {
+                contentDescription = "${tile.label}, ${tile.headline} ${tile.unit}. ${tile.soFarLine}"
+            },
         verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
-        Text(tile.label, style = WellnessTheme.type.micro, color = palette.textFaint)
+        Text(tile.label.uppercase(), style = LogbookTheme.type.eyebrow, color = palette.inkSoft)
         Row(verticalAlignment = Alignment.Bottom) {
-            Text(tile.headline, style = WellnessTheme.type.stat, color = palette.textPrimary)
+            Text(
+                text = tile.headline,
+                style = LogbookTheme.type.data.copy(
+                    fontSize = STAT_SIZE,
+                    lineHeight = STAT_LEADING,
+                    fontWeight = FontWeight.Medium,
+                ),
+                color = palette.ink,
+            )
             Text(
                 text = tile.unit,
-                style = WellnessTheme.type.secondary,
-                color = palette.textFaint,
+                style = LogbookTheme.type.meta,
+                color = palette.inkSoft,
                 modifier = Modifier.padding(start = 3.dp, bottom = 3.dp),
             )
         }
-        tile.avgLine?.let { Text(it, style = WellnessTheme.type.micro, color = palette.textSecondary) }
-        Text(tile.soFarLine, style = WellnessTheme.type.micro, color = palette.textFaint)
-        Sparkline(points = tile.sparkline, modifier = Modifier.height(26.dp))
+        // The delta rides inside the model's own line and carries its sign
+        // there: direction needs no colour and no arrow.
+        tile.avgLine?.let { Text(it, style = LogbookTheme.type.meta, color = palette.ink) }
+        Text(tile.soFarLine, style = LogbookTheme.type.meta, color = palette.inkFaint)
+        Sparkline(points = tile.sparkline, modifier = Modifier.height(SPARKLINE_HEIGHT))
     }
 }
 
 @Composable
 private fun PrTile(model: PrTileModel) {
-    TrendsCard(title = model.badge) {
+    TrendsSection(title = prBadgeText(model.badge)) {
         model.latest?.let {
-            Text(it, style = WellnessTheme.type.secondary, color = WellnessTheme.palette.textSecondary)
+            Text(it, style = LogbookTheme.type.meta, color = LogbookTheme.palette.inkSoft)
         }
     }
 }
 
+/**
+ * The weakest trackers, each with its fortnight drawn in the journal's marks.
+ *
+ * The same nine-shape grammar, not a chart-shaped copy of it: a day that met its
+ * target is the same filled dot here as it is on the journal row the reader
+ * tapped through from. The run is one spoken node — fourteen marks are one
+ * glance, and a reader stopping on each would hear geometry with no sentence
+ * around it.
+ */
 @Composable
-private fun FocusCard(rows: List<FocusRowModel>) {
-    TrendsCard(title = "Adherence focus", unit = "weakest, rolling 14d") {
+private fun FocusSection(rows: List<FocusRowModel>) {
+    val palette = LogbookTheme.palette
+    TrendsSection(title = "Adherence focus", sub = "weakest · 14d") {
         for (row in rows) {
-            Column(verticalArrangement = Arrangement.spacedBy(WellnessSpace.xs)) {
+            Column(verticalArrangement = Arrangement.spacedBy(LogbookSpace.grid + 2.dp)) {
                 Row(
-                    horizontalArrangement = Arrangement.spacedBy(WellnessSpace.sm),
+                    horizontalArrangement = Arrangement.spacedBy(LogbookSpace.grid * 2),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(
-                        row.name,
-                        style = WellnessTheme.type.body,
-                        color = WellnessTheme.palette.textPrimary,
-                    )
-                    Text(
-                        row.rate,
-                        style = WellnessTheme.type.micro,
-                        color = WellnessTheme.palette.textFaint,
-                    )
+                    Text(row.name, style = LogbookTheme.type.name, color = palette.ink)
+                    Text(row.rate, style = LogbookTheme.type.meta, color = palette.inkSoft)
                     if (row.dropping) {
+                        // A fact about the trend, said in the label voice —
+                        // there is no failure here to tint, and the arrow the
+                        // Graphite chip carried was doing the colour's job.
                         Text(
-                            text = "↓ dropping",
-                            style = WellnessTheme.type.micro,
-                            color = WellnessTheme.palette.warning,
+                            text = "DROPPING",
+                            style = LogbookTheme.type.eyebrow,
+                            color = palette.inkFaint,
                         )
                     }
                 }
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
-                    for (day in row.ribbon) {
-                        Box(
-                            modifier = Modifier
-                                .size(8.dp)
-                                .clip(CircleShape)
-                                .background(dayStatusColor(day.status)),
-                        )
-                    }
+                val spoken = describeFocusRibbon(row.ribbon.map { it.status })
+                FlowRow(
+                    modifier = if (spoken == null) {
+                        Modifier
+                    } else {
+                        Modifier.clearAndSetSemantics { contentDescription = spoken }
+                    },
+                    horizontalArrangement = Arrangement.spacedBy(RIBBON_GAP),
+                    verticalArrangement = Arrangement.spacedBy(LogbookSpace.grid),
+                ) {
+                    for (day in row.ribbon) WeekMarkGlyph(mark = focusMark(day.status))
                 }
             }
         }
     }
 }
 
-/**
- * A day dot's tone. `off` is not a failure — the tracker was not scheduled —
- * so it takes the faint ink rather than the missed one.
- */
-@Composable
-private fun dayStatusColor(status: String): Color {
-    val palette = WellnessTheme.palette
-    return when (status) {
-        "met" -> palette.success
-        "partial" -> palette.warning
-        "missed" -> palette.line
-        else -> palette.textFaint.copy(alpha = 0.3f)
-    }
-}
+private val SECTION_GAP = 26.dp
+private val SCREEN_BOTTOM = 40.dp
+private val TILE_GAP = 20.dp
+private val RIBBON_GAP = 5.dp
+private val SPARKLINE_HEIGHT = 26.dp
+
+private val STAT_SIZE = 24.sp
+private val STAT_LEADING = 26.sp

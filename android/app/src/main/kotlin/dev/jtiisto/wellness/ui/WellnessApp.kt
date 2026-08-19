@@ -128,7 +128,7 @@ internal val topLevelDestinations = listOf(
         label = "Trends",
         icon = Icons.Outlined.Insights,
         accent = ModuleAccent.TRENDS,
-        system = ShellSystem.GRAPHITE,
+        system = ShellSystem.LOGBOOK,
     ),
     TopLevelDestination(
         route = ANALYSIS_ROUTE,

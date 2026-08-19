@@ -1,5 +1,6 @@
 package dev.jtiisto.wellness.core.ui.chart
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
@@ -22,9 +23,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
-import dev.jtiisto.wellness.core.ui.theme.WellnessShape
-import dev.jtiisto.wellness.core.ui.theme.WellnessSpace
-import dev.jtiisto.wellness.core.ui.theme.WellnessTheme
+import dev.jtiisto.wellness.core.ui.theme.LogbookShapes
+import dev.jtiisto.wellness.core.ui.theme.LogbookSpace
+import dev.jtiisto.wellness.core.ui.theme.LogbookTheme
 import kotlin.math.abs
 
 /**
@@ -100,9 +101,9 @@ fun ChartScrubTooltip(
     anchor: IntOffset,
     modifier: Modifier = Modifier,
 ) {
-    val palette = WellnessTheme.palette
+    val palette = LogbookTheme.palette
     val pinnedOnly = state.activeIndex == null && state.pinnedIndex != null
-    val margin = with(LocalDensity.current) { WellnessSpace.sm.roundToPx() }
+    val margin = with(LocalDensity.current) { LogbookSpace.grid.roundToPx() * 2 }
     val positionProvider = remember(anchor, margin) { ScrubTooltipPosition(anchor, margin) }
     Popup(
         popupPositionProvider = positionProvider,
@@ -110,35 +111,37 @@ fun ChartScrubTooltip(
         properties = PopupProperties(focusable = pinnedOnly),
     ) {
         Surface(
-            modifier = modifier.padding(WellnessSpace.sm),
-            color = palette.card,
-            contentColor = palette.textPrimary,
-            shape = WellnessShape.floating,
-            // PopupProperties carries no elevation; the shadow belongs to the
-            // surface inside it.
-            shadowElevation = 8.dp,
+            modifier = modifier.padding(LogbookSpace.grid * 2),
+            color = palette.paper,
+            contentColor = palette.ink,
+            shape = LogbookShapes.soft,
+            // The calendar-popup rule: a hairline edge and no shadow. A popup
+            // floats above the screen, but it is still paper, and paper in this
+            // system is bounded by a rule rather than lifted off the page.
+            border = BorderStroke(LogbookSpace.hairline, palette.ruleStrong),
+            shadowElevation = 0.dp,
             tonalElevation = 0.dp,
         ) {
             Column(
-                modifier = Modifier.padding(horizontal = WellnessSpace.sm, vertical = 6.dp),
+                modifier = Modifier.padding(horizontal = LogbookSpace.grid * 2, vertical = 6.dp),
                 verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
                 Text(
                     text = label,
-                    style = WellnessTheme.type.micro,
-                    color = palette.textFaint,
+                    style = LogbookTheme.type.eyebrow,
+                    color = palette.inkFaint,
                 )
                 for ((series, value) in values) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(WellnessSpace.sm)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(LogbookSpace.grid * 2)) {
                         Text(
                             text = series,
-                            style = WellnessTheme.type.secondary,
-                            color = palette.textSecondary,
+                            style = LogbookTheme.type.meta,
+                            color = palette.inkSoft,
                         )
                         Text(
                             text = value,
-                            style = WellnessTheme.type.label,
-                            color = palette.textPrimary,
+                            style = LogbookTheme.type.meta,
+                            color = palette.ink,
                         )
                     }
                 }

@@ -590,11 +590,29 @@ Graphite rendering clause) and nothing else.
   Logbook form/button patterns.
 
 ### Implementation shape (from the 2026-08-18 survey — the seam is deliberate)
-- The entire color vocabulary is the `PlotTone` enum resolved in ONE place
-  (`rememberPlotColors`) plus `ChartTheme`. The re-theme re-answers the
+- The entire color vocabulary is the `PlotTone` enum resolved in ONE pure file
+  (`chart/ChartInk.kt`) plus `ChartTheme`. The re-theme re-answers the
   resolution and the 328-line `TrendsComponents.kt` chrome; the 194 chart
   tests and every builder stay untouched, except the open-dot judgment marks
-  (`WARN` gains a hollow style) and the `WeekMarkGlyph` focus-ribbon reuse.
+  (`WARN` gains a hollow style), the `WeekMarkGlyph` focus-ribbon reuse, and
+  one retag (usage's single key `STACK_0` → `BAR`, so a one-series card with no
+  legend cannot draw a plate).
+- **The resolution is keyed by chart: one pure per-chart plan file over a global
+  default** (implementation finding, 2026-08-18). `PlotTone` is a *role*
+  vocabulary and its roles are chart-ambiguous — eight charts spend
+  `PRIMARY`/`ALT`, and on five they are a 7d/28d rolling mean while on three
+  (progression's top set, sleep's hours bars, the aerobic proxy's sessions) they
+  are the chart's own subject. A single global tone→style map cannot say both,
+  and it cannot express this section's own rule that **plates are assigned
+  positionally _per chart_** — the same `SECONDARY` role is the first extra
+  series on Sleep (plate 1) and the second stack segment on Cardio (plate 2).
+  So: `defaultSeriesStyle(tone)` states the common case, and a `ChartInk` plan
+  states what a named chart actually draws, complete for that chart's series.
+  Style is one `SeriesStyle(ink, mark)` covering color *and* form, so the legend
+  swatch is derived from the same plan the canvas draws from and the two cannot
+  drift. Every plate-carrying chart is named in the enum even where the default
+  already lands right, and one test walks every plan asserting no two series on
+  a chart resolve to the same color.
 - Known traps: `LocalWellnessPalette`/`LocalModuleAccent` have **silent
   defaults** (a partial flip renders Graphite-dark chrome with Journal amber
   as the primary series — plausible and wrong, so the flip lands only with the

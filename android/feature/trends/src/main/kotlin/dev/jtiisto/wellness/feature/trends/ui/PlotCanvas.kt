@@ -20,6 +20,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.onSizeChanged
@@ -31,100 +32,99 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import dev.jtiisto.wellness.core.ui.chart.ChartScrubTooltip
 import dev.jtiisto.wellness.core.ui.chart.ChartTheme
+import dev.jtiisto.wellness.core.ui.chart.chartFaintMeanDash
 import dev.jtiisto.wellness.core.ui.chart.chartGuideDash
+import dev.jtiisto.wellness.core.ui.chart.chartMeanDash
 import dev.jtiisto.wellness.core.ui.chart.chartScrub
 import dev.jtiisto.wellness.core.ui.chart.rememberChartScrubState
 import dev.jtiisto.wellness.core.ui.chart.rememberChartTheme
-import dev.jtiisto.wellness.core.ui.theme.ModuleAccent
-import dev.jtiisto.wellness.core.ui.theme.WellnessTheme
-import dev.jtiisto.wellness.core.ui.theme.colors
+import dev.jtiisto.wellness.core.ui.theme.LogbookPalette
+import dev.jtiisto.wellness.core.ui.theme.LogbookTheme
+import dev.jtiisto.wellness.feature.trends.chart.ChartInk
 import dev.jtiisto.wellness.feature.trends.chart.LOGICAL_WIDTH
 import dev.jtiisto.wellness.feature.trends.chart.LabelAlign
 import dev.jtiisto.wellness.feature.trends.chart.LogicalScale
 import dev.jtiisto.wellness.feature.trends.chart.PlotLabel
 import dev.jtiisto.wellness.feature.trends.chart.PlotModel
 import dev.jtiisto.wellness.feature.trends.chart.PlotTone
+import dev.jtiisto.wellness.feature.trends.chart.SeriesInk
+import dev.jtiisto.wellness.feature.trends.chart.SeriesMark
+import dev.jtiisto.wellness.feature.trends.chart.isOpenMark
+import dev.jtiisto.wellness.feature.trends.chart.seriesStyle
 
 /**
  * Every Trends chart, drawn.
  *
  * The composable takes a finished [PlotModel] and does three things with it:
- * scales logical coordinates to pixels, resolves tones to colours, and hands
- * the anchor positions to the scrub state. No geometry decisions happen here,
- * which is why there is one of these rather than fourteen.
+ * scales logical coordinates to pixels, resolves tones to colours through the
+ * chart's own [ChartInk] plan, and hands the anchor positions to the scrub
+ * state. No geometry decisions happen here, which is why there is one of these
+ * rather than fourteen.
  */
-
-/** [PlotTone] resolved against the current theme. */
-@Immutable
-class PlotColors(
-    private val primary: Color,
-    private val alt: Color,
-    private val secondary: Color,
-    private val scan: Color,
-    private val value: Color,
-    private val warn: Color,
-    private val muted: Color,
-    private val band: Color,
-    private val met: Color,
-    private val partial: Color,
-    private val missed: Color,
-    private val inProgress: Color,
-    private val stackThird: Color,
-    private val stackOther: Color,
-) {
-    fun of(tone: PlotTone): Color = when (tone) {
-        PlotTone.PRIMARY, PlotTone.BAR, PlotTone.STACK_0 -> primary
-        PlotTone.ALT, PlotTone.STACK_1 -> alt
-        PlotTone.SECONDARY -> secondary
-        PlotTone.SCAN -> scan
-        PlotTone.VALUE -> value
-        PlotTone.WARN -> warn
-        PlotTone.MUTED -> muted
-        PlotTone.BAND -> band
-        PlotTone.MET -> met
-        PlotTone.PARTIAL -> partial
-        PlotTone.MISSED -> missed
-        PlotTone.IN_PROGRESS -> inProgress
-        PlotTone.STACK_2 -> stackThird
-        PlotTone.STACK_OTHER -> stackOther
-    }
-}
 
 /**
- * Series colours come from [ChartTheme], which already fixes the policy: the
- * module accent leads, and a second series borrows Analysis violet rather than
- * inventing a hue. A stacked chart needs a third, so it borrows Journal amber
- * the same way — four modules' worth of accent is the whole colour vocabulary
- * this design has, and inventing a fifth for a bar chart would break it.
+ * The palette half of the vocabulary: [SeriesInk] tokens as real colours.
+ *
+ * *Which* ink a series takes is [ChartInk]'s decision and is made per chart,
+ * because plates are assigned positionally per chart. This class only says what
+ * each token is on the current paper, which is the one part of the answer that
+ * needs a palette — and keeping the two apart is what lets every rule about
+ * meaning be asserted on the JVM.
  */
+@Immutable
+class PlotColors(private val palette: LogbookPalette) {
+
+    /** What an open mark is filled with, so the page shows through it. */
+    val paper: Color = palette.paper
+
+    /** A band's hairline bounds — the wash alone has no edge to read. */
+    val bandEdge: Color = palette.ruleStrong
+
+    fun of(ink: SeriesInk): Color = when (ink) {
+        SeriesInk.INK -> palette.ink
+        SeriesInk.INK_SOFT -> palette.inkSoft
+        SeriesInk.INK_FAINT -> palette.inkFaint
+        SeriesInk.RULE -> palette.rule
+        SeriesInk.PLATE_1 -> palette.plates[0]
+        SeriesInk.PLATE_2 -> palette.plates[1]
+        SeriesInk.PLATE_3 -> palette.plates[2]
+        // The week in progress, laid over whatever it covers: today's treatment,
+        // applied to a bar.
+        SeriesInk.INK_LID -> palette.ink.copy(alpha = IN_PROGRESS_ALPHA)
+    }
+
+    /** What [tone] is drawn in on [chart] — the plan's answer, or the default. */
+    fun of(tone: PlotTone, chart: ChartInk? = null): Color = of(seriesStyle(tone, chart).ink)
+}
+
+/** A [SeriesMark], as the dash the canvas actually strokes with. */
+private fun dashOf(mark: SeriesMark): PathEffect? = when (mark) {
+    SeriesMark.DASHED_LINE -> chartMeanDash
+    SeriesMark.FAINT_DASHED_LINE -> chartFaintMeanDash
+    else -> null
+}
+
 @Composable
 @ReadOnlyComposable
-fun rememberPlotColors(): PlotColors {
-    val theme = rememberChartTheme()
-    val palette = WellnessTheme.palette
-    return PlotColors(
-        primary = theme.line,
-        alt = theme.altLine,
-        secondary = theme.line.copy(alpha = 0.45f),
-        scan = theme.altLine,
-        // Raw readings sit under their own rolling mean: same colour, less of it.
-        value = theme.point.copy(alpha = 0.6f),
-        warn = palette.warning,
-        muted = palette.textFaint,
-        band = theme.bandFill,
-        met = palette.success,
-        partial = palette.warning,
-        // The base a ribbon cell's fills are painted over, not a semantic red:
-        // a missed day is information, not an error.
-        missed = palette.line,
-        inProgress = palette.canvas.copy(alpha = 0.4f),
-        stackThird = ModuleAccent.JOURNAL.colors(palette).fill,
-        stackOther = palette.textFaint,
-    )
-}
+fun rememberPlotColors(): PlotColors = PlotColors(LogbookTheme.palette)
 
 /** Bars and bands of an unfinished week, drawn back. */
 private const val PARTIAL_ALPHA = 0.45f
+
+/** The lid over the week in progress: today's treatment, applied to a bar. */
+private const val IN_PROGRESS_ALPHA = 0.45f
+
+/** An open mark's outline: a hairline at mark scale, not at chart scale. */
+private val OPEN_MARK_STROKE = 1.4.dp
+
+/**
+ * How much bigger an open dot draws than the filled one it replaces.
+ *
+ * Its outline is drawn *on* the radius, so at the same size a hollow mark reads
+ * smaller than a solid one; the step back is what keeps a flagged reading from
+ * looking like a lesser reading.
+ */
+private const val OPEN_MARK_SCALE = 1.2f
 
 /**
  * Draw [model], and let the finger read it.
@@ -142,6 +142,7 @@ fun PlotCanvas(
     model: PlotModel,
     identity: Any,
     modifier: Modifier = Modifier,
+    chart: ChartInk? = null,
     scrubEnabled: Boolean = true,
     touchPadding: Dp = 0.dp,
 ) {
@@ -173,7 +174,7 @@ fun PlotCanvas(
                 .onSizeChanged { widthPx = it.width.toFloat() },
         ) {
             val scale = LogicalScale(size.width)
-            drawPlot(model, scale, colors, theme, measurer)
+            drawPlot(model, scale, colors, theme, measurer, chart)
             if (displayed != null) {
                 val x = scale.px(model.anchors[displayed].x)
                 drawLine(
@@ -202,15 +203,32 @@ private fun DrawScope.drawPlot(
     colors: PlotColors,
     theme: ChartTheme,
     measurer: TextMeasurer,
+    chart: ChartInk?,
 ) {
     for (rect in model.rects) {
-        val color = colors.of(rect.tone)
+        val color = colors.of(rect.tone, chart)
+        val topLeft = Offset(scale.px(rect.x), scale.px(rect.y))
+        val size = Size(scale.px(rect.w), scale.px(rect.h))
         drawRoundRect(
             color = if (rect.partial) color.copy(alpha = color.alpha * PARTIAL_ALPHA) else color,
-            topLeft = Offset(scale.px(rect.x), scale.px(rect.y)),
-            size = Size(scale.px(rect.w), scale.px(rect.h)),
+            topLeft = topLeft,
+            size = size,
             cornerRadius = CornerRadius(rect.radius.toPx()),
         )
+        // A band is a wash, and a wash on paper has no edge — the two hairlines
+        // are what make a target or a reference range read as bounded rather
+        // than as a smudge behind the series.
+        if (rect.tone == PlotTone.BAND) {
+            val stroke = theme.gridWidth.toPx()
+            for (edge in listOf(topLeft.y, topLeft.y + size.height)) {
+                drawLine(
+                    color = colors.bandEdge,
+                    start = Offset(topLeft.x, edge),
+                    end = Offset(topLeft.x + size.width, edge),
+                    strokeWidth = stroke,
+                )
+            }
+        }
     }
     for (line in model.gridlines) {
         drawLine(
@@ -229,7 +247,7 @@ private fun DrawScope.drawPlot(
             pathEffect = if (guide.dashed) chartGuideDash else null,
         )
     }
-    if (model.dotsBelowLines) drawPlotDots(model, scale, colors, theme)
+    if (model.dotsBelowLines) drawPlotDots(model, scale, colors, chart)
     for (line in model.lines) {
         if (line.points.size < 2) continue
         val path = Path()
@@ -240,37 +258,52 @@ private fun DrawScope.drawPlot(
         }
         drawPath(
             path = path,
-            color = colors.of(line.tone),
+            color = colors.of(line.tone, chart),
             style = Stroke(
                 width = if (line.tone == PlotTone.PRIMARY) {
                     theme.lineWidth.toPx()
                 } else {
                     theme.altLineWidth.toPx()
                 },
+                pathEffect = dashOf(seriesStyle(line.tone, chart).mark),
             ),
         )
     }
-    if (!model.dotsBelowLines) drawPlotDots(model, scale, colors, theme)
+    if (!model.dotsBelowLines) drawPlotDots(model, scale, colors, chart)
     for (label in model.labels) {
         drawPlotLabel(label, scale, theme, measurer)
     }
 }
 
-/** A muted point is outlined rather than filled — present, but not counted. */
+/**
+ * Dots, and the two that are drawn open.
+ *
+ * A **muted** point is present but not counted — an off-plan session — and a
+ * **[PlotTone.WARN]** point is one the source itself flagged: a morning under
+ * Garmin's own floor, a lab result carrying an H or an L. Both hollow out
+ * rather than change colour, because a judgment in this system is a shape: the
+ * journal's open dot, turned outward. The filled paper is what stops the band
+ * or the line underneath from showing through and reading as a filled mark.
+ */
 private fun DrawScope.drawPlotDots(
     model: PlotModel,
     scale: LogicalScale,
     colors: PlotColors,
-    theme: ChartTheme,
+    chart: ChartInk?,
 ) {
     for (dot in model.dots) {
         val center = Offset(scale.px(dot.x), scale.px(dot.y))
-        val radius = dot.radius.toPx()
-        if (dot.muted) {
-            drawCircle(colors.of(dot.tone), radius, center, style = Stroke(theme.gridWidth.toPx() * 2))
-        } else {
-            drawCircle(colors.of(dot.tone), radius, center)
+        val style = seriesStyle(dot.tone, chart)
+        val color = colors.of(style.ink)
+        val open = dot.muted || isOpenMark(style.mark)
+        if (!open) {
+            drawCircle(color, dot.radius.toPx(), center)
+            continue
         }
+        val stroke = OPEN_MARK_STROKE.toPx()
+        val radius = dot.radius.toPx() * OPEN_MARK_SCALE
+        drawCircle(colors.paper, radius, center)
+        drawCircle(color, radius - stroke / 2f, center, style = Stroke(stroke))
     }
 }
 

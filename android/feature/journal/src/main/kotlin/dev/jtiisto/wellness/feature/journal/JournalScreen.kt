@@ -73,7 +73,10 @@ import dev.jtiisto.wellness.core.ui.theme.LogbookShapes
 import dev.jtiisto.wellness.core.ui.theme.LogbookSheetHandle
 import dev.jtiisto.wellness.core.ui.theme.LogbookSpace
 import dev.jtiisto.wellness.core.ui.theme.LogbookTheme
+import dev.jtiisto.wellness.core.ui.theme.ROLLUP_MARK_SIZE
+import dev.jtiisto.wellness.core.ui.theme.WeekMarkGlyph
 import dev.jtiisto.wellness.core.ui.theme.WellnessDenseField
+import dev.jtiisto.wellness.core.ui.theme.a11yLabel
 import org.koin.androidx.compose.koinViewModel
 
 /**
