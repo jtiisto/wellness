@@ -46,9 +46,13 @@ fun hrCaptureDisplay(state: HrCaptureState): HrCaptureDisplay? {
     if (!state.isRunning) return null
     return HrCaptureDisplay(
         // A capture that has not had its first beat yet shows a placeholder
-        // rather than a zero: zero is a heart rate, and a wrong one.
-        bpmText = state.bpm?.toString() ?: HrCaptureCopy.NO_READING,
-        tone = toneFor(state.connectionState),
+        // rather than a zero: zero is a heart rate, and a wrong one. So is a
+        // number the strap stopped confirming — the same placeholder, for as
+        // long as the stream stays quiet, which includes the whole reconnect
+        // that a stale stream triggers.
+        bpmText = state.bpm?.takeUnless { state.isStreamStale }?.toString()
+            ?: HrCaptureCopy.NO_READING,
+        tone = toneFor(state.connectionState, state.isStreamStale),
         // The address is the fallback the whole naming scheme rests on — an
         // unnamed advertisement is still a strap you connected to on purpose.
         deviceName = state.deviceName?.takeIf { it.isNotBlank() }
@@ -56,12 +60,22 @@ fun hrCaptureDisplay(state: HrCaptureState): HrCaptureDisplay? {
             ?: HrCaptureCopy.UNKNOWN_DEVICE,
         connectionText = connectionText(state.connectionState),
         detail = state.detail?.takeIf { it.isNotBlank() },
-        qualityText = qualityText(state.signalQuality),
+        // Nothing is rated while nothing is arriving. The last verdict is the
+        // one thing a frozen stream must not keep asserting — "Good signal ·
+        // 100% RR coverage" over a dead strap is the most confident lie the
+        // sheet can tell. It comes back, honestly, on the first beat after the
+        // outage: that sample carries a gap marker, which vetoes its window.
+        qualityText = if (state.isStreamStale) null else qualityText(state.signalQuality),
     )
 }
 
-private fun toneFor(state: ConnectionState): HrTone = when (state) {
-    ConnectionState.CONNECTED -> HrTone.LIVE
+/**
+ * Staleness can only take the tone *away* from [HrTone.LIVE]. A link that is
+ * already saying something worse — down, backing off — keeps its own word; the
+ * stream having gone quiet is not news on top of that.
+ */
+private fun toneFor(state: ConnectionState, streamStale: Boolean): HrTone = when (state) {
+    ConnectionState.CONNECTED -> if (streamStale) HrTone.WAITING else HrTone.LIVE
     ConnectionState.CONNECTING, ConnectionState.RECONNECTING, ConnectionState.SCANNING -> HrTone.WAITING
     ConnectionState.DISCONNECTED -> HrTone.LOST
 }

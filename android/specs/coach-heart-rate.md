@@ -7,6 +7,10 @@ captured end-to-end (8,839 RR samples, 21 set events, 1 anchored session in hr.d
 main. Deferred by explicit choice, tracked outside this spec: ForceSync HR arm, hr_mcp client
 registration, pulse-bridge retirement.
 
+**Amended 2026-08-19** — *Stream liveness* under **Behavior details**: a dead beat stream under a
+link that stays CONNECTED is now detected, declared and recovered from. Android-only; no server,
+PWA or wire change.
+
 ## Goal
 
 Fold pulse-bridge's live heart-rate capture into the coach feature so a workout can optionally record strap HR, show a compact live BPM readout, and — via a new timestamped set-completion event log — correlate heart rate with specific sets. Consolidate the two backends: the wellness FastAPI server gains an `hr` module (own endpoints, own `hr.db`), and pulse-bridge's analysis module + MCP server migrate to it. The standalone pulse-bridge app is superseded once this ships.
@@ -46,7 +50,10 @@ Ported essentially as-is, with their unit tests (pure Kotlin, injected clocks):
 `HrmCharacteristicParser` · `IntervalBuffer` · `ReconnectionStrategy`/`ReconnectionConfig` (1 s × 2.0, cap 30 s, max 15 attempts) · `SignalQualityTracker` (needed for analysis trust) · model types (`HeartRateSample`, `ConnectionState`, `BleDevice`).
 
 Ported with light rewiring (framework classes whose watchdog logic must not be rediscovered):
-`GarminHrmConnection` (15 s connect watchdog, 10 s first-sample watchdog, advertising probe, every-failure-routes-to-disconnect) · `BleScanner` (unfiltered `SCAN_MODE_LOW_LATENCY` scan, callback-side filtering on HRM service UUID / name prefixes).
+`GarminHrmConnection` (15 s connect watchdog, 10 s first-sample watchdog — generalised into the
+sample watchdog of *Stream liveness* below, amended 2026-08-19 — advertising probe,
+every-failure-routes-to-disconnect) · `BleScanner` (unfiltered `SCAN_MODE_LOW_LATENCY` scan,
+callback-side filtering on HRM service UUID / name prefixes).
 
 Not ported: `PriorityMultiplexer` (single-source now), tachogram UI, Polar everything, `ServerConfig` (wellness's Phase 8 server address book is the base URL).
 
@@ -57,7 +64,7 @@ First foreground service / notification channel / runtime-permission flow in the
 - `foregroundServiceType="connectedDevice"`, `START_STICKY`, resumes newest open session on null-intent restart.
 - Notification channel `hr_capture`, `IMPORTANCE_LOW`, silent, ongoing; text = connection state + live BPM.
 - `PARTIAL_WAKE_LOCK` for the session; **no `keepScreenOn`** (we show a number, not a tachogram).
-- 5-minute inactivity auto-stop (armed on disconnect/reconnecting, cancelled on connect and on every sample) — bounded battery drain from a dead strap.
+- 5-minute inactivity auto-stop (armed on disconnect/reconnecting, cancelled on connect and on every sample) — bounded battery drain from a dead strap. A stream that goes silent under a link that stays CONNECTED reaches this the same way a real drop does, via the sample watchdog below.
 - Permissions: `BLUETOOTH_SCAN` (`neverForLocation`) + `BLUETOOTH_CONNECT` requested blocking at first pairing entry; `POST_NOTIFICATIONS` requested but a denial never blocks capture.
 
 ### Data model (Room v5 → v6, one migration)
@@ -159,9 +166,95 @@ repo (authoritative until the server work lands it in `docs/ARCHITECTURE.md`). S
 
 ## Behavior details
 
-- Connection lifecycle, watchdogs, backoff, advertising-probe verdicts: as ported from pulse-bridge (see `core/ble` section).
+- Connection lifecycle, watchdogs, backoff, advertising-probe verdicts: as ported from pulse-bridge (see `core/ble` section), plus *Stream liveness* below.
 - Sample overflow is recorded in the data (gap marker + cumulative counter), not just logged.
 - Capture survives app death (`START_STICKY` + open-session resume); sync survives capture death (buffer scope is Koin-owned).
+
+### Stream liveness (amended 2026-08-19)
+
+**A link that has stopped delivering is not a live capture, whatever `ConnectionState` says.**
+As ported, every liveness check in the stack fired once and never again: the first-sample watchdog
+disarmed on the first beat and did not re-arm until the next reconnect; the inactivity countdown
+armed only on a *transition* to RECONNECTING/DISCONNECTED, and `CONNECTED` cancels it; the signal
+tracker recomputed only when a sample arrived. A silent notification death — a subscription that
+dies, firmware that hangs, skin contact lost while the radio link holds — therefore had no
+observer at all: the BPM froze at its last value under a green LIVE dot, the quality froze at
+whatever it last said (possibly "Good signal · 100% RR coverage"), and the wake lock, the
+foreground notification and the open session were held indefinitely while nothing was recorded.
+This section is the rule that closes it.
+
+1. **The sample watchdog replaces the first-sample watchdog.** One timer per connection, re-armed
+   by every beat: it holds the link to `FIRST_SAMPLE_TIMEOUT_MS` until the connection's first
+   sample and to `STALE_AFTER_MS` from every sample after that. The old behaviour is the special
+   case where no first sample ever arrives, so nothing about a failed connect changes.
+2. **Declaring staleness drives the same path a real link drop takes.** The watchdog asks the
+   stack to drop the link and then runs the lost-link teardown itself — close the handle, publish
+   DISCONNECTED, hand over to the existing backoff — rather than waiting for
+   `onConnectionStateChange`, because the failure being detected is precisely a stack that has
+   stopped answering. Consequences follow from the existing machinery and nothing new is invented:
+   `InactivityPolicy` gets a genuine transition to arm on, `ReconnectionStrategy` runs its budget,
+   and a wedged subscription is answered with reconnect attempts, which is the right answer to it.
+   No new `ConnectionState` member; the state machine is untouched.
+   **Only the connection's current handle may run that teardown** (review finding, same day): the
+   proactive drop means the platform's own `STATE_DISCONNECTED` for the same handle can still
+   arrive later — after the backoff has already opened a successor — and an unguarded second run
+   would cancel the successor's watchdogs, null it out of the field (leaking a live handle still
+   wired to the shared callback), publish DISCONNECTED over a healthy link, and after a
+   *deliberate* stop, resurrect the reconnect loop. `handleLinkLost` therefore ignores any handle
+   that is not the current one, closing the zombie again (idempotent) and touching nothing else.
+3. **The capture session does not end here.** Staleness ends the *link*, and the armed 5-minute
+   inactivity countdown is what ends the session if nothing recovers. Shortcutting it would kill a
+   capture that a single successful reconnect would have saved.
+4. **`streamStale` is published beside the connection state, because the two are different facts.**
+   The whole finding is that the app read "the link is connected" as "beats are arriving". The
+   connection therefore publishes a second, smaller fact — *the beat stream has gone quiet* — set
+   when the watchdog declares staleness and cleared **only by a sample** (not by a connect, not by
+   a state change; an attempt that has not delivered anything has not disproved it). It is a
+   boolean over one timer, not a parallel state machine. It is load-bearing rather than cosmetic:
+   the DISCONNECTED→RECONNECTING pair the teardown publishes is two writes to one `StateFlow`, so
+   a collector is not guaranteed to observe the DISCONNECTED in between, and every display rule
+   below would otherwise be racing that conflation.
+5. **The UI stops claiming a reading the moment staleness is declared**, all of it in the pure
+   display layer (`hrCaptureDisplay`, `HrCaptureNotificationText`) so it is covered by tests
+   rather than by a device:
+   - the tone leaves LIVE — staleness downgrades CONNECTED to WAITING and never overrides a link
+     state that is already saying something worse, so a stale DISCONNECTED still reads LOST;
+   - the BPM shows the no-reading placeholder instead of the frozen number, for as long as the
+     stream stays quiet — including through the whole stale-induced reconnect. A reconnect that
+     follows a *genuine* drop still keeps its last number, which is the existing convention and
+     stays correct: that number is seconds old and the link layer, not a watchdog, reported it;
+   - signal quality goes silent rather than showing its last verdict. Nothing is rated while
+     nothing is arriving, and the recompute that matters happens by itself on the other side: the
+     first sample after the outage carries `isGapBefore`, which vetoes the whole window down to
+     POOR. (Deliberately *not* a recompute-in-place: `SignalQualityTracker` is confined to the
+     sample collector's coroutine, and reaching into it from the liveness collector would trade
+     one honesty bug for a data race.)
+   - the notification never prints "Connected — N bpm" over a dead stream.
+6. **Thresholds** — named constants in `StreamLivenessPolicy`, with the arithmetic and the choice
+   of clock unit-tested there:
+   - `FIRST_SAMPLE_TIMEOUT_MS = 10_000` — unchanged, the ported value. A connect proves itself
+     within about a second of the CCCD acknowledgement or not at all, so ten is already ~10×
+     margin on a link that has proven nothing.
+   - `STALE_AFTER_MS = 15_000` — deliberately longer than the first-sample window: a proven link
+     earns more patience than an unproven one. Straps notify at ~1 Hz and this class already
+     treats three seconds of silence as a discontinuity (`GAP_THRESHOLD_MS`), so fifteen is five
+     consecutive discontinuity windows — unreachable by sub-second jitter or a brief radio hiccup,
+     which is what must not flap the tone, and well inside the harm, which is a display that
+     freezes for tens of seconds or forever. A genuinely dropped link reports itself through the
+     BLE supervision timeout in a few seconds, so this watchdog is only ever the net for silence
+     the link layer does *not* report; being a few seconds slower there costs nothing, while
+     tearing down a healthy link on a 10-second hiccup costs real beats.
+   - **One threshold, not two.** Blanking the reading earlier than recovery starts would leave a
+     window in which the app shows nothing and does nothing about it, which is not more honest —
+     the moment we stop believing the reading is the moment to go get another one.
+   - The clock is elapsed-realtime, not wall time (as the signal tracker's already is): a
+     wall-clock jump must never be readable as a dead strap. Exactly at the threshold counts as
+     stale, so the countdown cannot resolve to a zero-length wait and spin.
+
+Server-side: **nothing.** No wire field, no endpoint and no stored value changes — the samples a
+stale link fails to produce are simply samples that were never captured, which the protocol
+already represents as their absence. `docs/ARCHITECTURE.md`'s HR section is the protocol's home
+and stays as it is.
 
 ## Dependencies
 

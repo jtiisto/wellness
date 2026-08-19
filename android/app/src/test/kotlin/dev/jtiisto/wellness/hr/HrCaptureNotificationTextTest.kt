@@ -19,12 +19,14 @@ class HrCaptureNotificationTextTest {
         bpm: Int? = null,
         deviceName: String? = null,
         deviceAddress: String? = null,
+        isStreamStale: Boolean = false,
     ) = HrCaptureState(
         isRunning = true,
         connectionState = connectionState,
         bpm = bpm,
         deviceName = deviceName,
         deviceAddress = deviceAddress,
+        isStreamStale = isStreamStale,
     )
 
     @Test
@@ -48,6 +50,20 @@ class HrCaptureNotificationTextTest {
             val text = HrCaptureNotificationText.contentText(state(connectionState, bpm = 142))
             assertEquals(false, text.contains("142"), "$connectionState leaked a stale bpm")
         }
+    }
+
+    @Test
+    @DisplayName("a connected strap that stopped sending says so instead of showing its last number")
+    fun connectedButSilent() {
+        // While the app is closed this line is the only thing that can report
+        // the failure, and "Connected — 142 bpm" over a dead stream is
+        // indistinguishable from a working strap.
+        assertEquals(
+            "Connected — no data",
+            HrCaptureNotificationText.contentText(
+                state(ConnectionState.CONNECTED, bpm = 142, isStreamStale = true),
+            ),
+        )
     }
 
     @Test

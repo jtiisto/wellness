@@ -99,6 +99,7 @@ class HrCaptureService : Service() {
     private var stateJob: Job? = null
     private var sessionJob: Job? = null
     private var detailJob: Job? = null
+    private var staleJob: Job? = null
     private var inactivityJob: Job? = null
     private var startupJob: Job? = null
     private var wakeLock: PowerManager.WakeLock? = null
@@ -314,6 +315,13 @@ class HrCaptureService : Service() {
             conn.connectionDetail.collect { detail -> publish { it.copy(detail = detail) } }
         }
 
+        // Its own collector, and deliberately touching nothing but this one
+        // field: the tracker and the BPM belong to the sample collector below,
+        // which runs on another dispatcher. The display combines the two.
+        staleJob = serviceScope.launch {
+            conn.streamStale.collect { stale -> publish { it.copy(isStreamStale = stale) } }
+        }
+
         intervalBuffer.start()
         collectJob = serviceScope.launch(Dispatchers.Default) {
             conn.heartRateData.collect { sample ->
@@ -480,6 +488,8 @@ class HrCaptureService : Service() {
         sessionJob = null
         detailJob?.cancel()
         detailJob = null
+        staleJob?.cancel()
+        staleJob = null
         startupJob?.cancel()
         startupJob = null
         cancelInactivityTimer()

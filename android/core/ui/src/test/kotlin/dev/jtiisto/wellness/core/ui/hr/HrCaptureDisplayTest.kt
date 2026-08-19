@@ -145,6 +145,84 @@ class HrCaptureDisplayTest {
     }
 
     @Test
+    @DisplayName("a strap that stopped sending stops being drawn as live, connected or not")
+    fun staleStreamLosesTheLiveTone() {
+        fun toneFor(state: ConnectionState) = hrCaptureDisplay(
+            HrCaptureState(isRunning = true, connectionState = state, isStreamStale = true),
+        )?.tone
+
+        // The finding, in one assertion: CONNECTED alone used to mean LIVE, so a
+        // dead subscription under a healthy link kept a green dot indefinitely.
+        assertEquals(HrTone.WAITING, toneFor(ConnectionState.CONNECTED))
+        // Staleness only ever takes the tone away from LIVE. A link that is
+        // already down keeps its own, worse word.
+        assertEquals(HrTone.LOST, toneFor(ConnectionState.DISCONNECTED))
+        assertEquals(HrTone.WAITING, toneFor(ConnectionState.RECONNECTING))
+    }
+
+    @Test
+    @DisplayName("a reading the strap stopped confirming is not shown as a reading")
+    fun staleStreamBlanksTheNumber() {
+        val stale = hrCaptureDisplay(
+            HrCaptureState(
+                isRunning = true,
+                connectionState = ConnectionState.CONNECTED,
+                bpm = 132,
+                isStreamStale = true,
+            ),
+        )
+
+        assertEquals(HrCaptureCopy.NO_READING, stale?.bpmText)
+        // And it stays blanked through the reconnect the stale stream triggers —
+        // that is the whole window in which a frozen number would be believed.
+        val reconnecting = hrCaptureDisplay(
+            HrCaptureState(
+                isRunning = true,
+                connectionState = ConnectionState.RECONNECTING,
+                bpm = 132,
+                isStreamStale = true,
+            ),
+        )
+        assertEquals(HrCaptureCopy.NO_READING, reconnecting?.bpmText)
+    }
+
+    @Test
+    @DisplayName("a reconnect after a real drop keeps its number — the two cases are told apart")
+    fun aGenuineDropKeepsTheLastReading() {
+        // The link layer reported this one, seconds ago, and the tone already
+        // says the strap is not connected. Blanking here too would make the
+        // stale rule indistinguishable from an ordinary dropout.
+        val display = hrCaptureDisplay(
+            HrCaptureState(
+                isRunning = true,
+                connectionState = ConnectionState.RECONNECTING,
+                bpm = 132,
+                isStreamStale = false,
+            ),
+        )
+
+        assertEquals("132", display?.bpmText)
+    }
+
+    @Test
+    @DisplayName("nothing is rated while nothing is arriving")
+    fun staleStreamSaysNothingAboutSignalQuality() {
+        val display = hrCaptureDisplay(
+            HrCaptureState(
+                isRunning = true,
+                connectionState = ConnectionState.CONNECTED,
+                signalQuality = SignalQuality(SignalQualityLevel.GOOD, rrCoveragePercent = 100),
+                isStreamStale = true,
+            ),
+        )
+
+        // "Good signal · 100% RR coverage" over a dead strap is the most
+        // confident lie this sheet can tell, and the tracker cannot contradict
+        // it on its own — it only recomputes when a sample arrives.
+        assertNull(display?.qualityText)
+    }
+
+    @Test
     @DisplayName("the chip's accessible name carries what its digits cannot")
     fun chipDescription() {
         val display = requireNotNull(

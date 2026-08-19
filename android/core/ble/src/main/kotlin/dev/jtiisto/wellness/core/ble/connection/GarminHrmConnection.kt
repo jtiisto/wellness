@@ -10,6 +10,7 @@ import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothProfile
 import android.bluetooth.BluetoothStatusCodes
 import android.content.Context
+import android.os.SystemClock
 import dev.jtiisto.wellness.core.ble.BleLog
 import dev.jtiisto.wellness.core.ble.model.ConnectionState
 import dev.jtiisto.wellness.core.ble.model.HeartRateSample
@@ -44,16 +45,19 @@ import java.util.concurrent.atomic.AtomicLong
  *    leaves a link that is CONNECTED and will never produce a byte. Returning
  *    early from any of them is a silent permanent stall, so they all disconnect
  *    and let the reconnect path deal with it.
- * 2. **A connect is not healthy until data flows.** The retry budget resets on
- *    the first *sample*, not on `STATE_CONNECTED`, or repeated post-connect
- *    failures would defeat the attempt bound entirely.
+ * 2. **A connect is not healthy until data flows, and it stops being healthy the
+ *    moment data stops.** The retry budget resets on the first *sample*, not on
+ *    `STATE_CONNECTED`, or repeated post-connect failures would defeat the
+ *    attempt bound entirely — and the same watchdog keeps running afterwards, so
+ *    a subscription that dies mid-session is caught by the rule that caught it
+ *    dying at the start (see [StreamLivenessPolicy]).
  * 3. **A dropped notification is recorded in the data**, as a gap marker on the
  *    next sample that gets through plus a cumulative counter, rather than only
  *    in a log line nobody correlates.
  *
  * Device-only glue: excluded from the coverage gate. The decisions that are not
- * glue live in [ConnectDiagnostics], [HrmCharacteristicParser] and
- * [ReconnectionStrategy], all of which are covered.
+ * glue live in [ConnectDiagnostics], [HrmCharacteristicParser],
+ * [ReconnectionStrategy] and [StreamLivenessPolicy], all of which are covered.
  *
  * @param scope owns the watchdogs and the backoff. It is the capture service's
  *   scope, and it *should* die with the service — a GATT handle outliving its
@@ -61,6 +65,11 @@ import java.util.concurrent.atomic.AtomicLong
  * @param advertisementProbe the address-filtered scan run alongside each connect
  *   attempt, so a watchdog abort can say which failure happened. Null disables
  *   probing, and the verdict then stays agnostic rather than guessing.
+ * @param now wall clock, and only ever used to **stamp data**: a sample's receipt
+ *   time is a real instant that has to survive into the database.
+ * @param elapsed monotonic source for the watchdogs, which measure durations and
+ *   must not be readable by a clock adjustment. Same split the capture service
+ *   already makes for the signal tracker.
  */
 class GarminHrmConnection(
     private val context: Context,
@@ -69,9 +78,11 @@ class GarminHrmConnection(
     private val log: BleLog = BleLog {},
     private val reconnectionStrategy: ReconnectionStrategy = ReconnectionStrategy(),
     private val connectTimeoutMs: Long = DEFAULT_CONNECT_TIMEOUT_MS,
-    private val firstSampleTimeoutMs: Long = DEFAULT_FIRST_SAMPLE_TIMEOUT_MS,
+    private val firstSampleTimeoutMs: Long = StreamLivenessPolicy.FIRST_SAMPLE_TIMEOUT_MS,
+    private val staleAfterMs: Long = StreamLivenessPolicy.STALE_AFTER_MS,
     private val advertisementProbe: ((String) -> Flow<Int>)? = null,
     private val now: () -> Long = System::currentTimeMillis,
+    private val elapsed: () -> Long = SystemClock::elapsedRealtime,
 ) {
 
     companion object {
@@ -88,12 +99,6 @@ class GarminHrmConnection(
          * the retry loop responsive enough to be worth having.
          */
         const val DEFAULT_CONNECT_TIMEOUT_MS = 15_000L
-
-        /**
-         * A link is only proven once real data flows: discovery, the CCCD write
-         * and notification delivery can each fail *after* STATE_CONNECTED.
-         */
-        const val DEFAULT_FIRST_SAMPLE_TIMEOUT_MS = 10_000L
     }
 
     val deviceId: String = address
@@ -113,6 +118,20 @@ class GarminHrmConnection(
     private val _connectionDetail = MutableStateFlow<String?>(null)
     val connectionDetail: StateFlow<String?> = _connectionDetail.asStateFlow()
 
+    /**
+     * Whether the beat stream has gone quiet — a *different fact* from
+     * [connectionState], and the whole point of this class's liveness rule.
+     *
+     * "The link is up" and "beats are arriving" were read as one thing, and a
+     * subscription can die while the link stays perfectly healthy. This is set
+     * when [StreamLivenessPolicy] declares the stream dead and cleared **only by
+     * a sample** — never by a connect and never by a state change, because an
+     * attempt that has not delivered anything has not disproved it. The UI reads
+     * it to stop drawing a reading it no longer has.
+     */
+    private val _streamStale = MutableStateFlow(false)
+    val streamStale: StateFlow<Boolean> = _streamStale.asStateFlow()
+
     private val droppedSamples = AtomicInteger(0)
     private val lastSampleTimestamp = AtomicLong(0L)
 
@@ -122,10 +141,19 @@ class GarminHrmConnection(
     @Volatile
     private var awaitingFirstSample = false
 
+    /**
+     * Elapsed-time mark of the last sign of life on this connection: the connect
+     * itself, then every sample. What the sample watchdog measures silence from,
+     * kept separate from [lastSampleTimestamp] because that one is wall-clock
+     * *data* and deliberately survives across reconnects to gap-mark them.
+     */
+    @Volatile
+    private var streamActivityAtMs = 0L
+
     private var gatt: BluetoothGatt? = null
     private var reconnectJob: Job? = null
     private var connectWatchdogJob: Job? = null
-    private var firstSampleWatchdogJob: Job? = null
+    private var sampleWatchdogJob: Job? = null
     private var probeJob: Job? = null
 
     @Volatile
@@ -148,7 +176,7 @@ class GarminHrmConnection(
                     cancelConnectWatchdog()
                     stopAdvertisementProbe()
                     _connectionState.value = ConnectionState.CONNECTED
-                    startFirstSampleWatchdog()
+                    startSampleWatchdog()
                     // null means the call was refused outright and has already
                     // routed to disconnect; false means the stack was busy. A
                     // CONNECTED link with no services never produces data, so
@@ -158,14 +186,7 @@ class GarminHrmConnection(
                     }
                 }
 
-                BluetoothProfile.STATE_DISCONNECTED -> {
-                    cancelConnectWatchdog()
-                    cancelFirstSampleWatchdog()
-                    _connectionState.value = ConnectionState.DISCONNECTED
-                    gatt.closeSafely()
-                    this@GarminHrmConnection.gatt = null
-                    attemptReconnect()
-                }
+                BluetoothProfile.STATE_DISCONNECTED -> handleLinkLost(gatt)
             }
         }
 
@@ -229,6 +250,11 @@ class GarminHrmConnection(
             characteristic: BluetoothGattCharacteristic,
             value: ByteArray,
         ) {
+            // Same identity rule as handleLinkLost: only the current handle may
+            // feed the stream. A notification from an abandoned handle would
+            // re-arm the liveness mark, clear streamStale and emit a sample
+            // into the record as if the successor link had delivered it.
+            if (gatt !== this@GarminHrmConnection.gatt) return
             if (characteristic.uuid == HRM_MEASUREMENT_UUID) handleHrmData(value)
         }
     }
@@ -281,12 +307,15 @@ class GarminHrmConnection(
         reconnectJob?.cancel()
         reconnectJob = null
         cancelConnectWatchdog()
-        cancelFirstSampleWatchdog()
+        cancelSampleWatchdog()
         stopAdvertisementProbe()
         lastFailureVerdict = null
         reconnectionStrategy.reset()
         _connectionState.value = ConnectionState.DISCONNECTED
         _connectionDetail.value = null
+        // A deliberate teardown is not a dead stream, and the next capture starts
+        // from this object's published values.
+        _streamStale.value = false
         gatt?.disconnectSafely()
         gatt?.closeSafely()
         gatt = null
@@ -307,9 +336,15 @@ class GarminHrmConnection(
             isGapBefore = silenceGap || gapFromDrop,
         )
 
+        // This *is* the re-arm: the watchdog measures silence from here and
+        // recomputes its wait on every wake, so a beat needs no timer of its own.
+        streamActivityAtMs = elapsed()
+        _streamStale.value = false
+
         if (awaitingFirstSample) {
+            // Not a cancel — the watchdog keeps running, on the longer clock a
+            // proven link is held to from here on.
             awaitingFirstSample = false
-            cancelFirstSampleWatchdog()
             // Data flowing is the only real definition of a healthy link.
             reconnectionStrategy.reset()
             _connectionDetail.value = null
@@ -373,23 +408,91 @@ class GarminHrmConnection(
         connectWatchdogJob = null
     }
 
+    /**
+     * The link's liveness clock, running for as long as the link is up.
+     *
+     * One timer rather than one per beat: it sleeps for whatever
+     * [StreamLivenessPolicy] says is left, then re-reads how long the stream has
+     * actually been quiet and sleeps again. A beat therefore re-arms it by
+     * moving [streamActivityAtMs], with no job churn at 1 Hz, and the timeout
+     * switching from the first-sample clock to the steady-state one is picked up
+     * on the next wake.
+     */
     @SuppressLint("MissingPermission")
-    private fun startFirstSampleWatchdog() {
+    private fun startSampleWatchdog() {
         awaitingFirstSample = true
-        firstSampleWatchdogJob?.cancel()
-        firstSampleWatchdogJob = scope.launch {
-            delay(firstSampleTimeoutMs)
-            if (awaitingFirstSample && _connectionState.value == ConnectionState.CONNECTED) {
-                log.log("no data ${firstSampleTimeoutMs}ms after connect — disconnecting to retry")
-                gatt?.disconnectSafely()
+        streamActivityAtMs = elapsed()
+        sampleWatchdogJob?.cancel()
+        sampleWatchdogJob = scope.launch {
+            while (true) {
+                val timeout = StreamLivenessPolicy.timeoutMs(
+                    hasDelivered = !awaitingFirstSample,
+                    firstSampleTimeoutMs = firstSampleTimeoutMs,
+                    staleAfterMs = staleAfterMs,
+                )
+                val silence = elapsed() - streamActivityAtMs
+                if (StreamLivenessPolicy.isStale(silence, timeout)) break
+                delay(StreamLivenessPolicy.remainingMs(silence, timeout))
             }
+            // Anything that moved the state since — a real drop, a deliberate
+            // stop — has its own teardown running and must not get a second one.
+            if (_connectionState.value != ConnectionState.CONNECTED) return@launch
+
+            log.log("stream silent — the link is up and delivering nothing; dropping it to retry")
+            // Published before the teardown, and cleared only by a sample: the
+            // DISCONNECTED→RECONNECTING pair below is two writes to one
+            // StateFlow, so a collector is not guaranteed to see the state that
+            // would have told it to stop drawing a reading.
+            _streamStale.value = true
+
+            // Ask the stack to drop the link, then run the lost-link path
+            // ourselves rather than waiting for onConnectionStateChange — the
+            // failure being handled is a stack that has stopped answering, and
+            // recovery cannot be conditional on it answering now.
+            val handle = gatt
+            handle?.disconnectSafely()
+            // This cancels the coroutine it is running in. Safe, and the reason
+            // nothing suspends afterwards: the reconnect it schedules is a child
+            // of the scope, not of this job.
+            handleLinkLost(handle)
         }
     }
 
-    private fun cancelFirstSampleWatchdog() {
+    private fun cancelSampleWatchdog() {
         awaitingFirstSample = false
-        firstSampleWatchdogJob?.cancel()
-        firstSampleWatchdogJob = null
+        sampleWatchdogJob?.cancel()
+        sampleWatchdogJob = null
+    }
+
+    /**
+     * The link is gone: stand everything down and hand over to the backoff.
+     *
+     * Shared by the two ways that can be true — the peer or the platform saying
+     * so, and the sample watchdog concluding it — so a stale stream is recovered
+     * from by exactly the machinery a real drop is, rather than by a second
+     * lifecycle written alongside it.
+     */
+    private fun handleLinkLost(handle: BluetoothGatt?) {
+        // Only the connection's CURRENT handle may stand the machinery down.
+        // The sample watchdog tears a stale link down proactively and the
+        // platform's own STATE_DISCONNECTED for that same disconnect can still
+        // arrive later, on the shared callback object — after the backoff has
+        // already opened a successor. Without this identity check that late
+        // echo would cancel the successor's watchdogs, null the field out from
+        // under it (leaking a live handle that keeps delivering into the same
+        // callback), and publish DISCONNECTED over a healthy link. A handle
+        // that is not the current one is a zombie: close it again (idempotent)
+        // and touch nothing else.
+        if (handle == null || handle !== gatt) {
+            handle?.closeSafely()
+            return
+        }
+        cancelConnectWatchdog()
+        cancelSampleWatchdog()
+        _connectionState.value = ConnectionState.DISCONNECTED
+        handle.closeSafely()
+        gatt = null
+        attemptReconnect()
     }
 
     private fun startAdvertisementProbe() {

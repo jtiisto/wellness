@@ -25,9 +25,18 @@ object HrCaptureNotificationText {
      * BPM only appears under [ConnectionState.CONNECTED]. A number left over
      * from before a dropout would be the worst thing this line could show —
      * a stale reading that looks live is indistinguishable from a working strap.
+     *
+     * Connected is not sufficient, though, which is the second clause: a strap
+     * can stop sending while the link stays up, and this line has to be able to
+     * say so, because at that moment it is the only surface that can.
      */
     fun contentText(state: HrCaptureState): String = when (state.connectionState) {
-        ConnectionState.CONNECTED -> state.bpm?.let { "Connected — $it bpm" } ?: "Connected"
+        ConnectionState.CONNECTED ->
+            if (state.isStreamStale) {
+                "Connected — no data"
+            } else {
+                state.bpm?.let { "Connected — $it bpm" } ?: "Connected"
+            }
         ConnectionState.SCANNING -> "Scanning…"
         ConnectionState.CONNECTING -> "Connecting…"
         ConnectionState.RECONNECTING -> "Reconnecting…"

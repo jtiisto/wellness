@@ -21,6 +21,13 @@ import dev.jtiisto.wellness.core.ble.quality.SignalQuality
  * [dev.jtiisto.wellness.core.ble.connection.ConnectDiagnostics]; null means
  * nothing is wrong.
  *
+ * [isStreamStale] is deliberately not folded into [connectionState]. A strap can
+ * stop sending while the link stays up, which is the failure the two fields exist
+ * to tell apart: [connectionState] answers "is there a link", this answers "are
+ * beats arriving", and only the second one licenses drawing [bpm] as a current
+ * reading. See
+ * [dev.jtiisto.wellness.core.ble.connection.StreamLivenessPolicy].
+ *
  * [workoutDate] and [workoutSessionId] are the running session's workout anchor,
  * and they are published here rather than remembered by whoever started the
  * capture **because a ViewModel does not survive a process death and the session
@@ -39,6 +46,7 @@ data class HrCaptureState(
     val workoutSessionId: Long? = null,
     val signalQuality: SignalQuality = SignalQuality(),
     val detail: String? = null,
+    val isStreamStale: Boolean = false,
 )
 
 /**

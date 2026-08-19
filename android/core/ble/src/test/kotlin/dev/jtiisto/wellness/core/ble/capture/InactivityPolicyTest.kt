@@ -48,6 +48,20 @@ class InactivityPolicyTest {
     fun timeoutIsFiveMinutes() {
         assertEquals(5.minutes, InactivityPolicy.TIMEOUT)
     }
+
+    @Test
+    @DisplayName("a stream declared dead lands somewhere that starts the countdown")
+    fun aDeadStreamReachesTheStop() {
+        // The half of the liveness fix this policy owns. A silent strap used to
+        // hold the link at CONNECTED, which CANCELS — so the wake lock and the
+        // notification were held indefinitely with nothing being recorded. The
+        // sample watchdog now drives the same teardown a real drop does, and
+        // both states it can land in have to arm: DISCONNECTED while the
+        // reconnect is being scheduled, RECONNECTING once it is, and
+        // DISCONNECTED again for good if the retry budget is spent.
+        assertEquals(InactivityAction.ARM, InactivityPolicy.actionFor(ConnectionState.DISCONNECTED))
+        assertEquals(InactivityAction.ARM, InactivityPolicy.actionFor(ConnectionState.RECONNECTING))
+    }
 }
 
 /**
@@ -73,6 +87,10 @@ class HrCaptureStateTest {
         assertNull(idle.workoutDate)
         assertNull(idle.workoutSessionId)
         assertEquals(SignalQualityLevel.MEASURING, idle.signalQuality.level)
+        // Idle is not stale: nothing is claiming to deliver, so there is nothing
+        // to disbelieve. Teardown resets to exactly this, so a capture cannot
+        // inherit the previous one's dead stream.
+        assertFalse(idle.isStreamStale)
     }
 
     @Test
