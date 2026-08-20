@@ -9,9 +9,8 @@ class MCPConfig:
     """Configuration for read-only HR analysis access.
 
     `port` is only consulted by the http/sse transports; the server runs over
-    stdio like the other two. 8004 keeps it clear of coach (8002), journal
-    (8000) and the pulse-bridge MCP (8003), which keeps running in parallel as
-    a fallback until it is explicitly retired.
+    stdio like the other two. 8004 keeps it clear of coach (8002) and
+    journal (8000).
     """
 
     db_path: Path
