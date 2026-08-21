@@ -304,10 +304,37 @@ fun loadNeedsLabel(value: String): Boolean = value.trimStart().firstOrNull()?.is
 /** What joins two segments on the static line (U+00B7), matching the PWA's. */
 private const val SEGMENT_SEPARATOR = " · "
 
-/** Range dash (U+2013), floor (U+2265) and ceiling (U+2264) — never `-`/`>=`. */
+/** Range dash (U+2013), floor (U+2265) and ceiling (U+2264) — never `-`/`>=`.
+ * Private on purpose: the shapes travel only as [hrBoundsToken]'s output, so
+ * a consumer cannot assemble a fourth spelling from the raw symbols. */
 private const val RANGE_DASH = "–"
 private const val AT_LEAST = "≥"
 private const val AT_MOST = "≤"
+
+/**
+ * A segment's HR constraint as one token — `A–B`, `≥N`, `≤N` — or null when it
+ * carries no bound at all.
+ *
+ * The single authority for the three shapes, because the static plan line and
+ * the live guide's `TARGET` slot have to say the same thing about the same
+ * segment: two formatters would be two chances for the day view and the overlay
+ * to disagree about what the plan asked for.
+ *
+ * A **zero bound is absent**, not a bound of zero. The guard is JS-truthy in the
+ * PWA twin (`CoachUiLogic`'s spelled-out-truthiness rule) and the server's floor
+ * is 1, so a `0` can only be a hand-edited row — reading it as "no bound" beats
+ * drawing `≥0`.
+ */
+internal fun hrBoundsToken(hrMin: Int?, hrMax: Int?): String? {
+    val min = hrMin?.takeIf { it != 0 }
+    val max = hrMax?.takeIf { it != 0 }
+    return when {
+        min != null && max != null -> "$min$RANGE_DASH$max"
+        min != null -> "$AT_LEAST$min"
+        max != null -> "$AT_MOST$max"
+        else -> null
+    }
+}
 
 /**
  * A cardio exercise's whole target-HR timeline as one line:
@@ -333,14 +360,8 @@ fun formatSegments(segments: List<PlanSegmentDto>?): String {
     if (segments.isNullOrEmpty()) return ""
     return segments.joinToString(SEGMENT_SEPARATOR) { segment ->
         val time = segmentClock(segment.durationSec)
-        val min = segment.hrMin?.takeIf { it != 0 }
-        val max = segment.hrMax?.takeIf { it != 0 }
-        when {
-            min != null && max != null -> "$time $min$RANGE_DASH$max"
-            min != null -> "$time $AT_LEAST$min"
-            max != null -> "$time $AT_MOST$max"
-            else -> time
-        }
+        val bounds = hrBoundsToken(segment.hrMin, segment.hrMax)
+        if (bounds == null) time else "$time $bounds"
     }
 }
 
@@ -349,8 +370,13 @@ fun formatSegments(segments: List<PlanSegmentDto>?): String {
  * which is private to `:core:data` and so cannot be shared across the module
  * line. A negative duration cannot reach here (the server's floor is 1) and is
  * clamped rather than rendered as `-1:-5`.
+ *
+ * Shared with the live guide, which counts in the same notation the plan line
+ * reads in — an hour-long ride reads `61:30` on both, never `1:01:30`, because a
+ * format that grew a field mid-session would shift a mono column that ticks in
+ * place.
  */
-private fun segmentClock(seconds: Int): String {
+internal fun segmentClock(seconds: Int): String {
     val total = seconds.coerceAtLeast(0)
     return "${total / 60}:${(total % 60).toString().padStart(2, '0')}"
 }

@@ -117,9 +117,12 @@ Both clients receive it for free (raw-blob storage); rendering:
 
 ### The window (the motion contract — this system's first)
 
-- ~30 s of history; the **now-line at 2/3** of the width, future to the
-  right, so an upcoming segment's band approaches visibly (`+10 s` of
-  lookahead).
+- 30 s of history; the **now-line at exactly 2/3** of the width, future to
+  the right, so an upcoming segment's band approaches visibly. Those two
+  facts force the lookahead: 15 s. The approved mockup's `+10 s` marker is a
+  **tick label inside the lookahead**, not its extent (its own geometry says
+  so: now-line at 250/360 ≈ 2/3, the `+10 s` text at x≈330 of 360 — inside
+  the plot, an implementation note P2b's exactness surfaced).
 - The window advances **once per second** in discrete steps — a paper
   instrument ticks, it does not glide. One `LaunchedEffect` clock keyed on
   the overlay's composition (the `ElapsedClock` precedent); **no infinite
