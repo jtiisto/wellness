@@ -45,6 +45,7 @@ private class World(
 
     var clock = NOW
     private var minted = 0
+    private var ticking = false
 
     val store = HrCaptureStore(
         sessionDao = sessionDao,
@@ -53,8 +54,19 @@ private class World(
         scope = scope,
         scheduleUpload = { scheduled++ },
         newSessionId = { "session-${++minted}" },
-        now = { clock },
+        now = { if (ticking) clock++ else clock },
     )
+
+    /**
+     * Make every read of the clock a different instant.
+     *
+     * A frozen clock cannot tell "read once and used twice" from "read twice",
+     * and that difference is the whole of whether a stored value and the value
+     * published beside it are the same fact.
+     */
+    fun tickingClock() {
+        ticking = true
+    }
 
     fun session(id: String): HrSessionEntity = sessionDao.sessions.getValue(id)
 
@@ -106,7 +118,10 @@ class HrCaptureStoreTest {
         // The anchor is published beside the id, so a screen that did not start
         // this capture — or one recreated after a process death — can still tell
         // which workout it belongs to.
-        assertEquals(CaptureSession(id, workoutDate = "2026-08-10", workoutSessionId = 42L), world.store.current.value)
+        assertEquals(
+            CaptureSession(id, NOW, workoutDate = "2026-08-10", workoutSessionId = 42L),
+            world.store.current.value,
+        )
         assertEquals(1, world.scheduled)
     }
 
@@ -136,7 +151,56 @@ class HrCaptureStoreTest {
         // Published as absent too, not as some placeholder: a capture from the
         // strap settings belongs to no workout, and End Workout must not
         // recognise it as one it started.
-        assertEquals(CaptureSession(id), world.store.current.value)
+        assertEquals(CaptureSession(id, NOW), world.store.current.value)
+    }
+
+    @Test
+    @DisplayName("the published start is the one written to the row, to the millisecond")
+    fun startInstantIsPublishedAndStoredAsOneValue() = runTest {
+        val world = World(backgroundScope)
+        // A clock that moves on every read, which is what a real one does. Two
+        // reads would put one instant on the row and a different one on the
+        // flow, and a resume after a process death would then contradict what
+        // the live session had been saying all along.
+        world.tickingClock()
+
+        val id = world.store.startSession(DEVICE)
+
+        assertEquals(world.session(id).startedAtMs, world.store.current.value?.startedAtMs)
+    }
+
+    @Test
+    @DisplayName("a resume republishes the session's own start, not the moment it was resumed")
+    fun resumeRestoresTheStoredStart() = runTest {
+        val world = World(backgroundScope)
+        // The row is ten minutes old and the process that wrote it is gone. This
+        // is the whole reason the start is stored rather than held in memory:
+        // publishing `now` here would tell the guide a two-minute-old ride had
+        // just begun.
+        val startedAtMs = NOW - 600_000
+        world.sessionDao.upsert(HrSessionEntity("open", DEVICE, startedAtMs = startedAtMs))
+
+        world.store.resumeOpenSession()
+
+        assertEquals(startedAtMs, world.store.current.value?.startedAtMs)
+    }
+
+    @Test
+    @DisplayName("anchoring a running capture to a workout does not move its start")
+    fun anchorKeepsTheStart() = runTest {
+        val world = World(backgroundScope)
+        val id = world.store.startSession(DEVICE)
+        // Ten minutes into the capture, End Workout's late anchor arrives.
+        world.clock = NOW + 600_000
+
+        assertTrue(world.store.anchorToWorkout("2026-08-10", workoutSessionId = 7L))
+
+        // The anchor changes the anchor. The session began when it began, and
+        // the statement behind this only touches the two anchor columns — so the
+        // republished value has to be the live one amended, not a new one built
+        // from an event that never carried a start.
+        assertEquals(NOW, world.store.current.value?.startedAtMs)
+        assertEquals(NOW, world.session(id).startedAtMs)
     }
 
     @Test
@@ -178,7 +242,7 @@ class HrCaptureStoreTest {
         // started the capture died with the process; the row did not, so End
         // Workout can still recognise the capture as its own.
         assertEquals(
-            CaptureSession("open", workoutDate = "2026-08-10", workoutSessionId = 7L),
+            CaptureSession("open", NOW - 10_000, workoutDate = "2026-08-10", workoutSessionId = 7L),
             world.store.current.value,
         )
     }
@@ -191,7 +255,7 @@ class HrCaptureStoreTest {
 
         world.store.resumeOpenSession()
 
-        assertEquals(CaptureSession("open"), world.store.current.value)
+        assertEquals(CaptureSession("open", NOW - 10_000), world.store.current.value)
     }
 
     @Test
@@ -255,7 +319,7 @@ class HrCaptureStoreTest {
         // started is recognised by End Workout exactly like one anchored at the
         // start.
         assertEquals(
-            CaptureSession(id, workoutDate = "2026-08-10", workoutSessionId = 7L),
+            CaptureSession(id, NOW, workoutDate = "2026-08-10", workoutSessionId = 7L),
             world.store.current.value,
         )
     }
@@ -268,7 +332,7 @@ class HrCaptureStoreTest {
 
         assertTrue(world.store.anchorToWorkout("2026-08-10"))
 
-        assertEquals(CaptureSession(id, workoutDate = "2026-08-10"), world.store.current.value)
+        assertEquals(CaptureSession(id, NOW, workoutDate = "2026-08-10"), world.store.current.value)
     }
 
     @Test
@@ -287,7 +351,7 @@ class HrCaptureStoreTest {
         // statement's rows-affected is the discriminator that does not: zero
         // means the session was not open, and an anchor that never landed must
         // not be published as though it had.
-        assertEquals(CaptureSession(id), world.store.current.value)
+        assertEquals(CaptureSession(id, NOW), world.store.current.value)
         assertNull(world.session(id).workoutDate)
     }
 
@@ -310,7 +374,7 @@ class HrCaptureStoreTest {
 
         assertFalse(world.store.anchorToWorkout("2026-08-10"))
         assertTrue(world.sessionDao.sessions.isEmpty())
-        assertEquals(CaptureSession(id), world.store.current.value)
+        assertEquals(CaptureSession(id, NOW), world.store.current.value)
     }
 
     @Test
@@ -370,7 +434,7 @@ class HrCaptureStoreTest {
         // would have published. Publishing "stale" here would record samples
         // under the live session while every stop read the stale one.
         assertEquals(live, world.store.currentSessionId)
-        assertEquals(CaptureSession(live), world.store.current.value)
+        assertEquals(CaptureSession(live, NOW), world.store.current.value)
         assertNull(world.session("stale").endedAtMs)
     }
 

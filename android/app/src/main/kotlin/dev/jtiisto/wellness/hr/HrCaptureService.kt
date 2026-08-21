@@ -24,6 +24,7 @@ import dev.jtiisto.wellness.core.ble.di.HrCaptureStateQualifier
 import dev.jtiisto.wellness.core.ble.model.ConnectionState
 import dev.jtiisto.wellness.core.ble.quality.SignalQualityTracker
 import dev.jtiisto.wellness.core.ble.scanner.BleScanner
+import dev.jtiisto.wellness.core.ble.trace.HrTraceRing
 import dev.jtiisto.wellness.core.data.hr.CaptureStopResult
 import dev.jtiisto.wellness.core.data.hr.HrCaptureStore
 import dev.jtiisto.wellness.core.data.network.ServerBootstrap
@@ -62,8 +63,9 @@ import java.util.concurrent.atomic.AtomicInteger
  *
  * **Device-only glue**, excluded from the coverage gate. Every decision it makes
  * that could be wrong has been moved somewhere that is covered:
- * [CaptureStartGate], [InactivityPolicy], [HrCaptureNotificationText], and
- * `HrCaptureStore` for the whole of the session lifecycle.
+ * [CaptureStartGate], [InactivityPolicy], [HrCaptureNotificationText],
+ * [HrTraceRing] for the guide's rolling window, and `HrCaptureStore` for the
+ * whole of the session lifecycle.
  *
  * Started only from a foreground user action with `BLUETOOTH_CONNECT` already
  * granted — the pairing and Start Workout flows guarantee it, and
@@ -86,6 +88,7 @@ class HrCaptureService : Service() {
     private val captureState: MutableStateFlow<HrCaptureState> by inject(HrCaptureStateQualifier)
     private val captureStore: HrCaptureStore by inject()
     private val intervalBuffer: IntervalBuffer by inject()
+    private val traceRing: HrTraceRing by inject()
     private val knownDevices: KnownDeviceStore by inject()
     private val scanner: BleScanner by inject()
     private val bootstrap: ServerBootstrap by inject()
@@ -272,6 +275,16 @@ class HrCaptureService : Service() {
             return false
         }
         storedRows.set(0)
+        // A capture must not open onto the previous one's tail. Cleared on the
+        // way in rather than on the way out because only this ordering is
+        // reliable: the sample collector is wired below, after this line, so
+        // nothing can record into the window in between. Teardown cancels the
+        // previous collector without joining it (its `finally` path must never
+        // block), so that collector's non-suspending tail may still be running
+        // right now — which is why this hands back a licence: the old
+        // collector's write no-ops under its superseded one instead of putting
+        // the old trace straight back into the cleared window.
+        val trace = traceRing.beginSession()
 
         // The session id and its workout anchor are mirrored from the store
         // rather than from the Intent that started this, because the resume path
@@ -329,6 +342,14 @@ class HrCaptureService : Service() {
                 // stronger than the connection state, which can lag a stall.
                 cancelInactivityTimer()
                 tracker.add(sample)
+                // Ahead of the buffer on purpose. `add` can trigger a flush that
+                // reaches the store's actor, and the display has no business
+                // waiting on persistence to draw a beat that has already
+                // arrived. Safe to sit here because the call is one
+                // compare-and-set over an immutable list: it cannot suspend, so
+                // it delays nothing on the way to the record, and it cannot
+                // throw, so it can never be read as a failed flush and retried.
+                trace.record(sample.receivedAtMs, sample.heartRateBpm)
                 storedRows.addAndGet(intervalBuffer.add(sample, sessionId))
                 publish { it.copy(bpm = sample.heartRateBpm, signalQuality = tracker.quality()) }
             }

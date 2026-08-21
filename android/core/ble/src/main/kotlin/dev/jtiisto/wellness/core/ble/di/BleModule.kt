@@ -7,6 +7,7 @@ import dev.jtiisto.wellness.core.ble.device.KnownDeviceStorage
 import dev.jtiisto.wellness.core.ble.device.KnownDeviceStore
 import dev.jtiisto.wellness.core.ble.device.PrefsKnownDeviceStorage
 import dev.jtiisto.wellness.core.ble.scanner.BleScanner
+import dev.jtiisto.wellness.core.ble.trace.HrTraceRing
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -55,4 +56,12 @@ val bleModule = module {
     // sees it as anything but the interface, which is what keeps :core:ble a
     // leaf with Room on the other side of the seam.
     single { IntervalBuffer(sink = get(), scope = get(HrCaptureScope), log = get()) }
+
+    // The rolling window the cardio guide draws, fed by the capture service and
+    // read by whatever is on screen — so it outlives both, like the state flow
+    // above. No qualifier needed and none wanted: it is registered as its own
+    // class rather than as the flow it publishes, which is the erasure trap the
+    // two `named` definitions above exist to work around. `HrTraceRing` is a
+    // class Koin can key on; `MutableStateFlow<List<TraceSample>>` would not be.
+    single { HrTraceRing() }
 }

@@ -34,6 +34,14 @@ import dev.jtiisto.wellness.core.ble.quality.SignalQuality
  * row does**. A screen that held the anchor in a field would silently lose it
  * mid-workout, and End Workout would then decline to stop the very capture it
  * started. Read from here, the anchor comes back with the resumed session.
+ *
+ * [startedAtMs] rides the same path for the same reason — it is stored on the
+ * session row and comes back with a resume — and is null exactly when
+ * [sessionId] is: no session, no start. It is **published state and nothing
+ * more**. It anchors no clock: the cardio guide's timeline starts when the user
+ * presses START on the guide, deliberately, so that a warmup is not burnt while
+ * clipping the strap on. What this answers is "how long has the strap been
+ * recording", which is a different question from "how far into the plan are we".
  */
 data class HrCaptureState(
     val isRunning: Boolean = false,
@@ -42,6 +50,7 @@ data class HrCaptureState(
     val deviceAddress: String? = null,
     val deviceName: String? = null,
     val sessionId: String? = null,
+    val startedAtMs: Long? = null,
     val workoutDate: String? = null,
     val workoutSessionId: Long? = null,
     val signalQuality: SignalQuality = SignalQuality(),
@@ -69,6 +78,7 @@ fun HrCaptureState.withCaptureSession(session: CaptureSession?): HrCaptureState 
     } else {
         copy(
             sessionId = session.sessionId,
+            startedAtMs = session.startedAtMs,
             workoutDate = session.workoutDate,
             workoutSessionId = session.workoutSessionId,
         )

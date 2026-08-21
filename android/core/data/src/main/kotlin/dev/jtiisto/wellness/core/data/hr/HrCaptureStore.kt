@@ -470,18 +470,22 @@ class HrCaptureStore(
     private suspend fun onStart(event: Event.Start): String {
         closeStaleSessions(event.deviceId)
         val id = newSessionId()
+        // Read once, then written to the row *and* published. Two calls would be
+        // two different instants, and the published one would then disagree with
+        // the one a resume reads back off the row after a process death.
+        val startedAtMs = now()
         session.withWriteLease {
             sessionDao.upsert(
                 HrSessionEntity(
                     sessionId = id,
                     deviceId = event.deviceId,
-                    startedAtMs = now(),
+                    startedAtMs = startedAtMs,
                     workoutDate = event.workoutDate,
                     workoutSessionId = event.workoutSessionId,
                 ),
             )
         }
-        publish(CaptureSession(id, event.workoutDate, event.workoutSessionId))
+        publish(CaptureSession(id, startedAtMs, event.workoutDate, event.workoutSessionId))
         debugLog?.log(
             TAG,
             "capture session started",
@@ -500,7 +504,7 @@ class HrCaptureStore(
             debugLog?.log(TAG, "resume skipped: a capture is already running")
             return null
         }
-        publish(CaptureSession(open.sessionId, open.workoutDate, open.workoutSessionId))
+        publish(CaptureSession(open.sessionId, open.startedAtMs, open.workoutDate, open.workoutSessionId))
         // A session being captured into again must not be closed behind the
         // capture's back by a deferred close it left behind earlier. The resume
         // *is* the reattachment the deferred close was standing in for, and only
@@ -515,15 +519,20 @@ class HrCaptureStore(
     }
 
     private suspend fun onAnchor(event: Event.Anchor): Boolean {
-        val id = owned?.sessionId ?: return false
+        // The whole live session, not just its id: an anchor changes the anchor
+        // and nothing else, so the republished value is this one amended rather
+        // than a new one built from the event — which would have to invent a
+        // start instant the anchor never carried. `anchorWorkout` touches the two
+        // anchor columns for the same reason.
+        val live = owned ?: return false
         val rows = session.withWriteLease {
-            sessionDao.anchorWorkout(id, event.workoutDate, event.workoutSessionId)
+            sessionDao.anchorWorkout(live.sessionId, event.workoutDate, event.workoutSessionId)
         }
         if (rows == 0) {
             debugLog?.log(TAG, "workout anchor skipped: the session was no longer open")
             return false
         }
-        publish(CaptureSession(id, event.workoutDate, event.workoutSessionId))
+        publish(live.copy(workoutDate = event.workoutDate, workoutSessionId = event.workoutSessionId))
         scheduleUpload()
         return true
     }

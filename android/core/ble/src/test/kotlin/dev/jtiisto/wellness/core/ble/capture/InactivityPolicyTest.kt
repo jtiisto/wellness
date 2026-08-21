@@ -11,6 +11,9 @@ import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 import kotlin.time.Duration.Companion.minutes
 
+/** A far-future capture start, so it can never be read as a real session's. */
+private const val STARTED_AT = 1_893_456_000_000L
+
 /**
  * When a capture with nothing coming in gives up on itself — the net under a
  * strap that goes flat or is left in a bag, so a dead session cannot hold a
@@ -79,6 +82,9 @@ class HrCaptureStateTest {
         assertEquals(ConnectionState.DISCONNECTED, idle.connectionState)
         assertNull(idle.bpm)
         assertNull(idle.sessionId)
+        // Null exactly when the session id is: nothing is recording, so there is
+        // no instant recording began.
+        assertNull(idle.startedAtMs)
         assertNull(idle.deviceAddress)
         assertNull(idle.deviceName)
         assertNull(idle.detail)
@@ -94,15 +100,16 @@ class HrCaptureStateTest {
     }
 
     @Test
-    @DisplayName("a running session publishes its id and its workout anchor together")
+    @DisplayName("a running session publishes its id, its start and its workout anchor together")
     fun captureSessionIsFolded() {
         val running = HrCaptureState(isRunning = true)
 
         val anchored = running.withCaptureSession(
-            CaptureSession("session-1", workoutDate = "2026-08-10", workoutSessionId = 7L),
+            CaptureSession("session-1", STARTED_AT, workoutDate = "2026-08-10", workoutSessionId = 7L),
         )
 
         assertEquals("session-1", anchored.sessionId)
+        assertEquals(STARTED_AT, anchored.startedAtMs)
         assertEquals("2026-08-10", anchored.workoutDate)
         assertEquals(7L, anchored.workoutSessionId)
     }
@@ -110,9 +117,13 @@ class HrCaptureStateTest {
     @Test
     @DisplayName("a capture started outside a workout publishes no anchor")
     fun unanchoredCaptureLeavesTheFieldsNull() {
-        val state = HrCaptureState(isRunning = true).withCaptureSession(CaptureSession("session-1"))
+        val state = HrCaptureState(isRunning = true)
+            .withCaptureSession(CaptureSession("session-1", STARTED_AT))
 
         assertEquals("session-1", state.sessionId)
+        // The start is not part of the anchor and does not depend on one: a
+        // capture begun from the strap settings has no workout and still began.
+        assertEquals(STARTED_AT, state.startedAtMs)
         assertNull(state.workoutDate)
         assertNull(state.workoutSessionId)
     }
@@ -120,22 +131,29 @@ class HrCaptureStateTest {
     @Test
     @DisplayName("re-anchoring replaces the whole anchor, both halves at once")
     fun anchorIsReplacedWholesale() {
-        val anchored = HrCaptureState(isRunning = true)
-            .withCaptureSession(CaptureSession("s", workoutDate = "2026-08-09", workoutSessionId = 7L))
+        val anchored = HrCaptureState(isRunning = true).withCaptureSession(
+            CaptureSession("s", STARTED_AT, workoutDate = "2026-08-09", workoutSessionId = 7L),
+        )
 
-        val moved = anchored.withCaptureSession(CaptureSession("s", workoutDate = "2026-08-10"))
+        val moved = anchored.withCaptureSession(
+            CaptureSession("s", STARTED_AT, workoutDate = "2026-08-10"),
+        )
 
         assertEquals("2026-08-10", moved.workoutDate)
         // Not left over from the previous anchor: the two halves describe one
         // workout and a mixed pair would name a session that never existed.
         assertNull(moved.workoutSessionId)
+        // The start belongs to the session, not to the anchor, so moving a
+        // capture to another workout must not restart its clock.
+        assertEquals(STARTED_AT, moved.startedAtMs)
     }
 
     @Test
     @DisplayName("no session leaves the last published values alone")
     fun nullSessionChangesNothing() {
-        val anchored = HrCaptureState(isRunning = true)
-            .withCaptureSession(CaptureSession("s", workoutDate = "2026-08-10", workoutSessionId = 7L))
+        val anchored = HrCaptureState(isRunning = true).withCaptureSession(
+            CaptureSession("s", STARTED_AT, workoutDate = "2026-08-10", workoutSessionId = 7L),
+        )
 
         // Clearing here would open a window where the state still says running
         // but has forgotten its workout — exactly the reading that makes End
@@ -153,6 +171,10 @@ class HrCaptureStateTest {
             deviceAddress = "AA:BB",
             deviceName = "HRM-Pro",
             sessionId = "session-1",
+            // The documented invariant: a session that exists began at some
+            // instant, so startedAtMs is null exactly when sessionId is. A
+            // fixture modelling "running" must model that too.
+            startedAtMs = 1_893_456_000_000L,
             signalQuality = SignalQuality(SignalQualityLevel.GOOD, rrCoveragePercent = 98),
             detail = null,
         )

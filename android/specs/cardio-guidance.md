@@ -84,9 +84,14 @@ Both clients receive it for free (raw-blob storage); rendering:
   existing `heartRateData` collector inside `HrCaptureService`, published as
   its own flow beside `HrCaptureState` — never folded into it
   (`HrCaptureState` is scalar-and-conflatable by contract, and a conflating
-  StateFlow would drop beats). Capacity ~64 samples (30 s at per-RR density
-  plus margin), epoch-ms timestamps (legal arithmetic in HR land — data
-  values, not opaque watermarks).
+  StateFlow would drop beats). Capacity ~64 samples — one point per
+  notification, not per RR interval (a notification reports a single BPM
+  however many intervals ride with it), so at the strap's real 1–2 Hz the
+  window holds ≥ 30 s even at the fast end. Epoch-ms timestamps (legal
+  arithmetic in HR land — data values, not opaque watermarks). Writing is
+  licensed per session (`beginSession()` → recorder handle): teardown cancels
+  the collector without joining it, so a superseded recorder's tail write
+  must no-op rather than land in the next session's window.
 
 ## Behavior
 
