@@ -1958,6 +1958,20 @@ textarea:focus-visible,
     border-left: 3px solid var(--accent-warning);
 }
 
+/* Segments line — the cardio target-HR timeline, one mono token per segment
+   (`5:00 125–140 · 3:00 ≤150`). Monospaced and tabular so the durations and bpm
+   line up down a multi-segment session; wraps rather than scrolls, since a VO2
+   timeline is written out segment by segment and can be long. */
+.coach .exercise-segments {
+    margin-bottom: var(--spacing-md);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: var(--font-size-sm);
+    color: var(--text-secondary);
+    font-variant-numeric: tabular-nums;
+    line-height: 1.6;
+    overflow-wrap: anywhere;
+}
+
 /* Prescription line — the OPTIONAL strength modifiers (RPE · load · tempo),
    display-only, in the expanded body. The mandatory sets×reps stay in the header
    (formatTarget). Distinct from the italic guidance note: an upright line with

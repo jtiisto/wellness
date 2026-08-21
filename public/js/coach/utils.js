@@ -120,6 +120,31 @@ export function formatInterval({
 }
 
 /**
+ * Format a cardio target-HR timeline into one compact line, e.g.
+ *   "5:00 125–140 · 3:00 160–175 · 2:00 ≤150"
+ *
+ * One token per segment: its duration as M:SS, then its HR constraint — a
+ * range as `A–B` (en dash), a floor (`hr_min` only) as `≥N`, a ceiling
+ * (`hr_max` only) as `≤N`. The server guarantees at least one of the two and
+ * `hr_min <= hr_max`, so the three cases are exhaustive; a segment that
+ * somehow carries neither shows its duration alone rather than a broken token.
+ *
+ * Returns "" when there is no timeline — the common case, since `segments` is
+ * omitted from the wire unless the plan author wrote one.
+ */
+export function formatSegments(segments) {
+    if (!Array.isArray(segments) || segments.length === 0) return '';
+    const fmt = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+    return segments.map(({ duration_sec: dur, hr_min: min, hr_max: max }) => {
+        const time = fmt(dur || 0);
+        if (min && max) return `${time} ${min}–${max}`;
+        if (min) return `${time} ≥${min}`;
+        if (max) return `${time} ≤${max}`;
+        return time;
+    }).join(' · ');
+}
+
+/**
  * Format exercise target for display. `block` (optional) supplies block-level
  * circuit/interval timing that an interval exercise falls back to when it
  * doesn't carry its own.

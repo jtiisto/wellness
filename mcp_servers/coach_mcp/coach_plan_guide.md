@@ -41,9 +41,11 @@ work / rest timing is **block-level** — put `rounds`, `work_duration_sec`,
  "exercises": [
    {"id": "vo2_1", "name": "VO2 Max Intervals", "type": "interval",
     "target_duration_min": 20,
-    "guidance_note": "4 x (3 min HARD / 2 min easy). HR 160-175"}
+    "guidance_note": "4 x (3 min HARD / 2 min easy). Stay seated on the efforts."}
  ]}
 ```
+Give a cardio exercise a `segments` timeline when you know the target heart
+rates — that is where they belong now, not in the note (see below).
 Shorthand: a block with an `instructions` array (free-form text, no
 `exercises`) still works — the server expands it into a single `duration`
 exercise, or `interval` if the text mentions VO2/HARD. The `exercises` form
@@ -71,6 +73,7 @@ Per-set nuance (e.g. "last set RPE 9", drop sets, AMRAP) still goes in
 {"id": "cardio_1", "name": "Zone 2 Bike", "type": "duration",
  "target_duration_min": 15, "guidance_note": "HR 135-148"}
 ```
+Optionally carries a `segments` target-HR timeline — see below.
 
 ### checklist
 ```json
@@ -92,6 +95,75 @@ block instead — see the cardio/circuit block types above.
 {"id": "hiit_1", "name": "Bike Intervals", "type": "interval",
  "rounds": 4, "work_duration_sec": 30, "rest_duration_sec": 90}
 ```
+Optionally carries a `segments` target-HR timeline — see below.
+
+## Target-HR timelines (`segments`)
+
+`segments` is an optional field on a **`duration` or `interval`** exercise: the
+session's target heart rate over time, as a flat ordered list of segments. It is
+what the Android client's live guidance display draws the strap's heart rate
+against, second by second — so it is the one place HR targets are structured
+data rather than prose.
+
+Mind the derived type: an exercise inside a `circuit`/`power` block that does
+not declare its own `type` becomes `type: "circuit"` and cannot carry
+`segments`. A cardio station in such a block (a rower, a bike) needs an
+explicit `"type": "duration"` to take a timeline.
+
+```json
+{"id": "vo2_1", "name": "VO2 Max Intervals", "type": "interval",
+ "target_duration_min": 26,
+ "segments": [
+   {"duration_sec": 300, "hr_min": 120, "hr_max": 138, "label": "warmup"},
+   {"duration_sec": 180, "hr_min": 158, "hr_max": 172, "label": "hard"},
+   {"duration_sec": 120, "hr_max": 145, "label": "easy"},
+   {"duration_sec": 180, "hr_min": 158, "hr_max": 172, "label": "hard"},
+   {"duration_sec": 120, "hr_max": 145, "label": "easy"},
+   {"duration_sec": 300, "hr_max": 130, "label": "cooldown"}
+ ]}
+```
+
+- `duration_sec` — required, integer seconds >= 1.
+- `hr_min` / `hr_max` — **absolute bpm**, integers >= 1. At least one must be
+  present; when both, `hr_min <= hr_max`. Min only is a **floor** ("at least
+  this hard"), max only a **ceiling** ("no harder than this"), both a **range**.
+- `label` — optional short display string (`"warmup"`, `"hard"`, `"Z2"`). It is
+  rendered in small caps beside the segment, so keep it to a word or two.
+- No other keys are accepted — a misspelled one is rejected rather than
+  silently dropped.
+
+**Write bpm, never a zone name.** Nothing in this system resolves symbolic zones
+— there is no zone table and no stored HRmax — so compute the bpm yourself from
+the athlete's zones at authoring time and put the zone's name in `label` if it
+is worth showing.
+
+**The list is the whole timeline, explicit and in order.** Repeats are written
+out: a 4 × (3 min hard / 2 min easy) session is warmup + eight segments +
+cooldown, as above. Nothing is derived from block `rounds` /
+`work_duration_sec` — those stay as they are for the plan's own display, and an
+exercise with no `segments` simply has no timeline (which is a perfectly normal
+plan; every plan written before this field existed is one).
+
+**A steady-state ride is one segment.** Zone 2 with a floor and a ceiling is a
+single-segment timeline:
+
+```json
+{"id": "cardio_1", "name": "Zone 2 Bike", "type": "duration",
+ "target_duration_min": 45,
+ "segments": [{"duration_sec": 2700, "hr_min": 122, "hr_max": 140, "label": "Z2"}]}
+```
+
+**When an exercise carries `segments`, keep HR out of its `guidance_note`** —
+the numbers are on screen and in the guide, and a note repeating them is a
+second copy that will disagree with the first after the next edit. The note is
+still the place for everything the timeline cannot say (cadence, terrain, how to
+bail out of the last rep).
+
+Segments are settable in the plan JSON, via `add_exercise`, and via
+`update_exercise` (pass `null` or `[]` to clear the timeline). Changing an
+exercise's `type` away from `duration`/`interval` while it carries a timeline
+is rejected unless the same call clears it — pass `"segments": null` alongside
+the type change.
 
 ## Antagonist Pairs / Supersets
 
@@ -238,7 +310,11 @@ when plans are created. This enables cross-session queries.
 3. **Prescription fields**: For strength lifts, put tempo, target RPE, and load
    in their dedicated fields (`tempo`, `target_rpe`, `target_load`; all free-form,
    e.g. `"3-1-1"` / `"6-7"` / `"70%"`) — not in `guidance_note`
-4. **Guidance Notes**: Include rest periods, HR targets, form cues, and per-set
-   nuance (e.g. "last set RPE 9")
-5. **Progressive Overload**: Increase volume/intensity across phases
-6. **Consistent Names**: Use `search_exercises` to find existing exercise names
+4. **Cardio HR targets**: Put them in `segments` (the structured timeline) on
+   `duration` / `interval` exercises, not in prose — that is what the live
+   guidance display reads
+5. **Guidance Notes**: Include rest periods, form cues, and per-set nuance
+   (e.g. "last set RPE 9"); HR targets only for a cardio exercise with no
+   `segments`
+6. **Progressive Overload**: Increase volume/intensity across phases
+7. **Consistent Names**: Use `search_exercises` to find existing exercise names

@@ -306,6 +306,40 @@ def test_migration_7_adds_exposure_on_upgrade(tmp_path):
 
 
 @pytest.mark.unit
+def test_migration_8_adds_segments_json_on_upgrade(tmp_path):
+    """A DB stamped at v7 (pre-timeline) gains `segments_json` on
+    `planned_exercises` at the next init. Plans have no archive, so unlike
+    `exposure` this lands on ONE table — and only there: a log records what the
+    heart rate actually did, never what the plan asked for."""
+    import modules.coach as coach_mod
+    from modules.db import enable_wal, run_migrations
+
+    db_path = tmp_path / "coach.db"
+
+    conn = sqlite3.connect(db_path)
+    enable_wal(conn)
+    run_migrations(conn, coach_mod.MIGRATIONS[:7], label="coach test")
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 7
+    cols_before = {r[1] for r in conn.execute("PRAGMA table_info(planned_exercises)")}
+    assert "segments_json" not in cols_before
+    conn.close()
+
+    # A second init exercises the column_exists guard (idempotent).
+    coach_mod.init_database(DbAccessor(db_path, foreign_keys=True))
+    coach_mod.init_database(DbAccessor(db_path, foreign_keys=True))
+
+    conn = sqlite3.connect(db_path)
+    ver = conn.execute("PRAGMA user_version").fetchone()[0]
+    cols_after = {r[1] for r in conn.execute("PRAGMA table_info(planned_exercises)")}
+    log_cols = {r[1] for r in conn.execute("PRAGMA table_info(exercise_logs)")}
+    conn.close()
+
+    assert "segments_json" in cols_after
+    assert "segments_json" not in log_cols
+    assert ver == len(coach_mod.MIGRATIONS)
+
+
+@pytest.mark.unit
 def test_adopts_existing_unversioned_db(tmp_path):
     """An existing pre-registry DB (full schema, user_version=0) upgrades cleanly:
     guarded migrations are no-ops, the version is stamped forward, and data is

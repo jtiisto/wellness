@@ -321,7 +321,7 @@ The scrub modifier must not steal vertical scroll (guaranteed by `chartScrub`'s 
 
 Golden fixtures (`testdata/golden/trends/`): hand-authored synthetic JSON per endpoint incl. `available:false` variants, the weekly_usage present/absent pair, and a mixed numeric/note-string tracker-values fixture — shapes cross-checked against the server's exact-JSON tests (`test/trends/test_*_endpoint*.py`), values invented, `fixture-` prefix rule for ids/slugs/names per the existing README. **Never copied from any live or dev database.**
 
-Kover: gate stays at 80; full-invocation-only rule applies (CLAUDE.md kover gotcha). Chart composables follow the Phase 5.5 pattern (geometry pure and tested; Canvas draw lambdas thin).
+Kover: gate stays at 85; full-invocation-only rule applies (CLAUDE.md kover gotcha). Chart composables follow the Phase 5.5 pattern (geometry pure and tested; Canvas draw lambdas thin).
 
 ## Dependencies
 

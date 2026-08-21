@@ -118,6 +118,27 @@ data class HookResultDto(
     @SerialName("data") val data: JsonObject? = null,
 )
 
+/**
+ * One step of a cardio exercise's target-HR timeline.
+ *
+ * The server validates the shape before it is ever stored — `durationSec` >= 1,
+ * at least one of the two bounds, `hrMin <= hrMax` when both — so a decoded
+ * segment is already coherent and nothing re-checks it here. The bounds are
+ * **absolute bpm**: no zone is ever resolved on this side, because nothing in
+ * the system knows the athlete's zones (the plan author computed them and may
+ * have put the zone's name in [label]).
+ *
+ * Which bounds are present is the whole meaning: min only is a floor, max only a
+ * ceiling, both a range — which is why they are nullable rather than defaulted.
+ */
+@Serializable
+data class PlanSegmentDto(
+    @SerialName("duration_sec") val durationSec: Int,
+    @SerialName("hr_min") val hrMin: Int? = null,
+    @SerialName("hr_max") val hrMax: Int? = null,
+    @SerialName("label") val label: String? = null,
+)
+
 @Serializable
 data class PlanExerciseDto(
     @SerialName("id") val id: String,
@@ -140,4 +161,12 @@ data class PlanExerciseDto(
     @SerialName("target_load") val targetLoad: String? = null,
     @SerialName("canonical_slug") val canonicalSlug: String? = null,
     @SerialName("items") val items: List<String>? = null,
+    /**
+     * The target-HR timeline, on `duration` / `interval` exercises only.
+     *
+     * Omitted (never null, never `[]`) when the plan has none, which is the
+     * common case — a cardio exercise without one simply has no timeline, and
+     * nothing is derived from the block's `rounds` / `workDurationSec`.
+     */
+    @SerialName("segments") val segments: List<PlanSegmentDto>? = null,
 )

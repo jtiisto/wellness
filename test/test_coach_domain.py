@@ -350,6 +350,221 @@ def test_transform_passes_exposure_through():
     assert "exposure" not in exs[1]
 
 
+# ==================== segments (cardio target-HR timeline) ====================
+
+
+@pytest.mark.unit
+def test_normalize_segments_canonicalizes_a_timeline():
+    """The authority returns each segment rebuilt with only the keys it carries,
+    in a fixed order, so storage is deterministic and the sparse-omit convention
+    holds inside the blob too."""
+    from modules.coach_plans import normalize_segments
+
+    assert normalize_segments([
+        {"hr_max": 150, "duration_sec": 120, "label": "  easy  "},
+        {"duration_sec": 180, "hr_min": 160, "hr_max": 175},
+        {"duration_sec": 300, "hr_min": 125, "label": ""},
+    ]) == [
+        {"duration_sec": 120, "hr_max": 150, "label": "easy"},
+        {"duration_sec": 180, "hr_min": 160, "hr_max": 175},
+        {"duration_sec": 300, "hr_min": 125},
+    ]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("raw", [None, []])
+def test_normalize_segments_absence(raw):
+    """No timeline and an empty timeline are the same thing, and neither may
+    reach the wire as `"segments": []`."""
+    from modules.coach_plans import normalize_segments, segments_to_json
+
+    assert normalize_segments(raw) is None
+    assert segments_to_json(raw, "duration") is None
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("segments,message", [
+    ({"duration_sec": 60, "hr_max": 130}, "must be a list"),   # not a list
+    ([["duration_sec", 60]], "must be an object"),
+    ([{"hr_max": 130}], "missing 'duration_sec'"),
+    ([{"duration_sec": 0, "hr_max": 130}], ">= 1"),
+    ([{"duration_sec": True, "hr_max": 130}], "must be an integer"),
+    ([{"duration_sec": "soon", "hr_max": 130}], "must be an integer"),
+    ([{"duration_sec": 60, "hr_min": False}], "must be an integer"),
+    ([{"duration_sec": 60, "hr_max": 0}], ">= 1"),
+    ([{"duration_sec": 60}], "at least one"),
+    ([{"duration_sec": 60, "hr_min": 150, "hr_max": 140}], "must be <="),
+    ([{"duration_sec": 60, "hr_max": 140, "label": 7}], "must be a string"),
+    ([{"duration_sec": 60, "hr_maxx": 140}], "unknown field"),
+])
+def test_normalize_segments_rejects(segments, message):
+    """The IntervalIntent rules, generalized — booleans are not integers, the
+    floor is 1, one bound at least, min <= max — plus a closed key set: a
+    misspelled `hr_maxx` must fail loudly rather than store a floor-only segment
+    that reads as deliberate."""
+    from modules.coach_plans import normalize_segments
+
+    with pytest.raises(ValueError, match=message):
+        normalize_segments(segments)
+
+
+@pytest.mark.unit
+def test_normalize_segments_names_the_offending_segment():
+    """The index is in the message: a VO2 timeline is a dozen segments long and
+    "some segment is wrong" is not an actionable error for the authoring LLM."""
+    from modules.coach_plans import normalize_segments
+
+    with pytest.raises(ValueError, match=r"segments\[2\]"):
+        normalize_segments([
+            {"duration_sec": 60, "hr_max": 130},
+            {"duration_sec": 60, "hr_max": 130},
+            {"duration_sec": 60},
+        ])
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("ex_type", ["strength", "checklist", "weighted_time", "circuit"])
+def test_segments_rejected_on_non_cardio_types(ex_type):
+    """A timeline describes a continuous stretch of cardio time; a strength or
+    checklist exercise has no clock for it to sit on."""
+    from modules.coach_plans import validate_exercise_segments
+
+    with pytest.raises(ValueError, match="only valid on"):
+        validate_exercise_segments([{"duration_sec": 60, "hr_max": 130}], ex_type)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("ex_type", ["duration", "interval"])
+def test_segments_accepted_on_cardio_types(ex_type):
+    from modules.coach_plans import validate_exercise_segments
+
+    assert validate_exercise_segments([{"duration_sec": 60, "hr_max": 130}], ex_type) == [
+        {"duration_sec": 60, "hr_max": 130},
+    ]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("raw", [None, "", "not json", '{"duration_sec": 60}', "[]"])
+def test_segments_from_json_tolerates_a_hand_edited_row(raw):
+    """Only validated writes reach the column, so an unparseable value is a
+    hand-edited row: the field drops off that one exercise rather than failing
+    the whole day's sync (the journal's `_load_json_list` precedent)."""
+    from modules.coach_plans import segments_from_json
+
+    assert segments_from_json(raw) is None
+
+
+@pytest.mark.unit
+def test_store_plan_round_trips_segments(test_app, tmp_coach_db):
+    """The timeline survives the JSON TEXT column intact and in order, and the
+    cardio exercise beside it that has none omits the key entirely."""
+    plan = {
+        "day_name": "VO2", "total_duration_min": 40,
+        "blocks": [{
+            "block_type": "cardio", "title": "Conditioning",
+            "exercises": [
+                {"id": "vo2", "name": "Bike Intervals", "type": "interval",
+                 "target_duration_min": 16,
+                 "segments": [
+                     {"duration_sec": 300, "hr_min": 121, "hr_max": 137, "label": "warmup"},
+                     {"duration_sec": 180, "hr_min": 159, "hr_max": 174, "label": "hard"},
+                     {"duration_sec": 120, "hr_max": 146, "label": "easy"},
+                 ]},
+                {"id": "walk", "name": "Easy Walk", "type": "duration",
+                 "target_duration_min": 10},
+            ],
+        }],
+    }
+    conn = sqlite3.connect(tmp_coach_db)
+    conn.row_factory = sqlite3.Row
+    sid = store_plan(conn.cursor(), "2026-06-06", plan, modified_by="test")
+    conn.commit()
+    row = conn.execute("SELECT * FROM workout_sessions WHERE id=?", (sid,)).fetchone()
+    got = assemble_plan(conn.cursor(), row)
+    conn.close()
+
+    exs = {e["id"]: e for e in got["blocks"][0]["exercises"]}
+    assert exs["vo2"]["segments"] == plan["blocks"][0]["exercises"][0]["segments"]
+    assert "segments" not in exs["walk"]
+
+
+@pytest.mark.unit
+def test_store_plan_rejects_segments_on_a_strength_exercise(test_app, tmp_coach_db):
+    """validate_plan runs inside store_plan, so the type rule is enforced with
+    the exercise index before any row is written."""
+    plan = {
+        "day_name": "Legs", "total_duration_min": 40,
+        "blocks": [{
+            "block_type": "strength", "title": "Main",
+            "exercises": [
+                {"id": "sq", "name": "Squat", "type": "strength"},
+                {"id": "dl", "name": "Deadlift", "type": "strength",
+                 "segments": [{"duration_sec": 60, "hr_max": 130}]},
+            ],
+        }],
+    }
+    conn = sqlite3.connect(tmp_coach_db)
+    conn.row_factory = sqlite3.Row
+    with pytest.raises(ValueError, match="Exercise 1"):
+        store_plan(conn.cursor(), "2026-06-07", plan, modified_by="test")
+    conn.rollback()
+    written = conn.execute(
+        "SELECT COUNT(*) FROM workout_sessions WHERE date='2026-06-07'"
+    ).fetchone()[0]
+    conn.close()
+    assert written == 0
+
+
+@pytest.mark.unit
+def test_store_plan_accepts_an_empty_timeline_on_any_type(test_app, tmp_coach_db):
+    """`[]` IS absence: it normalizes away before the type gate, so a harmless
+    no-op is legal even on a strength exercise (deep-review fix: the gate
+    used to run first and reject it, which also broke `segments: []` riding a
+    type change away from cardio as a clear)."""
+    plan = {
+        "day_name": "Legs", "total_duration_min": 40,
+        "blocks": [{
+            "block_type": "strength", "title": "Main",
+            "exercises": [
+                {"id": "dl", "name": "Deadlift", "type": "strength",
+                 "segments": []},
+            ],
+        }],
+    }
+    conn = sqlite3.connect(tmp_coach_db)
+    conn.row_factory = sqlite3.Row
+    sid = store_plan(conn.cursor(), "2026-06-21", plan, modified_by="test")
+    conn.commit()
+    row = conn.execute("SELECT * FROM workout_sessions WHERE id=?", (sid,)).fetchone()
+    got = assemble_plan(conn.cursor(), row)
+    stored = conn.execute(
+        "SELECT segments_json FROM planned_exercises WHERE session_id=?", (sid,)
+    ).fetchone()["segments_json"]
+    conn.close()
+    assert stored is None
+    assert "segments" not in got["blocks"][0]["exercises"][0]
+
+
+@pytest.mark.unit
+def test_transform_passes_segments_through():
+    """`segments` is a canonical plan-JSON key, not a raw alias: the raw->formed
+    transform copies it verbatim and never pops it."""
+    from modules.coach_plans import transform_block_plan
+
+    raw = {
+        "theme": "Cardio", "blocks": [{
+            "block_type": "cardio", "title": "Conditioning",
+            "exercises": [
+                {"name": "Zone 2 Bike", "type": "duration", "target_duration_min": 30,
+                 "segments": [{"duration_sec": 1800, "hr_min": 118, "hr_max": 134}]},
+            ],
+        }],
+    }
+    ex = transform_block_plan(raw)["blocks"][0]["exercises"][0]
+
+    assert ex["segments"] == [{"duration_sec": 1800, "hr_min": 118, "hr_max": 134}]
+
+
 @pytest.mark.unit
 def test_log_lean_vs_rich_shapes(coach_seeded_database, tmp_coach_db):
     """§3.15 for logs: both transports share the raw per-exercise core, but the

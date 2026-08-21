@@ -248,6 +248,19 @@ class CoachGoldenFixtureTest {
         assertEquals(40, spin.workDurationSec)
         assertEquals(20, spin.restDurationSec)
         assertNull(spin.targetSets)
+
+        // The target-HR timeline. Which bounds a segment carries is its whole
+        // meaning, so the absent one has to survive the decode as null — a
+        // defaulted 0 would turn a ceiling into a range starting at zero.
+        val segments = spin.segments.orEmpty()
+        assertEquals(listOf(240, 420, 60), segments.map { it.durationSec })
+        assertEquals(listOf(118, 141, null), segments.map { it.hrMin })
+        assertEquals(listOf(132, 154, 124), segments.map { it.hrMax })
+        assertEquals("fixture-steady", segments[1].label)
+        assertNull(segments[2].hrMin)
+        // A plan without a timeline omits the field entirely — never `[]`, never
+        // null — so an exercise that has none decodes to null.
+        assertNull(bench.segments)
     }
 
     @Test

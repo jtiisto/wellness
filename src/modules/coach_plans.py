@@ -55,6 +55,169 @@ def normalize_exposure(value):
     return normalized
 
 
+# Exercise types a target-HR timeline may ride on. `segments` describes a
+# continuous stretch of cardio time, which is the only thing these two types
+# measure; a strength or checklist exercise has no clock for a segment to sit on.
+SEGMENT_EXERCISE_TYPES = ("duration", "interval")
+
+# The whole of a segment. Closed on purpose: a misspelled optional key
+# ("hr_maxx") would otherwise store a floor-only segment that reads as
+# deliberate, which is the same silent-drop trap the MCP `column_map` taught.
+SEGMENT_KEYS = ("duration_sec", "hr_min", "hr_max", "label")
+
+
+def _segment_int(segment, key, context):
+    """One optional positive integer off a segment, or None.
+
+    Mirrors `hr_analysis.intent._optional_positive_int` — the timeline is the
+    persisted generalization of `IntervalIntent`, so it applies that validator's
+    rules verbatim: booleans are not integers (in Python they would otherwise
+    pass as 0/1), anything int() cannot read is rejected, and the floor is 1.
+    Copied rather than imported: `coach_plans` is transport- and module-agnostic
+    by contract and must not reach into the HR package.
+    """
+    raw = segment.get(key)
+    if raw is None:
+        return None
+    if isinstance(raw, bool):
+        raise ValueError(f"{context} '{key}' must be an integer")
+    try:
+        parsed = int(raw)
+    except (TypeError, ValueError):
+        raise ValueError(f"{context} '{key}' must be an integer")
+    if parsed < 1:
+        raise ValueError(f"{context} '{key}' must be >= 1")
+    return parsed
+
+
+def normalize_segments(value, context="segments"):
+    """Validate a cardio target-HR timeline, or None when there isn't one.
+
+    The single validation authority for the field, shared by `validate_plan`
+    (and through it every plan write path) and the MCP exercise editors, exactly
+    as `normalize_exposure` is for `exposure`. Returns the canonical list — each
+    segment rebuilt with only the keys it actually carries, in a fixed order, so
+    storage is deterministic and the sparse-omit wire convention holds inside the
+    blob too.
+
+    An empty list means "no timeline" and yields None: absence is the normal
+    case, and the wire must never carry `"segments": []` for a plan that simply
+    has no timeline.
+
+    The rules (the `IntervalIntent` idiom, generalized):
+    - `duration_sec` — required, integer >= 1.
+    - `hr_min` / `hr_max` — each optional, integer bpm >= 1, at least one
+      present, `hr_min <= hr_max` when both are. Min-only is a floor, max-only a
+      ceiling, both a range. **Absolute bpm always** — nothing in the system
+      resolves a symbolic zone, so the authoring LLM computes the numbers.
+    - `label` — optional short display string; blank is the same as absent.
+    - Unknown keys are rejected rather than dropped (see SEGMENT_KEYS).
+
+    The list is the timeline, flat and in order: a VO2 session's repeats are
+    written out. Nothing is derived from block `rounds`/`work_duration_sec` —
+    a plan without `segments` has no timeline at all.
+
+    Raises ValueError, prefixed with `context`, on the first problem.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, list):
+        raise ValueError(f"{context} must be a list")
+    if not value:
+        return None
+
+    normalized = []
+    for i, segment in enumerate(value):
+        where = f"{context}[{i}]"
+        if not isinstance(segment, dict):
+            raise ValueError(f"{where} must be an object")
+        unknown = set(segment) - set(SEGMENT_KEYS)
+        if unknown:
+            raise ValueError(
+                f"{where} has unknown field(s): {sorted(unknown)}. "
+                f"Allowed: {list(SEGMENT_KEYS)}"
+            )
+        if segment.get("duration_sec") is None:
+            raise ValueError(f"{where} missing 'duration_sec'")
+        duration_sec = _segment_int(segment, "duration_sec", where)
+        hr_min = _segment_int(segment, "hr_min", where)
+        hr_max = _segment_int(segment, "hr_max", where)
+        if hr_min is None and hr_max is None:
+            raise ValueError(f"{where} must have at least one of 'hr_min' / 'hr_max'")
+        if hr_min is not None and hr_max is not None and hr_min > hr_max:
+            raise ValueError(f"{where} 'hr_min' must be <= 'hr_max'")
+
+        label = segment.get("label")
+        if label is not None and not isinstance(label, str):
+            raise ValueError(f"{where} 'label' must be a string")
+        label = label.strip() if label else ""
+
+        out = {"duration_sec": duration_sec}
+        if hr_min is not None:
+            out["hr_min"] = hr_min
+        if hr_max is not None:
+            out["hr_max"] = hr_max
+        if label:
+            out["label"] = label
+        normalized.append(out)
+
+    return normalized
+
+
+def validate_exercise_segments(value, exercise_type, context=""):
+    """The whole timeline rule for one exercise: a legal type, then a valid
+    shape. Returns the canonical list, or None when there is no timeline.
+
+    The type gate lives here rather than inside `normalize_segments` because the
+    MCP editors have to ask it of the type a row *will have* after the update,
+    not the one the caller happened to pass alongside.
+
+    `context` names the offending exercise when the caller has an index to give
+    ("Exercise 3") and is omitted by the single-exercise MCP editors, whose own
+    error wrapper already says which one — the `reject_legacy_pair_suffix`
+    convention.
+    """
+    if value is None:
+        return None
+    if isinstance(value, list) and not value:
+        # An empty list IS absence (`normalize_segments` yields None for it),
+        # and absence is legal on every exercise type — so it short-circuits
+        # ahead of the type gate. Otherwise `segments: []` could not ride a
+        # type change away from cardio to clear the timeline that change
+        # would strand.
+        return None
+    if exercise_type not in SEGMENT_EXERCISE_TYPES:
+        prefix = f"{context}: " if context else ""
+        raise ValueError(
+            f"{prefix}'segments' is only valid on "
+            f"{list(SEGMENT_EXERCISE_TYPES)} exercises, not '{exercise_type}'"
+        )
+    return normalize_segments(value, f"{context} segments".strip())
+
+
+def segments_to_json(value, exercise_type, context=""):
+    """A validated timeline in its storage form: JSON TEXT, or None for absent."""
+    segments = validate_exercise_segments(value, exercise_type, context)
+    return json.dumps(segments) if segments else None
+
+
+def segments_from_json(raw):
+    """A stored timeline back as a list, or None (absent / malformed / not a list).
+
+    Read-side counterpart of `segments_to_json`, mirroring the journal's
+    `_load_json_list`: only validated writes reach the column, so a value that
+    will not parse is a hand-edited row, and dropping the field from one exercise
+    is a better answer than failing the whole day's sync.
+    """
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except (ValueError, TypeError):
+        return None
+    return parsed if isinstance(parsed, list) and parsed else None
+
+
 def reject_legacy_pair_suffix(name, context=""):
     """Raise ValueError if name still uses the deprecated `(Pair X)` suffix."""
     if name and LEGACY_PAIR_SUFFIX_RE.search(name):
@@ -122,6 +285,12 @@ def validate_plan(plan):
                     normalize_exposure(exercise["exposure"])
                 except ValueError as e:
                     raise ValueError(f"Exercise {i}: {e}") from e
+            # Same reasoning as `exposure` one clause up: one authority owns the
+            # timeline's rules, and validating here means every write path
+            # inherits them through store_plan, before a row is written.
+            validate_exercise_segments(
+                exercise.get("segments"), exercise["type"], f"Exercise {i}"
+            )
 
 
 def assemble_plan(cursor, session_row):
@@ -191,6 +360,9 @@ def assemble_plan(cursor, session_row):
                 exercise["target_load"] = er["target_load"]
             if er["canonical_slug"]:
                 exercise["canonical_slug"] = er["canonical_slug"]
+            segments = segments_from_json(er["segments_json"])
+            if segments:
+                exercise["segments"] = segments
 
             if er["exercise_type"] == "checklist":
                 cursor.execute(
@@ -480,8 +652,8 @@ def insert_block(cursor, session_id, position, block):
              target_sets, target_reps, target_duration_min, target_duration_sec,
              rounds, work_duration_sec, rest_duration_sec,
              guidance_note, hide_weight, show_time, superset_group, tempo,
-             target_rpe, target_load, exposure, extra, canonical_slug)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             target_rpe, target_load, exposure, extra, canonical_slug, segments_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, [
             session_id, block_id, exercise_key, j,
             ex.get("name", "Unknown"),
@@ -503,6 +675,12 @@ def insert_block(cursor, session_id, position, block):
             normalize_exposure(ex.get("exposure")),
             json.dumps(ex["extra"]) if ex.get("extra") else None,
             ex.get("canonical_slug"),
+            # `add_block` reaches this writer without going through
+            # `validate_plan`, so the rule is applied here too — the same
+            # belt-and-braces `normalize_exposure` gets two lines up.
+            segments_to_json(
+                ex.get("segments"), ex.get("type", "strength"), f"Exercise {j}"
+            ),
         ])
         exercise_id = cursor.lastrowid
 

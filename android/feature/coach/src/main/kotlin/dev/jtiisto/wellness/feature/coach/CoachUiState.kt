@@ -226,6 +226,11 @@ data class ExerciseRowState(
     val expanded: Boolean,
     val guidanceNote: String?,
     val prescription: List<RxToken>,
+    /**
+     * The cardio target-HR timeline as its one static line, or "" when the
+     * exercise carries none — which is every strength row and most cardio ones.
+     */
+    val segments: String,
     val note: String,
     val entry: EntryWidgetState?,
 )
@@ -531,6 +536,7 @@ private fun buildExerciseRowState(
         expanded = expanded,
         guidanceNote = exercise.guidanceNote?.takeIf { it.isNotBlank() },
         prescription = buildPrescription(exercise),
+        segments = formatSegments(exercise.segments),
         note = logData?.get("user_note").asFieldText(),
         entry = if (expanded) {
             buildEntryWidget(date, exercise, logData, plans, logs, locale)

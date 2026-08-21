@@ -53,7 +53,9 @@ path that would reach them (`last_sync_time` older than 2026-04-18) currently
 answers **HTTP 500** — see the note in the phase report. There was therefore no
 plan to capture, and the spec makes a deterministic server-shaped synthetic
 fixture mandatory in that case, covering every typed field including the
-snake_case wire names and the free-form `"target_rpe":"6-7"`.
+snake_case wire names, the free-form `"target_rpe":"6-7"`, and the cardio
+`segments` timeline (whose three segments deliberately cover a range, a range,
+and a bare ceiling — which bound is absent is the field's whole meaning).
 
 `generate.py` asserts that premise — no plan inside the window — and fails
 loudly if the dev server ever grows one, at which point capture a real plan only

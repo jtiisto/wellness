@@ -6,7 +6,7 @@ import { useState } from 'preact/hooks';
 import htm from 'htm';
 
 import { updateLog, workoutPlans, workoutLogs } from '../store.js';
-import { formatTarget, getExerciseProgress, isExerciseCompleted, buildPrescription } from '../utils.js';
+import { formatTarget, getExerciseProgress, isExerciseCompleted, buildPrescription, formatSegments } from '../utils.js';
 import { findLastPerformance } from '../last-performance.js';
 import { SetEntry } from './SetEntry.js';
 import { CardioEntry } from './CardioEntry.js';
@@ -55,6 +55,9 @@ export function ExerciseItem({ date, exercise, logData, block, isEditable = true
     const progress = getExerciseProgress(exercise, logData);
     const parsed = parseName(exercise.name);
     const prescription = buildPrescription(exercise);
+    // The cardio target-HR timeline, static: the PWA has no live heart rate,
+    // so the line IS the whole of what it can say about the plan's HR targets.
+    const segments = formatSegments(exercise.segments);
 
     const handleNoteChange = (e) => {
         if (!isEditable) return;
@@ -163,6 +166,10 @@ export function ExerciseItem({ date, exercise, logData, block, isEditable = true
                 <div class="exercise-body">
                     ${exercise.guidance_note && html`
                         <div class="guidance-note">${exercise.guidance_note}</div>
+                    `}
+
+                    ${segments && html`
+                        <div class="exercise-segments">${segments}</div>
                     `}
 
                     ${prescription.length > 0 && html`

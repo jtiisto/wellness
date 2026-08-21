@@ -10,7 +10,11 @@ rebinding the captured `db_manager`/`registry`/`config` to `self.*`.
 from typing import Any, Dict, List, Optional
 
 from modules import coach_queries
-from modules.coach_plans import normalize_exposure
+from modules.coach_plans import (
+    SEGMENT_EXERCISE_TYPES,
+    normalize_exposure,
+    segments_to_json,
+)
 
 from ._helpers import _assemble_plan_from_db, _reject_legacy_pair_suffix
 from .database import get_utc_now
@@ -39,11 +43,14 @@ class ExerciseTools:
             updates: Dictionary of fields to update. Can include:
                      name, type, target_sets, target_reps, target_duration_min,
                      guidance_note, items, hide_weight, show_time, tempo,
-                     target_rpe, target_load, exposure
+                     target_rpe, target_load, exposure, segments
                      (`exposure` is the identity key naming which recurring
                      exposure of the movement this is; normalized to UPPER, and
                      None/"" clears it. Already-logged rows are never rewritten —
                      they keep the exposure they were logged with.)
+                     (`segments` is the cardio target-HR timeline — a flat
+                     ordered list of {duration_sec, hr_min?, hr_max?, label?};
+                     `duration`/`interval` exercises only, None/[] clears it.)
 
         Returns:
             Updated exercise and confirmation
@@ -67,6 +74,7 @@ class ExerciseTools:
             "target_rpe": "target_rpe",
             "target_load": "target_load",
             "exposure": "exposure",
+            "segments": "segments_json",
         }
 
         if "name" in updates:
@@ -76,7 +84,8 @@ class ExerciseTools:
             with self.db_manager.transaction() as cursor:
                 # Find the exercise
                 cursor.execute("""
-                    SELECT pe.id, pe.session_id FROM planned_exercises pe
+                    SELECT pe.id, pe.session_id, pe.exercise_type, pe.segments_json
+                    FROM planned_exercises pe
                     JOIN workout_sessions ws ON pe.session_id = ws.id
                     WHERE ws.date = ? AND pe.exercise_key = ?
                 """, [date, exercise_id])
@@ -87,6 +96,27 @@ class ExerciseTools:
 
                 pe_id = row["id"]
                 session_id = row["session_id"]
+                # A timeline is only legal on a cardio exercise, and `type` may
+                # be changing in this very call — so the rule is applied to the
+                # type the row will HAVE, not the one it had.
+                effective_type = updates.get("type", row["exercise_type"])
+                # And the rule binds the row, not just the call: a type change
+                # away from cardio must not strand a stored timeline the update
+                # never mentions — the row would carry segments no validated
+                # write path could have produced. Loud rejection over a silent
+                # auto-clear; the caller either keeps a cardio type or clears
+                # the timeline in the same call.
+                if (
+                    effective_type not in SEGMENT_EXERCISE_TYPES
+                    and "segments" not in updates
+                    and row["segments_json"]
+                ):
+                    raise ValueError(
+                        f"Exercise '{exercise_id}' carries a segments timeline; "
+                        f"changing type to '{effective_type}' would strand it. "
+                        "Clear it in the same call (\"segments\": null or []) "
+                        "or keep a duration/interval type."
+                    )
 
                 # Build UPDATE statement for mapped columns
                 set_clauses = []
@@ -104,6 +134,11 @@ class ExerciseTools:
                             # same key "HEAVY" created elsewhere. None (or a
                             # blank) normalizes to None and clears the column.
                             value = normalize_exposure(value)
+                        elif key == "segments":
+                            # Same story: validated by the one authority, stored
+                            # as the JSON TEXT column. None (or an empty list)
+                            # clears the timeline.
+                            value = segments_to_json(value, effective_type)
                         set_clauses.append(f"{col} = ?")
                         params.append(value)
 
@@ -192,6 +227,12 @@ class ExerciseTools:
 
         _reject_legacy_pair_suffix(exercise["name"])
 
+        # This tool writes its own INSERT rather than going through
+        # `insert_block`, so it does not inherit `validate_plan`'s per-exercise
+        # rules and has to apply the timeline's here — the same reason
+        # `normalize_exposure` is called below rather than trusted.
+        segments_json = segments_to_json(exercise.get("segments"), exercise["type"])
+
         try:
             with self.db_manager.transaction() as cursor:
                 # Get session
@@ -248,8 +289,8 @@ class ExerciseTools:
                      target_sets, target_reps, target_duration_min, target_duration_sec,
                      rounds, work_duration_sec, rest_duration_sec,
                      guidance_note, hide_weight, show_time, superset_group, tempo,
-                     target_rpe, target_load, canonical_slug, exposure)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     target_rpe, target_load, canonical_slug, exposure, segments_json)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, [
                     session_id, block_id, exercise["id"], position,
                     exercise["name"], exercise["type"],
@@ -269,6 +310,7 @@ class ExerciseTools:
                     str(exercise["target_load"]).strip() if exercise.get("target_load") else None,
                     slug,
                     normalize_exposure(exercise.get("exposure")),
+                    segments_json,
                 ])
                 exercise_id = cursor.lastrowid
 

@@ -179,7 +179,7 @@ session_blocks     (id, session_id, position, block_type, title, duration_min,
                     rest_guidance, rounds, work_duration_sec, rest_duration_sec)
 planned_exercises  (id, session_id, block_id, exercise_key, name, exercise_type,
                     targets..., superset_group, tempo, target_rpe, target_load,
-                    exposure, canonical_slug)
+                    exposure, canonical_slug, segments_json)
 checklist_items    (id, exercise_id, position, item_text)
 deleted_plans      (date, deleted_at)  -- tombstones for incremental sync
 ```
@@ -234,6 +234,50 @@ exposure = the slug's single/default exposure, nothing warns, and most exercises
 never carry one. It does not affect `canonical_slug` derivation. Added by
 migration 7 — guarded `ALTER TABLE`s on `planned_exercises`, `exercise_logs`,
 and `exercise_logs_archive` (the archive stays lossless).
+
+`segments` is the optional **target-HR timeline** on a `duration` or `interval`
+exercise: a flat, ordered list of `{duration_sec, hr_min?, hr_max?, label?}`
+describing what the heart rate should be doing, second by second, for the whole
+of that cardio session. It is the first structured representation of an HR target
+anywhere in the coach data model — before it, targets were prose in
+`guidance_note` ("HR 135-148") — and it exists because the Android client draws
+the live strap trace against it (`android/specs/cardio-guidance.md`).
+
+The values are **absolute bpm**, always: nothing in this system resolves a
+symbolic zone (there is no zone table and no stored HRmax), so the authoring LLM
+computes the numbers and may echo the zone's name in `label`. `hr_min` alone is a
+floor, `hr_max` alone a ceiling, both a range; at least one must be present, and
+`hr_min <= hr_max` when both are. `duration_sec` is required and >= 1. The list
+is the whole timeline, explicit and in order — a VO2 session's repeats are
+written out — and **nothing is derived** from block `rounds` /
+`work_duration_sec`: an exercise without `segments` has no timeline and renders
+exactly as it did before the field existed, which is the common case.
+
+Storage is `planned_exercises.segments_json` TEXT (migration 8, guarded
+`ALTER TABLE`) — the journal's `trackers.schedule_json` precedent: a structure
+read and written whole, never queried by row, so a child table would buy nothing.
+`normalize_segments` / `validate_exercise_segments` (`coach_plans.py`) are the
+single validation authority, applying `IntervalIntent`'s rules (booleans are not
+integers, `int()` or reject, floor of 1) to each segment and **rejecting unknown
+keys** rather than dropping them — a misspelled `hr_maxx` would otherwise store a
+floor-only segment that reads as deliberate. An empty list means "no timeline"
+and normalizes to absent, so the wire never carries `"segments": []`. As with
+`exposure`, the authority is shared by `validate_plan` (the point every plan
+write path inherits), plan ingest (`insert_block`, which `add_block` reaches
+without `validate_plan`), and the MCP editors (`add_exercise` /
+`update_exercise`, where `None`/`[]` clears; `update_exercise` checks the type
+the row *will have*, since the same call may be changing it). `assemble_plan`
+emits the parsed list sparsely, and a malformed blob emits nothing rather than
+failing the day's sync (the `_load_json_list` precedent).
+
+Both clients render one static mono line from it in the expanded cardio exercise
+body — `5:00 125–140 · 3:00 160–175 · 2:00 ≤150`, floor as `≥N`, ceiling as
+`≤N`, range with an en dash (`formatSegments` in `coach/utils.js`, its twin in
+Android's `CoachNotation`). The Android client additionally uses it as the
+timeline for the live guidance overlay; the PWA has no live HR and shows only the
+line. Coach golden fixtures are **not** shared between the two stacks
+(`android/testdata/golden/coach/` vs `test/`), so both were updated in the same
+protocol commit.
 
 **A log row inherits the exposure at its first insert and then freezes it.**
 `_store_log` reads it off the planned exercise alongside the canonical slug and

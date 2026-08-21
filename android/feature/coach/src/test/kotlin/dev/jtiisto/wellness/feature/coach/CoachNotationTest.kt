@@ -2,6 +2,7 @@ package dev.jtiisto.wellness.feature.coach
 
 import dev.jtiisto.wellness.core.data.coach.HookAction
 import dev.jtiisto.wellness.core.data.coach.HookButtonState
+import dev.jtiisto.wellness.core.data.coach.PlanSegmentDto
 import dev.jtiisto.wellness.core.data.coach.TallyMarks
 import dev.jtiisto.wellness.core.data.coach.WorkoutStatus
 import dev.jtiisto.wellness.core.ui.theme.LogbookDark
@@ -456,6 +457,73 @@ class CoachNotationTest {
         assertEquals(DayMark.NONE, dayMark(null))
     }
 
+    // ---- the cardio target-HR timeline -------------------------------------------------
+    //
+    // Twin of `test/js/segments.test.js`: the two stacks assert the same strings,
+    // case for case, because one plan renders on both.
+
+    @Test
+    @DisplayName("no timeline renders nothing")
+    fun segmentsAbsent() {
+        assertEquals("", formatSegments(null))
+        assertEquals("", formatSegments(emptyList()))
+    }
+
+    @Test
+    @DisplayName("a range uses an en dash, a floor reads at-least, a ceiling at-most")
+    fun segmentBoundShapes() {
+        assertEquals("5:00 125–140", formatSegments(listOf(segment(300, min = 125, max = 140))))
+        assertEquals("1:30 ≥132", formatSegments(listOf(segment(90, min = 132))))
+        assertEquals("2:00 ≤150", formatSegments(listOf(segment(120, max = 150))))
+    }
+
+    @Test
+    @DisplayName("segments join with a middle dot, in order")
+    fun segmentsJoinInOrder() {
+        assertEquals(
+            "5:00 125–140 · 3:00 160–175 · 2:00 ≤150",
+            formatSegments(
+                listOf(
+                    segment(300, min = 125, max = 140, label = "warmup"),
+                    segment(180, min = 160, max = 175, label = "hard"),
+                    segment(120, max = 150, label = "easy"),
+                ),
+            ),
+        )
+    }
+
+    @Test
+    @DisplayName("durations are M:SS — seconds padded, minutes not, and never wrapped at an hour")
+    fun segmentClockFormat() {
+        assertEquals(
+            "0:05 ≤110 · 1:05 ≤110 · 10:00 ≤110 · 61:01 ≤110",
+            formatSegments(
+                listOf(5, 65, 600, 3661).map { segment(it, max = 110) },
+            ),
+        )
+    }
+
+    @Test
+    @DisplayName("the label is not on the static line — it belongs beside its segment in the guide")
+    fun segmentLabelIsNotDrawnHere() {
+        assertEquals("1:00 ≥140", formatSegments(listOf(segment(60, min = 140, label = "HARD"))))
+    }
+
+    @Test
+    @DisplayName("a segment with neither bound degrades to its duration")
+    fun segmentWithoutBounds() {
+        // The server rejects this shape, so it can only arrive from a
+        // hand-edited row; the line stays readable rather than losing a number.
+        assertEquals("0:45", formatSegments(listOf(segment(45))))
+    }
+
+    @Test
+    @DisplayName("a zero bound is absent, not a bound of zero — the PWA's truthiness")
+    fun segmentZeroBoundIsAbsent() {
+        assertEquals("0:45 ≤130", formatSegments(listOf(segment(45, min = 0, max = 130))))
+        assertEquals("0:45", formatSegments(listOf(segment(45, min = 0, max = 0))))
+    }
+
     // ---- the provenance footer --------------------------------------------------------
 
     @Test
@@ -470,6 +538,9 @@ class CoachNotationTest {
             GhostProvenance(date = "Aug 1", ghostsShowing = false).label,
         )
     }
+
+    private fun segment(durationSec: Int, min: Int? = null, max: Int? = null, label: String? = null) =
+        PlanSegmentDto(durationSec = durationSec, hrMin = min, hrMax = max, label = label)
 
     private companion object {
         const val TODAY = "2026-08-08"

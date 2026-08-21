@@ -3,6 +3,7 @@ package dev.jtiisto.wellness.feature.coach
 import dev.jtiisto.wellness.core.data.coach.HookAction
 import dev.jtiisto.wellness.core.data.coach.HookButtonState
 import dev.jtiisto.wellness.core.data.coach.PlanExerciseDto
+import dev.jtiisto.wellness.core.data.coach.PlanSegmentDto
 import dev.jtiisto.wellness.core.data.coach.TallyMarks
 import dev.jtiisto.wellness.core.data.coach.WorkoutStatus
 import dev.jtiisto.wellness.core.data.coach.shortDatePattern
@@ -297,6 +298,62 @@ fun exerciseRowDescription(
  * string is numeric, which is the trap this exists to avoid.
  */
 fun loadNeedsLabel(value: String): Boolean = value.trimStart().firstOrNull()?.isDigit() != true
+
+// ---- the cardio target-HR timeline ------------------------------------------------------
+
+/** What joins two segments on the static line (U+00B7), matching the PWA's. */
+private const val SEGMENT_SEPARATOR = " · "
+
+/** Range dash (U+2013), floor (U+2265) and ceiling (U+2264) — never `-`/`>=`. */
+private const val RANGE_DASH = "–"
+private const val AT_LEAST = "≥"
+private const val AT_MOST = "≤"
+
+/**
+ * A cardio exercise's whole target-HR timeline as one line:
+ * `"5:00 125–140 · 3:00 160–175 · 2:00 ≤150"`.
+ *
+ * One token per segment — its duration as `M:SS`, then its HR constraint, whose
+ * *shape* is its meaning: a range as `A–B`, a floor (min only) as `≥N`, a
+ * ceiling (max only) as `≤N`. The server guarantees one bound at least, so a
+ * segment carrying neither can only come from a hand-edited row; it degrades to
+ * its duration rather than drawing a token with a missing number.
+ *
+ * The twin of `formatSegments` in the PWA's `coach/utils.js`, asserted against
+ * the same strings on both stacks. Its bound guards are JS-truthy, so a **zero
+ * is absent** here too (`CoachUiLogic`'s spelled-out-truthiness rule): the
+ * server's floor is 1, so a `0` can only be a hand-edited row, and reading it as
+ * "no bound" beats drawing `≥0`. [label] is deliberately not on this line: the
+ * static summary is durations and bpm, and the names belong beside their segment
+ * in the live guide.
+ *
+ * Returns `""` when there is no timeline, which is most plans.
+ */
+fun formatSegments(segments: List<PlanSegmentDto>?): String {
+    if (segments.isNullOrEmpty()) return ""
+    return segments.joinToString(SEGMENT_SEPARATOR) { segment ->
+        val time = segmentClock(segment.durationSec)
+        val min = segment.hrMin?.takeIf { it != 0 }
+        val max = segment.hrMax?.takeIf { it != 0 }
+        when {
+            min != null && max != null -> "$time $min$RANGE_DASH$max"
+            min != null -> "$time $AT_LEAST$min"
+            max != null -> "$time $AT_MOST$max"
+            else -> time
+        }
+    }
+}
+
+/**
+ * `M:SS`, minutes un-padded and seconds padded — `CoachUiLogic`'s interval clock,
+ * which is private to `:core:data` and so cannot be shared across the module
+ * line. A negative duration cannot reach here (the server's floor is 1) and is
+ * clamped rather than rendered as `-1:-5`.
+ */
+private fun segmentClock(seconds: Int): String {
+    val total = seconds.coerceAtLeast(0)
+    return "${total / 60}:${(total % 60).toString().padStart(2, '0')}"
+}
 
 // ---- the set table ---------------------------------------------------------------------
 

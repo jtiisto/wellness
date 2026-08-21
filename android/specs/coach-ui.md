@@ -93,7 +93,7 @@ suspend fun undoWorkoutHook(sessionId: Long, action: HookAction)    // DELETE �
 | `SetGridLogicTest` (:feature:coach) | pad-to-index fillers, whole-array rewrite, ghost placeholder matching by set_num, column shapes wired |
 | `ExtraSessionLogicTest` (:feature:coach) | draft state machine, duration-required save, non-null-only copy, tombstone-renders-as-absent |
 
-Instrumented: none new. Verification: `./gradlew build assembleDebugAndroidTest koverVerifyAggregated` green, coverage ≥ 80 gate; APK to Drive; manual checklist mirrors `test_coach.py` (log a set on today's real plan, start-gate behavior, calendar statuses, extra session on a rest day, feedback fields).
+Instrumented: none new. Verification: `./gradlew build assembleDebugAndroidTest koverVerifyAggregated` green, coverage ≥ 85 gate; APK to Drive; manual checklist mirrors `test_coach.py` (log a set on today's real plan, start-gate behavior, calendar statuses, extra session on a rest day, feedback fields).
 
 ## Dependencies
 

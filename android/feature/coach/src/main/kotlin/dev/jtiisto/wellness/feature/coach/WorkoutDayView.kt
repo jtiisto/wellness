@@ -908,6 +908,10 @@ private fun ExerciseAccordion(
                     PrescriptionMeta(row.prescription)
                 }
 
+                if (row.segments.isNotEmpty()) {
+                    SegmentsMeta(row.segments)
+                }
+
                 when (val entry = body.entry) {
                     is EntryWidgetState.Sets -> SetTable(
                         exerciseId = row.id,
@@ -1072,6 +1076,27 @@ private fun PrescriptionMeta(tokens: List<RxToken>) {
         },
         style = LogbookTheme.type.meta,
         color = palette.inkSoft,
+        modifier = Modifier.padding(bottom = LogbookSpace.grid * 2.5f),
+    )
+}
+
+/**
+ * The cardio target-HR timeline, static, in the prescription line's slot.
+ *
+ * It is a prescription — the same kind of thing as RPE and load, for the kind of
+ * exercise that has no sets to prescribe — so it is set in the same mono meta
+ * face directly under [PrescriptionMeta], never both on one line: they belong to
+ * different exercise families and never co-occur in practice.
+ *
+ * Set in ink rather than ink-soft: unlike a meta line's labels, every character
+ * here is a number the athlete is meant to read.
+ */
+@Composable
+private fun SegmentsMeta(segments: String) {
+    Text(
+        text = segments,
+        style = LogbookTheme.type.meta,
+        color = LogbookTheme.palette.ink,
         modifier = Modifier.padding(bottom = LogbookSpace.grid * 2.5f),
     )
 }

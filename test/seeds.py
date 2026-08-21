@@ -6,12 +6,13 @@ near-duplicate raw-SQL blocks that had already drifted (the e2e copy grew
 supersets and intervals); every coach schema change had to be mirrored by hand.
 Feature flags preserve each caller's exact seeded content.
 """
+import json
 from datetime import datetime, timezone
 
 
 def seed_coach_plan(conn, *, today, yesterday=None, supersets=False,
                     intervals=False, prescription=False, exposures=False,
-                    now=None):
+                    segments=False, now=None):
     """Insert the canonical test plan(s) into an open coach DB connection.
 
     today/yesterday are local-calendar YYYY-MM-DD strings (the browser and the
@@ -24,6 +25,12 @@ def seed_coach_plan(conn, *, today, yesterday=None, supersets=False,
     are written already-normalized (UPPER, trimmed) — this seed goes straight to
     SQL, bypassing the ingest path that owns normalization, so an un-normalized
     spelling here would only prove that SQLite stores what it is given.
+
+    `segments=True` gives the Zone 2 cardio exercise a target-HR timeline and
+    adds a second, segment-less cardio exercise beside it, because "no timeline"
+    is the common case the sparse-omit wire convention has to keep free. Written
+    as already-canonical JSON for the same reason as the exposures above: this
+    seed bypasses the ingest path that owns `normalize_segments`.
 
     All seeded content is INVENTED (this repo is public).
 
@@ -107,9 +114,27 @@ def seed_coach_plan(conn, *, today, yesterday=None, supersets=False,
     cursor.execute("""
         INSERT INTO planned_exercises
         (session_id, block_id, exercise_key, position, name, exercise_type,
-         target_duration_min, guidance_note, exposure)
-        VALUES (?, ?, 'cardio_1', 0, 'Zone 2 Bike', 'duration', 15, 'HR 135-148', ?)
-    """, (s1, b3, "STEADY" if exposures else None))
+         target_duration_min, guidance_note, exposure, segments_json)
+        VALUES (?, ?, 'cardio_1', 0, 'Zone 2 Bike', 'duration', 15, 'HR 135-148', ?, ?)
+    """, (
+        s1, b3,
+        "STEADY" if exposures else None,
+        json.dumps([
+            {"duration_sec": 180, "hr_min": 112, "hr_max": 128, "label": "ease in"},
+            {"duration_sec": 600, "hr_min": 134, "hr_max": 149, "label": "steady"},
+            {"duration_sec": 120, "hr_max": 122, "label": "spin down"},
+        ]) if segments else None,
+    ))
+    if segments:
+        # The other half of the contract: a cardio exercise with no timeline at
+        # all, which must stay absent from the wire rather than emit an empty
+        # list.
+        cursor.execute("""
+            INSERT INTO planned_exercises
+            (session_id, block_id, exercise_key, position, name, exercise_type,
+             target_duration_min)
+            VALUES (?, ?, 'cardio_plain', 2, 'Easy Walk', 'duration', 10)
+        """, (s1, b3))
     if intervals:
         cursor.execute("""
             INSERT INTO planned_exercises

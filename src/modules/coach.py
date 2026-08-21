@@ -383,6 +383,25 @@ def _migration_7_exposure(cursor):
             cursor.execute(f"ALTER TABLE {table} ADD COLUMN exposure TEXT")
 
 
+def _migration_8_planned_exercise_segments(cursor):
+    """Add the optional cardio target-HR timeline (`segments_json`) to planned
+    exercises: a JSON array of `{duration_sec, hr_min?, hr_max?, label?}` in
+    order, validated by `coach_plans.normalize_segments` before it is ever
+    written.
+
+    A TEXT column rather than a child table because the timeline is read and
+    written whole, never queried by row — the journal's `trackers.schedule_json`
+    is the same shape and the same reason. Plans have no archive, so unlike
+    `exposure` this lands on one table only.
+
+    Guarded; existing rows backfill to NULL, which means "no timeline" — the
+    absence is the normal case and stays free (the field is omitted from the
+    wire, and a plan without one renders exactly as it did before).
+    """
+    if not column_exists(cursor, "planned_exercises", "segments_json"):
+        cursor.execute("ALTER TABLE planned_exercises ADD COLUMN segments_json TEXT")
+
+
 MIGRATIONS = [
     (1, _migration_1_baseline),
     (2, _migration_2_block_interval_cols),
@@ -391,6 +410,7 @@ MIGRATIONS = [
     (5, _migration_5_prescription_fields),
     (6, _migration_6_deleted_exercise_logs),
     (7, _migration_7_exposure),
+    (8, _migration_8_planned_exercise_segments),
 ]
 
 

@@ -1891,6 +1891,193 @@ class TestWriteTools:
             )
         assert self._planned_exposure("2099-09-13", "test_ex_1") is None
 
+    # --- segments (cardio target-HR timeline) support ---
+    #
+    # The MCP editors write their own SQL and keep their own `column_map`, whose
+    # unlisted keys are silently DROPPED — so every one of these asserts the
+    # value came back out of the database, not out of the argument dict.
+
+    TIMELINE = [
+        {"duration_sec": 300, "hr_min": 121, "hr_max": 137, "label": "warmup"},
+        {"duration_sec": 180, "hr_min": 159, "hr_max": 174, "label": "hard"},
+        {"duration_sec": 120, "hr_max": 146, "label": "easy"},
+    ]
+
+    def _cardio_plan(self, segments=None):
+        """A cardio block with a timeline-bearing exercise and a plain one."""
+        cardio = {"id": "vo2", "name": "Bike Intervals", "type": "interval",
+                  "target_duration_min": 16}
+        if segments is not None:
+            cardio["segments"] = segments
+        return {
+            "day_name": "Conditioning", "location": "Gym", "phase": "Foundation",
+            "blocks": [{
+                "block_type": "cardio", "title": "Conditioning",
+                "exercises": [
+                    cardio,
+                    {"id": "walk", "name": "Easy Walk", "type": "duration",
+                     "target_duration_min": 10},
+                ],
+            }],
+        }
+
+    def _stored_segments(self, date, exercise_key):
+        """The timeline as the plan reader emits it, straight from the DB."""
+        plans = self.tools["get_workout_plan"](start_date=date, end_date=date)
+        exercises = plans[0]["plan"]["blocks"][0]["exercises"]
+        return next(ex for ex in exercises if ex["id"] == exercise_key).get("segments")
+
+    def test_set_workout_plan_persists_segments(self):
+        self.tools["set_workout_plan"](
+            date="2099-09-14", plan=self._cardio_plan(self.TIMELINE)
+        )
+        assert self._stored_segments("2099-09-14", "vo2") == self.TIMELINE
+        assert self._stored_segments("2099-09-14", "walk") is None
+
+    def test_add_exercise_persists_segments(self):
+        self.tools["set_workout_plan"](date="2099-09-15", plan=self._cardio_plan())
+        self.tools["add_exercise"](
+            date="2099-09-15",
+            exercise={"id": "added", "name": "Zone 2 Bike", "type": "duration",
+                      "target_duration_min": 45,
+                      "segments": [{"duration_sec": 2700, "hr_min": 118, "hr_max": 134}]},
+            block_position=0,
+        )
+        assert self._stored_segments("2099-09-15", "added") == [
+            {"duration_sec": 2700, "hr_min": 118, "hr_max": 134},
+        ]
+
+    def test_add_exercise_rejects_segments_on_a_strength_exercise(self):
+        """`add_exercise` writes its own INSERT and never sees `validate_plan`,
+        so it has to enforce the type rule itself."""
+        self.tools["set_workout_plan"](date="2099-09-16", plan=self._cardio_plan())
+        with pytest.raises(ValueError, match="only valid on"):
+            self.tools["add_exercise"](
+                date="2099-09-16",
+                exercise={"id": "bad", "name": "Back Squat", "type": "strength",
+                          "segments": [{"duration_sec": 60, "hr_max": 130}]},
+                block_position=0,
+            )
+
+    def test_update_exercise_sets_and_clears_segments(self):
+        self.tools["set_workout_plan"](date="2099-09-17", plan=self._cardio_plan())
+        assert self._stored_segments("2099-09-17", "vo2") is None
+
+        self.tools["update_exercise"](
+            date="2099-09-17", exercise_id="vo2", updates={"segments": self.TIMELINE},
+        )
+        assert self._stored_segments("2099-09-17", "vo2") == self.TIMELINE
+
+        self.tools["update_exercise"](
+            date="2099-09-17", exercise_id="vo2", updates={"segments": None},
+        )
+        assert self._stored_segments("2099-09-17", "vo2") is None
+
+    def test_update_exercise_empty_list_clears_segments(self):
+        """An empty timeline is no timeline — it must never be stored as `[]`."""
+        self.tools["set_workout_plan"](
+            date="2099-09-18", plan=self._cardio_plan(self.TIMELINE)
+        )
+        self.tools["update_exercise"](
+            date="2099-09-18", exercise_id="vo2", updates={"segments": []},
+        )
+        assert self._stored_segments("2099-09-18", "vo2") is None
+
+    def test_update_exercise_rejects_segments_on_a_strength_exercise(self):
+        self.tools["set_workout_plan"](date="2099-09-19", plan=self._make_plan())
+        with pytest.raises(ValueError, match="only valid on"):
+            self.tools["update_exercise"](
+                date="2099-09-19", exercise_id="test_ex_1",
+                updates={"segments": [{"duration_sec": 60, "hr_max": 130}]},
+            )
+        assert self._stored_segments("2099-09-19", "test_ex_1") is None
+
+    def test_update_exercise_judges_the_type_the_row_will_have(self):
+        """A single call may change `type` AND set the timeline; the rule has to
+        be applied to the type the row ends up with, both ways round."""
+        self.tools["set_workout_plan"](date="2099-09-20", plan=self._make_plan())
+        self.tools["update_exercise"](
+            date="2099-09-20", exercise_id="test_ex_1",
+            updates={"type": "duration", "segments": self.TIMELINE},
+        )
+        assert self._stored_segments("2099-09-20", "test_ex_1") == self.TIMELINE
+
+        self.tools["set_workout_plan"](
+            date="2099-09-21", plan=self._cardio_plan(self.TIMELINE)
+        )
+        with pytest.raises(ValueError, match="only valid on"):
+            self.tools["update_exercise"](
+                date="2099-09-21", exercise_id="vo2",
+                updates={"type": "strength", "segments": self.TIMELINE},
+            )
+
+    @pytest.mark.parametrize("bad,match", [
+        ([{"duration_sec": 60}], "at least one"),
+        ([{"hr_max": 130}], "missing 'duration_sec'"),
+        ([{"duration_sec": 60, "hr_min": 150, "hr_max": 140}], "must be <="),
+        ([{"duration_sec": 60, "hr_maxx": 140}], "unknown field"),
+    ])
+    def test_update_exercise_rejects_invalid_segments(self, bad, match):
+        self.tools["set_workout_plan"](date="2099-09-22", plan=self._cardio_plan())
+        with pytest.raises(ValueError, match=match):
+            self.tools["update_exercise"](
+                date="2099-09-22", exercise_id="vo2", updates={"segments": bad},
+            )
+        assert self._stored_segments("2099-09-22", "vo2") is None
+
+    def test_update_exercise_type_change_must_not_strand_a_timeline(self):
+        """Changing `type` away from cardio on a row that carries segments is
+        rejected unless the same call clears them — otherwise the stored row
+        would violate the type rule with no write path ever having validated
+        it, and the next assemble would emit segments on a strength exercise."""
+        self.tools["set_workout_plan"](
+            date="2099-09-23", plan=self._cardio_plan(self.TIMELINE)
+        )
+        with pytest.raises(ValueError, match="strand"):
+            self.tools["update_exercise"](
+                date="2099-09-23", exercise_id="vo2", updates={"type": "strength"},
+            )
+        assert self._stored_segments("2099-09-23", "vo2") == self.TIMELINE
+
+    def test_update_exercise_type_change_with_a_clear_is_legal(self):
+        """Both spellings of "no timeline" ride a cardio-to-strength change."""
+        for date, clear in (("2099-09-24", None), ("2099-09-25", [])):
+            self.tools["set_workout_plan"](
+                date=date, plan=self._cardio_plan(self.TIMELINE)
+            )
+            self.tools["update_exercise"](
+                date=date, exercise_id="vo2",
+                updates={"type": "strength", "segments": clear},
+            )
+            assert self._stored_segments(date, "vo2") is None
+
+    def test_add_block_carries_and_gates_segments(self):
+        """`add_block` reaches `insert_block` without `validate_plan` — the
+        same side door `add_exercise` uses. The belt-and-braces inside
+        `insert_block` is what validates here, both directions."""
+        self.tools["set_workout_plan"](date="2099-09-26", plan=self._make_plan())
+        self.tools["add_block"](
+            date="2099-09-26",
+            block={"block_type": "cardio", "title": "Intervals",
+                   "exercises": [{"id": "vo2b", "name": "Bike Intervals",
+                                  "type": "interval", "target_duration_min": 20,
+                                  "segments": self.TIMELINE}]},
+        )
+        plans = self.tools["get_workout_plan"](
+            start_date="2099-09-26", end_date="2099-09-26"
+        )
+        added = plans[0]["plan"]["blocks"][-1]["exercises"][0]
+        assert added["segments"] == self.TIMELINE
+
+        with pytest.raises(ValueError, match="only valid on"):
+            self.tools["add_block"](
+                date="2099-09-26",
+                block={"block_type": "strength", "title": "Bad",
+                       "exercises": [{"id": "bad", "name": "Back Squat",
+                                      "type": "strength",
+                                      "segments": self.TIMELINE}]},
+            )
+
 
 # ==================== Unit 4: Exercise Registry + DB Classes ====================
 
