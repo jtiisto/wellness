@@ -1,8 +1,11 @@
 package dev.jtiisto.wellness.feature.coach.guidance
 
+import dev.jtiisto.wellness.core.data.coach.PlanSegmentDto
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 
@@ -90,7 +93,22 @@ class GuidanceOverlayStateTest {
         assertEquals(0, second[zone2].extensionSec)
     }
 
-    // ---- the footer's one control ------------------------------------------------
+    @Test
+    @DisplayName("+ 5 MIN appends to one key's run, cumulatively, and leaves the holder it came from alone")
+    fun extensionIsCumulativeAndIsolated() {
+        val before = GuidanceRuns().started(zone2, nowMs = 1_000L)
+
+        val after = before.extended(zone2).extended(zone2)
+
+        assertEquals(2 * EXTENSION_STEP_SEC, after[zone2].extensionSec)
+        assertEquals(0, before[zone2].extensionSec)
+        assertEquals(0, after[intervals].extensionSec)
+        // The anchor is untouched: appending time moves the end of the timeline,
+        // never its start.
+        assertEquals(1_000L, after[zone2].startedAtMs)
+    }
+
+    // ---- the footer's two controls ------------------------------------------------
 
     @Test
     @DisplayName("START is offered before a run and after one, and says which it is")
@@ -103,6 +121,78 @@ class GuidanceOverlayStateTest {
     @DisplayName("a run under way offers no START — nothing may silently discard it")
     fun noRestartMidRun() {
         assertNull(startButtonLabel(GuidancePhase.RUNNING))
+    }
+
+    // ---- who may extend --------------------------------------------------------------
+
+    /** A steady ride: one continuous band, the shape the control exists for. */
+    private fun steady(started: Boolean, elapsedMs: Long = 0L, extensionSec: Int = 0) =
+        guidanceStatus(
+            timeline = guidanceTimeline(
+                segments = listOf(PlanSegmentDto(durationSec = 1_800, hrMin = 118, hrMax = 132)),
+                plannedDurationSec = null,
+            ),
+            run = GuidanceRun(startedAtMs = if (started) T0 else null, extensionSec = extensionSec),
+            nowMs = T0 + elapsedMs,
+        )
+
+    @Test
+    @DisplayName("a running steady ride offers + 5 MIN")
+    fun steadyRunOffersTheExtension() {
+        assertTrue(canOfferExtension(steady(started = true, elapsedMs = 600_000)))
+    }
+
+    @Test
+    @DisplayName("a finished steady ride still offers it — that is how a ride carries on past its plan")
+    fun doneStillOffersTheExtension() {
+        val done = steady(started = true, elapsedMs = 1_800_000)
+
+        assertEquals(GuidancePhase.DONE, done.phase)
+        assertTrue(canOfferExtension(done))
+    }
+
+    @Test
+    @DisplayName("READY offers nothing — START would throw the added minutes away")
+    fun readyOffersNoExtension() {
+        val ready = steady(started = false)
+
+        assertEquals(GuidancePhase.READY, ready.phase)
+        assertFalse(canOfferExtension(ready))
+        // And the discard is real, which is why: a run started after being
+        // extended keeps no trace of the extension.
+        assertEquals(0, GuidanceRun(extensionSec = EXTENSION_STEP_SEC).start(T0).extensionSec)
+    }
+
+    @Test
+    @DisplayName("a structured session never offers it, however far into the ride")
+    fun structuredSessionOffersNoExtension() {
+        val status = guidanceStatus(
+            timeline = guidanceTimeline(
+                segments = listOf(
+                    PlanSegmentDto(durationSec = 300, hrMin = 118, hrMax = 132, label = "warmup"),
+                    PlanSegmentDto(durationSec = 180, hrMin = 155, hrMax = 172, label = "hard"),
+                ),
+                plannedDurationSec = null,
+            ),
+            run = GuidanceRun(startedAtMs = T0),
+            nowMs = T0 + 60_000,
+        )
+
+        assertFalse(canOfferExtension(status))
+    }
+
+    @Test
+    @DisplayName("a segmentless ride with a planned length offers it; an open-ended one does not")
+    fun segmentlessNeedsALengthToAppendTo() {
+        val timed = guidanceStatus(
+            timeline = guidanceTimeline(segments = null, plannedDurationSec = 1_800),
+            run = GuidanceRun(startedAtMs = T0),
+            nowMs = T0 + 60_000,
+        )
+        val openEnded = guidanceStatus(GuidanceTimeline.OPEN, GuidanceRun(startedAtMs = T0), T0 + 60_000)
+
+        assertTrue(canOfferExtension(timed))
+        assertFalse(canOfferExtension(openEnded))
     }
 
     // ---- the shell's words ---------------------------------------------------------

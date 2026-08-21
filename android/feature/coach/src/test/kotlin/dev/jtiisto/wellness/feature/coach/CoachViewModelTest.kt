@@ -4,6 +4,8 @@ import dev.jtiisto.wellness.core.ble.capture.HrCaptureController
 import dev.jtiisto.wellness.core.ble.capture.HrCaptureState
 import dev.jtiisto.wellness.core.ble.device.KnownDeviceStorage
 import dev.jtiisto.wellness.core.ble.device.KnownDeviceStore
+import dev.jtiisto.wellness.core.ble.trace.HrTraceRing
+import dev.jtiisto.wellness.core.ble.trace.TraceSample
 import dev.jtiisto.wellness.core.data.coach.CoachSyncStore
 import dev.jtiisto.wellness.core.data.coach.CompletionToggle
 import dev.jtiisto.wellness.core.data.coach.EXTRA_SESSION_KEY
@@ -11,6 +13,7 @@ import dev.jtiisto.wellness.core.data.coach.HookAction
 import dev.jtiisto.wellness.core.data.coach.HookButtonState
 import dev.jtiisto.wellness.core.data.coach.HookResultDto
 import dev.jtiisto.wellness.core.data.coach.PlanDto
+import dev.jtiisto.wellness.core.data.coach.PlanSegmentDto
 import dev.jtiisto.wellness.core.data.coach.TYPE_DURATION
 import dev.jtiisto.wellness.core.data.coach.WorkoutStatusDto
 import dev.jtiisto.wellness.core.data.hr.HrCaptureStore
@@ -164,6 +167,12 @@ class CoachViewModelTest {
 
     private val captureStore = mockk<HrCaptureStore>(relaxed = true)
 
+    /**
+     * The real ring, not a mock: the ViewModel does nothing with it but publish
+     * its flow, and a real one proves that flow is the ring's own.
+     */
+    private val traceRing = HrTraceRing()
+
     /** Records what the UI asked of the capture service, in order. */
     private class FakeCaptureController : HrCaptureController {
         var permitted = true
@@ -199,6 +208,7 @@ class CoachViewModelTest {
         knownStraps = knownStraps,
         capture = capture,
         captureStore = captureStore,
+        traceRing = traceRing,
         today = { today },
         now = { nowMs },
         // The strap refresh is a SharedPreferences read in production; here it
@@ -660,6 +670,7 @@ class CoachViewModelTest {
             knownStraps = knownStraps,
             capture = capture,
             captureStore = captureStore,
+            traceRing = traceRing,
             today = { now },
             io = StandardTestDispatcher(testScheduler),
         )
@@ -1164,6 +1175,85 @@ class CoachViewModelTest {
         assertNull(viewModel.uiState.value.guide?.run?.startedAtMs)
     }
 
+    // ---- + 5 MIN ---------------------------------------------------------------------
+    //
+    // Extension is UI-only by design: the plan's target duration is what
+    // completion is measured against, so raising it mid-ride would un-complete
+    // an exercise the rider had already satisfied. Everything below asserts
+    // that the minutes land on the run and nowhere else.
+
+    @Test
+    @DisplayName("+ 5 MIN appends to the live timeline, cumulatively, and writes nothing")
+    fun extendAppendsToTheRun() = runVmTest { viewModel ->
+        givenCardioPlan()
+        viewModel.openGuide("ex_ride")
+        runCurrent()
+        viewModel.startGuidance()
+        runCurrent()
+
+        viewModel.extendGuidance()
+        viewModel.extendGuidance()
+        runCurrent()
+
+        val guide = viewModel.uiState.value.guide
+        assertEquals(600, guide?.run?.extensionSec)
+        // The plan's own timeline is untouched — half an hour, as authored.
+        assertEquals(1_800, guide?.timeline?.plannedTotalSec)
+        coVerify(exactly = 0) { store.transformLogEntry(any(), any(), any(), any()) }
+    }
+
+    @Test
+    @DisplayName("+ 5 MIN before START does nothing — the anchor would discard it")
+    fun extendBeforeStartIsInert() = runVmTest { viewModel ->
+        givenCardioPlan()
+        viewModel.openGuide("ex_ride")
+        runCurrent()
+
+        viewModel.extendGuidance()
+        runCurrent()
+
+        assertEquals(0, viewModel.uiState.value.guide?.run?.extensionSec)
+    }
+
+    @Test
+    @DisplayName("a structured session cannot be extended, however hard the control is tapped")
+    fun extendRefusesAStructuredSession() = runVmTest { viewModel ->
+        publish(plans = intervalPlan())
+        runCurrent()
+        viewModel.openGuide("ex_intervals")
+        runCurrent()
+        viewModel.startGuidance()
+        runCurrent()
+
+        viewModel.extendGuidance()
+        runCurrent()
+
+        assertEquals(0, viewModel.uiState.value.guide?.run?.extensionSec)
+    }
+
+    @Test
+    @DisplayName("+ 5 MIN with no guide open does nothing at all")
+    fun extendWithoutAGuideIsInert() = runVmTest { viewModel ->
+        givenCardioPlan()
+
+        viewModel.extendGuidance()
+        runCurrent()
+
+        viewModel.openGuide("ex_ride")
+        runCurrent()
+        assertEquals(0, viewModel.uiState.value.guide?.run?.extensionSec)
+    }
+
+    @Test
+    @DisplayName("the trace the guide draws is the ring's own window, published beside the state")
+    fun traceSamplesArePublished() = runVmTest { viewModel ->
+        val recorder = traceRing.beginSession()
+
+        recorder.record(timestampMs = nowMs, bpm = 124)
+
+        assertEquals(listOf(TraceSample(nowMs, 124)), viewModel.traceSamples.value)
+    }
+
     @Test
     @DisplayName("changing the day closes the guide, and it does not spring back open")
     fun changingTheDayClosesTheGuide() = runVmTest { viewModel ->
@@ -1198,6 +1288,30 @@ class CoachViewModelTest {
                             name = "Row Intervals",
                             type = TYPE_DURATION,
                             targetDurationMin = 12,
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    /** A structured session: the shape the extension is deliberately not offered on. */
+    private fun intervalPlan(): Map<DateString, PlanDto?> = mapOf(
+        todayString to plan(
+            blocks = listOf(
+                block(
+                    blockType = "cardio",
+                    exercises = listOf(
+                        exercise(
+                            id = "ex_intervals",
+                            name = "Bike Intervals",
+                            type = TYPE_DURATION,
+                            targetDurationMin = 24,
+                            segments = listOf(
+                                PlanSegmentDto(durationSec = 420, hrMin = 118, hrMax = 134, label = "warmup"),
+                                PlanSegmentDto(durationSec = 180, hrMin = 156, hrMax = 174, label = "hard"),
+                                PlanSegmentDto(durationSec = 240, hrMax = 142, label = "easy"),
+                            ),
                         ),
                     ),
                 ),

@@ -199,6 +199,25 @@ class GuidanceNotationTest {
     }
 
     @Test
+    @DisplayName("the BPM readout draws the bare numeral and speaks the whole sentence")
+    fun bpmReadoutPairs() {
+        val reading = bpmReadout(126)
+
+        assertEquals("126", reading.drawn)
+        assertEquals("Heart rate 126 beats per minute", reading.spoken)
+    }
+
+    @Test
+    @DisplayName("no current beat blanks to the same dash every other empty slot draws")
+    fun bpmReadoutBlanks() {
+        val none = bpmReadout(null)
+
+        assertEquals("—", none.drawn)
+        assertEquals(targetToken(statusAt(listOf(segment(60)), 0)).drawn, none.drawn)
+        assertEquals("No current heart rate", none.spoken)
+    }
+
+    @Test
     @DisplayName("REMAINING ticks in M:SS and says which clock it is counting")
     fun remainingScopeIsSpoken() {
         val inSegment = remaining(statusAt(intervals, elapsedMs = 318_000))

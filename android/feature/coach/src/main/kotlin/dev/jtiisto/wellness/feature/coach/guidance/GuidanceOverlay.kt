@@ -9,10 +9,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -31,8 +29,10 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import dev.jtiisto.wellness.core.ble.trace.TraceSample
 import dev.jtiisto.wellness.core.ui.theme.InkButton
 import dev.jtiisto.wellness.core.ui.theme.InkNotice
+import dev.jtiisto.wellness.core.ui.theme.InkOutlineButton
 import dev.jtiisto.wellness.core.ui.theme.LogbookSpace
 import dev.jtiisto.wellness.core.ui.theme.LogbookTheme
 import kotlinx.coroutines.delay
@@ -50,11 +50,16 @@ import kotlinx.coroutines.delay
  * ## What this file owns, and what it does not
  *
  * The shell and the lifecycle: the eyebrow, the title, the way out, the 1 Hz
- * clock, the capture gate, the footer's elapsed line and its `START`. The
- * instrument itself — the header grammar's three lines, the scrolling window,
- * the session strip and `+ 5 MIN` — lands in [GuidanceInstrumentSlot] and is
- * P3b's; it is left as a hole rather than half-drawn, so nothing has to be
- * unpicked when the real thing arrives.
+ * clock, the capture gate, and the footer — its elapsed line, its `START` and
+ * its `+ 5 MIN`. The instrument itself is [GuidanceInstrument]'s: the header
+ * grammar's three lines, the scrolling window and the session strip, all of
+ * them behind the capture gate because all of them are readings of a stream.
+ *
+ * The extension deliberately sits on the *shell* side of that gate, with the
+ * elapsed line it belongs beside. Appending five minutes is a statement about
+ * the timeline, which runs whether or not a strap is delivering — a rider whose
+ * belt slipped mid-ride can still say "make it five more", and the notice above
+ * says as much in so many words.
  *
  * ## The motion contract
  *
@@ -67,10 +72,13 @@ import kotlinx.coroutines.delay
  * a timeline are different things.
  */
 @Composable
+@Suppress("LongParameterList")
 internal fun GuidanceOverlay(
     state: GuidanceOverlayState,
+    samples: List<TraceSample>,
     onDismiss: () -> Unit,
     onStart: () -> Unit,
+    onExtend: () -> Unit,
     modifier: Modifier = Modifier,
     // The same kind of seam the ViewModel's injected clock is: the tick and
     // the anchor must read the same idea of now, or injected test time and
@@ -86,6 +94,11 @@ internal fun GuidanceOverlay(
 
     val nowMs = guidanceTick(now)
     val status = guidanceStatus(state.timeline, state.run, nowMs)
+    // Fixed for the whole session, and fixed *here* — one domain held above the
+    // tick is what makes "no per-tick rescaling" structural rather than a
+    // promise the painter has to keep. The extension cannot move it either: it
+    // changes when a segment ends, never what the segment asks for.
+    val domain = remember(state.timeline) { bpmDomain(state.timeline) }
 
     Column(
         modifier = modifier
@@ -122,11 +135,17 @@ internal fun GuidanceOverlay(
                     modifier = Modifier.padding(top = LogbookSpace.group),
                 )
             } else {
-                GuidanceInstrumentSlot()
+                GuidanceInstrument(
+                    capture = state.capture,
+                    status = status,
+                    samples = samples,
+                    domain = domain,
+                    nowMs = nowMs,
+                )
             }
         }
 
-        GuideFooter(status = status, onStart = onStart)
+        GuideFooter(status = status, onStart = onStart, onExtend = onExtend)
     }
 }
 
@@ -175,34 +194,21 @@ private fun GuideHeader(state: GuidanceOverlayState, onDismiss: () -> Unit) {
 }
 
 /**
- * Where the instrument goes — P3b.
- *
- * The header grammar (context line, the two live numbers on one baseline, their
- * labels), the scrolling window painter, the session strip and the `+ 5 MIN`
- * control all mount here, gated on exactly what this slot is gated on: a capture
- * that is delivering. Left as air rather than as a placeholder anyone might
- * mistake for a state of the instrument.
- */
-@Composable
-private fun GuidanceInstrumentSlot() {
-    Spacer(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(INSTRUMENT_SLOT_HEIGHT),
-    )
-}
-
-/**
- * `Elapsed 16:18 · of 25:00`, and the way in and out of a run.
+ * `Elapsed 16:18 · of 25:00`, and the two ways a run is steered.
  *
  * The elapsed line is the one number the shell owns: it is a statement about the
  * *timeline*, which exists whether or not a strap is connected, so it keeps
- * ticking through the capture-idle notice above it. `START` sits at the End
- * edge, where P3b's `+ 5 MIN` joins it — the two never contend for the slot,
- * since a run offering an extension is a run that is under way.
+ * ticking through the capture-idle notice above it.
+ *
+ * The controls share the End edge, and only in [GuidancePhase.DONE] are there
+ * two of them — a finished steady ride can be ridden on (`+ 5 MIN`) or ridden
+ * again (`START AGAIN`). The filled button keeps the outer edge there, because
+ * a primary call to action that a hollow one had displaced would read as the
+ * lesser of the two; through the whole of a running ride `+ 5 MIN` stands alone
+ * in that slot, which is the arrangement the spec describes.
  */
 @Composable
-private fun GuideFooter(status: GuidanceStatus, onStart: () -> Unit) {
+private fun GuideFooter(status: GuidanceStatus, onStart: () -> Unit, onExtend: () -> Unit) {
     val palette = LogbookTheme.palette
     val elapsed = elapsedFooter(status)
     Row(
@@ -221,6 +227,9 @@ private fun GuideFooter(status: GuidanceStatus, onStart: () -> Unit) {
                 .weight(1f)
                 .semantics { contentDescription = elapsed.spoken },
         )
+        if (canOfferExtension(status)) {
+            InkOutlineButton(label = GuidanceOverlayCopy.EXTEND, onClick = onExtend)
+        }
         startButtonLabel(status.phase)?.let { label ->
             InkButton(label = label, onClick = onStart)
         }
@@ -286,9 +295,3 @@ private const val DISMISS_GLYPH = "✕"
 
 /** The page margin, matching the day view's own. */
 private val OVERLAY_PADDING = 20.dp
-
-/**
- * The air P3b's instrument fills. Held now so the shell's proportions — title
- * up, footer down — are the ones the device pass will judge.
- */
-private val INSTRUMENT_SLOT_HEIGHT = 240.dp

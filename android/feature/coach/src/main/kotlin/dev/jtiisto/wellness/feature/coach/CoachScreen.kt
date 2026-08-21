@@ -62,6 +62,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.jtiisto.wellness.core.ble.trace.TraceSample
 import dev.jtiisto.wellness.core.data.coach.HookAction
 import dev.jtiisto.wellness.core.data.coach.WorkoutStatus
 import dev.jtiisto.wellness.core.ui.SyncStatusIndicator
@@ -71,6 +72,7 @@ import dev.jtiisto.wellness.core.ui.theme.LogbookShapes
 import dev.jtiisto.wellness.core.ui.theme.LogbookSpace
 import dev.jtiisto.wellness.core.ui.theme.LogbookTheme
 import dev.jtiisto.wellness.feature.coach.guidance.GuidanceOverlay
+import kotlinx.coroutines.flow.StateFlow
 import org.koin.androidx.compose.koinViewModel
 
 /**
@@ -104,6 +106,7 @@ class CoachActions(
     val onOpenGuide: (String) -> Unit,
     val onDismissGuide: () -> Unit,
     val onStartGuidance: () -> Unit,
+    val onExtendGuidance: () -> Unit,
 )
 
 /**
@@ -153,12 +156,16 @@ fun CoachScreen(viewModel: CoachViewModel = koinViewModel()) {
             onOpenGuide = viewModel::openGuide,
             onDismissGuide = viewModel::dismissGuide,
             onStartGuidance = viewModel::startGuidance,
+            onExtendGuidance = viewModel::extendGuidance,
         )
     }
 
     val strapPrompt by viewModel.strapPrompt.collectAsStateWithLifecycle()
 
-    CoachContent(state = state, actions = actions)
+    // The flow itself, not its value: collecting it here would keep a
+    // once-a-second window alive behind a screen whose guide is shut. It is
+    // collected inside the overlay's own composition instead.
+    CoachContent(state = state, actions = actions, traceSamples = viewModel.traceSamples)
 
     strapPrompt?.let { prompt ->
         ConnectStrapSheet(
@@ -171,7 +178,11 @@ fun CoachScreen(viewModel: CoachViewModel = koinViewModel()) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun CoachContent(state: CoachUiState, actions: CoachActions) {
+private fun CoachContent(
+    state: CoachUiState,
+    actions: CoachActions,
+    traceSamples: StateFlow<List<TraceSample>>,
+) {
     val palette = LogbookTheme.palette
     // Local because it is a view of state that already exists: the sheet can
     // only be open while there is a capture to describe, and `state.hr` going
@@ -229,10 +240,19 @@ private fun CoachContent(state: CoachUiState, actions: CoachActions) {
         // dismiss, a day change, an exercise leaving the plan — is what takes it
         // down. The run behind it lives in the ViewModel and survives all three.
         state.guide?.let { guide ->
+            // Subscribed exactly here, which is exactly while the guide is up:
+            // this lambda is composed only when there is an overlay to draw, so
+            // the ring has no collector at all behind a closed guide, and the
+            // lifecycle-aware collection drops it again when the app leaves the
+            // foreground. Nothing is lost by either — every emission is the
+            // whole window, so the next one contains what a missed one held.
+            val samples by traceSamples.collectAsStateWithLifecycle()
             GuidanceOverlay(
                 state = guide,
+                samples = samples,
                 onDismiss = actions.onDismissGuide,
                 onStart = actions.onStartGuidance,
+                onExtend = actions.onExtendGuidance,
             )
         }
     }

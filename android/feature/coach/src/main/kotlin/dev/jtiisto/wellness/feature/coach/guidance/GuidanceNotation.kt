@@ -142,6 +142,26 @@ fun targetToken(status: GuidanceStatus): GuidanceLine {
 }
 
 /**
+ * The header's other live number: the heart rate itself.
+ *
+ * The drawn half is the bare numeral — the unit is chrome the header sets
+ * beside it once, and a number that carried its own unit could not share a
+ * baseline with the countdown opposite. A null reading draws the same em dash
+ * every other empty slot in this file draws, which is also the character the
+ * BPM chip shows when a capture has had no beat yet: the guide and the chip
+ * blank identically, because they are blanking for the same reason.
+ *
+ * What null *means* here is [currentReading]'s decision, not this one — this
+ * only says how the two cases are spelled. "No current heart rate" rather than
+ * "no heart rate": the strap may be perfectly alive and merely quiet, and the
+ * tone dot beside this number is the surface that reports on the link.
+ */
+fun bpmReadout(bpm: Int?): GuidanceLine {
+    if (bpm == null) return GuidanceLine(EM_DASH, "No current heart rate")
+    return GuidanceLine(bpm.toString(), "Heart rate $bpm beats per minute")
+}
+
+/**
  * The `REMAINING` number: mono `M:SS`, so it ticks in place.
  *
  * What it counts down is the current **segment** when there are several and the

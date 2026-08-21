@@ -61,6 +61,19 @@ data class GuidanceRuns(private val runs: Map<GuidanceKey, GuidanceRun> = emptyM
      */
     fun started(key: GuidanceKey, nowMs: Long): GuidanceRuns =
         GuidanceRuns(runs + (key to this[key].start(nowMs)))
+
+    /**
+     * Append another five minutes to [key]'s live timeline.
+     *
+     * Cumulative, and a pure map update like [started] — **the eligibility rule
+     * is not here**. Whether a run may be extended at all is a question about
+     * the phase and the shape of the timeline ([canOfferExtension]), and the
+     * ViewModel asks it against resolved state on every tap, exactly as it asks
+     * the phase before anchoring. Policing it in two places is how the two
+     * answers start to differ.
+     */
+    fun extended(key: GuidanceKey): GuidanceRuns =
+        GuidanceRuns(runs + (key to this[key].extend()))
 }
 
 /**
@@ -110,6 +123,30 @@ fun startButtonLabel(phase: GuidancePhase): String? = when (phase) {
     GuidancePhase.DONE -> "Start again"
 }
 
+/**
+ * Whether the footer offers `+ 5 MIN`.
+ *
+ * Two conditions, and the interesting one is the phase.
+ *
+ * **Shape** is the spec's rule, and it is [GuidanceStatus.canExtend]'s: the
+ * steady-state ride — one continuous band, or none at all — with a length to
+ * append to. A structured session is a plan someone wrote in parts, and
+ * stretching its last part mid-ride is not what "five more minutes" means to
+ * the rider looking at four hard intervals.
+ *
+ * **Phase** is this function's own addition, and it excludes
+ * [GuidancePhase.READY] for a reason the value types make plain:
+ * [GuidanceRun.start] discards the extension along with the old anchor, so five
+ * minutes added *before* START would be silently thrown away by the very next
+ * tap the rider is expected to make. A control whose effect the next control
+ * erases is worse than an absent one. [GuidancePhase.DONE] keeps it: appending
+ * to a finished timeline is exactly how a Zone 2 ride carries on past its plan,
+ * and because DONE is derived rather than latched, the timeline simply becomes
+ * unfinished again.
+ */
+fun canOfferExtension(status: GuidanceStatus): Boolean =
+    status.phase != GuidancePhase.READY && status.canExtend
+
 /** The overlay shell's own words, gathered where a test can hold them. */
 object GuidanceOverlayCopy {
 
@@ -120,6 +157,15 @@ object GuidanceOverlayCopy {
     fun openDescription(exerciseName: String): String = "Open the guide for $exerciseName"
 
     const val DISMISS = "Close guide"
+
+    /**
+     * The extension control, drawn mono-caps by the button.
+     *
+     * Says what it does, not what it produces: the cumulative total lives in
+     * the context line's `EXTENDED · +N:00`, so the button can stay the same
+     * five minutes on the third tap as on the first.
+     */
+    const val EXTEND = "+ 5 min"
 
     /**
      * What stands where the instrument would be when nothing is recording.

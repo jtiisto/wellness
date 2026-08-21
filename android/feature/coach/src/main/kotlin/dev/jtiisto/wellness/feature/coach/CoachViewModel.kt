@@ -5,6 +5,8 @@ import androidx.lifecycle.viewModelScope
 import dev.jtiisto.wellness.core.ble.capture.HrCaptureController
 import dev.jtiisto.wellness.core.ble.capture.HrCaptureState
 import dev.jtiisto.wellness.core.ble.device.KnownDeviceStore
+import dev.jtiisto.wellness.core.ble.trace.HrTraceRing
+import dev.jtiisto.wellness.core.ble.trace.TraceSample
 import dev.jtiisto.wellness.core.data.coach.CoachSyncStore
 import dev.jtiisto.wellness.core.data.coach.CompletionToggle
 import dev.jtiisto.wellness.core.data.coach.EXTRA_SESSION_KEY
@@ -19,6 +21,7 @@ import dev.jtiisto.wellness.core.data.sync.SyncScheduler
 import dev.jtiisto.wellness.feature.coach.guidance.GuidanceKey
 import dev.jtiisto.wellness.feature.coach.guidance.GuidancePhase
 import dev.jtiisto.wellness.feature.coach.guidance.GuidanceRuns
+import dev.jtiisto.wellness.feature.coach.guidance.canOfferExtension
 import dev.jtiisto.wellness.feature.coach.guidance.guidanceStatus
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -60,6 +63,7 @@ class CoachViewModel(
     private val knownStraps: KnownDeviceStore,
     private val capture: HrCaptureController,
     private val captureStore: HrCaptureStore,
+    traceRing: HrTraceRing,
     private val today: () -> LocalDate = LocalDate::now,
     /**
      * The wall clock a guidance run is anchored at.
@@ -89,6 +93,18 @@ class CoachViewModel(
     private val guideKey = MutableStateFlow<GuidanceKey?>(null)
 
     private val guidanceRuns = MutableStateFlow(GuidanceRuns())
+
+    /**
+     * The live trace, straight from the ring — **not** part of [uiState].
+     *
+     * A window of beats arrives once or twice a second, and folding it into the
+     * state would rebuild the whole Coach tab at that rate to move one polyline
+     * inside an overlay that is usually closed. So it is published beside the
+     * state, for the same reason the overlay's per-second instant deliberately
+     * never enters it, and the guide is the only thing that ever collects it —
+     * inside the composition that draws it, so a closed guide collects nothing.
+     */
+    val traceSamples: StateFlow<List<TraceSample>> = traceRing.samples
 
     private val _strapPrompt = MutableStateFlow<StrapPrompt?>(null)
 
@@ -313,6 +329,27 @@ class CoachViewModel(
         val phase = guidanceStatus(guide.timeline, guide.run, nowMs).phase
         if (phase == GuidancePhase.RUNNING) return
         guidanceRuns.update { it.started(guide.key, nowMs) }
+    }
+
+    /**
+     * Append five minutes to the open guide's live timeline — and to nothing
+     * else.
+     *
+     * The plan's `target_duration_min` is untouched, deliberately: raising it
+     * mid-ride would un-complete an exercise the rider had already satisfied,
+     * which is the recorded trap that made the extension UI-only. The log
+     * records the minutes actually ridden, as it always has.
+     *
+     * Guarded exactly as [startGuidance] is, and for the same reason — the
+     * button's absence is not a guard. [canOfferExtension] is asked against
+     * resolved state and this pass's clock, so a tap that lands after the
+     * timeline stopped being extensible does nothing.
+     */
+    fun extendGuidance() {
+        val guide = uiState.value.guide ?: return
+        val status = guidanceStatus(guide.timeline, guide.run, now())
+        if (!canOfferExtension(status)) return
+        guidanceRuns.update { it.extended(guide.key) }
     }
 
     // ---- workout hooks --------------------------------------------------------

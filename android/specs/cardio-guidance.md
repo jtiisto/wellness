@@ -159,10 +159,52 @@ Both clients receive it for free (raw-blob storage); rendering:
      neighbor's text width;
   3. their small mono-caps labels beneath, same columns:
      `TARGET <floor/ceiling/range>` · `REMAINING`.
+
+  *(Clarified 2026-08-21, P3b: "one type size per line" binds the line
+  **roles** — context, numerals, labels — against the v1 jumble of mixed
+  display/mono sizes sharing a line. The numeral line's subordinate **marks**
+  ride its shared baseline at their own smaller sizes, exactly as the
+  approved mockup draws them — hero 42px, unit 12px, and the bang likewise
+  subordinate. A mark is not a number; the rule's teeth are the fixed
+  columns and the shared baseline.)*
 - Below the chart: the whole-session strip (segments as blocks — filled
   done, ink current, outlined ahead, dashed appended extension; cursor
   hairline) with a mono session summary line above it; footer: elapsed/total
   Start, `+ 5 MIN` ink-outline button End (Zone 2 only).
+
+### The instrument, as built (P3b resolutions)
+
+What building the header, the window and the strip settled that the section
+above left open.
+
+- **The readout is the newest *drawn* beat**, taken from the window model rather
+  than from `HrCaptureState.bpm`, and it blanks to the chip's own `—` after
+  three seconds of silence (`TRACE_GAP_THRESHOLD_MS`, the same threshold that
+  breaks the trace). One rule, so the number, the open dot, the mono bang and
+  the spoken verdict are four renderings of one beat instead of four
+  computations. The stricter-than-the-watchdog blanking is deliberate: the
+  capture stack's liveness timer asks whether the *link* died, while a number
+  standing over a visible gap would be contradicted by the chart underneath it.
+  The tone dot beside it still reports the link, unchanged.
+- **`+ 5 MIN` is offered only after `START`** (`canOfferExtension`: not
+  `READY`, plus the spec's steady-state shape). Anchoring a run discards its
+  extension by design, so minutes added before `START` would be silently thrown
+  away by the very next tap; `DONE` keeps the control, which is how a ride
+  carries on past its plan. It sits in the **footer**, outside the capture gate,
+  with the elapsed line it is a statement about — a rider whose belt slipped can
+  still add five minutes.
+- **Only the approaching band is captioned.** The band being held is named by
+  the header's `TARGET` slot, and captioning it too would be the same
+  instruction twice at two type sizes.
+- **Marks are sparse**: an open dot for every out-of-band beat, one filled dot
+  on the newest in-band beat, and the bang beside the newest beat while it is
+  out. A dot per sample is a bead curtain to read a line through.
+- **The strip and its caption are one semantics node**, carrying the caption's
+  spoken twin: the strip is a picture of that sentence, and the only fact it
+  adds — where the cursor stands — is already spoken by the footer.
+- The header grammar, the window and the strip are all inside the **capture
+  gate** (P3a's slot): every one of them is a reading of a stream, and the
+  notice that replaces them says the timeline below keeps running.
 
 ### Zone 2 and extension
 

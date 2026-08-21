@@ -10,6 +10,13 @@ has landed**: Graphite Signal is gone from the tree (theme, palette, defaults,
 type/shape/space, module accents, the dual-system shell), `design-system.md` is
 deleted, and the app draws in one design language. The whole app is Logbook.
 
+**Amended 2026-08-21** by the cardio guide (`cardio-guidance.md`), which needed
+two things the four rounds never had: a **motion** rule, because it is the first
+surface that draws while something happens, and a **live instrument's**
+vocabulary. Both are sections at the end, added rather than woven in — the
+Round 4 resolutions' precedent, so a completed round stays readable as what it
+was.
+
 ## Goal
 
 Replace Graphite Signal as the app's design language with **Logbook** — a
@@ -878,6 +885,73 @@ The judgement calls the retirement itself needed.
    glyph that identifies a control is non-text contrast, not decoration. A
    *disabled* control keeps `inkFaint` — an inactive component is exempt, and
    fading is how it says so.
+
+## Motion (amendment, 2026-08-21 — the system's first motion rule)
+
+Added by the cardio guide, which is the first surface in this app that draws
+something *while it happens*. Nothing in Rounds 1–4 moved on its own: every
+animation in the tree is a transition between two states a user asked for
+(the accordion's expand, the sheet's slide), and the one component that ever
+ran a continuous clock — `SyncStatusDot` — carries a comment recording what
+that cost. The rule below is what makes a live instrument legal without
+reopening that.
+
+1. **A paper instrument ticks; it does not glide.** A live display advances in
+   **discrete one-second steps**, driven by one clock for the whole surface, so
+   every number on it changes on the same step. No interpolation, no easing, no
+   per-value animation — a value that slid between two readings would be
+   drawing a measurement nobody took.
+2. **Nothing animates while it is not composed.** The clock is a
+   `LaunchedEffect` keyed on the composition and nothing else, so it exists
+   exactly as long as the thing it drives is on screen. This is not an
+   optimisation: a permanent frame clock standing beside a `KEEP_SCREEN_ON`
+   flag is a battery contract, and the composition is the only lifetime that
+   cannot outlive what the user is looking at.
+3. **A live chart's axis never moves.** Its domain is fixed once, for the whole
+   session, from the plan rather than from the data. Scrolling is the only
+   motion permitted inside the plot: an axis that re-fitted itself would be a
+   ruler moving under a reading, and the trace's own shape would stop meaning
+   anything between two ticks.
+4. **Geometry stays pure, ink stays in the painter.** The motion is a new
+   `nowMs` handed to the same pure model function (the `PlotModel` → `drawPlot`
+   seam), never state accumulated in a composable. Nothing about *what moves* is
+   decided below the model.
+
+## Components — Cardio guide (amendment, 2026-08-21)
+
+A full-canvas paper overlay over the Coach day, drawn while a strap capture is
+delivering: the live HR trace against the plan's target band. Its committed
+contract is [cardio-guidance.md](cardio-guidance.md) — this section only records
+what it adds to the design system's own vocabulary.
+
+- **The header grammar** (binding user feedback, and the reusable part): between
+  a title and an instrument, **one type size per line** — a mono-caps context
+  line, then the live numbers on **one shared baseline** at fixed Start/End
+  edges, then their small mono-caps labels in the same columns. No number's
+  position may depend on a neighbour's text width; the numerals are mono, so
+  they tick in place. The one size the ramp does not name — the arm's-length
+  numeral — is a `copy()` at the callsite, per the `LogbookTypography` two-forms
+  convention, not a ninth role.
+- **Bands, grid and dashes are the Trends vocabulary verbatim**: faint `rule`
+  wash bounded by `ruleStrong` hairlines, hairline gridlines with mono
+  `inkFaint` tick labels, the guide dash for a reference line. The one addition
+  is the **open-edged band**: a floor-only target is open-topped and a
+  ceiling-only one open-bottomed, and the missing hairline *is* the instruction
+  — unlike a Trends band, which clamps a missing bound to the plot edge.
+- **Judgment stays ink** (Variant A, user-chosen 2026-08-21): a reading outside
+  its target is an **open dot** plus the mono `!`, on the chart and beside the
+  readout. The live-signal exception keeps its closed consumer set — the only
+  colour on this screen is the strap's own `HrToneDot`, meaning what it has
+  always meant.
+- **The session strip** is a new mark: one block per segment across the whole
+  ride — solid ink for the one being ridden, solid faint behind it, outlined
+  ahead, **outlined and dashed** for time appended mid-session — with a cursor
+  hairline. The dash means what the Trends means made it mean: derived, not
+  planned.
+- It is one caption and one picture, so it is **one semantics node**; the chart
+  is another, carrying what the instrument *reads* rather than what it looks
+  like. The drawn/spoken pair convention is `GuidanceNotation`'s, which is
+  `CoachNotation`'s.
 
 ## Behavior
 
