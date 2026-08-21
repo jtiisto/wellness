@@ -5,9 +5,14 @@
 #   * android/** sources/build/goldens -> change-scoped ./gradlew testDebugUnitTest
 #                                         (Gradle skips up-to-date modules)
 #   * server/PWA non-docs paths        -> fast pytest slice + coverage + JS units
+#                                         + version.json stamp (SW cache-bust
+#                                         token — bumped only when the deployed
+#                                         artifact can differ; docs/android-only
+#                                         commits keep the previous stamp and so
+#                                         stay out of the pre-push server gate)
 #   * docs-only commit                 -> doc-lint only
 #   * EVERY commit                     -> personal-data scan (repo is PUBLIC),
-#                                         doc-lint, version.json stamp
+#                                         doc-lint
 set -e
 
 cd "$(git rev-parse --show-toplevel)" || exit 1
@@ -45,14 +50,21 @@ echo "Running doc-lint..."
 # claims) at commit time instead of a 10-minute pre-push round trip.
 python3 -m pytest test/integration/test_doc_lint.py -q 2>&1
 
-# Stamp version.json with build date.
-BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-VERSION_FILE="public/version.json"
+# Stamp version.json with build date — but only when the commit touches
+# server/PWA content. buildDate is the service-worker cache-bust token
+# (server.py derives the SW cache key from it), so a commit that cannot
+# change the deployed artifact must not bump it: clients would re-download
+# an identical app shell, and the stamp would drag every docs-only or
+# android-only push into the pre-push hook's full server gate.
+if [[ -n "$server_changed" ]]; then
+    BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    VERSION_FILE="public/version.json"
 
-cat > "$VERSION_FILE" <<EOF
+    cat > "$VERSION_FILE" <<EOF
 {"buildDate":"${BUILD_DATE}"}
 EOF
 
-git add "$VERSION_FILE"
+    git add "$VERSION_FILE"
+fi
 
 echo "Pre-commit checks passed."
