@@ -3,6 +3,7 @@ package dev.jtiisto.wellness.feature.coach
 import dev.jtiisto.wellness.core.data.coach.PlanBlockDto
 import dev.jtiisto.wellness.core.data.coach.PlanDto
 import dev.jtiisto.wellness.core.data.coach.PlanExerciseDto
+import dev.jtiisto.wellness.core.data.coach.PlanSegmentDto
 import dev.jtiisto.wellness.core.data.coach.TYPE_STRENGTH
 import dev.jtiisto.wellness.core.data.journal.journalNumberJson
 import kotlinx.serialization.json.JsonArray
@@ -27,6 +28,7 @@ internal fun exercise(
     hideWeight: Boolean? = null,
     showTime: Boolean? = null,
     guidanceNote: String? = null,
+    segments: List<PlanSegmentDto>? = null,
 ): PlanExerciseDto = PlanExerciseDto(
     id = id,
     name = name,
@@ -41,6 +43,23 @@ internal fun exercise(
     exposure = exposure,
     canonicalSlug = canonicalSlug,
     items = items,
+    segments = segments,
+)
+
+/**
+ * One timeline step. Bounds are absolute bpm and **invented** — never a number
+ * off a real ride, and the far-future dates around them say the same thing.
+ */
+internal fun segment(
+    durationSec: Int,
+    hrMin: Int? = null,
+    hrMax: Int? = null,
+    label: String? = null,
+): PlanSegmentDto = PlanSegmentDto(
+    durationSec = durationSec,
+    hrMin = hrMin,
+    hrMax = hrMax,
+    label = label,
 )
 
 internal fun block(

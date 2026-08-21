@@ -16,6 +16,10 @@ import dev.jtiisto.wellness.core.data.hr.HrCaptureStore
 import dev.jtiisto.wellness.core.data.network.CoachApi
 import dev.jtiisto.wellness.core.data.network.DateString
 import dev.jtiisto.wellness.core.data.sync.SyncScheduler
+import dev.jtiisto.wellness.feature.coach.guidance.GuidanceKey
+import dev.jtiisto.wellness.feature.coach.guidance.GuidancePhase
+import dev.jtiisto.wellness.feature.coach.guidance.GuidanceRuns
+import dev.jtiisto.wellness.feature.coach.guidance.guidanceStatus
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -57,12 +61,34 @@ class CoachViewModel(
     private val capture: HrCaptureController,
     private val captureStore: HrCaptureStore,
     private val today: () -> LocalDate = LocalDate::now,
+    /**
+     * The wall clock a guidance run is anchored at.
+     *
+     * Epoch milliseconds, and legal arithmetic for the reason the whole HR stack
+     * records: this is a data value off the phone's own clock, not a server
+     * watermark. Injected for the same reason [today] is — a clock a test cannot
+     * name is a clock a test cannot assert against.
+     */
+    private val now: () -> Long = System::currentTimeMillis,
     private val io: CoroutineDispatcher = Dispatchers.IO,
 ) : ViewModel() {
 
     private val selectedDate = MutableStateFlow(today().toString())
     private val viewMonth = MutableStateFlow(monthOf(selectedDate.value))
     private val expandedExercises = MutableStateFlow(emptySet<String>())
+
+    /**
+     * Which guide is open, and every run this process is holding.
+     *
+     * Two facts, kept apart because they have different lifetimes and that
+     * difference *is* the spec: the open key is what a dismiss clears, and the
+     * runs are what a dismiss must not touch. Both live here rather than in the
+     * overlay so the clock survives the composable — the guide is dismissed and
+     * reopened mid-ride, and it comes back where it was.
+     */
+    private val guideKey = MutableStateFlow<GuidanceKey?>(null)
+
+    private val guidanceRuns = MutableStateFlow(GuidanceRuns())
 
     private val _strapPrompt = MutableStateFlow<StrapPrompt?>(null)
 
@@ -104,13 +130,25 @@ class CoachViewModel(
         Triple(status, syncing, capture)
     }
 
+    // Bundled to keep the state build at five inputs: these three are all
+    // "what has the user opened", and none of them comes from storage.
+    private val surfaceInputs = combine(
+        expandedExercises,
+        guideKey,
+        guidanceRuns,
+    ) { expanded, key, runs ->
+        Triple(expanded, key, runs)
+    }
+
     val uiState: StateFlow<CoachUiState> = combine(
         viewInputs,
         storeInputs,
         syncInputs,
         hooks.state,
-        expandedExercises,
-    ) { (date, month), (plansByDate, logsByDate, earliest), (status, syncing, hrState), hooksState, expanded ->
+        surfaceInputs,
+    ) { (date, month), (plansByDate, logsByDate, earliest), (status, syncing, hrState), hooksState,
+        (expanded, openGuide, runs),
+        ->
         buildCoachUiState(
             selectedDate = date,
             viewMonth = month,
@@ -124,6 +162,8 @@ class CoachViewModel(
             isSyncing = syncing,
             isLoading = plansByDate == null || logsByDate == null,
             capture = hrState,
+            openGuide = openGuide,
+            guidanceRuns = runs,
         )
     }.stateIn(
         scope = viewModelScope,
@@ -181,6 +221,12 @@ class CoachViewModel(
         // Accordion state belongs to the day being looked at, as it does in the
         // PWA, where changing the date unmounts every exercise component.
         expandedExercises.value = emptySet()
+        // So does the open guide — and it is *closed*, not merely hidden. The
+        // key carries its date, so a stale one would already refuse to draw
+        // here; leaving it set would make the overlay spring back open the
+        // moment the user navigated to the day it belongs to. The run itself
+        // survives, which is what makes coming back and reopening restore it.
+        guideKey.value = null
     }
 
     fun goToToday() = selectDate(today().toString())
@@ -214,6 +260,59 @@ class CoachViewModel(
         expandedExercises.update { expanded ->
             if (exerciseId in expanded) expanded - exerciseId else expanded + exerciseId
         }
+    }
+
+    // ---- the cardio guide -------------------------------------------------------
+
+    /**
+     * Open the guide for a cardio exercise on the day being looked at.
+     *
+     * Nothing is validated here and nothing needs to be: the key is resolved
+     * against the plan on every state build, so an exercise that carries no
+     * guide — or none at all — yields no overlay rather than an empty one. The
+     * affordance is only drawn where the same predicate says yes.
+     *
+     * Opening does not start anything. The timeline is anchored by START and by
+     * nothing else, deliberately, so that clipping the strap on does not burn
+     * the warmup.
+     */
+    fun openGuide(exerciseId: String) {
+        guideKey.value = GuidanceKey(date = selectedDate.value, exerciseId = exerciseId)
+    }
+
+    /**
+     * Close the guide. **The clock keeps running.**
+     *
+     * A dismiss is the rider putting the phone down mid-interval, not the ride
+     * ending — the run stays in [guidanceRuns] and reopening restores its
+     * position. Nothing here is a record of anything: the log is.
+     */
+    fun dismissGuide() {
+        guideKey.value = null
+    }
+
+    /**
+     * Anchor the open guide's timeline at now.
+     *
+     * Serves both the first START and the fresh run offered after a completed
+     * one — [GuidanceRuns.started] discards whatever the key held, so a second
+     * ride does not inherit the first one's anchor or its appended minutes.
+     * Nothing is written to the log or the plan: raising a plan's target
+     * mid-session would un-complete an exercise the rider had already satisfied.
+     */
+    fun startGuidance() {
+        // Resolved state, not the raw key: a key whose overlay no longer
+        // resolves (exercise gone, date moved on) must not anchor anything.
+        val guide = uiState.value.guide ?: return
+        val nowMs = now()
+        // The button is absent while a run is under way, but absence is not a
+        // guard: a double-tap can land after the first START and before the
+        // recomposition that removes the control, and a re-anchor here is the
+        // one tap that silently discards a timeline mid-ride (the deep-review
+        // find). READY and DONE both legitimately anchor; RUNNING never does.
+        val phase = guidanceStatus(guide.timeline, guide.run, nowMs).phase
+        if (phase == GuidancePhase.RUNNING) return
+        guidanceRuns.update { it.started(guide.key, nowMs) }
     }
 
     // ---- workout hooks --------------------------------------------------------

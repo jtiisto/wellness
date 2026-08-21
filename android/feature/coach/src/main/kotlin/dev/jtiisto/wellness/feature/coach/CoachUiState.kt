@@ -41,6 +41,11 @@ import dev.jtiisto.wellness.core.data.network.DateString
 import dev.jtiisto.wellness.core.data.sync.SyncStatus
 import dev.jtiisto.wellness.core.ui.hr.HrCaptureDisplay
 import dev.jtiisto.wellness.core.ui.hr.hrCaptureDisplay
+import dev.jtiisto.wellness.feature.coach.guidance.GuidanceKey
+import dev.jtiisto.wellness.feature.coach.guidance.GuidanceOverlayState
+import dev.jtiisto.wellness.feature.coach.guidance.GuidanceRuns
+import dev.jtiisto.wellness.feature.coach.guidance.guidanceTimeline
+import dev.jtiisto.wellness.feature.coach.guidance.guideEyebrow
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -87,6 +92,14 @@ data class CoachUiState(
      * exactly when [hr] is, so the sheet never has one without the other.
      */
     val hrLink: CaptureLink? = null,
+    /**
+     * The cardio guide, or null when it is closed — which is nearly always.
+     *
+     * Resolved against the plan on every pass rather than snapshotted when it
+     * opens, so it is impossible for the overlay to outlive the exercise it
+     * guides. See [GuidanceOverlayState].
+     */
+    val guide: GuidanceOverlayState? = null,
 )
 
 /**
@@ -231,6 +244,8 @@ data class ExerciseRowState(
      * exercise carries none — which is every strength row and most cardio ones.
      */
     val segments: String,
+    /** Whether the row offers the `GUIDE` affordance. See [exerciseHasGuide]. */
+    val hasGuide: Boolean,
     val note: String,
     val entry: EntryWidgetState?,
 )
@@ -285,6 +300,8 @@ fun buildCoachUiState(
     isSyncing: Boolean = false,
     isLoading: Boolean = false,
     capture: HrCaptureState = HrCaptureState(),
+    openGuide: GuidanceKey? = null,
+    guidanceRuns: GuidanceRuns = GuidanceRuns(),
     locale: Locale = Locale.getDefault(),
     zone: ZoneId = ZoneId.systemDefault(),
 ): CoachUiState {
@@ -294,6 +311,9 @@ fun buildCoachUiState(
     val isEditable = selectedDate == todayString
     val dataExists = hasAnyProgress(log)
     val selectedStatus = getWorkoutStatus(selectedDate, plans, logs, todayString)
+    // One reading of the capture for both consumers: the chip and the guide must
+    // never be able to say different things about the same session.
+    val hrDisplay = hrCaptureDisplay(capture)
 
     return CoachUiState(
         selectedDate = selectedDate,
@@ -334,7 +354,7 @@ fun buildCoachUiState(
         },
         syncStatus = syncStatus,
         isSyncing = isSyncing,
-        hr = hrCaptureDisplay(capture),
+        hr = hrDisplay,
         hrLink = if (capture.isRunning) {
             WorkoutCapturePolicy.linkFor(
                 anchor = capture.workoutAnchor(),
@@ -343,6 +363,15 @@ fun buildCoachUiState(
         } else {
             null
         },
+        guide = guidanceOverlay(
+            key = openGuide,
+            selectedDate = selectedDate,
+            plan = plan,
+            runs = guidanceRuns,
+            capture = hrDisplay,
+            locale = locale,
+            zone = zone,
+        ),
     )
 }
 
@@ -537,12 +566,81 @@ private fun buildExerciseRowState(
         guidanceNote = exercise.guidanceNote?.takeIf { it.isNotBlank() },
         prescription = buildPrescription(exercise),
         segments = formatSegments(exercise.segments),
+        hasGuide = exerciseHasGuide(exercise),
         note = logData?.get("user_note").asFieldText(),
         entry = if (expanded) {
             buildEntryWidget(date, exercise, logData, plans, logs, locale)
         } else {
             null
         },
+    )
+}
+
+// ---- the cardio guide ------------------------------------------------------------
+
+/**
+ * Whether an exercise offers the live guide.
+ *
+ * The rule is the spec's, and its asymmetry is deliberate. A `duration` exercise
+ * gets the guide **with or without segments**: with none there is no band to
+ * draw, but the timer, the trace and the extension are useful on their own — a
+ * Zone 2 ride is exactly that case, and it is the one the feature is used for
+ * most. An `interval` exercise gets it **only with segments**: its structure
+ * lives in prose and block `rounds`/`work_duration_sec`, nothing derives a
+ * timeline from those (the explicit-only rule), so a guide there would be a
+ * stopwatch beside a plan it could not read. Authoring segments is the upgrade
+ * path, and the affordance appearing is what says they landed.
+ *
+ * Every other type has no timeline to guide against at all.
+ */
+internal fun exerciseHasGuide(exercise: PlanExerciseDto): Boolean = when (exercise.type) {
+    TYPE_DURATION -> true
+    TYPE_INTERVAL -> !exercise.segments.isNullOrEmpty()
+    else -> false
+}
+
+/**
+ * The overlay for the guide that is open, or null when none is.
+ *
+ * Resolved from the plan rather than from what the affordance was showing when
+ * it was tapped, which is what makes three separate things impossible rather
+ * than merely unlikely: a guide surviving onto another day (the key carries its
+ * date, and a mismatch closes it), a guide surviving its exercise leaving the
+ * plan, and a guide for an exercise that never offered one — [exerciseHasGuide]
+ * is asked again here, so the overlay and the affordance cannot disagree even if
+ * a stale key reached this far.
+ */
+private fun guidanceOverlay(
+    key: GuidanceKey?,
+    selectedDate: DateString,
+    plan: PlanDto?,
+    runs: GuidanceRuns,
+    capture: HrCaptureDisplay?,
+    locale: Locale,
+    zone: ZoneId,
+): GuidanceOverlayState? {
+    // Returning null closes the overlay but deliberately does NOT clear the
+    // ViewModel's open key. Invalidity here can be transient — a background
+    // plan sync rebuilding the day's rows mid-ride — and clearing the key on
+    // it would dismiss a guide the rider never dismissed. The user's open is
+    // the standing consent and their dismiss the only revocation: an exercise
+    // that leaves the plan and returns finds its never-dismissed overlay
+    // waiting (pinned by test; the deep review read this as a bug, and the
+    // sync-transient case is why it is not).
+    if (key == null || key.date != selectedDate || plan == null) return null
+    val exercise = plan.blocks.asSequence()
+        .flatMap { it.exercises.asSequence() }
+        .firstOrNull { it.id == key.exerciseId }
+        ?: return null
+    if (!exerciseHasGuide(exercise)) return null
+    val run = runs[key]
+    return GuidanceOverlayState(
+        key = key,
+        title = parseName(exercise.name).base,
+        eyebrow = guideEyebrow(run, locale, zone),
+        timeline = exercise.guidanceTimeline(),
+        run = run,
+        capture = capture,
     )
 }
 

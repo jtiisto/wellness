@@ -17,8 +17,17 @@
     <!-- Requested at first pairing, and a denial never blocks capture: the
          service still runs, its notification is simply not shown. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <!-- PARTIAL_WAKE_LOCK for the length of a capture. No keepScreenOn anywhere:
-         this shows a number, not a live tachogram. -->
+    <!-- PARTIAL_WAKE_LOCK for the length of a capture: recording with the screen
+         off stays first-class, and the capture holds nothing else.
+
+         The screen is held awake in exactly one place, and it needs no
+         permission — FLAG_KEEP_SCREEN_ON on the Activity window, set and cleared
+         by the cardio guidance overlay for as long as it is composed (see
+         GuidanceOverlay's KeepScreenOn). That amends what stood here: the old
+         rationale for having no keepScreenOn anywhere was that this app "shows a
+         number, not a live tachogram", and the guidance display is exactly the
+         live tachogram that rationale said did not exist. Nothing else in the
+         app may hold the display, and the capture's own posture is unchanged. -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <!-- usesCleartextTraffic: dev server is plain HTTP inside the tailnet

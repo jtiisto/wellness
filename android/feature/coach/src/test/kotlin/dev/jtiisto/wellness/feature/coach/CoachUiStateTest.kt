@@ -5,13 +5,17 @@ import dev.jtiisto.wellness.core.data.coach.HookButtonState
 import dev.jtiisto.wellness.core.data.coach.PlanBlockDto
 import dev.jtiisto.wellness.core.data.coach.PlanDto
 import dev.jtiisto.wellness.core.data.coach.PlanExerciseDto
+import dev.jtiisto.wellness.core.data.coach.PlanSegmentDto
 import dev.jtiisto.wellness.core.data.coach.RxKind
 import dev.jtiisto.wellness.core.data.coach.TallyMarks
 import dev.jtiisto.wellness.core.data.coach.TYPE_CHECKLIST
 import dev.jtiisto.wellness.core.data.coach.TYPE_DURATION
+import dev.jtiisto.wellness.core.data.coach.TYPE_INTERVAL
 import dev.jtiisto.wellness.core.data.coach.TYPE_WEIGHTED_TIME
 import dev.jtiisto.wellness.core.data.coach.WorkoutStatus
 import dev.jtiisto.wellness.core.data.network.DateString
+import dev.jtiisto.wellness.feature.coach.guidance.GuidanceKey
+import dev.jtiisto.wellness.feature.coach.guidance.GuidanceRuns
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -49,6 +53,8 @@ class CoachUiStateTest {
         expanded: Set<String> = emptySet(),
         isLoading: Boolean = false,
         capture: HrCaptureState = HrCaptureState(),
+        openGuide: GuidanceKey? = null,
+        guidanceRuns: GuidanceRuns = GuidanceRuns(),
         locale: Locale = Locale.ENGLISH,
     ): CoachUiState = buildCoachUiState(
         selectedDate = selectedDate,
@@ -61,6 +67,8 @@ class CoachUiStateTest {
         expandedExercises = expanded,
         isLoading = isLoading,
         capture = capture,
+        openGuide = openGuide,
+        guidanceRuns = guidanceRuns,
         locale = locale,
         // Pinned so a caption built from a server instant does not depend on
         // where the machine running the suite happens to be.
@@ -921,6 +929,158 @@ class CoachUiStateTest {
             .entry as EntryWidgetState.Sets
 
         assertNull(entry.provenance)
+    }
+
+    // ---- the cardio guide ---------------------------------------------------
+
+    /** A day whose one block holds a Zone 2 ride and a VO2 session. */
+    private fun cardioPlan(
+        zone2Segments: List<PlanSegmentDto>? = null,
+        intervalSegments: List<PlanSegmentDto>? = null,
+    ): PlanDto = plan(
+        blocks = listOf(
+            block(
+                blockType = "cardio",
+                exercises = listOf(
+                    exercise(
+                        id = "ex_zone2",
+                        name = "Tempo Ride",
+                        type = TYPE_DURATION,
+                        targetDurationMin = 30,
+                        segments = zone2Segments,
+                    ),
+                    exercise(
+                        id = "ex_vo2",
+                        name = "VO2 Max Intervals",
+                        type = TYPE_INTERVAL,
+                        segments = intervalSegments,
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    private fun cardioState(
+        openGuide: GuidanceKey? = null,
+        guidanceRuns: GuidanceRuns = GuidanceRuns(),
+        capture: HrCaptureState = HrCaptureState(),
+        intervalSegments: List<PlanSegmentDto>? = null,
+    ): CoachUiState = state(
+        plans = mapOf(today.toString() to cardioPlan(intervalSegments = intervalSegments)),
+        openGuide = openGuide,
+        guidanceRuns = guidanceRuns,
+        capture = capture,
+    )
+
+    private fun guideKey(exerciseId: String, date: DateString = today.toString()) =
+        GuidanceKey(date = date, exerciseId = exerciseId)
+
+    @Test
+    @DisplayName("a duration exercise offers the guide with or without a timeline")
+    fun durationAlwaysGuides() {
+        assertTrue(allRows(cardioState()).getValue("ex_zone2").hasGuide)
+        assertTrue(exerciseHasGuide(exercise(type = TYPE_DURATION, segments = listOf(segment(600, hrMax = 140)))))
+    }
+
+    @Test
+    @DisplayName("an interval exercise guides only once segments are authored")
+    fun intervalGuidesOnlyWithSegments() {
+        assertFalse(allRows(cardioState()).getValue("ex_vo2").hasGuide)
+
+        val authored = cardioState(intervalSegments = listOf(segment(180, hrMin = 160, hrMax = 175)))
+
+        assertTrue(allRows(authored).getValue("ex_vo2").hasGuide)
+
+        // The boundary itself: an explicitly empty list is not an authored
+        // timeline — the wire never carries `[]`, so it can only be a
+        // hand-edited row, and it reads as absence here like everywhere else.
+        assertFalse(exerciseHasGuide(exercise(type = TYPE_INTERVAL, segments = emptyList())))
+    }
+
+    @Test
+    @DisplayName("nothing that is not cardio offers a guide")
+    fun strengthNeverGuides() {
+        assertFalse(exerciseHasGuide(exercise()))
+        assertFalse(exerciseHasGuide(exercise(type = TYPE_CHECKLIST, items = listOf("Foam roll"))))
+        assertFalse(exerciseHasGuide(exercise(type = TYPE_WEIGHTED_TIME)))
+    }
+
+    @Test
+    @DisplayName("no guide is open until one is asked for")
+    fun noOverlayByDefault() {
+        assertNull(cardioState().guide)
+    }
+
+    @Test
+    @DisplayName("the open guide carries the exercise's name, timeline and run")
+    fun overlayResolvesAgainstThePlan() {
+        val key = guideKey("ex_zone2")
+
+        val guide = cardioState(
+            openGuide = key,
+            guidanceRuns = GuidanceRuns().started(key, nowMs = 1_000L),
+        ).guide
+
+        assertNotNull(guide)
+        assertEquals(key, guide!!.key)
+        assertEquals("Tempo Ride", guide.title)
+        // No segments on the ride, so the timeline is the target duration.
+        assertEquals(30 * 60, guide.timeline.plannedTotalSec)
+        assertEquals(1_000L, guide.run.startedAtMs)
+    }
+
+    @Test
+    @DisplayName("a key from another day draws nothing — the guide belongs to its date")
+    fun overlayIsKeyedToTheDay() {
+        assertNull(cardioState(openGuide = guideKey("ex_zone2", date = "2026-08-07")).guide)
+    }
+
+    @Test
+    @DisplayName("a guide whose exercise left the plan closes rather than outliving it")
+    fun overlayNeedsItsExercise() {
+        assertNull(cardioState(openGuide = guideKey("ex_gone")).guide)
+    }
+
+    @Test
+    @DisplayName("a stale key for an exercise that offers no guide draws nothing")
+    fun overlayReAsksThePredicate() {
+        assertNull(cardioState(openGuide = guideKey("ex_vo2")).guide)
+    }
+
+    @Test
+    @DisplayName("with nothing recording the guide has no capture to draw — and stays open")
+    fun overlayGatesOnCapture() {
+        val key = guideKey("ex_zone2")
+
+        assertNull(cardioState(openGuide = key).guide?.capture)
+
+        val live = cardioState(
+            openGuide = key,
+            capture = HrCaptureState(isRunning = true, bpm = 131, deviceName = "Strap"),
+        ).guide
+
+        assertNotNull(live?.capture)
+        assertEquals("131", live!!.capture!!.bpmText)
+    }
+
+    @Test
+    @DisplayName("the eyebrow says only Guide until START anchors the run")
+    fun overlayEyebrowFollowsTheRun() {
+        val key = guideKey("ex_zone2")
+
+        assertEquals("Guide", cardioState(openGuide = key).guide?.eyebrow?.drawn)
+
+        // 2030-01-06T18:41Z, read in the UTC zone the harness pins — and in a
+        // 24-hour locale, which is `GuidanceNotationTest`'s own dodge around the
+        // narrow no-break space CLDR puts before an English AM/PM marker.
+        val started = state(
+            plans = mapOf(today.toString() to cardioPlan()),
+            openGuide = key,
+            guidanceRuns = GuidanceRuns().started(key, nowMs = 1_893_955_260_000L),
+            locale = Locale.UK,
+        ).guide
+
+        assertEquals("Guide · Started 18:41", started?.eyebrow?.drawn)
     }
 
     private fun plannedDay(

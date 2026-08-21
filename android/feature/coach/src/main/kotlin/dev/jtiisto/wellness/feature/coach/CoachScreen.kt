@@ -70,6 +70,7 @@ import dev.jtiisto.wellness.core.ui.motion.WellnessMotion
 import dev.jtiisto.wellness.core.ui.theme.LogbookShapes
 import dev.jtiisto.wellness.core.ui.theme.LogbookSpace
 import dev.jtiisto.wellness.core.ui.theme.LogbookTheme
+import dev.jtiisto.wellness.feature.coach.guidance.GuidanceOverlay
 import org.koin.androidx.compose.koinViewModel
 
 /**
@@ -100,6 +101,9 @@ class CoachActions(
     val onSaveExtraSession: (ExtraSessionDraft) -> Unit,
     val onCommitExtraSessionField: (String, String) -> Unit,
     val onDeleteExtraSession: () -> Unit,
+    val onOpenGuide: (String) -> Unit,
+    val onDismissGuide: () -> Unit,
+    val onStartGuidance: () -> Unit,
 )
 
 /**
@@ -146,6 +150,9 @@ fun CoachScreen(viewModel: CoachViewModel = koinViewModel()) {
             onSaveExtraSession = viewModel::saveExtraSession,
             onCommitExtraSessionField = viewModel::commitExtraSessionField,
             onDeleteExtraSession = viewModel::deleteExtraSession,
+            onOpenGuide = viewModel::openGuide,
+            onDismissGuide = viewModel::dismissGuide,
+            onStartGuidance = viewModel::startGuidance,
         )
     }
 
@@ -171,35 +178,63 @@ private fun CoachContent(state: CoachUiState, actions: CoachActions) {
     // null closes it on its own.
     var captureSheetOpen by remember { mutableStateOf(false) }
 
-    Column(modifier = Modifier.fillMaxSize()) {
-        TopAppBar(
-            title = { Text("Coach".uppercase(), style = LogbookTheme.type.section) },
-            colors = TopAppBarDefaults.topAppBarColors(
-                // Paper, like everything else — the bar is not a second surface.
-                containerColor = palette.paper,
-                titleContentColor = palette.ink,
-            ),
-            windowInsets = WindowInsets(0),
-            actions = {
-                // No chip when idle — `state.hr` is null precisely then.
-                state.hr?.let { hr ->
-                    HrBpmChip(display = hr, onClick = { captureSheetOpen = true })
-                }
-                SyncStatusIndicator(
-                    status = state.syncStatus,
-                    syncing = state.isSyncing,
-                    // The colour exception is documented; the type is not — the
-                    // label reads in Logbook's own mono, not Graphite's ramp.
-                    textStyle = LogbookTheme.type.meta,
-                    labelColor = palette.inkSoft,
-                    modifier = Modifier.padding(end = LogbookSpace.grid * 3),
-                )
-            },
-        )
+    // A Box so the guide can sit *over* the day rather than replace it: the day
+    // stays composed behind the paper, which is what makes dismissing return to
+    // the row the guide was opened from instead of the top of the workout.
+    Box(modifier = Modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                // Paper over the day blocks fingers, not screen readers: the
+                // covered content must also leave the semantics tree, or
+                // TalkBack's linear traversal walks straight through the
+                // overlay into controls nobody can see (the deep-review find).
+                .then(
+                    if (state.guide != null) Modifier.clearAndSetSemantics { }
+                    else Modifier
+                ),
+        ) {
+            TopAppBar(
+                title = { Text("Coach".uppercase(), style = LogbookTheme.type.section) },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    // Paper, like everything else — the bar is not a second surface.
+                    containerColor = palette.paper,
+                    titleContentColor = palette.ink,
+                ),
+                windowInsets = WindowInsets(0),
+                actions = {
+                    // No chip when idle — `state.hr` is null precisely then.
+                    state.hr?.let { hr ->
+                        HrBpmChip(display = hr, onClick = { captureSheetOpen = true })
+                    }
+                    SyncStatusIndicator(
+                        status = state.syncStatus,
+                        syncing = state.isSyncing,
+                        // The colour exception is documented; the type is not —
+                        // the label reads in Logbook's own mono, not Graphite's.
+                        textStyle = LogbookTheme.type.meta,
+                        labelColor = palette.inkSoft,
+                        modifier = Modifier.padding(end = LogbookSpace.grid * 3),
+                    )
+                },
+            )
 
-        CalendarPicker(state = state, actions = actions)
+            CalendarPicker(state = state, actions = actions)
 
-        WorkoutDayView(day = state.day, actions = actions, modifier = Modifier.weight(1f))
+            WorkoutDayView(day = state.day, actions = actions, modifier = Modifier.weight(1f))
+        }
+
+        // Beside the sheets, not on a route of its own: the guide is a surface
+        // the day puts up and takes down, and `state.guide` going null — a
+        // dismiss, a day change, an exercise leaving the plan — is what takes it
+        // down. The run behind it lives in the ViewModel and survives all three.
+        state.guide?.let { guide ->
+            GuidanceOverlay(
+                state = guide,
+                onDismiss = actions.onDismissGuide,
+                onStart = actions.onStartGuidance,
+            )
+        }
     }
 
     // Read from the same nullable as the chip: a capture that ends while its

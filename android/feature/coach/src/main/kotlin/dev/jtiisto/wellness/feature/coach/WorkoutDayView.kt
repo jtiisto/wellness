@@ -88,6 +88,8 @@ import dev.jtiisto.wellness.core.ui.theme.InkOutlineButton
 import dev.jtiisto.wellness.core.ui.theme.LogbookSpace
 import dev.jtiisto.wellness.core.ui.theme.LogbookTheme
 import dev.jtiisto.wellness.core.ui.theme.WellnessDenseField
+import dev.jtiisto.wellness.core.ui.theme.bottomRule
+import dev.jtiisto.wellness.feature.coach.guidance.GuidanceOverlayCopy
 
 /**
  * The selected day's workout, on paper.
@@ -886,6 +888,13 @@ private fun ExerciseAccordion(
                 }
                 row.tally?.let { Tally(it) }
             }
+            if (row.hasGuide) {
+                GuideAffordance(
+                    name = row.name,
+                    onClick = { actions.onOpenGuide(row.id) },
+                    modifier = Modifier.padding(start = LogbookSpace.grid * 2.5f),
+                )
+            }
             Icon(
                 imageVector = Icons.Filled.ExpandMore,
                 contentDescription = null,
@@ -1016,6 +1025,55 @@ private fun ExerciseNameText(row: ExerciseRowState, modifier: Modifier = Modifie
         inlineContent = inlineContent,
         modifier = modifier,
     )
+}
+
+/**
+ * `GUIDE` on a cardio row: the only way into the live guide.
+ *
+ * Manual, and manual on purpose. The app cannot tell when the strength block is
+ * finished — the user may still be typing a note on the last set — so nothing
+ * auto-surfaces, and capture itself needs no screen at all. This is one word the
+ * rider taps when they are on the bike, and the guide is an instrument they
+ * chose to look at.
+ *
+ * Mono caps over a drawn rule rather than a button: the row already holds its
+ * one metadata cluster, and a filled control here would outrank the exercise it
+ * belongs to. The tap target is the row's own content height — a taller one
+ * would push every row of the log to 76dp, which is the trap the accordion's
+ * `heightIn`-before-`padding` ordering exists to avoid — and a miss lands on the
+ * row, which merely expands it.
+ */
+@Composable
+private fun GuideAffordance(name: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    val palette = LogbookTheme.palette
+    Box(
+        modifier = modifier
+            .clickable(role = Role.Button, onClick = onClick)
+            // Its own merged node, so it survives the row's merged semantics
+            // rather than disappearing into the row's sentence.
+            .semantics { contentDescription = GuidanceOverlayCopy.openDescription(name) }
+            // A fixed height, not a minimum: the row is heightIn(48) with 14dp
+            // vertical padding, so any child that measures taller than ~20dp
+            // inflates every log row — the accordion's recorded trap. A hard
+            // height makes the non-inflation claim structural rather than
+            // hoping the content stays short.
+            .height(GUIDE_TAP_HEIGHT)
+            .padding(horizontal = GUIDE_TAP_INSET),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = GuidanceOverlayCopy.GUIDE.uppercase(),
+            style = LogbookTheme.type.eyebrow,
+            color = palette.ink,
+            modifier = Modifier
+                // Rule then padding: the drawn line takes the padded node's
+                // bottom edge, which puts it under the word rather than through
+                // its descenders (the calendar's today-underline ordering).
+                .bottomRule(palette.ink, GUIDE_UNDERLINE)
+                .padding(bottom = GUIDE_UNDERLINE_GAP)
+                .clearAndSetSemantics { },
+        )
+    }
 }
 
 /** One mark per unit of work: inked when done, outlined when not. */
@@ -1615,6 +1673,16 @@ private const val PLATE_DOT_SLOT = "plate"
 private val TALLY_WIDTH = 6.dp
 private val TALLY_HEIGHT = 11.dp
 private val TALLY_GAP = 3.dp
+
+/**
+ * The guide affordance's target: the collapsed row's content height, and no
+ * more. The row is `heightIn(48).padding(vertical = 14)`, so a taller child
+ * grows every row it appears on rather than filling the one it is in.
+ */
+private val GUIDE_TAP_HEIGHT = 20.dp
+private val GUIDE_TAP_INSET = 8.dp
+private val GUIDE_UNDERLINE = 1.5.dp
+private val GUIDE_UNDERLINE_GAP = 2.dp
 
 /** Marks round by 1dp — enough to read as drawn rather than as a screen artefact. */
 private val MARK_SHAPE = RoundedCornerShape(1.dp)

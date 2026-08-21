@@ -11,6 +11,12 @@ registration, pulse-bridge retirement.
 link that stays CONNECTED is now detected, declared and recovered from. Android-only; no server,
 PWA or wire change.
 
+**Amended 2026-08-21** — the cardio guidance display arrives as a **fourth HR surface** (see
+**UX**), and with it the one `FLAG_KEEP_SCREEN_ON` in the app, which falsifies this spec's recorded
+no-keepScreenOn rationale under **Capture foreground service**. Both amendments are marked in
+place. The capture stack itself is untouched: guidance is a consumer. Contract:
+`cardio-guidance.md`.
+
 ## Goal
 
 Fold pulse-bridge's live heart-rate capture into the coach feature so a workout can optionally record strap HR, show a compact live BPM readout, and — via a new timestamped set-completion event log — correlate heart rate with specific sets. Consolidate the two backends: the wellness FastAPI server gains an `hr` module (own endpoints, own `hr.db`), and pulse-bridge's analysis module + MCP server migrate to it. The standalone pulse-bridge app is superseded once this ships.
@@ -63,7 +69,12 @@ First foreground service / notification channel / runtime-permission flow in the
 
 - `foregroundServiceType="connectedDevice"`, `START_STICKY`, resumes newest open session on null-intent restart.
 - Notification channel `hr_capture`, `IMPORTANCE_LOW`, silent, ongoing; text = connection state + live BPM.
-- `PARTIAL_WAKE_LOCK` for the session; **no `keepScreenOn`** (we show a number, not a tachogram).
+- `PARTIAL_WAKE_LOCK` for the session; the capture itself still holds **no `keepScreenOn`**, so
+  screen-off capture stays first-class. *(Amended 2026-08-21: the original rationale — "we show a
+  number, not a tachogram" — was falsified by the cardio guidance display, which is exactly that
+  tachogram. `FLAG_KEEP_SCREEN_ON` is now held on the Activity window by the guidance overlay and
+  by nothing else, for exactly as long as it is composed; see `cardio-guidance.md` §Keep-screen-on
+  and the manifest comment beside `WAKE_LOCK`.)*
 - 5-minute inactivity auto-stop (armed on disconnect/reconnecting, cancelled on connect and on every sample) — bounded battery drain from a dead strap. A stream that goes silent under a link that stays CONNECTED reaches this the same way a real drop does, via the sample watchdog below.
 - Permissions: `BLUETOOTH_SCAN` (`neverForLocation`) + `BLUETOOTH_CONNECT` requested blocking at first pairing entry; `POST_NOTIFICATIONS` requested but a denial never blocks capture.
 
@@ -101,6 +112,12 @@ Quarantine: on a 422 the batch is recursively bisected to isolate poison rows (o
 - **Configuration screen — "Heart rate strap" section**: initial pairing lives here. Scan → unknown devices listed (name + MAC) with Connect; a successful connect saves it as the known device (SharedPreferences-equivalent MAC→name map; no OS bonding). Known device row shows name + Forget.
 - **Start Workout**: when a known strap exists and capture isn't running, the Start tap first shows a small sheet — **"Connect HRM?" [Connect] [Skip]** — then proceeds with the hook either way. Asks every time (no sticky auto-connect in v1). Capture started here records `workoutDate` on the session.
 - **Live BPM chip**: compact element in the coach top bar, visible only while a capture session is active — BPM number + connection-state color, nothing else. Tap opens a sheet: device, connection state, signal quality, Disconnect/Stop. When idle there is no chip; starting capture without a workout goes through the configuration screen's strap section.
+- **The cardio guidance overlay** (added 2026-08-21, the fourth HR surface): a full-canvas paper
+  overlay opened by hand from a cardio exercise row's `GUIDE` affordance, drawing the live trace
+  against the plan's target-HR band. It is a **consumer of this stack and nothing more** — a
+  separate rolling-sample flow beside `HrCaptureState`, `hrCaptureDisplay`'s null as its "nothing
+  is arriving" rule, and the existing `HrToneDot` for link liveness. It starts and stops no
+  capture. Contract: `cardio-guidance.md`.
 - **End Workout** stops capture automatically (plus the 5-min inactivity net).
 - Service-side capture errors surface via the existing snackbar event channel (fixing pulse-bridge's invisible-`state.error` gap).
 

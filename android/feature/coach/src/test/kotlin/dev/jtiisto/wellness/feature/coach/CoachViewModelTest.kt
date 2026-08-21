@@ -11,6 +11,7 @@ import dev.jtiisto.wellness.core.data.coach.HookAction
 import dev.jtiisto.wellness.core.data.coach.HookButtonState
 import dev.jtiisto.wellness.core.data.coach.HookResultDto
 import dev.jtiisto.wellness.core.data.coach.PlanDto
+import dev.jtiisto.wellness.core.data.coach.TYPE_DURATION
 import dev.jtiisto.wellness.core.data.coach.WorkoutStatusDto
 import dev.jtiisto.wellness.core.data.hr.HrCaptureStore
 import dev.jtiisto.wellness.core.data.network.CoachApi
@@ -63,6 +64,15 @@ class CoachViewModelTest {
 
     private val today = LocalDate.parse("2026-08-08")
     private val todayString: DateString = today.toString()
+
+    /**
+     * The wall clock a guidance run is anchored at, moved by hand.
+     *
+     * Deliberately not the test scheduler's virtual time: the guide's clock is
+     * the phone's, and a run anchored at "now" has to be assertable against a
+     * number the test chose.
+     */
+    private var nowMs = 1_893_955_260_000L
 
     // Shared flows with replay, not state flows: a StateFlow always has a value,
     // which would make "storage has not answered yet" impossible to express —
@@ -190,6 +200,7 @@ class CoachViewModelTest {
         capture = capture,
         captureStore = captureStore,
         today = { today },
+        now = { nowMs },
         // The strap refresh is a SharedPreferences read in production; here it
         // has to land on the test's own clock like everything else.
         io = StandardTestDispatcher(testScheduler),
@@ -994,6 +1005,209 @@ class CoachViewModelTest {
         runCurrent()
 
         coVerify(exactly = 0) { api.workoutStatus(any()) }
+    }
+
+    // ---- the cardio guide ---------------------------------------------------------
+    //
+    // The lifecycle the spec states in three sentences: a dismiss does not stop
+    // the clock, reopening restores the position, and START after a finished run
+    // starts a fresh one. The overlay that shows them has no test rig, so they
+    // are asserted here, where they are decided.
+
+    @Test
+    @DisplayName("opening the guide surfaces the tapped exercise, un-started")
+    fun openGuideSurfacesTheExercise() = runVmTest { viewModel ->
+        givenCardioPlan()
+
+        viewModel.openGuide("ex_ride")
+        runCurrent()
+
+        val guide = viewModel.uiState.value.guide
+        assertEquals("Tempo Ride", guide?.title)
+        assertEquals(todayString, guide?.key?.date)
+        // Opening anchors nothing: the warmup must not burn while the strap goes on.
+        assertNull(guide?.run?.startedAtMs)
+    }
+
+    @Test
+    @DisplayName("START anchors the run at the wall clock, and only the open guide's")
+    fun startAnchorsTheOpenGuide() = runVmTest { viewModel ->
+        givenCardioPlan()
+
+        viewModel.openGuide("ex_ride")
+        runCurrent()
+        viewModel.startGuidance()
+        runCurrent()
+
+        assertEquals(nowMs, viewModel.uiState.value.guide?.run?.startedAtMs)
+    }
+
+    @Test
+    @DisplayName("dismissing closes the overlay and leaves the clock running")
+    fun dismissPreservesTheRun() = runVmTest { viewModel ->
+        givenCardioPlan()
+        viewModel.openGuide("ex_ride")
+        runCurrent()
+        viewModel.startGuidance()
+        runCurrent()
+        val anchor = viewModel.uiState.value.guide?.run?.startedAtMs
+
+        viewModel.dismissGuide()
+        runCurrent()
+        assertNull(viewModel.uiState.value.guide)
+
+        // Six minutes later the rider picks the phone back up.
+        nowMs += 360_000L
+        viewModel.openGuide("ex_ride")
+        runCurrent()
+
+        assertEquals(anchor, viewModel.uiState.value.guide?.run?.startedAtMs)
+    }
+
+    @Test
+    @DisplayName("START on a finished run starts a fresh one rather than resuming it")
+    fun restartDiscardsTheFinishedRun() = runVmTest { viewModel ->
+        givenCardioPlan()
+        viewModel.openGuide("ex_ride")
+        runCurrent()
+        viewModel.startGuidance()
+        runCurrent()
+
+        // The ride ends and a second one begins on the same exercise.
+        nowMs += 40 * 60_000L
+        viewModel.startGuidance()
+        runCurrent()
+
+        assertEquals(nowMs, viewModel.uiState.value.guide?.run?.startedAtMs)
+    }
+
+    @Test
+    @DisplayName("START mid-ride is a no-op — a double-tap cannot re-anchor a running timeline")
+    fun startWhileRunningDoesNotReAnchor() = runVmTest { viewModel ->
+        givenCardioPlan()
+        viewModel.openGuide("ex_ride")
+        runCurrent()
+        viewModel.startGuidance()
+        runCurrent()
+        val anchor = viewModel.uiState.value.guide?.run?.startedAtMs
+
+        // Ten minutes into a thirty-minute ride, a stale or doubled tap lands.
+        // The button is not on screen, but absence is not a guard — this is.
+        nowMs += 600_000L
+        viewModel.startGuidance()
+        runCurrent()
+
+        assertEquals(anchor, viewModel.uiState.value.guide?.run?.startedAtMs)
+    }
+
+    @Test
+    @DisplayName("an exercise that leaves the plan and returns finds its never-dismissed overlay waiting")
+    fun transientPlanInvalidityDoesNotForgetTheOpenGuide() = runVmTest { viewModel ->
+        givenCardioPlan()
+        viewModel.openGuide("ex_ride")
+        runCurrent()
+        viewModel.startGuidance()
+        runCurrent()
+        val anchor = viewModel.uiState.value.guide?.run?.startedAtMs
+
+        // A background sync rebuilds the day without the ride for a pass: the
+        // overlay closes, but the open key and the run both stay.
+        publish(plans = mapOf(todayString to plan(sessionId = 9)))
+        runCurrent()
+        assertNull(viewModel.uiState.value.guide)
+
+        // The re-planned session arrives with the ride back in it: the guide
+        // the rider never dismissed returns, clock intact. Deliberate — the
+        // user's open is the standing consent and their dismiss the only
+        // revocation; clearing the key on transient invalidity would dismiss
+        // a live ride mid-sync.
+        publish(plans = cardioPlan())
+        runCurrent()
+        assertEquals(anchor, viewModel.uiState.value.guide?.run?.startedAtMs)
+    }
+
+    @Test
+    @DisplayName("two cardio exercises guided in one session keep their own runs")
+    fun runsAreKeyedPerExercise() = runVmTest { viewModel ->
+        givenCardioPlan()
+        viewModel.openGuide("ex_ride")
+        runCurrent()
+        viewModel.startGuidance()
+        runCurrent()
+        val ride = nowMs
+
+        nowMs += 1_800_000L
+        viewModel.openGuide("ex_row")
+        runCurrent()
+        viewModel.startGuidance()
+        runCurrent()
+
+        assertEquals(nowMs, viewModel.uiState.value.guide?.run?.startedAtMs)
+
+        viewModel.openGuide("ex_ride")
+        runCurrent()
+        assertEquals(ride, viewModel.uiState.value.guide?.run?.startedAtMs)
+    }
+
+    @Test
+    @DisplayName("START with no guide open does nothing at all")
+    fun startWithoutAGuideIsInert() = runVmTest { viewModel ->
+        givenCardioPlan()
+
+        viewModel.startGuidance()
+        runCurrent()
+
+        assertNull(viewModel.uiState.value.guide)
+
+        viewModel.openGuide("ex_ride")
+        runCurrent()
+        assertNull(viewModel.uiState.value.guide?.run?.startedAtMs)
+    }
+
+    @Test
+    @DisplayName("changing the day closes the guide, and it does not spring back open")
+    fun changingTheDayClosesTheGuide() = runVmTest { viewModel ->
+        publish(plans = cardioPlan() + ("2026-08-07" to plan(sessionId = 9)))
+        runCurrent()
+        viewModel.openGuide("ex_ride")
+        runCurrent()
+
+        viewModel.selectDate("2026-08-07")
+        runCurrent()
+        assertNull(viewModel.uiState.value.guide)
+
+        viewModel.selectDate(todayString)
+        runCurrent()
+        assertNull(viewModel.uiState.value.guide)
+    }
+
+    private fun cardioPlan(): Map<DateString, PlanDto?> = mapOf(
+        todayString to plan(
+            blocks = listOf(
+                block(
+                    blockType = "cardio",
+                    exercises = listOf(
+                        exercise(
+                            id = "ex_ride",
+                            name = "Tempo Ride",
+                            type = TYPE_DURATION,
+                            targetDurationMin = 30,
+                        ),
+                        exercise(
+                            id = "ex_row",
+                            name = "Row Intervals",
+                            type = TYPE_DURATION,
+                            targetDurationMin = 12,
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    private fun kotlinx.coroutines.test.TestScope.givenCardioPlan() {
+        publish(plans = cardioPlan())
+        runCurrent()
     }
 
     private fun expandedIds(viewModel: CoachViewModel): Set<String> =
