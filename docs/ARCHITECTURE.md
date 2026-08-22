@@ -236,8 +236,8 @@ migration 7 — guarded `ALTER TABLE`s on `planned_exercises`, `exercise_logs`,
 and `exercise_logs_archive` (the archive stays lossless).
 
 `segments` is the optional **target-HR timeline** on a `duration` or `interval`
-exercise: a flat, ordered list of `{duration_sec, hr_min?, hr_max?, label?}`
-describing what the heart rate should be doing, second by second, for the whole
+exercise: a flat, ordered list of `{duration_sec, hr_min?, hr_max?, label?,
+role?}` describing what the heart rate should be doing, second by second, for the whole
 of that cardio session. It is the first structured representation of an HR target
 anywhere in the coach data model — before it, targets were prose in
 `guidance_note` ("HR 135-148") — and it exists because the Android client draws
@@ -252,6 +252,22 @@ is the whole timeline, explicit and in order — a VO2 session's repeats are
 written out — and **nothing is derived** from block `rounds` /
 `work_duration_sec`: an exercise without `segments` has no timeline and renders
 exactly as it did before the field existed, which is the common case.
+
+`role` (added 2026-08-22) is a segment's optional **purpose** — one of `warmup`,
+`work`, `cooldown`, a closed set whose unknown *values* are rejected as loudly as
+unknown keys. **Absent means `work`**, which is what keeps every pre-role plan
+behaving to the byte. It is semantics rather than display: neither client's
+static segments line reads it. What consumes it is the Android guide — the
+work-role spans are the ones a finished guided ride averages its heart rate over
+when it auto-fills the log, and a timeline with exactly one work segment is the
+one shape `+ 5 MIN` may lengthen (that segment, with everything after it shifting
+later; a segmentless `duration` ride stays extendable too — it is all work by
+absence). The guide-events `timeline_json` snapshot inherits the field for free,
+being the same wire shape; a work segment records there as *absence*, since that
+is what absence means and it keeps a role-less ride's record identical to the
+ones written before roles existed. An explicit `"role": "work"` on the wire is
+stored as authored — the value is legal to send, and dropping it as redundant
+would make the round trip lossy for an author reading their own plan back.
 
 Storage is `planned_exercises.segments_json` TEXT (migration 8, guarded
 `ALTER TABLE`) — the journal's `trackers.schedule_json` precedent: a structure

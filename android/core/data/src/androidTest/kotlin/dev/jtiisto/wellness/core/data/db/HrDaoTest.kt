@@ -466,6 +466,43 @@ class HrDaoTest {
     }
 
     @Test
+    fun beatsBetweenIsInclusiveAndSkipsQuarantined() = runBlocking {
+        samples.insertAll(
+            listOf(
+                sample(900, bpm = 100),
+                sample(1_000, bpm = 110),
+                sample(1_500, bpm = 120, quarantined = true),
+                // Two beats in one millisecond: the seq keeps their order.
+                sample(2_000, seq = 1, bpm = 131),
+                sample(2_000, seq = 0, bpm = 130),
+                sample(2_001, bpm = 140),
+            ),
+        )
+
+        val beats = samples.beatsBetween(fromMs = 1_000, toMs = 2_000)
+
+        // Both ends included, the quarantined row left out, order by (time, seq).
+        assertEquals(listOf(1_000L, 2_000L, 2_000L), beats.map { it.timestampMs })
+        assertEquals(listOf(110, 130, 131), beats.map { it.heartRateBpm })
+    }
+
+    @Test
+    fun beatsBetweenSpansEverySessionInTheWindow() = runBlocking {
+        // A strap that dropped out and reconnected: two sessions, one ride.
+        samples.insertAll(
+            listOf(
+                sample(1_000, sessionId = "a", bpm = 120),
+                sample(2_000, sessionId = "b", bpm = 130),
+            ),
+        )
+
+        assertEquals(
+            listOf(120, 130),
+            samples.beatsBetween(fromMs = 0, toMs = 3_000).map { it.heartRateBpm },
+        )
+    }
+
+    @Test
     fun summariesAggregatePerSession() = runBlocking {
         samples.insertAll(
             listOf(

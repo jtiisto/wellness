@@ -258,6 +258,10 @@ class CoachGoldenFixtureTest {
         assertEquals(listOf(132, 154, 124), segments.map { it.hrMax })
         assertEquals("fixture-steady", segments[1].label)
         assertNull(segments[2].hrMin)
+        // `role` rides the same sparse convention: marked on the ends, absent in
+        // the middle — and absence is what "work" is written as, so it must
+        // decode to null rather than to a string this side invented.
+        assertEquals(listOf("warmup", null, "cooldown"), segments.map { it.role })
         // A plan without a timeline omits the field entirely — never `[]`, never
         // null — so an exercise that has none decodes to null.
         assertNull(bench.segments)

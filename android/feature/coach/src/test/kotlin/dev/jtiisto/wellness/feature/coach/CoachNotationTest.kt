@@ -524,6 +524,29 @@ class CoachNotationTest {
         assertEquals("0:45", formatSegments(listOf(segment(45, min = 0, max = 0))))
     }
 
+    @Test
+    @DisplayName("a role changes nothing about the line — it is semantics, and this line is display")
+    fun segmentRoleIsNotDrawnHere() {
+        // The twin of the same assertion in `test/js/segments.test.js`: the
+        // guide reads roles, the static line does not, and the two clients
+        // agree on that by both refusing to render them.
+        val plain = listOf(
+            segment(300, max = 118),
+            segment(2_400, min = 122, max = 140),
+            segment(300, max = 118),
+        )
+        val roled = listOf(
+            segment(300, max = 118, role = "warmup"),
+            segment(2_400, min = 122, max = 140, role = "work"),
+            segment(300, max = 118, role = "cooldown"),
+        )
+
+        assertEquals(formatSegments(plain), formatSegments(roled))
+        assertEquals("5:00 ≤118 · 40:00 122–140 · 5:00 ≤118", formatSegments(roled))
+        // A value no client knows renders like any other — the line is display.
+        assertEquals("1:00 ≥140", formatSegments(listOf(segment(60, min = 140, role = "sprint"))))
+    }
+
     // ---- the provenance footer --------------------------------------------------------
 
     @Test
@@ -539,8 +562,19 @@ class CoachNotationTest {
         )
     }
 
-    private fun segment(durationSec: Int, min: Int? = null, max: Int? = null, label: String? = null) =
-        PlanSegmentDto(durationSec = durationSec, hrMin = min, hrMax = max, label = label)
+    private fun segment(
+        durationSec: Int,
+        min: Int? = null,
+        max: Int? = null,
+        label: String? = null,
+        role: String? = null,
+    ) = PlanSegmentDto(
+        durationSec = durationSec,
+        hrMin = min,
+        hrMax = max,
+        label = label,
+        role = role,
+    )
 
     private companion object {
         const val TODAY = "2026-08-08"

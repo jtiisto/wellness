@@ -63,7 +63,17 @@ SEGMENT_EXERCISE_TYPES = ("duration", "interval")
 # The whole of a segment. Closed on purpose: a misspelled optional key
 # ("hr_maxx") would otherwise store a floor-only segment that reads as
 # deliberate, which is the same silent-drop trap the MCP `column_map` taught.
-SEGMENT_KEYS = ("duration_sec", "hr_min", "hr_max", "label")
+SEGMENT_KEYS = ("duration_sec", "hr_min", "hr_max", "label", "role")
+
+# What a segment is *for*. A closed set, and an unknown value is rejected as
+# loudly as an unknown key — for the same reason: "warmpu" would otherwise store
+# a work segment that reads as deliberate, and the guide would auto-fill a
+# ride's average heart rate over a warmup nobody meant to include.
+#
+# **Absence means "work"**, which is what makes every plan written before this
+# field existed keep its exact behavior. Role is semantics, not display: neither
+# client's static segments line reads it.
+SEGMENT_ROLES = ("warmup", "work", "cooldown")
 
 
 def _segment_int(segment, key, context):
@@ -111,6 +121,8 @@ def normalize_segments(value, context="segments"):
       ceiling, both a range. **Absolute bpm always** — nothing in the system
       resolves a symbolic zone, so the authoring LLM computes the numbers.
     - `label` — optional short display string; blank is the same as absent.
+    - `role` — optional, one of SEGMENT_ROLES; absent means "work". An unknown
+      value is rejected like an unknown key.
     - Unknown keys are rejected rather than dropped (see SEGMENT_KEYS).
 
     The list is the timeline, flat and in order: a VO2 session's repeats are
@@ -152,6 +164,15 @@ def normalize_segments(value, context="segments"):
             raise ValueError(f"{where} 'label' must be a string")
         label = label.strip() if label else ""
 
+        role = segment.get("role")
+        if role is not None and not isinstance(role, str):
+            raise ValueError(f"{where} 'role' must be a string")
+        role = role.strip() if role else ""
+        if role and role not in SEGMENT_ROLES:
+            raise ValueError(
+                f"{where} 'role' must be one of {list(SEGMENT_ROLES)}, not '{role}'"
+            )
+
         out = {"duration_sec": duration_sec}
         if hr_min is not None:
             out["hr_min"] = hr_min
@@ -159,6 +180,13 @@ def normalize_segments(value, context="segments"):
             out["hr_max"] = hr_max
         if label:
             out["label"] = label
+        # An explicit "work" is kept rather than dropped as redundant: the value
+        # is legal to send, and a field that silently lost one of its three
+        # values on the way in would make the round-trip lossy for an author
+        # reading their own plan back. Absence carries the same meaning; it is
+        # what a pre-role plan has.
+        if role:
+            out["role"] = role
         normalized.append(out)
 
     return normalized

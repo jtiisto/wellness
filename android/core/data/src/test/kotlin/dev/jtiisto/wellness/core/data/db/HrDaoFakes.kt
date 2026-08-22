@@ -102,6 +102,12 @@ internal open class FakeHrSampleDao : HrSampleDao() {
     override suspend fun listAll(): List<HrSampleEntity> =
         samples.values.sortedWith(compareBy({ it.timestampMs }, { it.seq }))
 
+    /** The SQL's own rules: inclusive at both ends, quarantined rows left out. */
+    override suspend fun beatsBetween(fromMs: Long, toMs: Long): List<HrBeatRow> = samples.values
+        .filter { !it.isQuarantined && it.timestampMs in fromMs..toMs }
+        .sortedWith(compareBy({ it.timestampMs }, { it.seq }))
+        .map { HrBeatRow(timestampMs = it.timestampMs, heartRateBpm = it.heartRateBpm) }
+
     override suspend fun countPending(): Int = samples.values.count { !it.isSynced && !it.isQuarantined }
 
     override suspend fun countQuarantined(): Int = samples.values.count { it.isQuarantined }

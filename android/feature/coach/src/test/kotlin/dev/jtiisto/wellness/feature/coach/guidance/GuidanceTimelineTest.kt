@@ -22,8 +22,19 @@ class GuidanceTimelineTest {
 
     // ---- fixtures -------------------------------------------------------------------
 
-    private fun segment(durationSec: Int, min: Int? = null, max: Int? = null, label: String? = null) =
-        PlanSegmentDto(durationSec = durationSec, hrMin = min, hrMax = max, label = label)
+    private fun segment(
+        durationSec: Int,
+        min: Int? = null,
+        max: Int? = null,
+        label: String? = null,
+        role: String? = null,
+    ) = PlanSegmentDto(
+        durationSec = durationSec,
+        hrMin = min,
+        hrMax = max,
+        label = label,
+        role = role,
+    )
 
     /** Warmup, then three hard/easy pairs — the VO2 shape, written out flat. */
     private val intervals = listOf(
@@ -37,6 +48,16 @@ class GuidanceTimelineTest {
     )
 
     private val steady = listOf(segment(1_800, min = 122, max = 138, label = "zone 2"))
+
+    /**
+     * The shape the role rules exist for: one work segment with preparation
+     * around it. Five minutes easy, thirty steady, five spinning down.
+     */
+    private val wrappedSteady = listOf(
+        segment(300, max = 118, label = "ease in", role = "warmup"),
+        segment(1_800, min = 122, max = 138, label = "zone 2"),
+        segment(300, max = 118, label = "spin down", role = "cooldown"),
+    )
 
     private fun statusAt(
         timeline: GuidanceTimeline,
@@ -274,14 +295,67 @@ class GuidanceTimelineTest {
     }
 
     @Test
-    @DisplayName("appended time stretches the last segment, and the plan's own length is kept beside it")
-    fun extensionStretchesTheLastSegment() {
+    @DisplayName("appended time stretches the work segment, and the plan's own length is kept beside it")
+    fun extensionStretchesTheWorkSegment() {
         val status = statusAt(guidanceTimeline(steady, null), elapsedMs = 60_000, extensionSec = 600)
 
         assertEquals(2_400, status.totalSec)
         assertEquals(1_800, status.plannedTotalSec)
         assertEquals(2_400, status.segments.single().endSec)
         assertEquals(2_340, status.remainingSec)
+        assertEquals(0, status.extendedIndex)
+    }
+
+    @Test
+    @DisplayName("the work segment is lengthened where it sits, and the cooldown after it shifts later intact")
+    fun extensionMovesTheSegmentsAfterTheWorkOne() {
+        val status = statusAt(guidanceTimeline(wrappedSteady, null), elapsedMs = 0, extensionSec = 300)
+
+        assertEquals(1, status.extendedIndex)
+        assertEquals(listOf(0, 300, 2_400), status.segments.map { it.startSec })
+        assertEquals(listOf(300, 2_400, 2_700), status.segments.map { it.endSec })
+        // The cooldown is five minutes long before and after: it moved, it did
+        // not grow. Only the work segment is longer.
+        assertEquals(listOf(300, 2_100, 300), status.segments.map { it.durationSec })
+        assertEquals(2_700, status.totalSec)
+        assertEquals(2_400, status.plannedTotalSec)
+    }
+
+    @Test
+    @DisplayName("the current segment follows the shifted boundaries, not the planned ones")
+    fun extensionMovesTheBoundariesTheClockIsReadAgainst() {
+        val extended = guidanceTimeline(wrappedSteady, null)
+        // 2_150 s in: past the planned end of the work segment (2_100), and in
+        // the cooldown were it not for the five appended minutes.
+        val status = statusAt(extended, elapsedMs = 2_150_000, extensionSec = 300)
+
+        assertEquals(1, status.currentIndex)
+        assertEquals("zone 2", status.current?.label)
+        assertEquals(250, status.remainingSec)
+    }
+
+    @Test
+    @DisplayName("a run extended before its plan changed shape still lands its minutes somewhere")
+    fun extensionFallsBackToTheLastSegment() {
+        // Several work segments have no single work segment to lengthen — the
+        // control is never offered here, but a mid-ride re-sync can leave an
+        // extension behind, and the segments must still sum to the total or the
+        // strip and the countdown would disagree.
+        val status = statusAt(guidanceTimeline(intervals, null), elapsedMs = 0, extensionSec = 300)
+
+        assertEquals(6, status.extendedIndex)
+        assertEquals(1_500, status.totalSec)
+        assertEquals(1_500, status.segments.last().endSec)
+        assertEquals(1_500, status.segments.sumOf { it.durationSec })
+    }
+
+    @Test
+    @DisplayName("with no appended time nothing is extended and nothing moves")
+    fun noExtensionNoTarget() {
+        val status = statusAt(guidanceTimeline(wrappedSteady, null), elapsedMs = 0)
+
+        assertNull(status.extendedIndex)
+        assertEquals(listOf(0, 300, 2_100), status.segments.map { it.startSec })
     }
 
     @Test
@@ -327,12 +401,40 @@ class GuidanceTimelineTest {
     }
 
     @Test
-    @DisplayName("+ 5 MIN is offered on steady rides with a length, and nowhere else")
-    fun extendIsSteadyStateOnly() {
+    @DisplayName("+ 5 MIN is offered on one-work-segment rides with a length, and nowhere else")
+    fun extendIsOneWorkSegmentOnly() {
         assertTrue(statusAt(guidanceTimeline(steady, null), 0).canExtend)
         assertTrue(statusAt(guidanceTimeline(null, 2_400), 0).canExtend)
         assertFalse(statusAt(guidanceTimeline(intervals, null), 0).canExtend)
         assertFalse(statusAt(GuidanceTimeline.OPEN, 0).canExtend)
+    }
+
+    @Test
+    @DisplayName("warmup and cooldown around one work segment stay extendable — the shape the size rule refused")
+    fun extendAllowsPreparationAroundTheWork() {
+        assertTrue(statusAt(guidanceTimeline(wrappedSteady, null), 0).canExtend)
+
+        // And a VO2 session is still refused, roles or no roles: six work
+        // segments have no single one that "five more minutes" could mean.
+        val rolledIntervals = listOf(
+            segment(300, max = 132, label = "warmup", role = "warmup"),
+            segment(180, min = 158, max = 172, label = "hard"),
+            segment(120, max = 144, label = "easy"),
+            segment(180, min = 158, max = 172, label = "hard"),
+            segment(300, max = 130, label = "cooldown", role = "cooldown"),
+        )
+        assertFalse(statusAt(guidanceTimeline(rolledIntervals, null), 0).canExtend)
+    }
+
+    @Test
+    @DisplayName("a timeline that is all preparation has no work segment to lengthen")
+    fun extendRefusesATimelineWithNoWork() {
+        val noWork = listOf(
+            segment(300, max = 118, role = "warmup"),
+            segment(300, max = 118, role = "cooldown"),
+        )
+
+        assertFalse(statusAt(guidanceTimeline(noWork, null), 0).canExtend)
     }
 
     @Test
@@ -342,6 +444,50 @@ class GuidanceTimelineTest {
 
         assertEquals(0, status.extensionSec)
         assertEquals(1_800, status.totalSec)
+    }
+
+    // ---- roles ----------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("roles resolve onto the timeline, and an absent one is work")
+    fun rolesResolve() {
+        val segments = guidanceTimeline(wrappedSteady, null).segments
+
+        assertEquals(
+            listOf(SegmentRole.WARMUP, SegmentRole.WORK, SegmentRole.COOLDOWN),
+            segments.map { it.role },
+        )
+        assertEquals(listOf(false, true, false), segments.map { it.isWork })
+    }
+
+    @Test
+    @DisplayName("a role the server would have rejected degrades to work rather than closing the guide")
+    fun unknownRolesDegradeToWork() {
+        // The server holds the closed set, so anything else is a hand-edited
+        // row — the zero-bound rule's stance, applied to a string.
+        assertEquals(SegmentRole.WORK, SegmentRole.fromWire("sprint"))
+        assertEquals(SegmentRole.WORK, SegmentRole.fromWire(""))
+        assertEquals(SegmentRole.WORK, SegmentRole.fromWire(null))
+        // A transcription of the right answer is the right answer.
+        assertEquals(SegmentRole.WARMUP, SegmentRole.fromWire(" Warmup "))
+        assertEquals(SegmentRole.COOLDOWN, SegmentRole.fromWire("COOLDOWN"))
+    }
+
+    @Test
+    @DisplayName("a role-less timeline behaves exactly as it did before roles existed")
+    fun roleLessTimelinesAreUnchanged() {
+        // The compatibility promise, stated as a test: absence is work, so one
+        // segment is extendable and several are not — which is the shipped rule,
+        // and both readings of it agree on every role-less plan.
+        assertTrue(statusAt(guidanceTimeline(steady, null), 0).canExtend)
+        assertFalse(statusAt(guidanceTimeline(intervals, null), 0).canExtend)
+
+        val single = statusAt(guidanceTimeline(steady, null), 0, extensionSec = 300)
+        assertEquals(2_100, single.segments.single().endSec)
+
+        val many = statusAt(guidanceTimeline(intervals, null), 0, extensionSec = 300)
+        assertEquals(listOf(0, 300, 480, 600, 780, 900, 1_080), many.segments.map { it.startSec })
+        assertEquals(1_500, many.segments.last().endSec)
     }
 
     // ---- shape predicates ---------------------------------------------------------------
@@ -417,6 +563,28 @@ class GuidanceTimelineTest {
             """[{"duration_sec":300,"hr_min":118,"hr_max":132,"label":"warmup"},""" +
                 """{"duration_sec":120,"hr_max":144}]""",
             json,
+        )
+    }
+
+    @Test
+    @DisplayName("roles are recorded, and a work segment records as the absence that means work")
+    fun guidedSegmentsCarryRoles() {
+        val json = guidanceTimeline(wrappedSteady, null).guidedSegmentsJson()
+
+        assertEquals(
+            """[{"duration_sec":300,"hr_max":118,"label":"ease in","role":"warmup"},""" +
+                """{"duration_sec":1800,"hr_min":122,"hr_max":138,"label":"zone 2"},""" +
+                """{"duration_sec":300,"hr_max":118,"label":"spin down","role":"cooldown"}]""",
+            json,
+        )
+    }
+
+    @Test
+    @DisplayName("a role-less ride records exactly what it recorded before the field existed")
+    fun guidedSegmentsOfARoleLessRideAreUnchanged() {
+        assertEquals(
+            """[{"duration_sec":1800,"hr_min":122,"hr_max":138,"label":"zone 2"}]""",
+            guidanceTimeline(steady, null).guidedSegmentsJson(),
         )
     }
 

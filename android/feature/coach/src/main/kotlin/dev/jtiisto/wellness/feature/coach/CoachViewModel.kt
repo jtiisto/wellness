@@ -15,16 +15,24 @@ import dev.jtiisto.wellness.core.data.coach.PlanDto
 import dev.jtiisto.wellness.core.data.coach.array
 import dev.jtiisto.wellness.core.data.coach.hasAnyProgress
 import dev.jtiisto.wellness.core.data.hr.GuideEventRecorder
+import dev.jtiisto.wellness.core.data.hr.HrBeatReader
 import dev.jtiisto.wellness.core.data.hr.HrCaptureStore
+import dev.jtiisto.wellness.core.data.journal.journalNumberJson
 import dev.jtiisto.wellness.core.data.network.CoachApi
 import dev.jtiisto.wellness.core.data.network.DateString
 import dev.jtiisto.wellness.core.data.sync.SyncScheduler
 import dev.jtiisto.wellness.feature.coach.guidance.EXTENSION_STEP_SEC
 import dev.jtiisto.wellness.feature.coach.guidance.GuidanceKey
 import dev.jtiisto.wellness.feature.coach.guidance.GuidancePhase
+import dev.jtiisto.wellness.feature.coach.guidance.GuidanceRun
 import dev.jtiisto.wellness.feature.coach.guidance.GuidanceRuns
+import dev.jtiisto.wellness.feature.coach.guidance.GuidanceStatus
+import dev.jtiisto.wellness.feature.coach.guidance.GuidanceTimeline
+import dev.jtiisto.wellness.feature.coach.guidance.GuidedRideFill
+import dev.jtiisto.wellness.feature.coach.guidance.MILLIS_PER_SECOND
 import dev.jtiisto.wellness.feature.coach.guidance.canOfferExtension
 import dev.jtiisto.wellness.feature.coach.guidance.guidanceStatus
+import dev.jtiisto.wellness.feature.coach.guidance.guidedRideFill
 import dev.jtiisto.wellness.feature.coach.guidance.guidedSegmentsJson
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -39,7 +47,9 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonObjectBuilder
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonObject
@@ -72,6 +82,12 @@ class CoachViewModel(
      * day log are untouched by both actions.
      */
     private val guideEvents: GuideEventRecorder,
+    /**
+     * The beats a finished guided ride is described from — read from Room on
+     * dismissal, never from the live ring, which holds thirty seconds and is
+     * empty by the time a strap comes off.
+     */
+    private val beatReader: HrBeatReader,
     traceRing: HrTraceRing,
     private val today: () -> LocalDate = LocalDate::now,
     /**
@@ -290,30 +306,81 @@ class CoachViewModel(
     // ---- the cardio guide -------------------------------------------------------
 
     /**
-     * Open the guide for a cardio exercise on the day being looked at.
+     * Open the guide for a cardio exercise **on today**.
      *
-     * Nothing is validated here and nothing needs to be: the key is resolved
-     * against the plan on every state build, so an exercise that carries no
-     * guide — or none at all — yields no overlay rather than an empty one. The
-     * affordance is only drawn where the same predicate says yes.
+     * The date is the one thing checked here, and it is checked here as well as
+     * at the affordance because the two can disagree for a moment: a tap can
+     * land on a row drawn before midnight, and the guide is an instrument for a
+     * ride happening now. Everything else is resolved against the plan on every
+     * state build, so an exercise that carries no guide — or none at all —
+     * yields no overlay rather than an empty one.
+     *
+     * The gate is on **opening**. A guide already open goes on running across
+     * midnight; see the resolver.
      *
      * Opening does not start anything. The timeline is anchored by START and by
      * nothing else, deliberately, so that clipping the strap on does not burn
      * the warmup.
      */
     fun openGuide(exerciseId: String) {
-        guideKey.value = GuidanceKey(date = selectedDate.value, exerciseId = exerciseId)
+        val date = selectedDate.value
+        if (date != today().toString()) return
+        guideKey.value = GuidanceKey(date = date, exerciseId = exerciseId)
     }
 
     /**
-     * Close the guide. **The clock keeps running.**
+     * Close the guide — **the clock keeps running** — and, if the ride finished
+     * under it, write what it saw into the log.
      *
-     * A dismiss is the rider putting the phone down mid-interval, not the ride
-     * ending — the run stays in [guidanceRuns] and reopening restores its
-     * position. Nothing here is a record of anything: the log is.
+     * A dismiss is usually the rider putting the phone down mid-interval rather
+     * than the ride ending: the run stays in [guidanceRuns] and reopening
+     * restores its position. But a dismiss *after* the timeline has run out is
+     * the one moment the app knows a whole cardio session end to end — how long
+     * it was, and what the heart did through the work of it — and typing that
+     * back in from memory is the thing this round removes. So the fill runs
+     * here, from resolved state read before the overlay closes.
+     *
+     * Nothing fills unless the phase has actually reached DONE. An early bail is
+     * the rider's to log, exactly as before.
      */
     fun dismissGuide() {
+        val guide = uiState.value.guide
         guideKey.value = null
+        if (guide == null) return
+        val status = guidanceStatus(guide.timeline, guide.run, now())
+        if (status.phase != GuidancePhase.DONE) return
+        autoFillFromRide(guide.key.exerciseId, status, guide.timeline, guide.run)
+    }
+
+    /**
+     * Fill the cardio entry from the ride the guide just watched.
+     *
+     * The beats come off the phone's own store rather than the live ring: the
+     * ring holds thirty seconds, the ride was an hour, and — the case that makes
+     * this the only workable source — a dismiss routinely happens with the
+     * capture already stopped, the strap already unclipped and the ring long
+     * since emptied. The rows are there either way, uploaded or not.
+     *
+     * Everything is swallowed on failure, as the guide-event record is and for
+     * the same reason: the fill is a convenience laid on top of an action that
+     * has already succeeded, and a database read that failed must not take the
+     * dismiss down with it. The rider is left with the manual fields they had
+     * before, which is where every ride started until this round.
+     */
+    private fun autoFillFromRide(
+        exerciseId: String,
+        status: GuidanceStatus,
+        timeline: GuidanceTimeline,
+        run: GuidanceRun,
+    ) {
+        val totalSec = status.totalSec ?: return
+        val endMs = status.anchorMs + totalSec * MILLIS_PER_SECOND
+        viewModelScope.launch {
+            runCatching {
+                val beats = withContext(io) { beatReader.beatsBetween(status.anchorMs, endMs) }
+                guidedRideFill(beats, timeline, run)
+            }.getOrNull()?.let { fillCardioEntry(exerciseId, it) }
+        }
     }
 
     /**
@@ -570,6 +637,51 @@ class CoachViewModel(
             val value = numericCellValue(entry?.get(field), input) ?: return@editEntry null
             buildJsonObject { put(field, value) }
         }
+    }
+
+    /**
+     * Write a finished guided ride's numbers into the entry — **into whichever
+     * of the three fields are empty, and no others**.
+     *
+     * The same write path a typed field takes: [editEntry], so the store's
+     * transaction applies it and completion derivation, the upload debounce and
+     * every downstream reader see an ordinary cardio entry with no idea a guide
+     * produced it. One write rather than three, because the three numbers
+     * describe one ride.
+     *
+     * The emptiness test is made **inside the transaction**, against the entry
+     * as stored — the same discipline the set-cell commit records: a check made
+     * out here against the last emitted snapshot could overwrite a number the
+     * rider typed while the beats were being read.
+     *
+     * [isEntryEditable] still governs. A ride that runs past midnight and is
+     * dismissed on the next day fills nothing, because by then the day it
+     * belongs to is read-only — the rider could not type into it either, and the
+     * fill is not entitled to more than they are.
+     */
+    private fun fillCardioEntry(exerciseId: String, fill: GuidedRideFill) {
+        if (!isEntryEditable()) return
+        editEntry(exerciseId) { entry ->
+            buildJsonObject {
+                fillIfEmpty(entry, "duration_min", fill.durationMin)
+                fillIfEmpty(entry, "avg_hr", fill.avgHr)
+                fillIfEmpty(entry, "max_hr", fill.maxHr)
+            }.takeIf { it.isNotEmpty() }
+        }
+    }
+
+    /**
+     * One number into one field, iff the field is empty and the number exists.
+     *
+     * Absent and explicit null are both empty — the second is how a cleared
+     * field is recorded — and anything else, including a `0` the rider typed, is
+     * a value the guide has no business replacing.
+     */
+    private fun JsonObjectBuilder.fillIfEmpty(entry: JsonObject?, field: String, value: Int?) {
+        if (value == null) return
+        val stored = entry?.get(field)
+        if (stored != null && stored != JsonNull) return
+        put(field, journalNumberJson(value.toDouble()))
     }
 
     /**

@@ -27,8 +27,26 @@ class HrTraceModelTest {
     /** Milliseconds per logical unit: `45_000 / 360`. */
     private val msPerUnit = 125L
 
-    private fun segment(durationSec: Int, min: Int? = null, max: Int? = null, label: String? = null) =
-        PlanSegmentDto(durationSec = durationSec, hrMin = min, hrMax = max, label = label)
+    private fun segment(
+        durationSec: Int,
+        min: Int? = null,
+        max: Int? = null,
+        label: String? = null,
+        role: String? = null,
+    ) = PlanSegmentDto(
+        durationSec = durationSec,
+        hrMin = min,
+        hrMax = max,
+        label = label,
+        role = role,
+    )
+
+    /** Warmup, work, cooldown: the shape whose extension lands mid-timeline. */
+    private val wrapped = listOf(
+        segment(300, max = 118, label = "ease in", role = "warmup"),
+        segment(600, min = 122, max = 138, label = "zone 2"),
+        segment(300, max = 118, label = "spin down", role = "cooldown"),
+    )
 
     /**
      * Warmup then work, with bounds chosen so the axis comes out round: the
@@ -546,6 +564,46 @@ class HrTraceModelTest {
         assertEquals(StripState.EXTENSION, strip.blocks.last().state)
         assertEquals(360.0, strip.blocks.last().x1)
         assertEquals(135.0, strip.cursorX)
+    }
+
+    @Test
+    @DisplayName("the appended block sits at the work segment's end — mid-strip, with the cooldown after it")
+    fun stripDrawsTheExtensionWhereItWasAdded() {
+        val roled = listOf(
+            segment(60, min = 100, label = "a", role = "warmup"),
+            segment(60, min = 150, label = "b"),
+            segment(60, min = 200, label = "c", role = "cooldown"),
+        )
+
+        val strip = guidanceStrip(statusAt(roled, elapsedMs = 90_000, extensionSec = 60))!!
+
+        assertEquals(4, strip.blocks.size)
+        assertEquals(listOf(0.0, 90.0, 180.0, 270.0), strip.blocks.map { it.x0 })
+        assertEquals(listOf(90.0, 180.0, 270.0, 360.0), strip.blocks.map { it.x1 })
+        assertEquals(
+            listOf(StripState.DONE, StripState.CURRENT, StripState.EXTENSION, StripState.AHEAD),
+            strip.blocks.map { it.state },
+        )
+        // The cooldown keeps its name and its length; the dashed block between
+        // them is the only thing the extension added.
+        assertEquals(listOf("a", "b", null, "c"), strip.blocks.map { it.label })
+    }
+
+    @Test
+    @DisplayName("the extension stretches the work band, and the cooldown's band moves with it")
+    fun extensionStretchesTheWorkBand() {
+        // Ten seconds before the work segment's planned end, with the whole
+        // window inside it. Without an extension the band stops mid-window and
+        // the cooldown's begins; with one, the work band runs off the edge.
+        val plain = modelAt(elapsedMs = 890_000, segments = wrapped)
+        assertEquals(listOf(320.0, 360.0), plain.bands.map { it.x1 })
+        assertEquals(listOf(320.0), plain.boundaries.map { it.x })
+
+        val extended = modelAt(elapsedMs = 890_000, segments = wrapped, extensionSec = 300)
+        assertEquals(1, extended.bands.size)
+        assertEquals(360.0, extended.bands.single().x1)
+        // The cooldown boundary went with it, five minutes out of the window.
+        assertTrue(extended.boundaries.isEmpty())
     }
 
     @Test

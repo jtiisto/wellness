@@ -137,6 +137,22 @@ data class PlanSegmentDto(
     @SerialName("hr_min") val hrMin: Int? = null,
     @SerialName("hr_max") val hrMax: Int? = null,
     @SerialName("label") val label: String? = null,
+    /**
+     * What the segment is for: `warmup`, `work` or `cooldown`, **absent meaning
+     * work**.
+     *
+     * A string rather than an enum on purpose. The server holds the closed set
+     * and rejects anything outside it, so a value that gets this far and is not
+     * one of the three can only be a hand-edited row — and a `@Serializable`
+     * enum would fail the whole day's decode over it, where the display rule is
+     * to degrade (see `SegmentRole`, which reads this leniently). Nothing here
+     * re-validates; the field is carried.
+     *
+     * Nothing about display reads it: the static segments line is identical with
+     * and without. It is the guide that consumes it — which spans a finished
+     * ride averages, and which segment `+ 5 MIN` may lengthen.
+     */
+    @SerialName("role") val role: String? = null,
 )
 
 @Serializable

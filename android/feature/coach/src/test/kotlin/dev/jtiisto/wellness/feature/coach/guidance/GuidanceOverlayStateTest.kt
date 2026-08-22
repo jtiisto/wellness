@@ -182,6 +182,29 @@ class GuidanceOverlayStateTest {
     }
 
     @Test
+    @DisplayName("a labelled warmup is not a warmup — only the role takes a segment out of the work")
+    fun onlyTheRoleCounts() {
+        fun statusFor(warmupRole: String?, cooldownRole: String?) = guidanceStatus(
+            timeline = guidanceTimeline(
+                segments = listOf(
+                    PlanSegmentDto(durationSec = 300, hrMax = 118, label = "warmup", role = warmupRole),
+                    PlanSegmentDto(durationSec = 1_800, hrMin = 118, hrMax = 132),
+                    PlanSegmentDto(durationSec = 300, hrMax = 118, label = "cooldown", role = cooldownRole),
+                ),
+                plannedDurationSec = null,
+            ),
+            run = GuidanceRun(startedAtMs = T0),
+            nowMs = T0 + 60_000,
+        )
+
+        // Three work segments as far as the rule is concerned: the labels are
+        // for the rider's eyes, and nothing reads them.
+        assertFalse(canOfferExtension(statusFor(null, null)))
+        // Marked, the same ride is the steady one it always was.
+        assertTrue(canOfferExtension(statusFor("warmup", "cooldown")))
+    }
+
+    @Test
     @DisplayName("a segmentless ride with a planned length offers it; an open-ended one does not")
     fun segmentlessNeedsALengthToAppendTo() {
         val timed = guidanceStatus(

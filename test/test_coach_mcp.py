@@ -1897,8 +1897,13 @@ class TestWriteTools:
     # unlisted keys are silently DROPPED — so every one of these asserts the
     # value came back out of the database, not out of the argument dict.
 
+    # The first segment carries a `role`, the other two do not: every assertion
+    # against this timeline is therefore also a round trip for the role field
+    # AND for its absence, through the editors' own SQL and back out of the
+    # plan reader.
     TIMELINE = [
-        {"duration_sec": 300, "hr_min": 121, "hr_max": 137, "label": "warmup"},
+        {"duration_sec": 300, "hr_min": 121, "hr_max": 137, "label": "warmup",
+         "role": "warmup"},
         {"duration_sec": 180, "hr_min": 159, "hr_max": 174, "label": "hard"},
         {"duration_sec": 120, "hr_max": 146, "label": "easy"},
     ]
@@ -2016,6 +2021,7 @@ class TestWriteTools:
         ([{"hr_max": 130}], "missing 'duration_sec'"),
         ([{"duration_sec": 60, "hr_min": 150, "hr_max": 140}], "must be <="),
         ([{"duration_sec": 60, "hr_maxx": 140}], "unknown field"),
+        ([{"duration_sec": 60, "hr_max": 140, "role": "sprint"}], "must be one of"),
     ])
     def test_update_exercise_rejects_invalid_segments(self, bad, match):
         self.tools["set_workout_plan"](date="2099-09-22", plan=self._cardio_plan())

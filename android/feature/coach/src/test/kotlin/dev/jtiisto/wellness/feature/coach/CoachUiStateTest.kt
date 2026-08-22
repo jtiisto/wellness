@@ -979,7 +979,7 @@ class CoachUiStateTest {
     @DisplayName("a duration exercise offers the guide with or without a timeline")
     fun durationAlwaysGuides() {
         assertTrue(allRows(cardioState()).getValue("ex_zone2").hasGuide)
-        assertTrue(exerciseHasGuide(exercise(type = TYPE_DURATION, segments = listOf(segment(600, hrMax = 140)))))
+        assertTrue(exerciseOffersGuide(exercise(type = TYPE_DURATION, segments = listOf(segment(600, hrMax = 140)))))
     }
 
     @Test
@@ -994,15 +994,59 @@ class CoachUiStateTest {
         // The boundary itself: an explicitly empty list is not an authored
         // timeline — the wire never carries `[]`, so it can only be a
         // hand-edited row, and it reads as absence here like everywhere else.
-        assertFalse(exerciseHasGuide(exercise(type = TYPE_INTERVAL, segments = emptyList())))
+        assertFalse(exerciseOffersGuide(exercise(type = TYPE_INTERVAL, segments = emptyList())))
     }
 
     @Test
     @DisplayName("nothing that is not cardio offers a guide")
     fun strengthNeverGuides() {
-        assertFalse(exerciseHasGuide(exercise()))
-        assertFalse(exerciseHasGuide(exercise(type = TYPE_CHECKLIST, items = listOf("Foam roll"))))
-        assertFalse(exerciseHasGuide(exercise(type = TYPE_WEIGHTED_TIME)))
+        assertFalse(exerciseOffersGuide(exercise()))
+        assertFalse(exerciseOffersGuide(exercise(type = TYPE_CHECKLIST, items = listOf("Foam roll"))))
+        assertFalse(exerciseOffersGuide(exercise(type = TYPE_WEIGHTED_TIME)))
+    }
+
+    @Test
+    @DisplayName("the affordance is today's only — there is no live trace to draw against another day")
+    fun guideIsDateGated() {
+        val plans = mapOf(
+            today.toString() to cardioPlan(),
+            "2026-08-07" to cardioPlan(),
+            "2026-08-09" to cardioPlan(),
+        )
+
+        assertTrue(allRows(state(plans = plans)).getValue("ex_zone2").hasGuide)
+        assertFalse(
+            allRows(state(selectedDate = "2026-08-07", plans = plans)).getValue("ex_zone2").hasGuide,
+        )
+        assertFalse(
+            allRows(state(selectedDate = "2026-08-09", plans = plans)).getValue("ex_zone2").hasGuide,
+        )
+        // The shape predicate is untouched by the date — it is the row that is
+        // gated, and the resolver keeps asking the shape alone.
+        assertTrue(exerciseOffersGuide(exercise(type = TYPE_DURATION)))
+    }
+
+    @Test
+    @DisplayName("an open guide is not closed by its day going read-only — a 23:50 ride survives midnight")
+    fun overlaySurvivesTheDayTurningReadOnly() {
+        // The day on screen is yesterday, which is what the rollover looks like
+        // to this function: `isEditable` is false, the affordance is gone, and
+        // the overlay the rider never dismissed is still there.
+        val yesterday = "2026-08-07"
+        val plans = mapOf(yesterday to cardioPlan())
+        val key = guideKey("ex_zone2", date = yesterday)
+
+        val built = state(
+            selectedDate = yesterday,
+            plans = plans,
+            openGuide = key,
+            guidanceRuns = GuidanceRuns().started(key, nowMs = 1_000L),
+        )
+
+        assertFalse(built.isEditable)
+        assertFalse(allRows(built).getValue("ex_zone2").hasGuide)
+        assertNotNull(built.guide)
+        assertEquals(1_000L, built.guide!!.run.startedAtMs)
     }
 
     @Test

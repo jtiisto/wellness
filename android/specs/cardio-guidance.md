@@ -42,6 +42,18 @@ timeline"; never null):
   resolves symbolic zones (survey-verified: no zone table, no stored HRmax);
   the authoring LLM computes bpm and may echo the zone name in `label`.
 - `label`: optional display string (rendered mono-caps; keep short).
+- `role` *(added 2026-08-22, polish round)*: optional, one of `"warmup"`,
+  `"work"`, `"cooldown"` — a closed enum, any other value rejected loudly
+  (the unknown-key stance applied to values). **Absent means `work`**, so
+  every pre-role plan keeps its exact behavior. Role is semantics, not
+  display: neither client's static segments line changes. It drives the
+  work-only auto-fill spans, the extend rules below, and (in the analysis
+  round) per-segment metrics; the guide-events `timeline_json` snapshot
+  carries it automatically, being the wire shape — with one deliberate
+  asymmetry: an explicitly-authored `"work"` records in the snapshot as
+  absence (same meaning, and it keeps a role-less ride's record
+  byte-identical to pre-role ones), while the server stores what was
+  authored.
 - The list is the timeline, in order, explicit and flat: a VO2 session's
   repeats are written out (warmup + hard/easy × N). **No rounds shorthand,
   no derivation from block `rounds`/`work_duration_sec`** — plans without
@@ -223,6 +235,73 @@ above left open.
   `GUIDE` affordance therefore appears on every cardio (`duration` /
   `interval`) exercise; `interval` without segments gets no guide (its
   structure is prose — authoring segments is the upgrade path).
+- **Extend, revised by `role` (2026-08-22, polish round — supersedes the
+  single-segment reading of "steady-state")**: eligible iff the timeline has
+  **exactly one work-role segment** — warmup and cooldown around it welcome,
+  which is the warmup/Z2/cooldown ride the size-1 rule wrongly excluded; a
+  many-work-segment timeline (VO2) stays ineligible; a segmentless
+  `duration` stays eligible. `+ 5 MIN` lengthens **the work segment**, not
+  the last: the cooldown shifts later intact, the band stretches the work
+  band, the strip's dashed appended block draws at the work segment's end
+  (mid-strip when a cooldown follows), DONE still derives from the total.
+  Role-less timelines are all-work by the absence rule, so their behavior
+  is unchanged to the byte. The guide-events derivation follows the same
+  rule — which segment absorbs each extend is read from the snapshot's
+  roles.
+- **The affordance is date-gated (2026-08-22, polish round)**: `GUIDE`
+  shows and opens only when the selected day is today (the state's
+  existing today/editability fact; both the affordance and the open action
+  gate — defense in depth). The gate is on the OPEN only: an already-open
+  guide survives the midnight rollover — a ride started at 23:50 must not
+  slam shut at 00:00.
+
+### Auto-fill from a guided ride (added 2026-08-22, polish round)
+
+When the guide is dismissed after a run that **reached DONE** and a capture
+session existed for it, the cardio entry's three manual fields fill
+themselves — and only themselves, and only if empty:
+
+- **`duration_min` = the guided timeline's total including extends**, never
+  the elapsed clock: idling past DONE before dismissing must not inflate
+  the log, and a run dismissed before DONE fills nothing (an early bail is
+  the rider's to log, as today).
+- **Average HR and max HR are both computed over the work-role spans
+  only** — warmup and cooldown excluded, easy/recovery segments between
+  efforts included (they are work-role; the protocol's rests are part of
+  the work). The beats come from the phone's own Room store (the capture
+  persists samples locally; no server round-trip), sliced by the run's
+  absolute schedule: anchor + durations + extends, extends absorbed by the
+  work segment per the rule above.
+- Fills go through the **normal cardio-entry commit path** — the same one
+  manual typing uses — so completion derivation, sync, and every
+  downstream reader see an ordinary entry. A field the rider already
+  typed is never overwritten.
+- Unguided rides, strapless rides, DONE-less dismissals: nothing fills,
+  manual entry exactly as before.
+
+*(As built, 2026-08-22 — what implementing the section settled.)*
+
+- **The presence test is beats inside the run's window**, not a session row:
+  a strap that dropped out and reconnected mid-ride is two sessions and one
+  ride, so the beats are read by time range (`HrBeatReader` over
+  `hr_samples`, quarantined rows excluded) and both halves count. No beats in
+  the window at all is the strapless case and fills nothing.
+- **Beats present but none in the work spans** — the belt that came off after
+  the warmup — fills `duration_min` alone and leaves both heart rates empty.
+  The duration is a statement about the timeline, not about the beats.
+- `duration_min` is the total **rounded to the nearest minute**, floor of one.
+- The fill is **one write** through `editEntry` (the store transaction
+  `commitCardioField` itself uses), with the per-field emptiness test made
+  *inside* the transaction against the entry as stored — a check made outside
+  it could overwrite a number typed while the beats were being read. Absent and
+  explicit null are both empty; anything else, including a typed `0`, is kept.
+- The entry gate still governs, which has one visible consequence: a ride
+  dismissed **after midnight** fills nothing, because the day it belongs to is
+  read-only by then — the rider could not type into it either.
+- A `role` value no client knows (only reachable by hand-editing the database,
+  since the server rejects it) **degrades to `work`** on the client rather than
+  failing the decode: the display-layer leniency the zero-bound rule already
+  established.
 
 ### Keep-screen-on (user requirement)
 

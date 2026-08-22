@@ -455,6 +455,28 @@ class HrDaoLogicTest {
     }
 
     @Test
+    @DisplayName("beatsBetween takes both ends of the window, every session in it, and no quarantined row")
+    fun beatsBetweenWindowsTheRide() = runTest {
+        val dao = FakeHrSampleDao()
+        dao.insertAll(
+            listOf(
+                sample(900, bpm = 100),
+                sample(1_000, bpm = 110),
+                sample(1_500, bpm = 120, quarantined = true),
+                // A strap that dropped out and reconnected is two sessions and
+                // one ride: the window is what the rider rode, so both are in.
+                sample(2_000, bpm = 130, sessionId = "other-session"),
+                sample(2_001, bpm = 140),
+            ),
+        )
+
+        val beats = dao.beatsBetween(fromMs = 1_000, toMs = 2_000)
+
+        assertEquals(listOf(1_000L, 2_000L), beats.map { it.timestampMs })
+        assertEquals(listOf(110, 130), beats.map { it.heartRateBpm })
+    }
+
+    @Test
     @DisplayName("markSynced stamps exactly the batch it was given, and nothing else")
     fun markSyncedTouchesOnlyTheBatch() = runTest {
         val dao = FakeHrSampleDao()

@@ -20,6 +20,16 @@ internal const val HR_SAMPLE_SUMMARY_SQL =
         "MIN(timestampMs) AS firstTimestampMs, MAX(timestampMs) AS lastTimestampMs " +
         "FROM hr_samples GROUP BY sessionId ORDER BY firstTimestampMs"
 
+/**
+ * One stored beat, projected down to what a reading needs: when, and how fast.
+ *
+ * A projection rather than the entity because the one caller — the guide's
+ * auto-fill — wants a few thousand beats and none of the sync columns, and
+ * because a query that selects two integers cannot accidentally start being used
+ * as an upload path.
+ */
+data class HrBeatRow(val timestampMs: Long, val heartRateBpm: Int)
+
 /** A session's sample counts, aggregated in SQL so the export never holds the rows. */
 data class HrSampleSummary(
     val sessionId: String,
@@ -70,6 +80,33 @@ abstract class HrSampleDao {
 
     @Query("SELECT * FROM hr_samples ORDER BY timestampMs, seq")
     abstract suspend fun listAll(): List<HrSampleEntity>
+
+    /**
+     * Every beat stored inside a window, oldest first.
+     *
+     * The one read of this table that is not the uploader's, and it is
+     * **time-ranged rather than session-scoped** on purpose: a strap that drops
+     * out and reconnects mid-ride opens a second session, and both halves are
+     * the same ride. The window is what the rider actually rode, so the window
+     * is what the question asks about.
+     *
+     * The boundary is inclusive at both ends; the caller decides which spans
+     * inside it count. Quarantined rows are excluded — a row the server refused
+     * as invalid is exactly the one that would corrupt a maximum heart rate, and
+     * nothing else in this window depends on it being there.
+     *
+     * There is no index for this and deliberately so. It is a full scan of the
+     * biggest table, run **once, when a guide is dismissed** — never on the
+     * capture path — while an index on `timestampMs` would be write
+     * amplification on the hottest insert in the app, paid on every beat of
+     * every session, for one query a day.
+     */
+    @Query(
+        "SELECT timestampMs, heartRateBpm FROM hr_samples " +
+            "WHERE isQuarantined = 0 AND timestampMs BETWEEN :fromMs AND :toMs " +
+            "ORDER BY timestampMs, seq",
+    )
+    abstract suspend fun beatsBetween(fromMs: Long, toMs: Long): List<HrBeatRow>
 
     @Query("SELECT COUNT(*) FROM hr_samples WHERE isSynced = 0 AND isQuarantined = 0")
     abstract suspend fun countPending(): Int

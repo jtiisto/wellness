@@ -453,6 +453,9 @@ private fun buildPlannedDayState(
                 logs = logs,
                 expandedExercises = expandedExercises,
                 tiers = tiers,
+                // The raw date fact, not `effectiveEditable`: the guide is an
+                // instrument, not entry, and the hook gate has no say over it.
+                isToday = isEditable,
                 locale = locale,
             )
         },
@@ -504,6 +507,7 @@ private fun buildBlockState(
     logs: Map<DateString, JsonObject>,
     expandedExercises: Set<String>,
     tiers: TierPlates,
+    isToday: Boolean,
     locale: Locale,
 ): BlockState {
     fun row(exercise: PlanExerciseDto) = buildExerciseRowState(
@@ -515,6 +519,7 @@ private fun buildBlockState(
         logs = logs,
         expanded = exercise.id in expandedExercises,
         tiers = tiers,
+        isToday = isToday,
         locale = locale,
     )
 
@@ -548,6 +553,7 @@ private fun buildExerciseRowState(
     logs: Map<DateString, JsonObject>,
     expanded: Boolean,
     tiers: TierPlates,
+    isToday: Boolean,
     locale: Locale,
 ): ExerciseRowState {
     val parsed = parseName(exercise.name)
@@ -566,7 +572,7 @@ private fun buildExerciseRowState(
         guidanceNote = exercise.guidanceNote?.takeIf { it.isNotBlank() },
         prescription = buildPrescription(exercise),
         segments = formatSegments(exercise.segments),
-        hasGuide = exerciseHasGuide(exercise),
+        hasGuide = exerciseHasGuide(exercise, isToday),
         note = logData?.get("user_note").asFieldText(),
         entry = if (expanded) {
             buildEntryWidget(date, exercise, logData, plans, logs, locale)
@@ -579,7 +585,30 @@ private fun buildExerciseRowState(
 // ---- the cardio guide ------------------------------------------------------------
 
 /**
- * Whether an exercise offers the live guide.
+ * Whether the row draws its `GUIDE` affordance: the right shape of exercise,
+ * **on today**.
+ *
+ * The date gate is the whole difference between this and [exerciseOffersGuide],
+ * and it is on the *opening* only. A guide is an instrument for a ride happening
+ * now — there is no strap trace to draw against a Tuesday in the past, and a
+ * future day's ride has not been ridden — so the affordance stays off every day
+ * but today, and [CoachViewModel.openGuide] asks the same question again at the
+ * tap. What the gate deliberately does not touch is the resolver: an already-open
+ * guide survives the midnight rollover, because a ride started at 23:50 must not
+ * slam shut at 00:00.
+ *
+ * [isToday] is the state's own editability fact — `selectedDate == today` —
+ * rather than a second clock: two readings of "now" in one pass could disagree.
+ * It is deliberately the *raw* date fact and not the hook gate, which can close
+ * entry after End Workout: the guide starts and stops no capture and writes
+ * nothing on its own, so a workout the rider has ended is no reason to take the
+ * instrument away mid-cooldown.
+ */
+internal fun exerciseHasGuide(exercise: PlanExerciseDto, isToday: Boolean): Boolean =
+    isToday && exerciseOffersGuide(exercise)
+
+/**
+ * Whether an exercise is the *shape* that offers the live guide, date aside.
  *
  * The rule is the spec's, and its asymmetry is deliberate. A `duration` exercise
  * gets the guide **with or without segments**: with none there is no band to
@@ -593,7 +622,7 @@ private fun buildExerciseRowState(
  *
  * Every other type has no timeline to guide against at all.
  */
-internal fun exerciseHasGuide(exercise: PlanExerciseDto): Boolean = when (exercise.type) {
+internal fun exerciseOffersGuide(exercise: PlanExerciseDto): Boolean = when (exercise.type) {
     TYPE_DURATION -> true
     TYPE_INTERVAL -> !exercise.segments.isNullOrEmpty()
     else -> false
@@ -606,9 +635,14 @@ internal fun exerciseHasGuide(exercise: PlanExerciseDto): Boolean = when (exerci
  * it was tapped, which is what makes three separate things impossible rather
  * than merely unlikely: a guide surviving onto another day (the key carries its
  * date, and a mismatch closes it), a guide surviving its exercise leaving the
- * plan, and a guide for an exercise that never offered one — [exerciseHasGuide]
- * is asked again here, so the overlay and the affordance cannot disagree even if
- * a stale key reached this far.
+ * plan, and a guide for an exercise that never offered one —
+ * [exerciseOffersGuide] is asked again here, so the overlay and the affordance
+ * cannot disagree even if a stale key reached this far.
+ *
+ * The **shape** predicate, not the dated one: the affordance's today gate is on
+ * opening a guide, and an open one has to survive the midnight rollover. A ride
+ * anchored at 23:50 goes on drawing at 00:05, against the day it was opened
+ * from — which is still the day the key names, so nothing else here moves either.
  */
 private fun guidanceOverlay(
     key: GuidanceKey?,
@@ -632,7 +666,7 @@ private fun guidanceOverlay(
         .flatMap { it.exercises.asSequence() }
         .firstOrNull { it.id == key.exerciseId }
         ?: return null
-    if (!exerciseHasGuide(exercise)) return null
+    if (!exerciseOffersGuide(exercise)) return null
     val run = runs[key]
     return GuidanceOverlayState(
         key = key,

@@ -62,6 +62,31 @@ test('formatSegments: a segment with neither bound degrades to its duration', ()
     assert.equal(formatSegments([{ duration_sec: 45 }]), '0:45');
 });
 
+test('formatSegments: a role changes nothing about the line', () => {
+    // `role` is semantics for the Android guide — which spans a finished ride
+    // averages its heart rate over, and which segment `+ 5 MIN` lengthens — and
+    // it has no display meaning on either client. This line is the PWA's whole
+    // stake in the field: it must read identically with the roles and without
+    // them, including a value no client knows.
+    const plain = [
+        { duration_sec: 300, hr_max: 118 },
+        { duration_sec: 2400, hr_min: 122, hr_max: 140 },
+        { duration_sec: 300, hr_max: 118 },
+    ];
+    const roled = [
+        { duration_sec: 300, hr_max: 118, role: 'warmup' },
+        { duration_sec: 2400, hr_min: 122, hr_max: 140, role: 'work' },
+        { duration_sec: 300, hr_max: 118, role: 'cooldown' },
+    ];
+
+    assert.equal(formatSegments(roled), formatSegments(plain));
+    assert.equal(formatSegments(roled), '5:00 ≤118 · 40:00 122–140 · 5:00 ≤118');
+    assert.equal(
+        formatSegments([{ duration_sec: 60, hr_min: 140, role: 'sprint' }]),
+        '1:00 ≥140',
+    );
+});
+
 test('formatSegments: a zero bound is absent, not a bound of zero', () => {
     // JS-truthy guards, mirrored by the Kotlin twin: the server's floor is 1, so
     // a 0 is a hand-edited row, and "no bound" beats drawing "≥0".

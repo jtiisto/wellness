@@ -43,10 +43,21 @@ class TestSegmentsAssembly:
         by_id = self._exercises(client, segments_seeded_db)
 
         assert by_id["cardio_1"]["segments"] == [
-            {"duration_sec": 180, "hr_min": 112, "hr_max": 128, "label": "ease in"},
+            {"duration_sec": 180, "hr_min": 112, "hr_max": 128, "label": "ease in",
+             "role": "warmup"},
             {"duration_sec": 600, "hr_min": 134, "hr_max": 149, "label": "steady"},
-            {"duration_sec": 120, "hr_max": 122, "label": "spin down"},
+            {"duration_sec": 120, "hr_max": 122, "label": "spin down",
+             "role": "cooldown"},
         ]
+
+    def test_an_unroled_segment_stays_unroled_on_the_wire(
+        self, client, segments_seeded_db
+    ):
+        """Absence means work, so a work segment must arrive with no `role` key
+        at all — emitting one would make every pre-role plan look edited."""
+        middle = self._exercises(client, segments_seeded_db)["cardio_1"]["segments"][1]
+
+        assert "role" not in middle
 
     def test_a_ceiling_only_segment_keeps_its_missing_bound_missing(
         self, client, segments_seeded_db

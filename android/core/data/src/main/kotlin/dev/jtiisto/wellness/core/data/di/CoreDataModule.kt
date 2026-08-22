@@ -14,6 +14,7 @@ import dev.jtiisto.wellness.core.data.db.WellnessDatabase
 import dev.jtiisto.wellness.core.data.export.DataExporter
 import dev.jtiisto.wellness.core.data.export.SharedFileStore
 import dev.jtiisto.wellness.core.data.hr.GuideEventRecorder
+import dev.jtiisto.wellness.core.data.hr.HrBeatReader
 import dev.jtiisto.wellness.core.data.hr.HrCaptureStore
 import dev.jtiisto.wellness.core.data.hr.HrSyncStore
 import dev.jtiisto.wellness.core.data.journal.JournalSyncStore
@@ -297,6 +298,10 @@ fun coreDataModule(builtInUrl: String) = module {
         )
     }
     single<HrSampleSink> { get<HrCaptureStore>() }
+
+    // The only reader of the sample table. The guide's auto-fill asks it for a
+    // finished ride's beats; nothing on the capture path ever calls it.
+    single { HrBeatReader(dao = get()) }
 
     // `:core:ble` declares its diagnostics seam and cannot reach DebugLog, which
     // lives here — so the bridge is wired on this side. Same privacy rule as

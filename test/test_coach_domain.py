@@ -364,11 +364,39 @@ def test_normalize_segments_canonicalizes_a_timeline():
         {"hr_max": 150, "duration_sec": 120, "label": "  easy  "},
         {"duration_sec": 180, "hr_min": 160, "hr_max": 175},
         {"duration_sec": 300, "hr_min": 125, "label": ""},
+        {"role": "cooldown", "duration_sec": 240, "hr_max": 130},
     ]) == [
         {"duration_sec": 120, "hr_max": 150, "label": "easy"},
         {"duration_sec": 180, "hr_min": 160, "hr_max": 175},
         {"duration_sec": 300, "hr_min": 125},
+        {"duration_sec": 240, "hr_max": 130, "role": "cooldown"},
     ]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("role", ["warmup", "work", "cooldown"])
+def test_normalize_segments_keeps_every_legal_role(role):
+    """All three are stored as authored, including the explicit "work": absence
+    means work, but a value that is legal to send must survive the round trip."""
+    from modules.coach_plans import normalize_segments
+
+    assert normalize_segments([{"duration_sec": 60, "hr_max": 130, "role": role}]) == [
+        {"duration_sec": 60, "hr_max": 130, "role": role}
+    ]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("raw", [None, "", "   "])
+def test_normalize_segments_role_absence_is_work(raw):
+    """No role is the pre-role plan's shape and the common case — it must reach
+    storage as absence, never as an invented "work" the author did not write."""
+    from modules.coach_plans import normalize_segments
+
+    segment = {"duration_sec": 60, "hr_max": 130}
+    if raw is not None:
+        segment["role"] = raw
+
+    assert normalize_segments([segment]) == [{"duration_sec": 60, "hr_max": 130}]
 
 
 @pytest.mark.unit
@@ -396,12 +424,17 @@ def test_normalize_segments_absence(raw):
     ([{"duration_sec": 60, "hr_min": 150, "hr_max": 140}], "must be <="),
     ([{"duration_sec": 60, "hr_max": 140, "label": 7}], "must be a string"),
     ([{"duration_sec": 60, "hr_maxx": 140}], "unknown field"),
+    ([{"duration_sec": 60, "hr_max": 140, "role": "sprint"}], "must be one of"),
+    ([{"duration_sec": 60, "hr_max": 140, "role": "Warmup"}], "must be one of"),
+    ([{"duration_sec": 60, "hr_max": 140, "role": 3}], "must be a string"),
 ])
 def test_normalize_segments_rejects(segments, message):
     """The IntervalIntent rules, generalized — booleans are not integers, the
     floor is 1, one bound at least, min <= max — plus a closed key set: a
     misspelled `hr_maxx` must fail loudly rather than store a floor-only segment
-    that reads as deliberate."""
+    that reads as deliberate. `role` is closed the same way and for the same
+    reason, on its VALUES as well as its name: a "sprint" quietly stored as work
+    would put a warmup into the average the guide fills the log with."""
     from modules.coach_plans import normalize_segments
 
     with pytest.raises(ValueError, match=message):

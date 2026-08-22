@@ -401,10 +401,16 @@ data class GuidanceStrip(
  * The whole-session strip.
  *
  * The strip is the one surface that draws the **plan** and the **extension**
- * apart: segments are clipped back to the planned length and the appended time
- * gets its own dashed block, because the strip answers "what was added" while
- * the band answers "what am I holding". Both are true at once — the rider is
- * still holding the same target, and those minutes were not in the plan.
+ * apart: the segment that absorbed the appended time is split at its planned
+ * end and the remainder gets its own dashed block, because the strip answers
+ * "what was added" while the band answers "what am I holding". Both are true at
+ * once — the rider is still holding the same target, and those minutes were not
+ * in the plan.
+ *
+ * The dashed block therefore sits wherever the lengthened segment ends, which is
+ * **mid-strip when a cooldown follows it**: the appended minutes belong to the
+ * work, and drawing them after a cooldown that has moved later would say the
+ * ride was extended at the end, which is not what happened.
  *
  * Null on an open-ended timeline. With no total there is no proportion, and a
  * strip that filled at a rate nobody set would be an invented measurement.
@@ -427,32 +433,44 @@ fun guidanceStrip(status: GuidanceStatus, width: Double = TRACE_LOGICAL_WIDTH): 
             label = null,
             intensity = null,
         )
-    } else {
-        for (segment in status.segments) {
-            val start = segment.startSec.coerceAtMost(planned)
-            val end = segment.endSec.coerceAtMost(planned)
-            if (end <= start) continue
+        if (total > planned) {
             blocks += StripBlock(
-                x0 = x(start),
-                x1 = x(end),
-                state = when {
-                    status.elapsedSec >= end -> StripState.DONE
-                    status.elapsedSec >= start -> StripState.CURRENT
-                    else -> StripState.AHEAD
-                },
-                label = segment.label,
-                intensity = normalise(levels[segment.index], floor, ceiling),
+                x0 = x(planned),
+                x1 = width,
+                state = StripState.EXTENSION,
+                label = null,
+                intensity = null,
             )
         }
-    }
-    if (total > planned) {
-        blocks += StripBlock(
-            x0 = x(planned),
-            x1 = width,
-            state = StripState.EXTENSION,
-            label = null,
-            intensity = null,
-        )
+    } else {
+        for (segment in status.segments) {
+            // The appended seconds are already inside this segment's end; the
+            // split puts them back where the strip can name them.
+            val appended = if (segment.index == status.extendedIndex) status.extensionSec else 0
+            val plannedEnd = (segment.endSec - appended).coerceAtLeast(segment.startSec)
+            if (plannedEnd > segment.startSec) {
+                blocks += StripBlock(
+                    x0 = x(segment.startSec),
+                    x1 = x(plannedEnd),
+                    state = when {
+                        status.elapsedSec >= plannedEnd -> StripState.DONE
+                        status.elapsedSec >= segment.startSec -> StripState.CURRENT
+                        else -> StripState.AHEAD
+                    },
+                    label = segment.label,
+                    intensity = normalise(levels[segment.index], floor, ceiling),
+                )
+            }
+            if (segment.endSec > plannedEnd) {
+                blocks += StripBlock(
+                    x0 = x(plannedEnd),
+                    x1 = x(segment.endSec),
+                    state = StripState.EXTENSION,
+                    label = null,
+                    intensity = null,
+                )
+            }
+        }
     }
     return GuidanceStrip(
         width = width,

@@ -128,11 +128,11 @@ fun startButtonLabel(phase: GuidancePhase): String? = when (phase) {
  *
  * Two conditions, and the interesting one is the phase.
  *
- * **Shape** is the spec's rule, and it is [GuidanceStatus.canExtend]'s: the
- * steady-state ride — one continuous band, or none at all — with a length to
- * append to. A structured session is a plan someone wrote in parts, and
- * stretching its last part mid-ride is not what "five more minutes" means to
- * the rider looking at four hard intervals.
+ * **Shape** is the spec's rule, and it is [GuidanceStatus.canExtend]'s: a
+ * timeline with exactly one work-role segment — warmup and cooldown around it
+ * welcome — or none at all, with a length to append to. A structured session is
+ * a plan someone wrote in parts, and stretching one of them mid-ride is not what
+ * "five more minutes" means to the rider looking at four hard intervals.
  *
  * **Phase** is this function's own addition, and it excludes
  * [GuidancePhase.READY] for a reason the value types make plain:

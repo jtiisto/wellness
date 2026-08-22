@@ -17,6 +17,7 @@ import dev.jtiisto.wellness.core.data.coach.PlanSegmentDto
 import dev.jtiisto.wellness.core.data.coach.TYPE_DURATION
 import dev.jtiisto.wellness.core.data.coach.WorkoutStatusDto
 import dev.jtiisto.wellness.core.data.hr.GuideEventRecorder
+import dev.jtiisto.wellness.core.data.hr.HrBeatReader
 import dev.jtiisto.wellness.core.data.hr.HrCaptureStore
 import dev.jtiisto.wellness.core.data.network.CoachApi
 import dev.jtiisto.wellness.core.data.network.DateString
@@ -40,6 +41,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -49,6 +51,7 @@ import kotlinx.serialization.json.put
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
@@ -210,6 +213,15 @@ class CoachViewModelTest {
      */
     private val guideEvents = mockk<GuideEventRecorder>(relaxed = true)
 
+    /**
+     * The stored beats a finished ride is described from.
+     *
+     * Relaxed, so it answers with no beats unless a test says otherwise — which
+     * is the strapless ride, and the state every test that is not about the
+     * auto-fill wants to be in.
+     */
+    private val beatReader = mockk<HrBeatReader>(relaxed = true)
+
     private fun kotlinx.coroutines.test.TestScope.viewModel() = CoachViewModel(
         store = store,
         scheduler = mockk(relaxed = true),
@@ -219,6 +231,7 @@ class CoachViewModelTest {
         capture = capture,
         captureStore = captureStore,
         guideEvents = guideEvents,
+        beatReader = beatReader,
         traceRing = traceRing,
         today = { today },
         now = { nowMs },
@@ -682,6 +695,7 @@ class CoachViewModelTest {
             capture = capture,
             captureStore = captureStore,
             guideEvents = guideEvents,
+            beatReader = beatReader,
             traceRing = traceRing,
             today = { now },
             io = StandardTestDispatcher(testScheduler),
@@ -1050,6 +1064,75 @@ class CoachViewModelTest {
         assertEquals(todayString, guide?.key?.date)
         // Opening anchors nothing: the warmup must not burn while the strap goes on.
         assertNull(guide?.run?.startedAtMs)
+    }
+
+    @Test
+    @DisplayName("the guide opens on today only — a tap on a stale row cannot open one for another day")
+    fun openGuideIsDateGated() = runVmTest { viewModel ->
+        publish(
+            plans = cardioPlan() + mapOf("2026-08-07" to cardioPlan().getValue(todayString)),
+        )
+        runCurrent()
+        viewModel.selectDate("2026-08-07")
+        runCurrent()
+
+        viewModel.openGuide("ex_ride")
+        runCurrent()
+
+        assertNull(viewModel.uiState.value.guide)
+
+        // Back on today, the same tap opens it.
+        viewModel.selectDate(todayString)
+        runCurrent()
+        viewModel.openGuide("ex_ride")
+        runCurrent()
+
+        assertNotNull(viewModel.uiState.value.guide)
+    }
+
+    @Test
+    @DisplayName("a guide open across midnight stays open, though the affordance that opened it is gone")
+    fun anOpenGuideSurvivesMidnight() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        var day = today
+        publish(plans = cardioPlan())
+        val viewModel = CoachViewModel(
+            store = store,
+            scheduler = mockk(relaxed = true),
+            api = api,
+            captureState = captureState,
+            knownStraps = knownStraps,
+            capture = capture,
+            captureStore = captureStore,
+            guideEvents = guideEvents,
+            beatReader = beatReader,
+            traceRing = traceRing,
+            today = { day },
+            now = { nowMs },
+            io = StandardTestDispatcher(testScheduler),
+        )
+        backgroundScope.launch { viewModel.uiState.collect { } }
+        runCurrent()
+        viewModel.openGuide("ex_ride")
+        runCurrent()
+        viewModel.startGuidance()
+        runCurrent()
+        val anchor = viewModel.uiState.value.guide?.run?.startedAtMs
+
+        // 23:50 becomes 00:05. The screen re-reads the clock on the way back.
+        day = LocalDate.parse("2026-08-09")
+        nowMs += 900_000L
+        viewModel.onScreenShown()
+        runCurrent()
+
+        assertFalse(viewModel.uiState.value.isEditable)
+        assertNotNull(viewModel.uiState.value.guide)
+        assertEquals(anchor, viewModel.uiState.value.guide?.run?.startedAtMs)
+        // The row underneath it stopped offering to open another, which is the
+        // gate doing its job on the half it governs.
+        val rows = (viewModel.uiState.value.day as WorkoutDayState.Planned)
+            .blocks.flatMap { it.items }.mapNotNull { (it as? BlockItemState.Single)?.exercise }
+        assertFalse(rows.first { it.id == "ex_ride" }.hasGuide)
     }
 
     @Test
@@ -1499,6 +1582,151 @@ class CoachViewModelTest {
         coVerify(exactly = 1) {
             guideEvents.recordStart(todayString, "ex_row", "session-1", nowMs, any())
         }
+    }
+
+    // ---- what a finished ride writes into the log ---------------------------------------
+    //
+    // The fill is a convenience over the ordinary entry, never an authority: it
+    // runs on a dismiss that follows DONE, it writes only into empty fields, and
+    // it goes through the same store transaction a typed number does — so
+    // completion derivation and sync cannot tell the two apart.
+
+    /** Beats every ten minutes of a thirty-minute ride, climbing. */
+    private fun rideBeats(anchorMs: Long) = listOf(0, 600, 1_200, 1_740)
+        .mapIndexed { index, second -> TraceSample(anchorMs + second * 1_000L, 120 + index * 10) }
+
+    private fun kotlinx.coroutines.test.TestScope.givenFinishedRide(
+        viewModel: CoachViewModel,
+        beats: (Long) -> List<TraceSample> = ::rideBeats,
+    ): Long {
+        givenCardioPlan()
+        viewModel.openGuide("ex_ride")
+        runCurrent()
+        viewModel.startGuidance()
+        runCurrent()
+        val anchor = nowMs
+        coEvery { beatReader.beatsBetween(any(), any()) } returns beats(anchor)
+        // Thirty-two minutes into a thirty-minute plan: DONE, and two minutes of
+        // it spent putting the bike away.
+        nowMs += 32 * 60_000L
+        return anchor
+    }
+
+    @Test
+    @DisplayName("dismissing a finished ride fills the entry from the timeline and the beats")
+    fun dismissAfterDoneFillsTheEntry() = runVmTest { viewModel ->
+        val anchor = givenFinishedRide(viewModel)
+
+        viewModel.dismissGuide()
+        runCurrent()
+
+        val entry = storedEntry("ex_ride")
+        // Thirty minutes: the timeline's length, not the thirty-two on the clock.
+        assertEquals("30", entry.getValue("duration_min").jsonPrimitive.content)
+        assertEquals("135", entry.getValue("avg_hr").jsonPrimitive.content)
+        assertEquals("150", entry.getValue("max_hr").jsonPrimitive.content)
+        // The beats asked for are exactly the ride: anchor to the timeline's end.
+        coVerify(exactly = 1) { beatReader.beatsBetween(anchor, anchor + 1_800_000L) }
+        // The same write path a typed field takes — no completion toggle, one
+        // transaction, nothing that marks the entry as machine-written.
+        assertEquals(listOf<CompletionToggle?>(null), completions)
+    }
+
+    @Test
+    @DisplayName("a field the rider typed is never overwritten — the fill goes into the gaps")
+    fun fillNeverOverwritesTypedValues() = runVmTest { viewModel ->
+        storedDay = buildJsonObject {
+            put(
+                "ex_ride",
+                buildJsonObject {
+                    put("duration_min", JsonPrimitive(45))
+                    // An explicit null is how a cleared field is stored, and it
+                    // is as empty as a field that never existed.
+                    put("avg_hr", JsonNull)
+                },
+            )
+        }
+        givenFinishedRide(viewModel)
+
+        viewModel.dismissGuide()
+        runCurrent()
+
+        val entry = storedEntry("ex_ride")
+        assertEquals("45", entry.getValue("duration_min").jsonPrimitive.content)
+        assertEquals("135", entry.getValue("avg_hr").jsonPrimitive.content)
+        assertEquals("150", entry.getValue("max_hr").jsonPrimitive.content)
+    }
+
+    @Test
+    @DisplayName("a dismiss before the timeline ends fills nothing and reads no beats")
+    fun dismissBeforeDoneFillsNothing() = runVmTest { viewModel ->
+        givenCardioPlan()
+        viewModel.openGuide("ex_ride")
+        runCurrent()
+        viewModel.startGuidance()
+        runCurrent()
+
+        // Twelve minutes into a thirty-minute ride: an early bail is the
+        // rider's to log, exactly as it was before the guide existed.
+        nowMs += 12 * 60_000L
+        viewModel.dismissGuide()
+        runCurrent()
+
+        assertTrue(storedDay.isEmpty())
+        coVerify(exactly = 0) { beatReader.beatsBetween(any(), any()) }
+    }
+
+    @Test
+    @DisplayName("a ride nobody wore a strap for fills nothing at all")
+    fun straplessRideFillsNothing() = runVmTest { viewModel ->
+        givenFinishedRide(viewModel) { emptyList() }
+
+        viewModel.dismissGuide()
+        runCurrent()
+
+        assertTrue(storedDay.isEmpty())
+        coVerify(exactly = 0) { store.transformLogEntry(any(), any(), any(), any()) }
+    }
+
+    @Test
+    @DisplayName("a ride dismissed after its day has gone read-only fills nothing")
+    fun fillRespectsTheEditableGate() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        var day = today
+        publish(plans = cardioPlan())
+        val viewModel = CoachViewModel(
+            store = store,
+            scheduler = mockk(relaxed = true),
+            api = api,
+            captureState = captureState,
+            knownStraps = knownStraps,
+            capture = capture,
+            captureStore = captureStore,
+            guideEvents = guideEvents,
+            beatReader = beatReader,
+            traceRing = traceRing,
+            today = { day },
+            now = { nowMs },
+            io = StandardTestDispatcher(testScheduler),
+        )
+        backgroundScope.launch { viewModel.uiState.collect { } }
+        runCurrent()
+        viewModel.openGuide("ex_ride")
+        runCurrent()
+        viewModel.startGuidance()
+        runCurrent()
+        coEvery { beatReader.beatsBetween(any(), any()) } returns rideBeats(nowMs)
+
+        // The ride finishes after midnight. The day it belongs to is read-only
+        // by then — the rider could not type into it either.
+        day = LocalDate.parse("2026-08-09")
+        nowMs += 32 * 60_000L
+        viewModel.onScreenShown()
+        runCurrent()
+        viewModel.dismissGuide()
+        runCurrent()
+
+        assertTrue(storedDay.isEmpty())
     }
 
     @Test

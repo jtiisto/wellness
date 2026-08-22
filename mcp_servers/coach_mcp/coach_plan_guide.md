@@ -114,12 +114,14 @@ explicit `"type": "duration"` to take a timeline.
 {"id": "vo2_1", "name": "VO2 Max Intervals", "type": "interval",
  "target_duration_min": 26,
  "segments": [
-   {"duration_sec": 300, "hr_min": 120, "hr_max": 138, "label": "warmup"},
+   {"duration_sec": 300, "hr_min": 120, "hr_max": 138, "label": "warmup",
+    "role": "warmup"},
    {"duration_sec": 180, "hr_min": 158, "hr_max": 172, "label": "hard"},
    {"duration_sec": 120, "hr_max": 145, "label": "easy"},
    {"duration_sec": 180, "hr_min": 158, "hr_max": 172, "label": "hard"},
    {"duration_sec": 120, "hr_max": 145, "label": "easy"},
-   {"duration_sec": 300, "hr_max": 130, "label": "cooldown"}
+   {"duration_sec": 300, "hr_max": 130, "label": "cooldown",
+    "role": "cooldown"}
  ]}
 ```
 
@@ -129,8 +131,33 @@ explicit `"type": "duration"` to take a timeline.
   this hard"), max only a **ceiling** ("no harder than this"), both a **range**.
 - `label` — optional short display string (`"warmup"`, `"hard"`, `"Z2"`). It is
   rendered in small caps beside the segment, so keep it to a word or two.
+- `role` — optional, exactly one of `"warmup"`, `"work"`, `"cooldown"`. Any
+  other value is rejected.
 - No other keys are accepted — a misspelled one is rejected rather than
   silently dropped.
+
+**Mark the warmup and the cooldown; leave the rest alone.** `role` is absent by
+default and absent means `"work"`, so a timeline with no roles at all is
+entirely work — which is exactly what every plan written before this field
+existed says, and usually the right thing for a plain steady ride. What the
+roles buy is on the guide's side, and both uses are about telling preparation
+from the session:
+
+- When a guided ride finishes, the client fills the log's duration, average HR
+  and max HR by itself. **The two heart-rate numbers are averaged over the
+  work-role segments only** — a warmup and a cooldown in the average would drag
+  the number below what the session actually asked for.
+- The `+ 5 MIN` control is offered when the timeline has **exactly one**
+  work-role segment, and it lengthens that segment. So a warmup / Zone 2 /
+  cooldown ride can be extended mid-session (the cooldown shifts later, intact),
+  while a VO2 session with six work intervals cannot — there is no single
+  segment "five more minutes" could mean.
+
+The easy/recovery segments *between* efforts are work: they are part of the
+protocol, not preparation for it. Leave them role-less — **absence IS the
+work role**, so a role-less segment counts as work everywhere the field is
+read (the auto-fill's averaged spans, the one-work-segment extend rule).
+Only `warmup` and `cooldown` are ever written.
 
 **Write bpm, never a zone name.** Nothing in this system resolves symbolic zones
 — there is no zone table and no stored HRmax — so compute the bpm yourself from
@@ -151,6 +178,19 @@ single-segment timeline:
 {"id": "cardio_1", "name": "Zone 2 Bike", "type": "duration",
  "target_duration_min": 45,
  "segments": [{"duration_sec": 2700, "hr_min": 122, "hr_max": 140, "label": "Z2"}]}
+```
+
+With an easy start and a spin-down around it, mark those two and the middle
+stays the one work segment — which keeps the ride extendable:
+
+```json
+{"id": "cardio_1", "name": "Zone 2 Bike", "type": "duration",
+ "target_duration_min": 50,
+ "segments": [
+   {"duration_sec": 300, "hr_max": 118, "label": "ease in", "role": "warmup"},
+   {"duration_sec": 2400, "hr_min": 122, "hr_max": 140, "label": "Z2"},
+   {"duration_sec": 300, "hr_max": 118, "label": "spin down", "role": "cooldown"}
+ ]}
 ```
 
 **When an exercise carries `segments`, keep HR out of its `guidance_note`** —

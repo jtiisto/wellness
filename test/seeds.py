@@ -120,9 +120,14 @@ def seed_coach_plan(conn, *, today, yesterday=None, supersets=False,
         s1, b3,
         "STEADY" if exposures else None,
         json.dumps([
-            {"duration_sec": 180, "hr_min": 112, "hr_max": 128, "label": "ease in"},
+            # Roles on the ends and none in the middle: the warmup/work/cooldown
+            # shape as an author writes it, which is also the shape that carries
+            # the absence rule (the steady segment is work by having no role).
+            {"duration_sec": 180, "hr_min": 112, "hr_max": 128, "label": "ease in",
+             "role": "warmup"},
             {"duration_sec": 600, "hr_min": 134, "hr_max": 149, "label": "steady"},
-            {"duration_sec": 120, "hr_max": 122, "label": "spin down"},
+            {"duration_sec": 120, "hr_max": 122, "label": "spin down",
+             "role": "cooldown"},
         ]) if segments else None,
     ))
     if segments:

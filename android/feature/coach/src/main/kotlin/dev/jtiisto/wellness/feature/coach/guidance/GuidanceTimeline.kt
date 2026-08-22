@@ -34,6 +34,48 @@ import kotlinx.serialization.encodeToString
 const val EXTENSION_STEP_SEC = 300
 
 /**
+ * What a segment is *for*, as the timeline reads it.
+ *
+ * Three values, and **absence is [WORK]** — every timeline authored before the
+ * field existed is therefore all work, which is what makes the role rules
+ * compatible to the byte with what shipped before them. Warmup and cooldown are
+ * preparation around the session rather than the session, so they are what the
+ * two role-driven rules exclude: the spans a finished ride averages its heart
+ * rate over, and the one segment `+ 5 MIN` may lengthen.
+ *
+ * The easy/recovery steps *between* efforts are work and are meant to be
+ * role-less: they are part of the protocol, not preparation for it.
+ */
+enum class SegmentRole {
+    WARMUP,
+    WORK,
+    COOLDOWN,
+    ;
+
+    /** The wire's spelling, or null for [WORK] — absence is how work is written. */
+    val wireValue: String? get() = if (this == WORK) null else name.lowercase()
+
+    companion object {
+
+        /**
+         * Read a wire value **leniently**: anything that is not one of the three
+         * is [WORK].
+         *
+         * The server holds the closed set and rejects an unknown value as loudly
+         * as an unknown key, so a value that reaches this side and is not one of
+         * the three can only be a hand-edited row. This is the display path's
+         * standing answer to that (the zero-bound rule's precedent): degrade to
+         * the meaning absence already carries rather than throw, because the
+         * alternative is a guide that refuses to open over one bad string.
+         * Case-folded on the way in for the same reason — `"Warmup"` is a
+         * transcription of the right answer, not a different one.
+         */
+        fun fromWire(raw: String?): SegmentRole =
+            entries.firstOrNull { it.name.equals(raw?.trim(), ignoreCase = true) } ?: WORK
+    }
+}
+
+/**
  * One step of the timeline, with its place on it resolved.
  *
  * The wire carries durations; this carries offsets, because everything the guide
@@ -60,8 +102,13 @@ data class GuidanceSegment(
     val endSec: Int,
     val hrMin: Int?,
     val hrMax: Int?,
+    /** Absence normalised away on the way in — see [SegmentRole]. */
+    val role: SegmentRole = SegmentRole.WORK,
 ) {
     val durationSec: Int get() = endSec - startSec
+
+    /** Whether this segment is the session rather than the preparation for it. */
+    val isWork: Boolean get() = role == SegmentRole.WORK
 
     val startMs: Long get() = startSec * MILLIS_PER_SECOND
 
@@ -143,6 +190,7 @@ fun guidanceTimeline(
             endSec = offset + duration,
             hrMin = segment.hrMin?.takeIf { it != 0 },
             hrMax = segment.hrMax?.takeIf { it != 0 },
+            role = SegmentRole.fromWire(segment.role),
         )
         offset += duration
     }
@@ -167,6 +215,13 @@ fun guidanceTimeline(
  * was clamped on the way in, and the record says what the rider actually rode
  * to. A segmentless ride serializes as `[]` — honestly, since no band was drawn
  * and there are no boundaries to derive.
+ *
+ * Roles ride along, because the offline derivation needs them: which segment
+ * absorbed each timestamped extend is read from the snapshot's roles, and the
+ * per-segment metrics the analysis round computes are the same work/warmup
+ * distinction the auto-fill makes here. A **work** segment records as *absence*
+ * — that is what absence means, and it keeps a role-less ride's record identical
+ * to the ones written before roles existed.
  */
 fun GuidanceTimeline.guidedSegmentsJson(): String = WellnessJson.encodeToString(
     segments.map {
@@ -175,6 +230,7 @@ fun GuidanceTimeline.guidedSegmentsJson(): String = WellnessJson.encodeToString(
             hrMin = it.hrMin,
             hrMax = it.hrMax,
             label = it.label,
+            role = it.role.wireValue,
         )
     },
 )
@@ -276,6 +332,16 @@ data class GuidanceStatus(
     val extensionSec: Int,
     val totalSec: Int?,
     val segments: List<GuidanceSegment>,
+    /**
+     * Which segment absorbed the appended time, or null when none did.
+     *
+     * Published rather than re-derived because two surfaces need the same
+     * answer and must not be able to differ on it: the band stretches the
+     * segment this names, and the session strip draws the appended time as its
+     * own dashed block *at that segment's end* — mid-strip when a cooldown
+     * follows it.
+     */
+    val extendedIndex: Int?,
     val currentIndex: Int?,
     /**
      * The header's `REMAINING` number: what is left of the **current segment**,
@@ -304,12 +370,25 @@ data class GuidanceStatus(
     /**
      * Whether `+ 5 MIN` is offered.
      *
-     * Steady-state only, per the spec, and only when there is a length to append
-     * to: appending to an open-ended timeline would move a total that does not
-     * exist while still counting up the `EXTENDED` note, which would be a
-     * control that reports work it did not do.
+     * **Exactly one work-role segment**, or none at all, and a length to append
+     * to. The rule is about what "five more minutes" could mean: with one work
+     * segment it means that segment, however much warmup and cooldown are
+     * wrapped around it — the warmup/Zone 2/cooldown ride, which the shipped
+     * size-of-one reading wrongly refused. With six of them (a VO2 session) it
+     * means nothing in particular, and the control stays away. A segmentless
+     * `duration` exercise is the whole ride and stays eligible.
+     *
+     * The length requirement is separate and unchanged: appending to an
+     * open-ended timeline would move a total that does not exist while still
+     * counting up the `EXTENDED` note, which would be a control that reports
+     * work it did not do.
+     *
+     * Role-less timelines are all-work by the absence rule, so a single segment
+     * is still eligible and several are still not — the shipped behavior,
+     * unchanged.
      */
-    val canExtend: Boolean get() = segments.size <= 1 && plannedTotalSec != null
+    val canExtend: Boolean get() =
+        plannedTotalSec != null && (segments.isEmpty() || segments.count { it.isWork } == 1)
 
     /**
      * The segment holding an arbitrary instant of the timeline.
@@ -340,6 +419,7 @@ fun guidanceStatus(timeline: GuidanceTimeline, run: GuidanceRun, nowMs: Long): G
     val anchorMs = run.startedAtMs ?: nowMs
     val extensionSec = run.extensionSec.coerceAtLeast(0)
     val elapsedMs = (nowMs - anchorMs).coerceAtLeast(0L)
+    val extendedIndex = timeline.segments.extensionTargetIndex(extensionSec)
     val segments = timeline.segments.extendedBy(extensionSec)
     val totalSec = timeline.plannedTotalSec?.plus(extensionSec)
     val phase = when {
@@ -366,6 +446,7 @@ fun guidanceStatus(timeline: GuidanceTimeline, run: GuidanceRun, nowMs: Long): G
         extensionSec = extensionSec,
         totalSec = totalSec,
         segments = segments,
+        extendedIndex = extendedIndex,
         currentIndex = currentIndex,
         remainingSec = remainingSec,
         remainingTotalSec = totalSec?.let { ceilSeconds(it * MILLIS_PER_SECOND - elapsedMs) },
@@ -373,24 +454,56 @@ fun guidanceStatus(timeline: GuidanceTimeline, run: GuidanceRun, nowMs: Long): G
 }
 
 /**
- * Fold appended time into the **last** segment.
+ * Which segment appended time goes into: **the work one**.
  *
- * One rule, and it is the right one for the only case that offers the control: a
- * steady ride's extension is more of the same ride, one continuous band held for
- * longer, which is exactly what stretching the single segment draws. Applied to
- * a multi-segment timeline it would lengthen the last step, which is the
- * sensible reading there too (you cool down for longer) — so the rule needs no
- * special case for a shape the UI does not currently expose.
+ * With exactly one work-role segment — the only shape the control is offered on
+ * — that segment is the ride, and lengthening it is what "five more minutes"
+ * means: the cooldown after it shifts later intact rather than being stretched
+ * into a cooldown nobody asked for.
  *
- * The **session strip** deliberately draws this differently: it clips the
- * segments back to the planned length and draws the appended time as its own
- * dashed block, because the strip's question is "what was added" while the
- * band's is "what am I holding". Both answers are true at once.
+ * The fallback is the **last** segment, which is what shipped before roles, and
+ * it is reached in two ways. A role-less timeline of several segments is all
+ * work by the absence rule, so it has no single work segment — and it is also
+ * the shape the control was never offered on, so the fallback only matters when
+ * a run that was extended while eligible finds its plan re-synced into a
+ * different shape mid-ride. The other way is a timeline of nothing but warmup
+ * and cooldown, which has no work segment at all. In both cases the appended
+ * time has to land *somewhere* — the extended segments must still sum to the
+ * total, or the strip and the band would disagree with the countdown.
+ *
+ * Null when there is nothing to extend: no segments, or no appended time.
  */
-private fun List<GuidanceSegment>.extendedBy(extensionSec: Int): List<GuidanceSegment> {
-    if (extensionSec <= 0 || isEmpty()) return this
-    val last = last()
-    return dropLast(1) + last.copy(endSec = last.endSec + extensionSec)
+internal fun List<GuidanceSegment>.extensionTargetIndex(extensionSec: Int): Int? {
+    if (extensionSec <= 0 || isEmpty()) return null
+    val work = filter { it.isWork }
+    return if (work.size == 1) indexOf(work.single()) else lastIndex
+}
+
+/**
+ * Fold appended time into the segment [extensionTargetIndex] names, shifting
+ * everything after it later by the same amount.
+ *
+ * The shift is what keeps the timeline a timeline: offsets are cumulative, so
+ * lengthening a segment in the middle has to move the ones behind it or they
+ * would overlap the time it just took.
+ *
+ * The **session strip** deliberately draws this differently: it splits the
+ * lengthened segment at its planned end and draws the appended time as its own
+ * dashed block there, because the strip's question is "what was added" while
+ * the band's is "what am I holding". Both answers are true at once.
+ */
+internal fun List<GuidanceSegment>.extendedBy(extensionSec: Int): List<GuidanceSegment> {
+    val target = extensionTargetIndex(extensionSec) ?: return this
+    return mapIndexed { index, segment ->
+        when {
+            index < target -> segment
+            index == target -> segment.copy(endSec = segment.endSec + extensionSec)
+            else -> segment.copy(
+                startSec = segment.startSec + extensionSec,
+                endSec = segment.endSec + extensionSec,
+            )
+        }
+    }
 }
 
 /**
