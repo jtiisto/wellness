@@ -119,7 +119,12 @@ case "$decision" in
     full)
         if [[ "$run_server" == "1" ]]; then
             echo "Running full server/PWA test suite with coverage before push..."
-            python3 -m pytest --cov=src --cov=mcp_servers --cov-report=term-missing --cov-fail-under=88 2>&1 || exit $?
+            # --cov-precision=2: pytest-cov's exit code compares round(total,
+            # precision) to fail-under while its FAIL banner compares raw — at
+            # precision 0 a total in [87.5, 88.0) printed FAIL yet exited 0 and
+            # pushed (observed 2026-08-21 at 87.67). Two decimals make the exit
+            # code and the banner agree, and the gate a true 88.00.
+            python3 -m pytest --cov=src --cov=mcp_servers --cov-report=term-missing --cov-fail-under=88 --cov-precision=2 2>&1 || exit $?
             echo "Running JS unit tests (node:test)..."
             node --test test/js/*.test.js || exit $?
         fi
