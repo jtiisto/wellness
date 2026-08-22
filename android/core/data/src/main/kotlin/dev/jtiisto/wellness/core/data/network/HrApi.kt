@@ -1,5 +1,6 @@
 package dev.jtiisto.wellness.core.data.network
 
+import dev.jtiisto.wellness.core.data.hr.GuideEventsBatchRequest
 import dev.jtiisto.wellness.core.data.hr.IngestResponseDto
 import dev.jtiisto.wellness.core.data.hr.SamplesBatchRequest
 import dev.jtiisto.wellness.core.data.hr.SessionsBatchRequest
@@ -17,7 +18,7 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.contentType
 
 /**
- * The heart-rate module's endpoints: one probe and three batch ingests.
+ * The heart-rate module's endpoints: one probe and four batch ingests.
  *
  * Upload-only, unlike every other API here — the server answers with counts and
  * nothing else, so there is no pull, no watermark and no arbitration. The
@@ -60,6 +61,13 @@ class HrApi(
             setBody(batch)
         }.body()
 
+    /** `INSERT OR IGNORE` on `eventId`, as the set-event log is. */
+    suspend fun postGuideEvents(batch: GuideEventsBatchRequest): IngestResponseDto =
+        client.post(config.endpoint(GUIDE_EVENTS_PATH)) {
+            contentType(ContentType.Application.Json)
+            setBody(batch)
+        }.body()
+
     /**
      * Full-row upsert on `sessionId`, last write wins — a session legitimately
      * changes after its first upload (started → workout-anchored → ended) and
@@ -75,6 +83,7 @@ class HrApi(
         const val STATUS_PATH = "/api/hr/status"
         const val SAMPLES_PATH = "/api/hr/samples/batch"
         const val SET_EVENTS_PATH = "/api/hr/set-events/batch"
+        const val GUIDE_EVENTS_PATH = "/api/hr/guide-events/batch"
         const val SESSIONS_PATH = "/api/hr/sessions/batch"
     }
 }

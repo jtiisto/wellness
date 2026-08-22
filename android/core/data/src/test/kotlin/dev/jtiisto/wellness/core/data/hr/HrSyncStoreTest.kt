@@ -1,9 +1,11 @@
 package dev.jtiisto.wellness.core.data.hr
 
 import dev.jtiisto.wellness.core.data.WellnessJson
+import dev.jtiisto.wellness.core.data.db.FakeGuideEventDao
 import dev.jtiisto.wellness.core.data.db.FakeHrSampleDao
 import dev.jtiisto.wellness.core.data.db.FakeHrSessionDao
 import dev.jtiisto.wellness.core.data.db.FakeSetEventDao
+import dev.jtiisto.wellness.core.data.db.GuideEventEntity
 import dev.jtiisto.wellness.core.data.db.HrSampleEntity
 import dev.jtiisto.wellness.core.data.db.HrSessionEntity
 import dev.jtiisto.wellness.core.data.db.SetEventEntity
@@ -110,22 +112,95 @@ class HrSyncStoreTest {
     }
 
     @Test
-    @DisplayName("a full flush drains sessions, then events, then samples")
+    @DisplayName("a full flush drains sessions, then both event logs, then samples")
     fun fullFlushCoversEveryFlow() = runTest {
         val world = World()
         world.seedSessions(1)
         world.seedEvents(2)
+        world.seedGuideEvents(2)
         world.seedSamples(4)
 
         assertTrue(world.store().flush().success)
 
         assertEquals(
-            listOf(HrApi.SESSIONS_PATH, HrApi.SET_EVENTS_PATH, HrApi.SAMPLES_PATH),
+            listOf(
+                HrApi.SESSIONS_PATH,
+                HrApi.SET_EVENTS_PATH,
+                HrApi.GUIDE_EVENTS_PATH,
+                HrApi.SAMPLES_PATH,
+            ),
             world.requests.map { it.path },
         )
         assertTrue(world.sessionDao.sessions.values.all { it.isSynced })
         assertTrue(world.eventDao.events.values.all { it.isSynced })
+        assertTrue(world.guideEventDao.events.values.all { it.isSynced })
         assertTrue(world.sampleDao.samples.values.all { it.isSynced })
+    }
+
+    // ---- guide events ----------------------------------------------------
+    //
+    // The same pipeline as the set events, so what is pinned here is what is
+    // particular to this flow: that it goes to its own endpoint, carries both
+    // action shapes intact, and is quarantined and pruned by the same rules.
+
+    @Test
+    @DisplayName("guide events post to their own endpoint and are marked by the 2xx")
+    fun guideEventsUploadToTheirOwnPath() = runTest {
+        val world = World()
+        world.seedGuideEvents(2)
+
+        val result = world.store().flushGuideEvents()
+
+        assertTrue(result.success)
+        assertEquals(HrApi.GUIDE_EVENTS_PATH, world.requests.single().path)
+        assertEquals(2, world.requests.single().rows)
+        assertTrue(world.guideEventDao.events.values.all { it.isSynced })
+        assertEquals(0, world.guideEventDao.countPending())
+    }
+
+    @Test
+    @DisplayName("the anchor's timeline and the extension's step both reach the wire")
+    fun guideEventPayloadsAreSent() = runTest {
+        val world = World()
+        world.seedGuideEvents(2)
+
+        world.store().flushGuideEvents()
+
+        val body = world.requests.single().body
+        assertTrue(body.contains("\"timelineJson\""), "the anchor carries what it guided against")
+        assertTrue(body.contains("\"extensionSec\":300"), "the extension carries its step")
+        // Omitted, never null: neither action sends the other's field as a null.
+        assertFalse(body.contains("null"), "optionals are omitted, not nulled: $body")
+    }
+
+    @Test
+    @DisplayName("a poison guide event is isolated and the rest of the batch still lands")
+    fun guideEventBisect() = runTest {
+        val world = World()
+        world.seedGuideEvents(8)
+        world.poison = setOf(guideEventId(5))
+
+        val result = world.store().flushGuideEvents()
+
+        assertTrue(result.success)
+        assertEquals(
+            listOf(guideEventId(5)),
+            world.guideEventDao.events.values.filter { it.isQuarantined }.map { it.eventId },
+        )
+        assertEquals(7, world.guideEventDao.events.values.count { it.isSynced })
+    }
+
+    @Test
+    @DisplayName("synced guide events keep the set events' sixty days, not the samples' seven")
+    fun guideEventPruneHorizon() = runTest {
+        val world = World()
+        val cutoff = NOW - EVENT_RETENTION_MS
+        world.seedGuideEvent(index = 0, clientTimestampMs = cutoff - 1, synced = true)
+        world.seedGuideEvent(index = 1, clientTimestampMs = cutoff, synced = true)
+
+        assertTrue(world.store().flushGuideEvents().success)
+
+        assertEquals(listOf(guideEventId(1)), world.guideEventDao.events.keys.toList())
     }
 
     @Test
@@ -782,6 +857,12 @@ class HrSyncStoreTest {
         // scheduler wakes for work no flow will ever offer it.
         world.sessionDao.markQuarantined(sessionId(0), world.sessionGeneration(0))
         assertFalse(world.store().hasPendingData(), "a quarantined-only backlog is not pending work")
+
+        world.seedGuideEvents(1)
+        assertTrue(world.store().hasPendingData(), "and so does a guide action nobody has sent")
+
+        world.guideEventDao.markQuarantined(listOf(guideEventId(0)))
+        assertFalse(world.store().hasPendingData())
     }
 
     @Test
@@ -850,7 +931,7 @@ class HrSyncStoreTest {
     private data class Recorded(val path: String, val rows: Int, val body: String)
 
     /**
-     * The three DAOs, a scriptable server and the fence, wired as Koin wires
+     * The four DAOs, a scriptable server and the fence, wired as Koin wires
      * them.
      *
      * The default responder is poison-aware: a batch containing any string in
@@ -862,6 +943,7 @@ class HrSyncStoreTest {
         val sessionDao: FakeHrSessionDao = FakeHrSessionDao(),
         val sampleDao: FakeHrSampleDao = FakeHrSampleDao(),
         val eventDao: FakeSetEventDao = FakeSetEventDao(),
+        val guideEventDao: FakeGuideEventDao = FakeGuideEventDao(),
     ) {
         val session = ServerSessionGate()
         val requests = mutableListOf<Recorded>()
@@ -898,6 +980,7 @@ class HrSyncStoreTest {
                 sessionDao = sessionDao,
                 sampleDao = sampleDao,
                 eventDao = eventDao,
+                guideEventDao = guideEventDao,
                 api = HrApi(buildHttpClient(engine, config, WellnessJson, debugLog), config),
                 clientId = { CLIENT },
                 isOnline = { online },
@@ -928,6 +1011,34 @@ class HrSyncStoreTest {
                 setNum = 1,
                 action = SetEventEntity.ACTION_CHECK,
                 clientTimestampMs = clientTimestampMs,
+                isSynced = synced,
+            )
+        }
+
+        /**
+         * Alternating anchors and extensions, so a batch of them carries both
+         * action shapes and neither field can be asserted by accident.
+         */
+        fun seedGuideEvents(count: Int) {
+            repeat(count) { seedGuideEvent(it) }
+        }
+
+        fun seedGuideEvent(
+            index: Int,
+            clientTimestampMs: Long = NOW - 100_000 + index,
+            synced: Boolean = false,
+        ) {
+            val id = guideEventId(index)
+            val isStart = index % 2 == 0
+            guideEventDao.events[id] = GuideEventEntity(
+                eventId = id,
+                date = "2030-01-03",
+                exerciseKey = "ex_ride",
+                action = if (isStart) GuideEventEntity.ACTION_START else GuideEventEntity.ACTION_EXTEND,
+                clientTimestampMs = clientTimestampMs,
+                sessionId = sessionId(0),
+                extensionSec = if (isStart) null else 300,
+                timelineJson = if (isStart) GUIDE_TIMELINE else null,
                 isSynced = synced,
             )
         }
@@ -977,7 +1088,12 @@ class HrSyncStoreTest {
         const val NOW = 1_800_000_000_000L
         const val ERROR_BODY = """{"detail":"fixture-validation-error"}"""
 
+        const val GUIDE_TIMELINE =
+            """[{"duration_sec":420,"hr_min":118,"hr_max":134,"label":"warmup"}]"""
+
         fun eventId(index: Int): String = "event-%04d".format(index)
+
+        fun guideEventId(index: Int): String = "guide-%04d".format(index)
 
         fun sessionId(index: Int): String = "session-%04d".format(index)
 

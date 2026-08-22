@@ -277,6 +277,56 @@ is 85; `HrTraceModel`/notation are counted code and ship with tests;
 composable wrappers taking composable lambdas are `inline`; never
 module-scoped or `--tests`-filtered runs.
 
+## Guide events in the HR record (added 2026-08-21, post-ship round)
+
+A spec-time omission, owned as such: the guide's user actions belong in the
+HR record the way set-completion checkboxes already do, so analysis can align
+the guided timeline with the beats. User decisions (2026-08-21/22, settled
+after two iterations): boundaries **derived, not materialized**; **no stop
+event**; recorded **only while a capture session is running**, session-tied.
+The rationale is the system's two-case model (user, 2026-08-22): either the
+wellness system is the sole authority for a ride — strap capture AND guide
+together, everything keyed by the session id — or the ride lives entirely on
+the Garmin side and wellness records only the completion checkbox, exactly
+as for strength. A strapless guided ride is not a case this system records
+(that is a watch ride), so a guide event without a session would be dead
+weight no session-keyed analysis could reach.
+
+- **What is recorded**: the guide's two user actions only — `start` (the
+  anchor instant) and `extend` (+300 s each). Every segment boundary is
+  derivable offline from the anchor plus cumulative durations shifted by the
+  timestamped extends — and derivation, unlike runtime boundary events, has
+  no hole when the overlay is dismissed mid-ride (nothing ticks while it is
+  not composed). DONE is a reading, not an event. A fresh run appends a
+  second `start`; all events are retained and alignment policy (latest
+  start wins) belongs to the analysis side.
+- **Storage**: `guide_events` in hr.db, sibling of `set_events` on the same
+  rails — client-minted `event_id` PK, `INSERT OR IGNORE` idempotency,
+  Pydantic-validated so a violation is the 422 the client bisects on.
+  Columns: `date` (local `YYYY-MM-DD`), `exercise_key`, `action`
+  (`start`/`extend`), `client_timestamp_ms` (epoch ms — the same instant the
+  overlay anchors or extends at), `session_id` (NOT NULL: the session is
+  the analysis key, and its presence is the recording precondition),
+  `extension_sec` (extend only), `timeline_json` (start only: the segments
+  as guided at anchor time — hr.db stays self-contained; nothing on the
+  analysis side reads coach.db), `received_at`.
+- **Wire**: `POST /api/hr/guide-events/batch`, mirroring the set-events
+  batch shape. Android: Room entity + DAO (schema version bump, exported
+  schema committed), emitted from the ViewModel's start/extend actions iff
+  the capture publishes a session id, uploaded on the existing HR sync
+  cadence.
+- **Follow-up round, planned**: `hr_analysis` goes **session-id-driven**
+  (user's simplified model, 2026-08-22). Retrieval is by session id
+  always; the time-window (`start_ms`/`end_ms`) retrieval surface retires
+  from the tools and MCP. A session with guide events analyzes against the
+  recorded timeline (latest `start` wins, snapshot + timestamped extends,
+  per-segment time-in-band against the recorded bounds); a session without
+  them keeps today's supplied-`IntervalIntent` structure. Garmin times
+  participate in nothing — the no-capture ride lives entirely outside this
+  system (watch + garmy), where wellness records only the completion
+  checkbox. Historical no-session-id beats stay stored but unreachable
+  through the tools. Playbook: `plans/cardio-guidance/plan.md` §Follow-up.
+
 ## Open Questions
 
 - None blocking P0. Deferred deliberately: sound/haptic out-of-band cues;

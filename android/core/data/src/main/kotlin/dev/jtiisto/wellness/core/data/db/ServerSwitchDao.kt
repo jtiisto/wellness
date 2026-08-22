@@ -9,7 +9,7 @@ import androidx.room.Transaction
  * The server switch's one write: empty every table that holds server data, move
  * the active flag, and record the boundary — all or nothing.
  *
- * **Eleven tables go, two stay.** `journal_trackers`, `journal_entries`,
+ * **Twelve tables go, two stay.** `journal_trackers`, `journal_entries`,
  * `journal_meta`, `coach_plans`, `coach_logs`, `coach_meta`, `payload_cache`
  * and `trends_meta` all hold data that came from — or is destined for — one
  * specific server, `journal_meta` and `coach_meta` most of all: they carry the
@@ -17,11 +17,13 @@ import androidx.room.Transaction
  * for a full pull, which is how the new server's data arrives without any
  * explicit "resync" step at all.
  *
- * `hr_sessions`, `hr_samples` and `set_events` go for the harder version of the
- * same reason: they are *destined* for the server being left. Nothing arbitrates
- * them, so keeping them would upload one server's captures into another's `hr`
- * module the moment the switch finished — telemetry silently attributed to the
- * wrong place, with no watermark or dirty flag anywhere to notice it.
+ * `hr_sessions`, `hr_samples`, `set_events` and `guide_events` go for the harder
+ * version of the same reason: they are *destined* for the server being left.
+ * Nothing arbitrates them, so keeping them would upload one server's captures
+ * into another's `hr` module the moment the switch finished — telemetry silently
+ * attributed to the wrong place, with no watermark or dirty flag anywhere to
+ * notice it. A guide action names a session id that only the old server has ever
+ * heard of, so it is the same row of the same argument.
  *
  * `server_profiles` survives because it is the list the user just used, and
  * `debug_log` survives because the switch is exactly the kind of event someone
@@ -62,6 +64,9 @@ abstract class ServerSwitchDao {
 
     @Query("DELETE FROM set_events")
     abstract suspend fun clearSetEvents()
+
+    @Query("DELETE FROM guide_events")
+    abstract suspend fun clearGuideEvents()
 
     @Query("UPDATE server_profiles SET isActive = CASE WHEN id = :id THEN 1 ELSE 0 END")
     abstract suspend fun activate(id: Long)
@@ -128,5 +133,6 @@ abstract class ServerSwitchDao {
         clearHrSessions()
         clearHrSamples()
         clearSetEvents()
+        clearGuideEvents()
     }
 }

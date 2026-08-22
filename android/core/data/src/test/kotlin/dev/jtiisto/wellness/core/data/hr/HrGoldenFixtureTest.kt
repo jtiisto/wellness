@@ -1,6 +1,7 @@
 package dev.jtiisto.wellness.core.data.hr
 
 import dev.jtiisto.wellness.core.data.WellnessJson
+import dev.jtiisto.wellness.core.data.db.GuideEventEntity
 import dev.jtiisto.wellness.core.data.db.HrSampleEntity
 import dev.jtiisto.wellness.core.data.db.HrSessionEntity
 import dev.jtiisto.wellness.core.data.db.SetEventEntity
@@ -167,6 +168,51 @@ class HrGoldenFixtureTest {
     }
 
     @Test
+    @DisplayName("an anchor, an extension and a segmentless anchor serialize to the guide fixture")
+    fun guideEventsRequestMatchesFixture() = runTest {
+        val bodies = mutableListOf<String>()
+        val rows = listOf(
+            GuideEventEntity(
+                eventId = "22222222-3333-4444-5555-666666666666",
+                date = "2030-01-03",
+                exerciseKey = "fixture-cardio-intervals",
+                action = GuideEventEntity.ACTION_START,
+                clientTimestampMs = 1770000030000,
+                sessionId = SESSION,
+                // Opaque to this protocol: the segments as the guide drew them,
+                // in the coach wire's shape, escaped into one string.
+                timelineJson = """[{"duration_sec":420,"hr_min":118,"hr_max":134,"label":"warmup"},""" +
+                    """{"duration_sec":240,"hr_max":142}]""",
+            ),
+            GuideEventEntity(
+                eventId = "77777777-8888-9999-aaaa-bbbbbbbbbbbb",
+                date = "2030-01-03",
+                exerciseKey = "fixture-cardio-intervals",
+                action = GuideEventEntity.ACTION_EXTEND,
+                clientTimestampMs = 1770000090000,
+                sessionId = SESSION,
+                extensionSec = 300,
+            ),
+            // A ride whose plan authored no timeline: an empty list, not an
+            // absent field — the guide ran, it simply drew no band.
+            GuideEventEntity(
+                eventId = "cccccccc-dddd-eeee-ffff-000000000000",
+                date = "2030-01-04",
+                exerciseKey = "fixture-cardio-steady",
+                action = GuideEventEntity.ACTION_START,
+                clientTimestampMs = 1770000120000,
+                sessionId = SESSION,
+                timelineJson = "[]",
+            ),
+        )
+
+        apiRecording(bodies).postGuideEvents(GuideEventsBatchRequest(CLIENT, rows.map { it.toDto() }))
+
+        assertEquals(compact(fixture("guide-events-batch-request.json")), bodies.single())
+        assertFalse(bodies.single().contains("null"), "optionals are omitted, never null")
+    }
+
+    @Test
     @DisplayName("an open, workout-anchored session serializes to the sessions fixture")
     fun sessionsRequestMatchesFixture() = runTest {
         val bodies = mutableListOf<String>()
@@ -188,7 +234,7 @@ class HrGoldenFixtureTest {
     }
 
     @Test
-    @DisplayName("the three POSTs go to their own unversioned paths")
+    @DisplayName("the four POSTs go to their own unversioned paths")
     fun endpointPaths() = runTest {
         val requests = mutableListOf<Pair<HttpMethod, String>>()
         val engine = MockEngine { request ->
@@ -202,12 +248,14 @@ class HrGoldenFixtureTest {
 
         api.postSamples(SamplesBatchRequest(CLIENT, emptyList()))
         api.postSetEvents(SetEventsBatchRequest(CLIENT, emptyList()))
+        api.postGuideEvents(GuideEventsBatchRequest(CLIENT, emptyList()))
         api.postSessions(SessionsBatchRequest(CLIENT, emptyList()))
 
         assertEquals(
             listOf(
                 HttpMethod.Post to "/wellness/api/hr/samples/batch",
                 HttpMethod.Post to "/wellness/api/hr/set-events/batch",
+                HttpMethod.Post to "/wellness/api/hr/guide-events/batch",
                 HttpMethod.Post to "/wellness/api/hr/sessions/batch",
             ),
             requests,

@@ -7,10 +7,10 @@ out. The wire contract (camelCase throughout, epoch-ms integers as data values)
 is documented in docs/ARCHITECTURE.md (its home); the Android client's
 android/specs/hr-protocol.md defers to it.
 
-Ingestion is three batch POSTs, all idempotent so a client that retries an
-unacknowledged flush cannot double-count: samples and set-events INSERT OR
-IGNORE on their natural keys, sessions full-row upsert (one writer per session,
-last write wins).
+Ingestion is four batch POSTs, all idempotent so a client that retries an
+unacknowledged flush cannot double-count: samples, set-events and guide-events
+INSERT OR IGNORE on their natural keys, sessions full-row upsert (one writer per
+session, last write wins).
 
 Validation is deliberately shallow — types, the `action` enum, date format,
 non-negative integers — and **whole-request**: one bad row 422s the entire
@@ -98,11 +98,53 @@ def _migration_1_baseline(cursor):
     """)
 
 
+def _migration_2_guide_events(cursor):
+    """Add `guide_events`: the cardio guide's two user actions.
+
+    Sibling of `set_events` on the same rails — client-minted `event_id`,
+    INSERT OR IGNORE, no foreign key to `sessions` — and it records the same
+    kind of fact: when the rider *did* something, so a beat stream can be read
+    against it.
+
+    Only `start` (the timeline's anchor instant) and `extend` (+300 s) are
+    recorded. Segment boundaries are **derived**, not materialized: every one of
+    them is the anchor plus the cumulative durations in `timeline_json`, shifted
+    by the timestamped extends. Runtime boundary events would have holes — the
+    overlay ticks only while it is composed, and it is dismissed mid-ride — while
+    the derivation has none. There is no stop event either: the guide stops being
+    read, which is not an event, and the log records what was ridden.
+
+    `session_id` is NOT NULL here, unlike its sibling's, because of the system's
+    two-case model: either wellness is the sole authority for a ride — strap
+    capture and guide used together, everything keyed by one session id — or the
+    ride lives entirely on the Garmin side and wellness records only the
+    completion checkbox, exactly as for strength. There is no third case. A
+    strapless guided ride is a watch ride, so a guide event without a session
+    would be dead weight that no session-keyed analysis could ever reach; the
+    session is the analysis key, and its presence is the recording precondition.
+    """
+    cursor.execute("""
+        CREATE TABLE guide_events (
+            event_id            TEXT PRIMARY KEY,
+            date                TEXT    NOT NULL,     -- YYYY-MM-DD (local)
+            exercise_key        TEXT    NOT NULL,     -- coach day-log entry key
+            action              TEXT    NOT NULL CHECK (action IN ('start','extend')),
+            client_timestamp_ms INTEGER NOT NULL,     -- the instant the guide anchored/extended
+            session_id          TEXT    NOT NULL,     -- the recording precondition
+            extension_sec       INTEGER,              -- extends only
+            timeline_json       TEXT,                 -- starts only: segments as guided
+            received_at         TEXT    NOT NULL
+        )
+    """)
+    cursor.execute("CREATE INDEX idx_guide_events_date ON guide_events(date, exercise_key)")
+
+
 # Ordered (target_version, migration_fn) pairs — see db.run_migrations for the
 # transactional contract. Migration fns are DDL-only and must not manage their
 # own transactions.
 MIGRATIONS = [
     (1, _migration_1_baseline),
+    (2, _migration_2_guide_events),
 ]
 
 
@@ -162,6 +204,37 @@ class SetEvent(_WireModel):
     session_id: Optional[str] = None
 
 
+class GuideEvent(_WireModel):
+    """One cardio-guide action: the timeline's anchor, or five appended minutes.
+
+    `session_id` is required, unlike [SetEvent]'s, and the two-case model is why:
+    a guided ride is one wellness owns end to end — capture and guide together,
+    keyed by one session — or it is a watch ride this system only checkboxes. The
+    client therefore records a guide action only while a capture is running, and
+    a sessionless row is not a state this protocol has.
+
+    The two payload fields belong to one action each — `extension_sec` to
+    `extend`, `timeline_json` to `start` — and that pairing is deliberately
+    **not** enforced here. Validation in this module is shallow by contract
+    (types, the enum, the date shape), a 422 is the client's cue to bisect and
+    quarantine, and a cross-field rule would throw away a row whose only fault is
+    that a later client version records more than this server expected.
+
+    `timeline_json` is an opaque string: the segments as the guide drew them, in
+    the coach wire's own segment shape (`duration_sec` / `hr_min` / `hr_max` /
+    `label`). Stored verbatim so `hr.db` stays self-contained — nothing on the
+    analysis side reads `coach.db` — and never parsed here.
+    """
+    event_id: str
+    date: str = Field(pattern=_DATE_PATTERN)
+    exercise_key: str
+    action: Literal["start", "extend"]
+    client_timestamp_ms: int
+    session_id: str
+    extension_sec: Optional[int] = Field(default=None, ge=1)
+    timeline_json: Optional[str] = None
+
+
 class Session(_WireModel):
     """One capture session, re-uploaded whenever its row changes."""
     session_id: str
@@ -183,6 +256,11 @@ class SamplesBatch(_WireModel):
 class SetEventsBatch(_WireModel):
     client_id: str
     events: list[SetEvent]
+
+
+class GuideEventsBatch(_WireModel):
+    client_id: str
+    events: list[GuideEvent]
 
 
 class SessionsBatch(_WireModel):
@@ -291,6 +369,33 @@ def _set_events_batch(get_db, payload):
                           total_received=len(rows))
 
 
+def _guide_events_batch(get_db, payload):
+    """Store cardio-guide actions, idempotent on event_id.
+
+    The same shape as [_set_events_batch] down to the counts, because it is the
+    same kind of log: append-only, client-keyed, and re-sent whenever a flush's
+    response went missing.
+    """
+    received_at = get_utc_now()
+    rows = [
+        (e.event_id, e.date, e.exercise_key, e.action, e.client_timestamp_ms,
+         e.session_id, e.extension_sec, e.timeline_json, received_at)
+        for e in payload.events
+    ]
+    with get_db() as conn:
+        accepted = _ingest(conn, """
+            INSERT OR IGNORE INTO guide_events
+                (event_id, date, exercise_key, action, client_timestamp_ms,
+                 session_id, extension_sec, timeline_json, received_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, rows)
+        conn.commit()
+    logger.debug("HR guide-events batch from %s: %d accepted of %d",
+                 payload.client_id, accepted, len(rows))
+    return IngestResponse(accepted=accepted, duplicates=len(rows) - accepted,
+                          total_received=len(rows))
+
+
 def _sessions_batch(get_db, payload):
     """Upsert capture sessions: full-row replace on session_id, last write wins.
 
@@ -357,6 +462,10 @@ def create_router(db_path: Path) -> APIRouter:
     @router.post("/set-events/batch", response_model=IngestResponse)
     def hr_set_events_batch(payload: SetEventsBatch):
         return _set_events_batch(get_db, payload)
+
+    @router.post("/guide-events/batch", response_model=IngestResponse)
+    def hr_guide_events_batch(payload: GuideEventsBatch):
+        return _guide_events_batch(get_db, payload)
 
     @router.post("/sessions/batch", response_model=UpsertResponse)
     def hr_sessions_batch(payload: SessionsBatch):

@@ -1,5 +1,6 @@
 package dev.jtiisto.wellness.core.data.hr
 
+import dev.jtiisto.wellness.core.data.db.GuideEventEntity
 import dev.jtiisto.wellness.core.data.db.HrSampleEntity
 import dev.jtiisto.wellness.core.data.db.HrSessionEntity
 import dev.jtiisto.wellness.core.data.db.SetEventEntity
@@ -77,6 +78,38 @@ data class SetEventDto(
 )
 
 /**
+ * One cardio-guide action, idempotent on [eventId].
+ *
+ * [action] is `start` | `extend` — the timeline's anchor instant, and five
+ * appended minutes. Every segment boundary is derived from the anchor plus the
+ * durations in [timelineJson] shifted by the timestamped extends, so no boundary
+ * is ever sent; there is no stop event either.
+ *
+ * [sessionId] is **required**, unlike [SetEventDto]'s, because a guided ride is
+ * one of two things and never a third: a ride wellness owns end to end, capture
+ * and guide together under one session id, or a watch ride it only checkboxes.
+ * A guide action is therefore recorded only while a capture is running, and a
+ * sessionless row is not a state this protocol has.
+ *
+ * The two payload fields belong to one action each — [extensionSec] to `extend`,
+ * [timelineJson] to `start` — and each is omitted on the other, which is the
+ * omit-never-null rule doing its ordinary work rather than a special case.
+ * [timelineJson] carries the segments as the guide drew them, in the coach
+ * wire's own segment shape, as an opaque string the server stores verbatim.
+ */
+@Serializable
+data class GuideEventDto(
+    val eventId: String,
+    val date: DateString,
+    val exerciseKey: String,
+    val action: String,
+    val clientTimestampMs: Long,
+    val sessionId: String,
+    val extensionSec: Int? = null,
+    val timelineJson: String? = null,
+)
+
+/**
  * One capture session. The endpoint is a **full-row upsert** on [sessionId], so
  * an optional this stops sending clears its stored column rather than lingering
  * from an earlier upload — the stored row stays a faithful copy of this one
@@ -101,6 +134,13 @@ data class SamplesBatchRequest(val clientId: String, val samples: List<SampleDto
 /** `POST /api/hr/set-events/batch` — the array is `events`, not `setEvents`. */
 @Serializable
 data class SetEventsBatchRequest(val clientId: String, val events: List<SetEventDto>)
+
+/**
+ * `POST /api/hr/guide-events/batch` — the array is `events`, as the set-event
+ * batch's is. The two logs are separate tables reached by separate paths.
+ */
+@Serializable
+data class GuideEventsBatchRequest(val clientId: String, val events: List<GuideEventDto>)
 
 /** `POST /api/hr/sessions/batch`. */
 @Serializable
@@ -139,7 +179,7 @@ data class StatusResponseDto(
 )
 
 /**
- * Row → wire, for each of the three tables.
+ * Row → wire, for each of the four tables.
  *
  * The local sync columns (`isSynced`, `syncedAt`, `isQuarantined`) have no wire
  * counterpart and stop here: they are this client's bookkeeping about what it
@@ -164,6 +204,17 @@ internal fun SetEventEntity.toDto(): SetEventDto = SetEventDto(
     action = action,
     clientTimestampMs = clientTimestampMs,
     sessionId = sessionId,
+)
+
+internal fun GuideEventEntity.toDto(): GuideEventDto = GuideEventDto(
+    eventId = eventId,
+    date = date,
+    exerciseKey = exerciseKey,
+    action = action,
+    clientTimestampMs = clientTimestampMs,
+    sessionId = sessionId,
+    extensionSec = extensionSec,
+    timelineJson = timelineJson,
 )
 
 internal fun HrSessionEntity.toDto(): SessionDto = SessionDto(

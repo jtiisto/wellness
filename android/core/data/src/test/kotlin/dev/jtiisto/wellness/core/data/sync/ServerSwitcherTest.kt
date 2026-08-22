@@ -56,6 +56,7 @@ class ServerSwitcherTest {
         override suspend fun clearHrSessions() { calls += "hr_sessions" }
         override suspend fun clearHrSamples() { calls += "hr_samples" }
         override suspend fun clearSetEvents() { calls += "set_events" }
+        override suspend fun clearGuideEvents() { calls += "guide_events" }
         override suspend fun activate(id: Long) { calls += "activate:$id" }
         override suspend fun clearActive() { calls += "clearActive" }
         override suspend fun deleteProfile(id: Long) { calls += "deleteProfile:$id" }
@@ -114,6 +115,7 @@ class ServerSwitcherTest {
                 override suspend fun clearHrSessions() = dao.clearHrSessions()
                 override suspend fun clearHrSamples() = dao.clearHrSamples()
                 override suspend fun clearSetEvents() = dao.clearSetEvents()
+                override suspend fun clearGuideEvents() = dao.clearGuideEvents()
                 override suspend fun activate(id: Long) = dao.activate(id)
                 override suspend fun clearActive() = dao.clearActive()
                 override suspend fun deleteProfile(id: Long) = dao.deleteProfile(id)
@@ -188,7 +190,7 @@ class ServerSwitcherTest {
     // ---- the wipe --------------------------------------------------------
 
     @Test
-    @DisplayName("exactly eleven tables are cleared, and the two that carry the switch itself are spared")
+    @DisplayName("exactly twelve tables are cleared, and the two that carry the switch itself are spared")
     fun wipeClearsExactlyElevenTables() = switcherTest { harness ->
         harness.switcher.switchTo(profile(2, "B"), fromNickname = "A")
 
@@ -209,6 +211,7 @@ class ServerSwitcherTest {
                 "hr_sessions",
                 "hr_samples",
                 "set_events",
+                "guide_events",
             ),
             cleared,
         )

@@ -14,15 +14,18 @@ import dev.jtiisto.wellness.core.data.coach.HookAction
 import dev.jtiisto.wellness.core.data.coach.PlanDto
 import dev.jtiisto.wellness.core.data.coach.array
 import dev.jtiisto.wellness.core.data.coach.hasAnyProgress
+import dev.jtiisto.wellness.core.data.hr.GuideEventRecorder
 import dev.jtiisto.wellness.core.data.hr.HrCaptureStore
 import dev.jtiisto.wellness.core.data.network.CoachApi
 import dev.jtiisto.wellness.core.data.network.DateString
 import dev.jtiisto.wellness.core.data.sync.SyncScheduler
+import dev.jtiisto.wellness.feature.coach.guidance.EXTENSION_STEP_SEC
 import dev.jtiisto.wellness.feature.coach.guidance.GuidanceKey
 import dev.jtiisto.wellness.feature.coach.guidance.GuidancePhase
 import dev.jtiisto.wellness.feature.coach.guidance.GuidanceRuns
 import dev.jtiisto.wellness.feature.coach.guidance.canOfferExtension
 import dev.jtiisto.wellness.feature.coach.guidance.guidanceStatus
+import dev.jtiisto.wellness.feature.coach.guidance.guidedSegmentsJson
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -63,6 +66,12 @@ class CoachViewModel(
     private val knownStraps: KnownDeviceStore,
     private val capture: HrCaptureController,
     private val captureStore: HrCaptureStore,
+    /**
+     * The guide's half of the heart-rate record: START and `+ 5 MIN`, appended
+     * only while a capture is running. It writes nothing else — the plan and the
+     * day log are untouched by both actions.
+     */
+    private val guideEvents: GuideEventRecorder,
     traceRing: HrTraceRing,
     private val today: () -> LocalDate = LocalDate::now,
     /**
@@ -329,6 +338,18 @@ class CoachViewModel(
         val phase = guidanceStatus(guide.timeline, guide.run, nowMs).phase
         if (phase == GuidancePhase.RUNNING) return
         guidanceRuns.update { it.started(guide.key, nowMs) }
+        // The anchor and its record are the same read of the clock, deliberately:
+        // a stored instant that disagreed with the clock the rider is watching
+        // would misplace every derived boundary by the difference.
+        recordGuideEvent { sessionId ->
+            guideEvents.recordStart(
+                date = guide.key.date,
+                exerciseKey = guide.key.exerciseId,
+                sessionId = sessionId,
+                clientTimestampMs = nowMs,
+                timelineJson = guide.timeline.guidedSegmentsJson(),
+            )
+        }
     }
 
     /**
@@ -347,9 +368,49 @@ class CoachViewModel(
      */
     fun extendGuidance() {
         val guide = uiState.value.guide ?: return
-        val status = guidanceStatus(guide.timeline, guide.run, now())
+        val nowMs = now()
+        val status = guidanceStatus(guide.timeline, guide.run, nowMs)
         if (!canOfferExtension(status)) return
         guidanceRuns.update { it.extended(guide.key) }
+        recordGuideEvent { sessionId ->
+            guideEvents.recordExtend(
+                date = guide.key.date,
+                exerciseKey = guide.key.exerciseId,
+                sessionId = sessionId,
+                clientTimestampMs = nowMs,
+                // The step, not the running total: each tap is its own fact, and
+                // a consumer that wants the cumulative figure sums the rows.
+                extensionSec = EXTENSION_STEP_SEC,
+            )
+        }
+    }
+
+    /**
+     * Append a guide action to the heart-rate record — **iff a capture is
+     * running**.
+     *
+     * The session is read here, at the instant of the tap, rather than inside the
+     * coroutine: what licenses the recording is that a capture was running when
+     * the rider acted, and a strap that drops out between the tap and the write
+     * does not un-happen it. A null session is not an error — it is the ordinary
+     * case of a guide used without a strap, where the guide is a pure display and
+     * the log's completion state is the only record, exactly as for strength.
+     *
+     * The run itself is already updated by the time this is called. The record is
+     * a consequence of the action, never a condition of it: a failed insert must
+     * not leave the rider looking at a timeline that refused to start.
+     */
+    private fun recordGuideEvent(record: suspend (String) -> Unit) {
+        val sessionId = captureState.value.sessionId ?: return
+        viewModelScope.launch {
+            // Swallowed on purpose: the record is a consequence of the action,
+            // never a condition of it, and an audit write that failed must not
+            // crash the guide the rider is mid-ride on (the deep-review find —
+            // an unguarded launch propagates to the scope and takes the UI
+            // down). A persistent storage failure surfaces through the upload
+            // pipeline's own diagnostics, not here.
+            runCatching { record(sessionId) }
+        }
     }
 
     // ---- workout hooks --------------------------------------------------------

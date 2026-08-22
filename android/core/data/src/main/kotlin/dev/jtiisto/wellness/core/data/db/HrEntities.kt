@@ -136,3 +136,59 @@ data class SetEventEntity(
         const val ACTION_UNCHECK = "uncheck"
     }
 }
+
+/**
+ * One cardio-guide action, appended when the rider anchors or extends a guided
+ * timeline **while a capture is running**.
+ *
+ * The sibling of [SetEventEntity] and the same kind of record: not what the plan
+ * asked for, but what the rider did and when, so a beat stream can be read
+ * against the timeline it was ridden to.
+ *
+ * Only two actions exist. [ACTION_START] is the instant the timeline was
+ * anchored; [ACTION_EXTEND] is five appended minutes ([extensionSec]). Segment
+ * boundaries are **derived** from the anchor plus the durations in
+ * [timelineJson], shifted by the timestamped extends — recording them at runtime
+ * would leave holes, because the overlay ticks only while it is composed and is
+ * routinely dismissed mid-ride. There is no stop event: a guide stops being
+ * read, which is not something that happens.
+ *
+ * [sessionId] is **not nullable here**, where the set-event log's is, and the
+ * system's two-case model is the reason. Either wellness owns a ride end to end
+ * — strap capture and guide used together, every row keyed by one session id —
+ * or the ride lives entirely on the Garmin side and wellness records nothing but
+ * the completion checkbox, exactly as for strength work. There is no third case:
+ * a strapless guided ride is a watch ride. So a guide event with no session
+ * would be dead weight that no session-keyed analysis could reach, and its
+ * presence is the recording precondition rather than a detail of the row.
+ *
+ * [timelineJson] is the segments as the guide drew them, serialized in the coach
+ * wire's own segment shape. It is copied rather than referenced so the record
+ * survives a plan edited after the ride.
+ */
+@Entity(
+    tableName = "guide_events",
+    // As on set_events: the uploader's scans are the only non-key reads. The
+    // server's (date, exercise_key) index serves the correlation queries, which
+    // run there and never here — nothing on this client reads this table back.
+    indices = [Index(value = ["isSynced", "isQuarantined", "clientTimestampMs"])],
+)
+data class GuideEventEntity(
+    @PrimaryKey val eventId: String,
+    val date: DateString,
+    val exerciseKey: String,
+    val action: String,
+    val clientTimestampMs: Long,
+    val sessionId: String,
+    /** Extends only: the step in seconds, never zero. */
+    val extensionSec: Int? = null,
+    /** Starts only: the guided segments, in the coach wire's segment shape. */
+    val timelineJson: String? = null,
+    val isSynced: Boolean = false,
+    val isQuarantined: Boolean = false,
+) {
+    companion object {
+        const val ACTION_START = "start"
+        const val ACTION_EXTEND = "extend"
+    }
+}

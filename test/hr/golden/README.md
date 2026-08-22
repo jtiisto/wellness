@@ -18,17 +18,20 @@ wire contract's authoritative home is `docs/ARCHITECTURE.md`
 |---|---|
 | `samples-batch-request.json` | `POST /api/hr/samples/batch` body — three RR intervals |
 | `set-events-batch-request.json` | `POST /api/hr/set-events/batch` body — a set tick, its undo, a checklist toggle |
+| `guide-events-batch-request.json` | `POST /api/hr/guide-events/batch` body — a guided ride's anchor, an extension, a second ride's anchor with no authored timeline |
 | `sessions-batch-request.json` | `POST /api/hr/sessions/batch` body — one open, workout-anchored session |
-| `ingest-response.json` | the response shared by the two `INSERT OR IGNORE` endpoints |
+| `ingest-response.json` | the response shared by the three `INSERT OR IGNORE` endpoints |
 | `upsert-response.json` | the sessions endpoint's distinct response shape |
 
-The two request files are wrapped across lines for review. JSON whitespace
+The request files are wrapped across lines for review. JSON whitespace
 *between* tokens is insignificant and no value here contains any, so the Android
 test compares against the fixture re-encoded compactly — key order, key names
 and which optionals are present are all still pinned exactly.
 
-One fixture serves both ingest endpoints because both canonical requests happen
-to carry three rows. `GET /api/hr/status` has **no fixture** on purpose: its
+One fixture serves all three ingest endpoints because each canonical request
+happens to carry three rows. The guide-event fixture's `timelineJson` is a JSON
+*string*, escaped — it is opaque to this protocol and stored verbatim, so what
+is pinned here is the escaping, not the segments inside it. `GET /api/hr/status` has **no fixture** on purpose: its
 shape is pinned by a decode test against the example in `ARCHITECTURE.md`.
 
 ## Provenance

@@ -3,7 +3,7 @@ package dev.jtiisto.wellness.core.data.db
 import dev.jtiisto.wellness.core.data.network.DateString
 
 /**
- * In-memory stand-ins for the three heart-rate DAOs.
+ * In-memory stand-ins for the four heart-rate DAOs.
  *
  * The composed `@Transaction` methods are deliberately *not* overridden — those
  * are the real code, and running them against these maps is what gives the
@@ -133,6 +133,42 @@ internal open class FakeHrSampleDao : HrSampleDao() {
     override suspend fun pruneSynced(cutoffMs: Long): Int {
         val doomed = samples.values.filter { it.isSynced && it.timestampMs < cutoffMs }.map { it.key() }
         doomed.forEach { samples.remove(it) }
+        return doomed.size
+    }
+}
+
+internal open class FakeGuideEventDao : GuideEventDao() {
+
+    /** Insertion-ordered, which is what stands in for `rowid` in the tie-break. */
+    val events = linkedMapOf<String, GuideEventEntity>()
+
+    /** Mirrors the plain `@Insert`: a reused id aborts rather than overwriting. */
+    override suspend fun insert(event: GuideEventEntity) {
+        check(events.putIfAbsent(event.eventId, event) == null) { "duplicate eventId ${event.eventId}" }
+    }
+
+    override suspend fun pendingUpload(limit: Int): List<GuideEventEntity> = events.values
+        .filter { !it.isSynced && !it.isQuarantined }
+        .sortedBy { it.clientTimestampMs }
+        .take(limit)
+
+    override suspend fun listAll(): List<GuideEventEntity> = events.values.sortedBy { it.clientTimestampMs }
+
+    override suspend fun countPending(): Int = events.values.count { !it.isSynced && !it.isQuarantined }
+
+    override suspend fun countQuarantined(): Int = events.values.count { it.isQuarantined }
+
+    override suspend fun markSynced(eventIds: List<String>) {
+        for (id in eventIds) events[id]?.let { events[id] = it.copy(isSynced = true) }
+    }
+
+    override suspend fun markQuarantined(eventIds: List<String>) {
+        for (id in eventIds) events[id]?.let { events[id] = it.copy(isQuarantined = true) }
+    }
+
+    override suspend fun pruneSynced(cutoffMs: Long): Int {
+        val doomed = events.values.filter { it.isSynced && it.clientTimestampMs < cutoffMs }.map { it.eventId }
+        doomed.forEach { events.remove(it) }
         return doomed.size
     }
 }

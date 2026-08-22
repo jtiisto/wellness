@@ -627,4 +627,111 @@ class HrDaoLogicTest {
         assertNull(rows.getValue("cardio").setNum)
         assertNull(rows.getValue("cardio").itemKey)
     }
+
+    // ---- guide events ----------------------------------------------------
+
+    private fun guideEvent(
+        eventId: String,
+        at: Long,
+        date: String = "2030-01-03",
+        exerciseKey: String = "ex_ride",
+        action: String = GuideEventEntity.ACTION_START,
+        sessionId: String = session,
+        extensionSec: Int? = null,
+        timelineJson: String? = null,
+        synced: Boolean = false,
+        quarantined: Boolean = false,
+    ) = GuideEventEntity(
+        eventId = eventId,
+        date = date,
+        exerciseKey = exerciseKey,
+        action = action,
+        clientTimestampMs = at,
+        sessionId = sessionId,
+        extensionSec = extensionSec,
+        timelineJson = timelineJson,
+        isSynced = synced,
+        isQuarantined = quarantined,
+    )
+
+    @Test
+    @DisplayName("guide events upload in the order they were taken, ties included")
+    fun guideEventsUploadInActionOrder() = runTest {
+        val dao = FakeGuideEventDao()
+        dao.insert(guideEvent("g-late", at = 2_000, action = GuideEventEntity.ACTION_EXTEND))
+        dao.insert(guideEvent("g-tie-first", at = 1_000))
+        dao.insert(guideEvent("g-tie-second", at = 1_000, action = GuideEventEntity.ACTION_EXTEND))
+
+        assertEquals(
+            listOf("g-tie-first", "g-tie-second", "g-late"),
+            dao.pendingUpload(10).map { it.eventId },
+        )
+        assertEquals(listOf("g-tie-first", "g-tie-second"), dao.pendingUpload(2).map { it.eventId })
+    }
+
+    @Test
+    @DisplayName("a second run appends another anchor rather than replacing the first")
+    fun guideRestartIsAppended() = runTest {
+        val dao = FakeGuideEventDao()
+        dao.insert(guideEvent("g1", at = 1_000, timelineJson = "[]"))
+        dao.insert(guideEvent("g2", at = 9_000, timelineJson = "[]"))
+
+        // Both anchors are kept; which one an analysis reads is its policy, and
+        // there is nothing here that could throw the earlier one away.
+        assertEquals(listOf("g1", "g2"), dao.listAll().map { it.eventId })
+    }
+
+    @Test
+    @DisplayName("reusing a guide event id aborts: the id is the server's idempotency key")
+    fun duplicateGuideEventIdIsRejected() = runTest {
+        val dao = FakeGuideEventDao()
+        dao.insert(guideEvent("g1", at = 1_000))
+
+        assertThrows<IllegalStateException> { dao.insert(guideEvent("g1", at = 2_000)) }
+    }
+
+    @Test
+    @DisplayName("synced and quarantined guide events are both out of the upload")
+    fun guideEventPendingExcludesSyncedAndQuarantined() = runTest {
+        val dao = FakeGuideEventDao()
+        dao.insert(guideEvent("g1", at = 1_000))
+        dao.insert(guideEvent("g2", at = 2_000))
+        dao.insert(guideEvent("g3", at = 3_000))
+
+        dao.markSynced(listOf("g1"))
+        dao.markQuarantined(listOf("g2"))
+
+        assertEquals(listOf("g3"), dao.pendingUpload(10).map { it.eventId })
+        assertEquals(1, dao.countPending())
+        assertEquals(1, dao.countQuarantined())
+    }
+
+    @Test
+    @DisplayName("the guide-event prune matches its sibling's: synced only, cutoff exclusive")
+    fun guideEventPruneBoundaries() = runTest {
+        val dao = FakeGuideEventDao()
+        dao.insert(guideEvent("old-synced", at = 1_000, synced = true))
+        dao.insert(guideEvent("boundary-synced", at = 2_000, synced = true))
+        dao.insert(guideEvent("old-pending", at = 900))
+
+        assertEquals(1, dao.pruneSynced(cutoffMs = 2_000))
+
+        assertEquals(listOf("old-pending", "boundary-synced"), dao.listAll().map { it.eventId })
+    }
+
+    @Test
+    @DisplayName("each action carries its own payload and neither carries the other's")
+    fun guideEventShapes() = runTest {
+        val dao = FakeGuideEventDao()
+        dao.insert(guideEvent("start", at = 1_000, timelineJson = """[{"duration_sec":300}]"""))
+        dao.insert(
+            guideEvent("extend", at = 2_000, action = GuideEventEntity.ACTION_EXTEND, extensionSec = 300),
+        )
+
+        val rows = dao.listAll().associateBy { it.eventId }
+        assertEquals("""[{"duration_sec":300}]""", rows.getValue("start").timelineJson)
+        assertNull(rows.getValue("start").extensionSec)
+        assertEquals(300, rows.getValue("extend").extensionSec)
+        assertNull(rows.getValue("extend").timelineJson)
+    }
 }

@@ -85,11 +85,12 @@ First foreground service / notification channel / runtime-permission flow in the
 | `hr_sessions` | `sessionId` (client UUID) | `deviceId`, `startedAtMs`, `endedAtMs` (null while open), optional `workoutDate` (`YYYY-MM-DD`), optional `workoutSessionId` (coach hook session id — a `Long`, set when started via the Start Workout sheet), `isSynced` (cleared on every content change so the session re-upserts), `isQuarantined` (422-bisect isolation, also cleared on content change so a corrected row re-attempts), `dirtyGeneration` (bumped on every content change; `markSynced`/`markQuarantined` are generation-guarded so a response that raced a newer write can never claim the newer row — coach's proven pattern, added 2026-08-11 after review caught the stale-response race) |
 | `hr_samples` | PK (`deviceId`, `timestampMs`, `seq`) | one row per RR interval: `heartRateBpm`, `rrIntervalMs` (0 = artifact sentinel), `isGapBefore`, `sessionId`, `isSynced`, `syncedAt`, `isQuarantined` |
 | `set_events` | `eventId` (client UUID) | `date`, `exerciseKey`, `setNum` (omitted for non-set widgets), `itemKey` (checklist toggles), `action` (`check` \| `uncheck`), `clientTimestampMs`, optional `sessionId`, `isSynced`, `isQuarantined` (poison rows isolated by the 422 bisect, same as samples) |
+| `guide_events` | `eventId` (client UUID) | added in Room v7 for the cardio guide (`cardio-guidance.md`): `date`, `exerciseKey`, `action` (`start` \| `extend`), `clientTimestampMs`, **required** `sessionId` (the analysis key; its presence is the recording precondition — no capture, no row, per the two-case model: wellness owns a ride end to end or it is a watch ride it only checkboxes), `extensionSec` (extends only), `timelineJson` (starts only), `isSynced`, `isQuarantined`. Same rails as `set_events` in every other respect |
 
 - **Sync model is append-only + `isSynced`** — deliberately *not* `isDirty`/`dirtyGeneration`. This is client-authored telemetry with no server arbitration: idempotent batch upload, mark synced on 2xx, retry safe by construction. Epoch-ms values here are *data*, not sync watermarks, so the opaque-timestamp rule doesn't apply.
 - The `seq` column replaces pulse-bridge's monotonic-bump hack in `IntervalBuffer.nextTimestamp()`: same-millisecond samples get seq 0,1,2… instead of artificially shifted timestamps. Anchoring rules are otherwise preserved (last beat of a notification lands at receipt time, earlier beats placed backward by their RR durations, zero-RR sentinels spread backward, >3 s gap marks `isGapBefore`).
-- Local retention: synced `hr_samples` pruned after 7 days; `set_events` after 60 (matches coach's prune horizon). Unsynced rows are never pruned.
-- Cross-cutting obligations (enumerated by name, so listed here as a checklist): `WELLNESS_MIGRATIONS` + exported schema; `ServerSwitchDao` wipe list += 3 tables; `ExportDao` snapshot += 3 tables — `hr_samples` as per-session aggregates (counts + time bounds), not raw rows, so export size stays bounded by session count rather than capture length (blessed 2026-08-11; the export is diagnostic, not a recovery path); every write under `ServerSessionGate.withWriteLease`.
+- Local retention: synced `hr_samples` pruned after 7 days; `set_events` and `guide_events` after 60 (matches coach's prune horizon). Unsynced rows are never pruned.
+- Cross-cutting obligations (enumerated by name, so listed here as a checklist): `WELLNESS_MIGRATIONS` + exported schema; `ServerSwitchDao` wipe list += 3 tables (4 from v7); `ExportDao` snapshot += 3 tables (4 from v7) — `hr_samples` as per-session aggregates (counts + time bounds), not raw rows, so export size stays bounded by session count rather than capture length (blessed 2026-08-11; the export is diagnostic, not a recovery path); every write under `ServerSessionGate.withWriteLease`.
 
 ### Set-event dual-write
 
@@ -124,7 +125,9 @@ Quarantine: on a 422 the batch is recursively bisected to isolate poison rows (o
 ### Quality gates
 
 - Kover: carry pulse-bridge-style **named exclusions for device-only glue** (service, scanner, connection, notification builder, receiver) or the 85 gate breaks; ported pure logic stays covered.
-- Golden fixtures for the new wire payloads in `testdata/golden/hr/` — synthetic only.
+- Golden fixtures for the HR wire payloads live in the repo root's
+  `test/hr/golden/` — the ONE directory both suites read (staged onto the
+  Gradle test classpath; never duplicated) — synthetic only.
 - Emulator has no BLE: BLE paths verified on the physical device via the APK-to-gdrive flow; everything below the BLE boundary (buffer, sync, events, UI state) is unit-tested headless.
 
 ## Server (planned and implemented at the repo root)
@@ -138,6 +141,7 @@ repo (authoritative until the server work lands it in `docs/ARCHITECTURE.md`). S
   - `GET  /api/hr/status` → `{status, samplesCount, setEventsCount, sessionsCount}`
   - `POST /api/hr/samples/batch` → `{accepted, duplicates, totalReceived}` (`INSERT OR IGNORE` on PK)
   - `POST /api/hr/set-events/batch` → same shape, idempotent on `eventId`
+  - `POST /api/hr/guide-events/batch` → same shape, idempotent on `eventId` (added with the cardio guide; `/status` deliberately keeps its three counts)
   - `POST /api/hr/sessions/batch` → `{upserted, totalReceived}` — full-row upsert on `sessionId`, last write wins (single writer); the client re-upserts on start, workout-anchor change, and close
 - JSON: wellness conventions — optional fields omitted, never null; **camelCase keys throughout** (deliberate choice recorded in the protocol spec).
 - **Dropped from the pulse-bridge protocol**: `X-Environment` header (test isolation via the wellness server's existing conftest pattern), accelerometer endpoints (Polar-sourced), diagnostics upload (wellness has the debug-log share).

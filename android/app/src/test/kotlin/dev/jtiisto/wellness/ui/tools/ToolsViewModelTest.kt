@@ -15,6 +15,7 @@ import dev.jtiisto.wellness.core.data.db.JournalTrackerEntity
 import dev.jtiisto.wellness.core.data.db.ServerProfileEntity
 import dev.jtiisto.wellness.core.data.db.ServerProfilesDao
 import dev.jtiisto.wellness.core.data.db.ServerSwitchDao
+import dev.jtiisto.wellness.core.data.db.GuideEventEntity
 import dev.jtiisto.wellness.core.data.db.SetEventEntity
 import dev.jtiisto.wellness.core.data.export.DataExporter
 import dev.jtiisto.wellness.core.data.export.SharedFileStore
@@ -124,6 +125,7 @@ class ToolsViewModelTest {
         override suspend fun hrSessions(): List<HrSessionEntity> = emptyList()
         override suspend fun hrSampleSummaries(): List<HrSampleSummary> = emptyList()
         override suspend fun setEvents(): List<SetEventEntity> = emptyList()
+        override suspend fun guideEvents(): List<GuideEventEntity> = emptyList()
     }
 
     private class FakeDebugLogDao : DebugLogDao() {
@@ -154,6 +156,7 @@ class ToolsViewModelTest {
         override suspend fun clearHrSessions() = Unit
         override suspend fun clearHrSamples() = Unit
         override suspend fun clearSetEvents() = Unit
+        override suspend fun clearGuideEvents() = Unit
         override suspend fun activate(id: Long) { calls += "activate:$id" }
         override suspend fun clearActive() { calls += "clearActive" }
         override suspend fun deleteProfile(id: Long) { calls += "deleteProfile:$id" }

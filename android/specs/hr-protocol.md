@@ -62,6 +62,16 @@ nothing. `accepted + duplicates == totalReceived` always.
 
 Idempotent on `eventId`.
 
+### `POST /api/hr/guide-events/batch`
+
+```json
+{"clientId": "fixture-client-hr-0001", "events": [GuideEvent, ...]}
+→ 200 {"accepted": 2, "duplicates": 0, "totalReceived": 2}
+```
+
+Idempotent on `eventId`, exactly as the set-event log is. Its own path and its own table: the
+two logs record different kinds of action and a guide action must never be counted as a set tick.
+
 ### `POST /api/hr/sessions/batch`
 
 ```json
@@ -106,6 +116,39 @@ A toggle carries at most one of `setNum` / `itemKey`; neither present means an e
 (cardio completed). Correlation folds the event stream in `clientTimestampMs` order (ties broken by
 arrival) to derive final state; the coach blob remains the display truth.
 
+### GuideEvent — one row per cardio-guide action
+
+| Field | Type | Notes |
+|---|---|---|
+| `eventId` | string | client-generated UUID (the idempotency key) |
+| `date` | string | local `YYYY-MM-DD` — the coach day the guided exercise belongs to |
+| `exerciseKey` | string | the planned exercise's id — joins to coach data by `(date, exerciseKey)`, as a set event does |
+| `action` | string | `"start"` (the timeline's anchor instant) \| `"extend"` (five appended minutes) |
+| `clientTimestampMs` | int | epoch ms at the moment of the action — the same instant the overlay anchors or extends at |
+| `sessionId` | string | **required**, unlike a set event's — the analysis key, and its presence is the recording precondition (see below) |
+| `extensionSec` | int ≥ 1 | `extend` only; the step this tap added, never the running total |
+| `timelineJson` | string | `start` only; the guided segments as a JSON string in the coach wire's segment shape (`duration_sec` / `hr_min` / `hr_max` / `label`), `"[]"` when the plan authored none |
+
+**Session-tied by the two-case model.** Either wellness is the sole authority
+for a ride — strap capture and guide used together, everything keyed by one
+session id — or the ride lives entirely on the Garmin side and wellness records
+only the completion checkbox, exactly as for strength. There is no third case: a
+strapless guided ride is a watch ride, so the client records a guide action only
+while a capture is running, and a sessionless row is not a state this protocol
+has.
+
+**Boundaries are derived, not recorded.** Every segment boundary is the anchor plus the cumulative
+`duration_sec` values in `timelineJson`, shifted by the timestamped `extend` rows — the overlay ticks
+only while it is composed and is routinely dismissed mid-ride, so runtime boundary events would have
+holes the derivation does not. There is **no stop event**: a guide stops being read, which is not
+something that happens, and DONE is a reading of the clock rather than a transition. A fresh run
+appends a second `start`; every row is kept and "latest start wins" is the analysis side's policy.
+
+`timelineJson` is copied rather than joined from the plan so `hr.db` stays self-contained — nothing
+on the analysis side reads `coach.db` — and so a plan edited after the ride cannot change what the
+ride was guided against. The pairing of each payload field to its action is a client convention the
+server does not enforce; it stays deliberately no stricter than this spec.
+
 ### Session
 
 | Field | Type | Notes |
@@ -121,7 +164,7 @@ arrival) to derive final state; the coach blob remains the display truth.
 
 | Server response | Client behavior |
 |---|---|
-| 2xx | mark the batch's rows `isSynced` (samples/events) / clear the session's needs-upload flag |
+| 2xx | mark the batch's rows `isSynced` (samples, both event logs) / clear the session's needs-upload flag |
 | **422** (any row failed validation) | **bisect**: recursively split the batch to isolate poison rows, quarantine only those, resubmit the valid remainder. Only 422 triggers bisection. Circuit breakers: max 10 quarantines per run, max 3 before any request in the run has succeeded |
 | other 4xx | systemic — no bisect; the sync run fails fast (`Result.failure()`, no backoff spin on a poison batch) |
 | 5xx / network error | keep the batch, retry with exponential backoff (WorkManager policy) |
@@ -134,14 +177,15 @@ Batch sizing: the client caps at **1000 rows per request** (live flushes are ~10
 increments; the cap matters when draining a backlog). The server imposes no hard limit.
 
 Upload cadence (client): buffer flush every 10 s or at 200 samples; a failed flush keeps the batch;
-set events and session upserts ride the same cadence; `SyncFlushWorker` drains everything on app
+set events, guide events and session upserts ride the same cadence; `SyncFlushWorker` drains everything on app
 backgrounding. A failed final flush leaves the session open (`endedAtMs` absent) rather than
 finalizing against stale data.
 
 ## Server storage (hr.db, informative)
 
 Columns are snake_case mirrors of the wire fields. `intervals` PK
-(`device_id`, `timestamp_ms`, `seq`); `set_events` PK `event_id`; `sessions` PK `session_id`.
+(`device_id`, `timestamp_ms`, `seq`); `set_events` PK `event_id`; `guide_events` PK `event_id`
+(`session_id` NOT NULL, `action` CHECK-constrained to `start`/`extend`); `sessions` PK `session_id`.
 DDL and migrations live in the server plan (`../../plans/hr-module.md`).
 
 ## Canonical example payloads
@@ -173,9 +217,14 @@ collide with a real lab/scan/log date. Keep it that way when editing these paylo
   {"sessionId":"11111111-2222-3333-4444-555555555555","deviceId":"AA:BB:CC:DD:EE:FF","startedAtMs":1769999990000,"workoutDate":"2030-01-03","workoutSessionId":42}]}
 ```
 
-`ingest-response.json` — the response shape shared by the two INSERT OR IGNORE
-endpoints (samples, set-events); both canonical requests above happen to carry
-3 rows, so one fixture serves both:
+`guide-events-batch-request.json` — the guide-events canonical request (three
+rows: an anchoring `start` carrying its `timelineJson`, an `extend`, and a
+segmentless `start` whose timeline is `"[]"`), exercised from Room rows on the
+Android side and POSTed raw on the server side like its siblings.
+
+`ingest-response.json` — the response shape shared by the three INSERT OR IGNORE
+endpoints (samples, set-events, guide-events); all three canonical requests above
+happen to carry 3 rows, so one fixture serves them all:
 ```json
 {"accepted":3,"duplicates":0,"totalReceived":3}
 ```

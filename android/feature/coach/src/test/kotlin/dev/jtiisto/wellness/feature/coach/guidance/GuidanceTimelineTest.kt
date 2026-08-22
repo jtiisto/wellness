@@ -397,6 +397,62 @@ class GuidanceTimelineTest {
         assertFalse(boundless.outOfBand(30))
         assertFalse(boundless.outOfBand(220))
     }
+
+    // ---- the timeline as the record keeps it ------------------------------------------
+    //
+    // What a `start` event carries: the segments as guided, in the coach wire's
+    // own segment shape, so a consumer parses them exactly as it parses a plan's.
+    // Boundaries are derived from these durations, so a duration that came out
+    // here wrong would misplace every one of them.
+
+    @Test
+    @DisplayName("the recorded timeline is the wire's segment shape, absent bounds omitted")
+    fun guidedSegmentsSerializeToTheWireShape() {
+        val json = guidanceTimeline(
+            listOf(segment(300, min = 118, max = 132, label = "warmup"), segment(120, max = 144)),
+            null,
+        ).guidedSegmentsJson()
+
+        assertEquals(
+            """[{"duration_sec":300,"hr_min":118,"hr_max":132,"label":"warmup"},""" +
+                """{"duration_sec":120,"hr_max":144}]""",
+            json,
+        )
+    }
+
+    @Test
+    @DisplayName("a ride with no authored timeline records an empty list, not a missing one")
+    fun segmentlessTimelineSerializesEmpty() {
+        assertEquals("[]", guidanceTimeline(emptyList(), 1_800).guidedSegmentsJson())
+        assertEquals("[]", GuidanceTimeline.OPEN.guidedSegmentsJson())
+    }
+
+    @Test
+    @DisplayName("the durations recorded are the resolved ones, not the ones as authored")
+    fun guidedSegmentsRecordWhatWasGuided() {
+        // A hand-edited negative duration is clamped on the way in, and the
+        // record says what the rider was actually guided to rather than what the
+        // row claimed.
+        val json = guidanceTimeline(listOf(segment(-90, min = 120), segment(600, min = 122)), null)
+            .guidedSegmentsJson()
+
+        assertEquals("""[{"duration_sec":0,"hr_min":120},{"duration_sec":600,"hr_min":122}]""", json)
+    }
+
+    @Test
+    @DisplayName("the extension is not folded in — it is its own timestamped row")
+    fun guidedSegmentsExcludeTheExtension() {
+        val timeline = guidanceTimeline(steady, null)
+        val extended = guidanceStatus(timeline, GuidanceRun(startedAtMs = T0, extensionSec = 600), T0)
+
+        // The live timeline has grown by ten minutes; what a start event records
+        // has not, because two extend rows already say so with their own instants.
+        assertEquals(2_400, extended.segments.single().durationSec)
+        assertEquals(
+            """[{"duration_sec":1800,"hr_min":122,"hr_max":138,"label":"zone 2"}]""",
+            timeline.guidedSegmentsJson(),
+        )
+    }
 }
 
 /** A far-future base, so no value here can be mistaken for a real capture. */

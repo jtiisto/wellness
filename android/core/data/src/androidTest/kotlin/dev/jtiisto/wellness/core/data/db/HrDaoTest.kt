@@ -33,6 +33,7 @@ class HrDaoTest {
     private lateinit var sessions: HrSessionDao
     private lateinit var samples: HrSampleDao
     private lateinit var events: SetEventDao
+    private lateinit var guideEvents: GuideEventDao
 
     private val device = "AA:BB:CC:DD:EE:FF"
     private val session = "11111111-2222-3333-4444-555555555555"
@@ -46,6 +47,7 @@ class HrDaoTest {
         sessions = db.hrSessionDao()
         samples = db.hrSampleDao()
         events = db.setEventDao()
+        guideEvents = db.guideEventDao()
     }
 
     @After
@@ -609,5 +611,103 @@ class HrDaoTest {
 
         assertNull(db.coachDao().getLog("2030-01-04"))
         assertEquals(1, events.countPending())
+    }
+
+    // ---- guide events ----------------------------------------------------
+
+    private fun guideEvent(
+        eventId: String,
+        at: Long,
+        action: String = GuideEventEntity.ACTION_START,
+        extensionSec: Int? = null,
+        timelineJson: String? = null,
+        synced: Boolean = false,
+        quarantined: Boolean = false,
+    ) = GuideEventEntity(
+        eventId = eventId,
+        date = "2030-01-03",
+        exerciseKey = "ex_ride",
+        action = action,
+        clientTimestampMs = at,
+        sessionId = session,
+        extensionSec = extensionSec,
+        timelineJson = timelineJson,
+        isSynced = synced,
+        isQuarantined = quarantined,
+    )
+
+    @Test
+    fun guideEventsUploadInActionOrder() = runBlocking {
+        guideEvents.insert(guideEvent("g-late", at = 2_000, action = GuideEventEntity.ACTION_EXTEND))
+        guideEvents.insert(guideEvent("g-tie-first", at = 1_000))
+        guideEvents.insert(
+            guideEvent("g-tie-second", at = 1_000, action = GuideEventEntity.ACTION_EXTEND),
+        )
+
+        assertEquals(
+            listOf("g-tie-first", "g-tie-second", "g-late"),
+            guideEvents.pendingUpload(10).map { it.eventId },
+        )
+        assertEquals(
+            listOf("g-tie-first", "g-tie-second"),
+            guideEvents.pendingUpload(2).map { it.eventId },
+        )
+    }
+
+    @Test
+    fun guideEventRoundTripsEveryColumn() = runBlocking {
+        val row = GuideEventEntity(
+            eventId = "g1",
+            date = "2030-01-04",
+            exerciseKey = "ex_row",
+            action = GuideEventEntity.ACTION_EXTEND,
+            clientTimestampMs = 1_770_000_020_000,
+            sessionId = session,
+            extensionSec = 300,
+            timelineJson = null,
+            isSynced = true,
+            isQuarantined = true,
+        )
+
+        guideEvents.insert(row)
+
+        assertEquals(row, guideEvents.listAll().single())
+    }
+
+    @Test
+    fun duplicateGuideEventIdIsRejected() {
+        runBlocking { guideEvents.insert(guideEvent("g1", at = 1_000)) }
+
+        assertThrows(SQLiteConstraintException::class.java) {
+            runBlocking { guideEvents.insert(guideEvent("g1", at = 2_000)) }
+        }
+    }
+
+    @Test
+    fun guideEventPendingExcludesSyncedAndQuarantined() = runBlocking {
+        guideEvents.insert(guideEvent("g1", at = 1_000))
+        guideEvents.insert(guideEvent("g2", at = 2_000))
+        guideEvents.insert(guideEvent("g3", at = 3_000))
+
+        guideEvents.markSynced(listOf("g1"))
+        guideEvents.markQuarantined(listOf("g2"))
+
+        assertEquals(listOf("g3"), guideEvents.pendingUpload(10).map { it.eventId })
+        assertEquals(1, guideEvents.countPending())
+        assertEquals(1, guideEvents.countQuarantined())
+    }
+
+    @Test
+    fun guideEventPruneBoundaries() = runBlocking {
+        guideEvents.insert(guideEvent("old-synced", at = 1_000, synced = true))
+        guideEvents.insert(guideEvent("boundary-synced", at = 2_000, synced = true))
+        guideEvents.insert(guideEvent("old-pending", at = 900))
+
+        assertEquals(1, guideEvents.pruneSynced(cutoffMs = 2_000))
+
+        assertEquals(
+            listOf("old-pending", "boundary-synced"),
+            guideEvents.listAll().map { it.eventId },
+        )
     }
 }

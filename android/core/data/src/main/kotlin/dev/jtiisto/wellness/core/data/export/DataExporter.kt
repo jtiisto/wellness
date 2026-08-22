@@ -229,6 +229,24 @@ class DataExporter(
                 )
             }
         }
+        putJsonArray("guide_events") {
+            for (row in snapshot.guideEvents) {
+                add(
+                    buildJsonObject {
+                        put("eventId", row.eventId)
+                        put("date", row.date)
+                        put("exerciseKey", row.exerciseKey)
+                        put("action", row.action)
+                        put("clientTimestampMs", row.clientTimestampMs)
+                        put("sessionId", row.sessionId)
+                        row.extensionSec?.let { put("extensionSec", it) }
+                        row.timelineJson?.let { put("timelineJson", it) }
+                        put("isSynced", row.isSynced)
+                        put("isQuarantined", row.isQuarantined)
+                    },
+                )
+            }
+        }
     }
 
     private fun nullable(value: String?): JsonElement =

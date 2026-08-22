@@ -651,10 +651,10 @@ assertions; the user reviews visuals directly. Both test harnesses pin
 ### HR: Idempotent Batch Ingestion (Headless)
 
 HR is the server half of heart-rate capture on the native Android client: RR
-intervals streamed off a Garmin chest strap, the set-completion toggles that let
-a beat stream be read against a coach workout, and the capture sessions that
-group them. It is the first **headless** module — it owns `data/hr.db` and
-mounts at `/api/hr` like any other, but has no PWA tab, no client-side state and
+intervals streamed off a Garmin chest strap, the set-completion toggles and
+cardio-guide actions that let a beat stream be read against a coach workout, and
+the capture sessions that group them. It is the first **headless** module — it
+owns `data/hr.db` and mounts at `/api/hr` like any other, but has no PWA tab, no client-side state and
 no bidirectional sync. The client pushes; the server stores; nothing flows back
 but counts. Everything that *reads* the data does so out of band, through the
 `hr_analysis` CLI and the HR MCP server (both below).
@@ -698,10 +698,14 @@ module would `KeyError` the one endpoint the app shell needs to boot.
 | `GET` | `/api/hr/status` | → `{status, samplesCount, setEventsCount, sessionsCount}` |
 | `POST` | `/api/hr/samples/batch` | `{clientId, samples[]}` → `{accepted, duplicates, totalReceived}` |
 | `POST` | `/api/hr/set-events/batch` | `{clientId, events[]}` → same shape |
+| `POST` | `/api/hr/guide-events/batch` | `{clientId, events[]}` → same shape |
 | `POST` | `/api/hr/sessions/batch` | `{clientId, sessions[]}` → `{upserted, totalReceived}` |
 
-`/status` is the client's reachability probe (three row counts); the three
-batch POSTs are the whole ingestion surface.
+`/status` is the client's reachability probe; the four batch POSTs are the whole
+ingestion surface. The probe deliberately still answers three counts — it exists
+to prove the server is reachable and holding data, not to enumerate tables, and
+a client that has to be upgraded to keep reading a reachability check is a worse
+protocol than one whose probe stays put.
 
 **Data model:**
 ```
@@ -711,13 +715,16 @@ intervals   (device_id, timestamp_ms, seq, heart_rate_bpm, rr_interval_ms,
 set_events  (event_id, date, exercise_key, set_num, item_key, action,
              client_timestamp_ms, session_id, received_at)
             PRIMARY KEY (event_id)
+guide_events(event_id, date, exercise_key, action, client_timestamp_ms,
+             session_id, extension_sec, timeline_json, received_at)
+            PRIMARY KEY (event_id)
 sessions    (session_id, device_id, started_at_ms, ended_at_ms,
              workout_date, workout_session_id, received_at)
             PRIMARY KEY (session_id)
 ```
 
 Columns are snake_case mirrors of the wire fields. There are **no foreign keys
-between the three tables**: batches drain in whatever order the client empties
+between the four tables**: batches drain in whatever order the client empties
 its queues, so an interval or a toggle may legitimately name a session whose row
 has not been uploaded yet — and since analysis reads the capture off
 `intervals`, such a session is still fully analysable.
@@ -736,10 +743,45 @@ the display truth). A toggle carries at most one of `set_num` / `item_key`;
 neither present is an exercise-level toggle. `(date, exercise_key)` is the join
 back to coach data.
 
+`guide_events` is that table's sibling, on the same rails and with the same join
+key: it records the cardio guide's two **user actions** — `start`, the instant
+the rider anchored the target-HR timeline, and `extend`, five appended minutes —
+so a beat stream can be read against the timeline it was ridden to. Three
+decisions shape it:
+
+- **Boundaries are derived, not materialized.** Every segment boundary is the
+  anchor plus the cumulative `duration_sec` values in `timeline_json`, shifted
+  by the timestamped `extend` rows. Runtime boundary events would have holes the
+  derivation does not: the overlay ticks only while it is composed, and it is
+  routinely dismissed mid-ride. There is no stop event either — a guide stops
+  being *read*, which is not something that happens, and DONE is a reading of
+  the clock rather than a transition. A fresh run simply appends a second
+  `start`; every row is kept and "latest start wins" is the analysis side's
+  policy, not the server's.
+- **`session_id` is NOT NULL here**, unlike its sibling's, and the system's
+  **two-case model** is the reason. Either wellness is the sole authority for a
+  ride — strap capture and guide used together, every row keyed by one session
+  id — or the ride lives entirely on the Garmin side and wellness records only
+  the completion checkbox, exactly as for strength work. There is no third case:
+  a strapless guided ride is a watch ride. The session is therefore the analysis
+  key, its presence is the recording precondition, and a sessionless guide event
+  would be dead weight no session-keyed query could reach.
+- **`timeline_json` is opaque and stored verbatim**: the segments as the guide
+  drew them, in the coach wire's own segment shape (`duration_sec` / `hr_min` /
+  `hr_max` / `label`), empty when the plan authored none. It is copied into
+  `hr.db` rather than joined from `coach.db` so this database stays
+  self-contained — nothing on the analysis side reads the coach's — and because
+  a plan edited after the ride must not change what the ride was guided against.
+
+`extension_sec` belongs to `extend` and `timeline_json` to `start`, and that
+pairing is a client convention the server deliberately does not enforce: a
+cross-field rule would 422 a row whose only fault is that a later client records
+more than this server expected, and 422 costs the client a quarantined row.
+
 **Idempotency, per endpoint:**
 
-- **Samples and set-events `INSERT OR IGNORE`** on their natural keys, so a
-  retried flush stores nothing new and the stored row — `received_at` included —
+- **Samples, set-events and guide-events `INSERT OR IGNORE`** on their natural
+  keys, so a retried flush stores nothing new and the stored row — `received_at` included —
   is never restamped. `OR IGNORE` reaches wider than the PK (it would swallow a
   NOT NULL or CHECK violation too), which is safe only because every such
   constraint is already enforced by the Pydantic models above it, where a
@@ -821,6 +863,8 @@ collide with a real lab, scan or workout date.
   migration 1 uses plain `CREATE TABLE` rather than the defensive
   `IF NOT EXISTS` of the older modules — there is no pre-registry unversioned
   database to adopt, and history begins at the first accepted capture batch.
+  Later tables are ordinary registry entries (`guide_events` is migration 2), so
+  a deployed `hr.db` gains them in place with every stored row intact.
 - **Garmin-only.** No Polar path, no accelerometer or diagnostics endpoints.
   `sensor_type` exists so a future source could be told apart, and defaults to
   `garmin_hrm`.

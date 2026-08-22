@@ -16,6 +16,7 @@ import dev.jtiisto.wellness.core.data.coach.PlanDto
 import dev.jtiisto.wellness.core.data.coach.PlanSegmentDto
 import dev.jtiisto.wellness.core.data.coach.TYPE_DURATION
 import dev.jtiisto.wellness.core.data.coach.WorkoutStatusDto
+import dev.jtiisto.wellness.core.data.hr.GuideEventRecorder
 import dev.jtiisto.wellness.core.data.hr.HrCaptureStore
 import dev.jtiisto.wellness.core.data.network.CoachApi
 import dev.jtiisto.wellness.core.data.network.DateString
@@ -200,6 +201,15 @@ class CoachViewModelTest {
 
     private val capture = FakeCaptureController()
 
+    /**
+     * The guide's half of the heart-rate record.
+     *
+     * Mocked rather than run over a fake DAO: what this file decides is *whether*
+     * an action is recorded and with what, and the row it becomes is
+     * `GuideEventRecorderTest`'s subject one layer down.
+     */
+    private val guideEvents = mockk<GuideEventRecorder>(relaxed = true)
+
     private fun kotlinx.coroutines.test.TestScope.viewModel() = CoachViewModel(
         store = store,
         scheduler = mockk(relaxed = true),
@@ -208,6 +218,7 @@ class CoachViewModelTest {
         knownStraps = knownStraps,
         capture = capture,
         captureStore = captureStore,
+        guideEvents = guideEvents,
         traceRing = traceRing,
         today = { today },
         now = { nowMs },
@@ -670,6 +681,7 @@ class CoachViewModelTest {
             knownStraps = knownStraps,
             capture = capture,
             captureStore = captureStore,
+            guideEvents = guideEvents,
             traceRing = traceRing,
             today = { now },
             io = StandardTestDispatcher(testScheduler),
@@ -1242,6 +1254,251 @@ class CoachViewModelTest {
         viewModel.openGuide("ex_ride")
         runCurrent()
         assertEquals(0, viewModel.uiState.value.guide?.run?.extensionSec)
+    }
+
+    // ---- what the heart-rate record is told ---------------------------------------------
+    //
+    // The guide's two user actions are recorded ONLY while a capture is running:
+    // without one there is nothing to align them to, the guide is a pure display,
+    // and the exercise's completion state stays its only record. Every boundary
+    // is derived from the anchor and these rows, so the anchor the record carries
+    // has to be the same instant the run itself is anchored at.
+
+    @Test
+    @DisplayName("START during a capture records the anchor at the instant the run anchored")
+    fun startIsRecordedWithTheRunsOwnInstant() = runVmTest { viewModel ->
+        givenRunningCapture(anchoredTo = null)
+        publish(plans = intervalPlan())
+        runCurrent()
+        viewModel.openGuide("ex_intervals")
+        runCurrent()
+
+        viewModel.startGuidance()
+        runCurrent()
+
+        // One read of the clock serves both, so the stored instant and the
+        // timeline the rider is watching cannot disagree.
+        assertEquals(nowMs, viewModel.uiState.value.guide?.run?.startedAtMs)
+        coVerify(exactly = 1) {
+            guideEvents.recordStart(
+                date = todayString,
+                exerciseKey = "ex_intervals",
+                sessionId = "session-1",
+                clientTimestampMs = nowMs,
+                // The segments as guided, in the coach wire's own segment shape —
+                // hr.db keeps its own copy rather than reading the plan back.
+                timelineJson = """[{"duration_sec":420,"hr_min":118,"hr_max":134,"label":"warmup"},""" +
+                    """{"duration_sec":180,"hr_min":156,"hr_max":174,"label":"hard"},""" +
+                    """{"duration_sec":240,"hr_max":142,"label":"easy"}]""",
+            )
+        }
+    }
+
+    @Test
+    @DisplayName("a ride with no authored timeline records an empty one, not a missing one")
+    fun segmentlessStartRecordsAnEmptyTimeline() = runVmTest { viewModel ->
+        givenRunningCapture(anchoredTo = null)
+        givenCardioPlan()
+        viewModel.openGuide("ex_ride")
+        runCurrent()
+
+        viewModel.startGuidance()
+        runCurrent()
+
+        coVerify(exactly = 1) {
+            guideEvents.recordStart(todayString, "ex_ride", "session-1", nowMs, "[]")
+        }
+    }
+
+    @Test
+    @DisplayName("START with no capture running records nothing at all")
+    fun startWithoutACaptureIsNotRecorded() = runVmTest { viewModel ->
+        givenCardioPlan()
+        viewModel.openGuide("ex_ride")
+        runCurrent()
+
+        viewModel.startGuidance()
+        runCurrent()
+
+        // The guide still runs — it is an instrument, not a recorder.
+        assertEquals(nowMs, viewModel.uiState.value.guide?.run?.startedAtMs)
+        coVerify(exactly = 0) { guideEvents.recordStart(any(), any(), any(), any(), any()) }
+    }
+
+    @Test
+    @DisplayName("a START that is refused records nothing — a no-op is not an action")
+    fun refusedStartIsNotRecorded() = runVmTest { viewModel ->
+        givenRunningCapture(anchoredTo = null)
+        givenCardioPlan()
+        viewModel.openGuide("ex_ride")
+        runCurrent()
+        viewModel.startGuidance()
+        runCurrent()
+
+        // A doubled tap ten minutes in: refused by the phase guard, so the
+        // record must not gain a second anchor the timeline never took.
+        nowMs += 600_000L
+        viewModel.startGuidance()
+        runCurrent()
+
+        coVerify(exactly = 1) { guideEvents.recordStart(any(), any(), any(), any(), any()) }
+    }
+
+    @Test
+    @DisplayName("starting again after a finished ride appends a second start row — the record keeps both")
+    fun restartAppendsASecondStartEvent() = runVmTest { viewModel ->
+        givenRunningCapture(anchoredTo = null)
+        givenCardioPlan()
+        viewModel.openGuide("ex_ride")
+        runCurrent()
+        viewModel.startGuidance()
+        runCurrent()
+        val firstAnchor = nowMs
+
+        // Forty minutes on a thirty-minute plan: DONE, then a second ride on
+        // the same exercise. The log is append-only — the first start is not
+        // rewritten, and analysis picks the latest start, discarding the run
+        // it began.
+        nowMs += 40 * 60_000L
+        viewModel.startGuidance()
+        runCurrent()
+
+        coVerify(exactly = 1) {
+            guideEvents.recordStart(any(), any(), any(), clientTimestampMs = firstAnchor, timelineJson = any())
+        }
+        coVerify(exactly = 1) {
+            guideEvents.recordStart(any(), any(), any(), clientTimestampMs = nowMs, timelineJson = any())
+        }
+        coVerify(exactly = 2) { guideEvents.recordStart(any(), any(), any(), any(), any()) }
+    }
+
+    @Test
+    @DisplayName("+ 5 MIN during a capture records the step it added, at the tap's own instant")
+    fun extensionIsRecorded() = runVmTest { viewModel ->
+        givenRunningCapture(anchoredTo = null)
+        givenCardioPlan()
+        viewModel.openGuide("ex_ride")
+        runCurrent()
+        viewModel.startGuidance()
+        runCurrent()
+
+        nowMs += 900_000L
+        viewModel.extendGuidance()
+        runCurrent()
+
+        coVerify(exactly = 1) {
+            guideEvents.recordExtend(
+                date = todayString,
+                exerciseKey = "ex_ride",
+                sessionId = "session-1",
+                clientTimestampMs = nowMs,
+                extensionSec = 300,
+            )
+        }
+    }
+
+    @Test
+    @DisplayName("three taps are three rows of five minutes, not one row of fifteen")
+    fun eachExtensionTapIsItsOwnRow() = runVmTest { viewModel ->
+        givenRunningCapture(anchoredTo = null)
+        givenCardioPlan()
+        viewModel.openGuide("ex_ride")
+        runCurrent()
+        viewModel.startGuidance()
+        runCurrent()
+
+        repeat(3) { viewModel.extendGuidance() }
+        runCurrent()
+
+        assertEquals(900, viewModel.uiState.value.guide?.run?.extensionSec)
+        coVerify(exactly = 3) {
+            guideEvents.recordExtend(any(), any(), any(), any(), extensionSec = 300)
+        }
+    }
+
+    @Test
+    @DisplayName("a strap clipped on mid-ride records the extend and never back-fills the START")
+    fun midRideConnectRecordsOnlyTheExtend() = runVmTest { viewModel ->
+        givenCardioPlan()
+        viewModel.openGuide("ex_ride")
+        runCurrent()
+        // START pressed before the strap is on: nothing to key a row by, so
+        // nothing is written, and nothing goes back to fill it in later.
+        viewModel.startGuidance()
+        runCurrent()
+
+        nowMs += 600_000L
+        givenRunningCapture(anchoredTo = null)
+        runCurrent()
+        viewModel.extendGuidance()
+        runCurrent()
+
+        // The extend lands with the session that was running when it happened —
+        // an orphan: a session carrying extends but no start. Analysis reads
+        // such a session as unguided and ignores them, which is why the client
+        // does not need to suppress it. Emission is all that is pinned here.
+        coVerify(exactly = 0) { guideEvents.recordStart(any(), any(), any(), any(), any()) }
+        coVerify(exactly = 1) {
+            guideEvents.recordExtend(todayString, "ex_ride", "session-1", nowMs, 300)
+        }
+    }
+
+    @Test
+    @DisplayName("+ 5 MIN with no capture running records nothing, and still extends")
+    fun extensionWithoutACaptureIsNotRecorded() = runVmTest { viewModel ->
+        givenCardioPlan()
+        viewModel.openGuide("ex_ride")
+        runCurrent()
+        viewModel.startGuidance()
+        runCurrent()
+
+        viewModel.extendGuidance()
+        runCurrent()
+
+        assertEquals(300, viewModel.uiState.value.guide?.run?.extensionSec)
+        coVerify(exactly = 0) { guideEvents.recordExtend(any(), any(), any(), any(), any()) }
+    }
+
+    @Test
+    @DisplayName("an extension the timeline refuses records nothing")
+    fun refusedExtensionIsNotRecorded() = runVmTest { viewModel ->
+        givenRunningCapture(anchoredTo = null)
+        publish(plans = intervalPlan())
+        runCurrent()
+        viewModel.openGuide("ex_intervals")
+        runCurrent()
+        viewModel.startGuidance()
+        runCurrent()
+
+        // A structured session is not extensible, so the tap changes nothing —
+        // and a record of five minutes nobody rode would be a lie in the data.
+        viewModel.extendGuidance()
+        runCurrent()
+
+        coVerify(exactly = 0) { guideEvents.recordExtend(any(), any(), any(), any(), any()) }
+    }
+
+    @Test
+    @DisplayName("the record follows the guide's own key, not the strap's workout anchor")
+    fun recordedKeyIsTheGuidesOwn() = runVmTest { viewModel ->
+        // The capture is anchored to a different day's session entirely; what
+        // identifies a guide action is the exercise it was taken on.
+        captureState.value = HrCaptureState(
+            isRunning = true,
+            sessionId = "session-1",
+            workoutDate = "2026-08-07",
+            workoutSessionId = 7,
+        )
+        givenCardioPlan()
+        viewModel.openGuide("ex_row")
+        runCurrent()
+
+        viewModel.startGuidance()
+        runCurrent()
+
+        coVerify(exactly = 1) {
+            guideEvents.recordStart(todayString, "ex_row", "session-1", nowMs, any())
+        }
     }
 
     @Test

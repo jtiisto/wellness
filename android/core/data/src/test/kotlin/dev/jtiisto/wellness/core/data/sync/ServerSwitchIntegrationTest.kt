@@ -8,6 +8,7 @@ import dev.jtiisto.wellness.core.data.coach.FakeCoachDao
 import dev.jtiisto.wellness.core.data.db.DebugLogEntity
 import dev.jtiisto.wellness.core.data.db.FakeHrSampleDao
 import dev.jtiisto.wellness.core.data.db.FakeHrSessionDao
+import dev.jtiisto.wellness.core.data.db.FakeGuideEventDao
 import dev.jtiisto.wellness.core.data.db.FakeSetEventDao
 import dev.jtiisto.wellness.core.data.db.HrSampleEntity
 import dev.jtiisto.wellness.core.data.db.HrSessionEntity
@@ -16,6 +17,7 @@ import dev.jtiisto.wellness.core.data.db.PayloadCacheDao
 import dev.jtiisto.wellness.core.data.db.PayloadCacheEntity
 import dev.jtiisto.wellness.core.data.db.ServerProfileEntity
 import dev.jtiisto.wellness.core.data.db.ServerSwitchDao
+import dev.jtiisto.wellness.core.data.db.GuideEventEntity
 import dev.jtiisto.wellness.core.data.db.SetEventEntity
 import dev.jtiisto.wellness.core.data.db.TrendsMetaDao
 import dev.jtiisto.wellness.core.data.db.TrendsMetaEntity
@@ -154,6 +156,7 @@ class ServerSwitchIntegrationTest {
         private val hrSessions: FakeHrSessionDao,
         private val hrSamples: FakeHrSampleDao,
         private val setEvents: FakeSetEventDao,
+        private val guideEvents: FakeGuideEventDao,
     ) : ServerSwitchDao() {
         val logLines = mutableListOf<String>()
 
@@ -168,6 +171,7 @@ class ServerSwitchIntegrationTest {
         override suspend fun clearHrSessions() = hrSessions.sessions.clear()
         override suspend fun clearHrSamples() = hrSamples.samples.clear()
         override suspend fun clearSetEvents() = setEvents.events.clear()
+        override suspend fun clearGuideEvents() = guideEvents.events.clear()
 
         override suspend fun activate(id: Long) {
             profiles.replaceAll { it.copy(isActive = it.id == id) }
@@ -199,9 +203,10 @@ class ServerSwitchIntegrationTest {
         val hrSessionDao = FakeHrSessionDao()
         val hrSampleDao = FakeHrSampleDao()
         val setEventDao = FakeSetEventDao()
+        val guideEventDao = FakeGuideEventDao()
         val switchDao = WiringSwitchDao(
             journalDao, coachDao, cacheDao, trendsMeta, profiles,
-            hrSessionDao, hrSampleDao, setEventDao,
+            hrSessionDao, hrSampleDao, setEventDao, guideEventDao,
         )
         val config = ServerConfig("http://localhost:9001/wellness")
 
@@ -310,6 +315,15 @@ class ServerSwitchIntegrationTest {
                     action = SetEventEntity.ACTION_CHECK, clientTimestampMs = 1_770_000_010_000,
                 ),
             )
+            // A guide action names a session only the server being left has ever
+            // heard of, so it belongs to that server exactly as its siblings do.
+            guideEventDao.insert(
+                GuideEventEntity(
+                    eventId = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff", date = "2030-01-03",
+                    exerciseKey = "ex_ride", action = GuideEventEntity.ACTION_START,
+                    clientTimestampMs = 1_770_000_020_000, sessionId = "hr-1", timelineJson = "[]",
+                ),
+            )
         }
 
         fun everythingIsEmpty(): Boolean = populatedTables().isEmpty()
@@ -326,6 +340,7 @@ class ServerSwitchIntegrationTest {
             if (hrSessionDao.sessions.isNotEmpty()) add("hr_sessions")
             if (hrSampleDao.samples.isNotEmpty()) add("hr_samples")
             if (setEventDao.events.isNotEmpty()) add("set_events")
+            if (guideEventDao.events.isNotEmpty()) add("guide_events")
         }
     }
 
@@ -428,10 +443,10 @@ class ServerSwitchIntegrationTest {
     }
 
     @Test
-    @DisplayName("every one of the eleven tables is empty once the switch returns")
-    fun allElevenTablesAreEmptied() = switchTest { world ->
+    @DisplayName("every one of the twelve tables is empty once the switch returns")
+    fun allTwelveTablesAreEmptied() = switchTest { world ->
         world.seedEverything()
-        assertEquals(11, world.populatedTables().size, "the seed must cover all eleven wiped tables")
+        assertEquals(12, world.populatedTables().size, "the seed must cover all twelve wiped tables")
 
         world.switcher.switchTo(target(world), fromNickname = "Laptop")
 

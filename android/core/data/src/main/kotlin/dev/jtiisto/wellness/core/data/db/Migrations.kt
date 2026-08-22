@@ -174,6 +174,44 @@ val MIGRATION_5_6 = object : Migration(5, 6) {
     }
 }
 
+/**
+ * v6 → v7: the cardio guide's action log.
+ *
+ * Additive, and it carries the heart-rate tables' extra edge: these rows are
+ * client-authored telemetry that exists nowhere else until it uploads, so the
+ * rule against destructive migration applies with no server to fall back on.
+ *
+ * The index is part of the schema comparison, not decoration — the uploader's
+ * two scans are the only reads of this table that do not go through its key.
+ *
+ * Transcribed verbatim from `schemas/…WellnessDatabase/7.json` with
+ * `${TABLE_NAME}` substituted; `Migration6to7Test` re-validates it against the
+ * real schema, and also runs the whole v1 → v7 chain.
+ */
+val MIGRATION_6_7 = object : Migration(6, 7) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `guide_events` (" +
+                "`eventId` TEXT NOT NULL, `date` TEXT NOT NULL, `exerciseKey` TEXT NOT NULL, " +
+                "`action` TEXT NOT NULL, `clientTimestampMs` INTEGER NOT NULL, " +
+                "`sessionId` TEXT NOT NULL, `extensionSec` INTEGER, `timelineJson` TEXT, " +
+                "`isSynced` INTEGER NOT NULL, `isQuarantined` INTEGER NOT NULL, " +
+                "PRIMARY KEY(`eventId`))",
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_guide_events_isSynced_isQuarantined_clientTimestampMs` " +
+                "ON `guide_events` (`isSynced`, `isQuarantined`, `clientTimestampMs`)",
+        )
+    }
+}
+
 /** Every migration the app ships, in order. Never add destructive fallbacks. */
 val WELLNESS_MIGRATIONS =
-    arrayOf(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+    arrayOf(
+        MIGRATION_1_2,
+        MIGRATION_2_3,
+        MIGRATION_3_4,
+        MIGRATION_4_5,
+        MIGRATION_5_6,
+        MIGRATION_6_7,
+    )

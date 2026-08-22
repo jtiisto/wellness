@@ -23,6 +23,7 @@ val coachModule = module {
             knownStraps = get(),
             capture = get(),
             captureStore = get(),
+            guideEvents = get(),
             // The app-lived ring the capture service feeds. Keyed on its own
             // class, not on the flow it publishes — see `bleModule`.
             traceRing = get(),

@@ -13,6 +13,7 @@ import dev.jtiisto.wellness.core.data.db.WELLNESS_MIGRATIONS
 import dev.jtiisto.wellness.core.data.db.WellnessDatabase
 import dev.jtiisto.wellness.core.data.export.DataExporter
 import dev.jtiisto.wellness.core.data.export.SharedFileStore
+import dev.jtiisto.wellness.core.data.hr.GuideEventRecorder
 import dev.jtiisto.wellness.core.data.hr.HrCaptureStore
 import dev.jtiisto.wellness.core.data.hr.HrSyncStore
 import dev.jtiisto.wellness.core.data.journal.JournalSyncStore
@@ -122,6 +123,7 @@ fun coreDataModule(builtInUrl: String) = module {
     single { get<WellnessDatabase>().hrSessionDao() }
     single { get<WellnessDatabase>().hrSampleDao() }
     single { get<WellnessDatabase>().setEventDao() }
+    single { get<WellnessDatabase>().guideEventDao() }
 
     single { ServerBootstrap(dao = get(), builtInUrl = builtInUrl) }
     // Resolved, never constructed from BuildConfig directly: which server this
@@ -209,6 +211,18 @@ fun coreDataModule(builtInUrl: String) = module {
         )
     }
 
+    // The guide's own seam onto the same log rails. It writes only while a
+    // capture is running — the ViewModel hands it the live session id, and a
+    // null one is the whole of the precondition.
+    single {
+        val koinScope = this
+        GuideEventRecorder(
+            dao = get(),
+            session = get(),
+            scheduleUpload = { koinScope.get<HrSyncStore>().scheduleFlush() },
+        )
+    }
+
     single {
         val connectivity = get<ConnectivityMonitor>()
         val koinScope = this
@@ -252,6 +266,7 @@ fun coreDataModule(builtInUrl: String) = module {
             sessionDao = get(),
             sampleDao = get(),
             eventDao = get(),
+            guideEventDao = get(),
             api = get(),
             // Coach's identity, not a third one: `clientId` is a diagnostic in
             // this protocol, the set events join back to coach data, and two

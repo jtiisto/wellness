@@ -15,6 +15,7 @@ from ..conftest import GOLDEN_DIR
 
 SAMPLES = "samples-batch-request.json"
 SET_EVENTS = "set-events-batch-request.json"
+GUIDE_EVENTS = "guide-events-batch-request.json"
 SESSIONS = "sessions-batch-request.json"
 INGEST_RESPONSE = "ingest-response.json"
 UPSERT_RESPONSE = "upsert-response.json"
@@ -55,6 +56,27 @@ class TestGoldenPayloads:
             (1, None), (1, None), (None, "fixture-item-a")]
         assert rows[2]["session_id"] is None
 
+    def test_guide_events_payload_returns_the_golden_response(self, post_golden, golden_json):
+        response = post_golden("/api/hr/guide-events/batch", GUIDE_EVENTS)
+        assert response.status_code == 200
+        assert response.json() == golden_json(INGEST_RESPONSE)
+
+    def test_guide_events_payload_stores_its_three_rows(self, post_golden, hr_rows):
+        post_golden("/api/hr/guide-events/batch", GUIDE_EVENTS)
+        rows = hr_rows("guide_events", order_by="client_timestamp_ms")
+        assert len(rows) == 3
+        assert [r["action"] for r in rows] == ["start", "extend", "start"]
+        # Each action carries only its own payload, and the timeline arrives as
+        # the opaque string it is — stored verbatim, never parsed here.
+        assert [r["extension_sec"] for r in rows] == [None, 300, None]
+        assert rows[0]["timeline_json"].startswith('[{"duration_sec":420')
+        assert rows[1]["timeline_json"] is None
+        # A ride whose plan authored no timeline records an empty one, which is
+        # different from having recorded none at all.
+        assert rows[2]["timeline_json"] == "[]"
+        # The session is present on every row: it is what licensed the record.
+        assert all(r["session_id"] for r in rows)
+
     def test_sessions_payload_returns_the_golden_response(self, post_golden, golden_json):
         response = post_golden("/api/hr/sessions/batch", SESSIONS)
         assert response.status_code == 200
@@ -71,12 +93,16 @@ class TestGoldenPayloads:
         """The retry the spec promises is harmless: same bytes, zero new rows."""
         post_golden("/api/hr/samples/batch", SAMPLES)
         post_golden("/api/hr/set-events/batch", SET_EVENTS)
+        post_golden("/api/hr/guide-events/batch", GUIDE_EVENTS)
         assert post_golden("/api/hr/samples/batch", SAMPLES).json() == {
             "accepted": 0, "duplicates": 3, "totalReceived": 3}
         assert post_golden("/api/hr/set-events/batch", SET_EVENTS).json() == {
             "accepted": 0, "duplicates": 3, "totalReceived": 3}
+        assert post_golden("/api/hr/guide-events/batch", GUIDE_EVENTS).json() == {
+            "accepted": 0, "duplicates": 3, "totalReceived": 3}
         assert len(hr_rows("intervals")) == 3
         assert len(hr_rows("set_events")) == 3
+        assert len(hr_rows("guide_events")) == 3
 
     def test_response_bytes_match_the_golden_files(self, post_golden):
         """Stronger than the parsed comparison: pins key ORDER and the compact
@@ -103,11 +129,12 @@ class TestGoldenFilesThemselves:
     """Guards on the checked-in bytes, independent of any endpoint."""
 
     @pytest.mark.parametrize(
-        "name", [SAMPLES, SET_EVENTS, SESSIONS, INGEST_RESPONSE, UPSERT_RESPONSE])
+        "name",
+        [SAMPLES, SET_EVENTS, GUIDE_EVENTS, SESSIONS, INGEST_RESPONSE, UPSERT_RESPONSE])
     def test_is_parseable_json(self, name, golden_json):
         assert isinstance(golden_json(name), dict)
 
-    @pytest.mark.parametrize("name", [SAMPLES, SET_EVENTS, SESSIONS])
+    @pytest.mark.parametrize("name", [SAMPLES, SET_EVENTS, GUIDE_EVENTS, SESSIONS])
     def test_every_date_literal_is_far_future(self, name):
         """This repo is public and its pre-commit guard scans staged literals
         against the live health databases, so a plausible past date in a fixture
@@ -116,7 +143,7 @@ class TestGoldenFilesThemselves:
         years = {int(y) for y in re.findall(r"\b(\d{4})-\d{2}-\d{2}\b", text)}
         assert all(year >= 2030 for year in years), sorted(years)
 
-    @pytest.mark.parametrize("name", [SAMPLES, SET_EVENTS, SESSIONS])
+    @pytest.mark.parametrize("name", [SAMPLES, SET_EVENTS, GUIDE_EVENTS, SESSIONS])
     def test_no_optional_field_is_sent_as_null(self, name):
         """Optionals are omitted, never null — the convention the server's
         defaults depend on."""

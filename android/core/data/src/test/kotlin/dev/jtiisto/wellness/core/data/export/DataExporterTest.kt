@@ -12,6 +12,7 @@ import dev.jtiisto.wellness.core.data.db.JournalDao
 import dev.jtiisto.wellness.core.data.db.JournalEntryEntity
 import dev.jtiisto.wellness.core.data.db.JournalMetaEntity
 import dev.jtiisto.wellness.core.data.db.JournalTrackerEntity
+import dev.jtiisto.wellness.core.data.db.GuideEventEntity
 import dev.jtiisto.wellness.core.data.db.SetEventEntity
 import dev.jtiisto.wellness.core.data.journal.JournalUiPrefs
 import kotlinx.coroutines.test.runTest
@@ -53,6 +54,7 @@ class DataExporterTest {
         var hrSessions = listOf<HrSessionEntity>()
         var hrSampleSummaries = listOf<HrSampleSummary>()
         var setEvents = listOf<SetEventEntity>()
+        var guideEvents = listOf<GuideEventEntity>()
 
         /** Ordered read log — the atomicity assertion reads this. */
         val reads = mutableListOf<String>()
@@ -102,6 +104,11 @@ class DataExporterTest {
         override suspend fun setEvents(): List<SetEventEntity> {
             reads += "setEvents"
             return setEvents
+        }
+
+        override suspend fun guideEvents(): List<GuideEventEntity> {
+            reads += "guideEvents"
+            return guideEvents
         }
     }
 
@@ -429,7 +436,7 @@ class DataExporterTest {
     // ---- snapshot and streaming ------------------------------------------
 
     @Test
-    @DisplayName("all nine tables are read through one snapshot call")
+    @DisplayName("all ten tables are read through one snapshot call")
     fun snapshotReadsEverythingTogether() = runTest {
         val dao = FakeExportDao()
 
@@ -441,7 +448,7 @@ class DataExporterTest {
         assertEquals(
             listOf(
                 "trackers", "entries", "journalMeta", "plans", "logs", "coachMeta",
-                "hrSessions", "hrSampleSummaries", "setEvents",
+                "hrSessions", "hrSampleSummaries", "setEvents", "guideEvents",
             ),
             dao.reads,
         )
@@ -617,5 +624,44 @@ class DataExporterTest {
         assertTrue(hr.getValue("sessions").jsonObject.isEmpty())
         assertTrue(hr.getValue("sample_counts").jsonObject.isEmpty())
         assertTrue(hr.getValue("set_events").jsonArray.isEmpty())
+        assertTrue(hr.getValue("guide_events").jsonArray.isEmpty())
+    }
+
+    @Test
+    @DisplayName("guide events are an ordered array, each action carrying only its own payload")
+    fun hrGuideEventsShape() = runTest {
+        val dao = FakeExportDao().apply {
+            guideEvents = listOf(
+                GuideEventEntity(
+                    eventId = "g-start", date = "2030-01-03", exerciseKey = "ex_ride",
+                    action = GuideEventEntity.ACTION_START, clientTimestampMs = 1_770_000_010_000,
+                    sessionId = "s-anchored",
+                    timelineJson = """[{"duration_sec":1800,"hr_min":122,"hr_max":138}]""",
+                    isSynced = true,
+                ),
+                GuideEventEntity(
+                    eventId = "g-extend", date = "2030-01-03", exerciseKey = "ex_ride",
+                    action = GuideEventEntity.ACTION_EXTEND, clientTimestampMs = 1_770_000_910_000,
+                    sessionId = "s-anchored", extensionSec = 300,
+                ),
+            )
+        }
+
+        val events = exportOf(dao).getValue("hr").jsonObject.getValue("guide_events").jsonArray
+
+        assertEquals(
+            listOf("g-start", "g-extend"),
+            events.map { it.jsonObject.getValue("eventId").jsonPrimitive.content },
+        )
+        val start = events[0].jsonObject
+        assertTrue(start.getValue("timelineJson").jsonPrimitive.content.contains("duration_sec"))
+        assertFalse(start.containsKey("extensionSec"))
+        // The session is required here, unlike a set tick's: it is what licensed
+        // the recording in the first place.
+        assertEquals("s-anchored", start.getValue("sessionId").jsonPrimitive.content)
+
+        val extend = events[1].jsonObject
+        assertEquals(300, extend.getValue("extensionSec").jsonPrimitive.content.toInt())
+        assertFalse(extend.containsKey("timelineJson"))
     }
 }

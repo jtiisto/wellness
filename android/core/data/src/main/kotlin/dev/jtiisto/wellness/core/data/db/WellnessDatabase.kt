@@ -25,8 +25,9 @@ import androidx.room.RoomDatabase
         HrSessionEntity::class,
         HrSampleEntity::class,
         SetEventEntity::class,
+        GuideEventEntity::class,
     ],
-    version = 6,
+    version = 7,
     exportSchema = true,
 )
 abstract class WellnessDatabase : RoomDatabase() {
@@ -52,6 +53,8 @@ abstract class WellnessDatabase : RoomDatabase() {
     abstract fun hrSampleDao(): HrSampleDao
 
     abstract fun setEventDao(): SetEventDao
+
+    abstract fun guideEventDao(): GuideEventDao
 
     companion object {
         const val NAME = "wellness.db"

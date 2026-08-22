@@ -1,7 +1,9 @@
 package dev.jtiisto.wellness.feature.coach.guidance
 
+import dev.jtiisto.wellness.core.data.WellnessJson
 import dev.jtiisto.wellness.core.data.coach.PlanExerciseDto
 import dev.jtiisto.wellness.core.data.coach.PlanSegmentDto
+import kotlinx.serialization.encodeToString
 
 /**
  * The cardio guide's clock: a plan's target-HR timeline, the live run over it,
@@ -149,6 +151,33 @@ fun guidanceTimeline(
         plannedTotalSec = if (resolved.isEmpty()) plannedDurationSec?.takeIf { it > 0 } else offset,
     )
 }
+
+/**
+ * The timeline as the guide will draw it, serialized for the heart-rate record.
+ *
+ * The **planned** segments and only those: an extension is a separate,
+ * timestamped fact in the same log, so folding it in here would count it twice —
+ * and a run is anchored with its extension discarded anyway.
+ *
+ * The shape is the coach wire's own segment shape, round-tripped through
+ * [PlanSegmentDto] rather than hand-built, so the segments a consumer reads out
+ * of `hr.db` parse exactly like the segments in a plan. Durations are the
+ * resolved ones (offsets differenced back), which is what makes this the
+ * timeline as *guided* rather than as authored: a hand-edited negative duration
+ * was clamped on the way in, and the record says what the rider actually rode
+ * to. A segmentless ride serializes as `[]` — honestly, since no band was drawn
+ * and there are no boundaries to derive.
+ */
+fun GuidanceTimeline.guidedSegmentsJson(): String = WellnessJson.encodeToString(
+    segments.map {
+        PlanSegmentDto(
+            durationSec = it.durationSec,
+            hrMin = it.hrMin,
+            hrMax = it.hrMax,
+            label = it.label,
+        )
+    },
+)
 
 /**
  * The timeline this planned exercise guides against.

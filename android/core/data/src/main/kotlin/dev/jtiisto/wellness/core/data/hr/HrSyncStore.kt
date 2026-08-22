@@ -1,5 +1,7 @@
 package dev.jtiisto.wellness.core.data.hr
 
+import dev.jtiisto.wellness.core.data.db.GuideEventDao
+import dev.jtiisto.wellness.core.data.db.GuideEventEntity
 import dev.jtiisto.wellness.core.data.db.HrSampleDao
 import dev.jtiisto.wellness.core.data.db.HrSampleEntity
 import dev.jtiisto.wellness.core.data.db.HrSessionDao
@@ -50,7 +52,11 @@ private const val DAY_MS = 24L * 60L * 60L * 1000L
 /** Synced samples outlive their upload by a week; there are a lot of them. */
 internal const val SAMPLE_RETENTION_MS = 7L * DAY_MS
 
-/** Synced events by sixty days — coach's horizon, and one row per set. */
+/**
+ * Synced events by sixty days — coach's horizon. Shared by the two event logs:
+ * a set tick and a guide action are both one small row about a moment, and both
+ * are the half of the correlation a person might still want to look at.
+ */
 internal const val EVENT_RETENTION_MS = 60L * DAY_MS
 
 /**
@@ -80,8 +86,8 @@ internal class QuarantineLimitException(
 )
 
 /**
- * Uploads heart-rate capture data: RR samples, set-completion events and the
- * sessions that group them.
+ * Uploads heart-rate capture data: RR samples, the set-completion and
+ * cardio-guide event logs, and the sessions that group them.
  *
  * **This is not a sync store in the sense the other two are.** Nothing flows
  * back but counts, so there is no watermark, no arbitration and no
@@ -90,11 +96,10 @@ internal class QuarantineLimitException(
  * natural key, which is what makes a retried batch free and a lost response
  * harmless.
  *
- * The three flows are one pipeline with three sets of lambdas. That is worth it
+ * The four flows are one pipeline with four sets of lambdas. That is worth it
  * for more than brevity — the error contract below is subtle enough that a
- * second copy of it would be a second chance to get it wrong, and samples stay
- * dormant until Phase 2 while events are live now, so the dormant flow gets the
- * live one's testing for free.
+ * second copy of it would be a second chance to get it wrong, and a flow that
+ * fires a handful of rows a week gets the busy ones' testing for free.
  *
  * **The error contract, which is the whole design:**
  *
@@ -134,6 +139,7 @@ class HrSyncStore(
     private val sessionDao: HrSessionDao,
     private val sampleDao: HrSampleDao,
     private val eventDao: SetEventDao,
+    private val guideEventDao: GuideEventDao,
     private val api: HrApi,
     private val clientId: suspend () -> String,
     private val isOnline: () -> Boolean,
@@ -175,7 +181,8 @@ class HrSyncStore(
      * content changes — by that point it is a different row, and it should.)
      */
     suspend fun hasPendingData(): Boolean =
-        eventDao.countPending() > 0 || sessionDao.countPending() > 0 || sampleDao.countPending() > 0
+        eventDao.countPending() > 0 || guideEventDao.countPending() > 0 ||
+            sessionDao.countPending() > 0 || sampleDao.countPending() > 0
 
     /** Block until no flush is in flight — the server switch's drain. */
     suspend fun awaitQuiescence() {
@@ -183,19 +190,23 @@ class HrSyncStore(
     }
 
     /**
-     * Everything, in one run and on one quarantine budget: sessions, then
-     * events, then samples.
+     * Everything, in one run and on one quarantine budget: sessions, then the
+     * two event logs, then samples.
      *
      * The order is a preference, not a requirement — the server enforces no
-     * foreign keys between the three tables precisely because batches drain in
+     * foreign keys between the four tables precisely because batches drain in
      * whatever order the client empties its queues. Sessions go first because
      * they are the cheapest and the most useful to have landed, samples last
      * because they are the only unbounded one.
      */
-    suspend fun flush(): SyncResult = runFlush(listOf(sessionsFlow, eventsFlow, samplesFlow))
+    suspend fun flush(): SyncResult =
+        runFlush(listOf(sessionsFlow, eventsFlow, guideEventsFlow, samplesFlow))
 
     /** The set-event log alone — what the debounce is armed for in Phase 1. */
     suspend fun flushEvents(): SyncResult = runFlush(listOf(eventsFlow))
+
+    /** The guide-event log alone. */
+    suspend fun flushGuideEvents(): SyncResult = runFlush(listOf(guideEventsFlow))
 
     /** The RR stream alone — the capture service's 10 s / 200-sample cadence. */
     suspend fun flushSamples(): SyncResult = runFlush(listOf(samplesFlow))
@@ -323,7 +334,25 @@ class HrSyncStore(
     )
 
     /**
-     * Sessions differ from the other two flows twice.
+     * The cardio guide's actions — the same flow as the set events, on the same
+     * retention horizon, because they are the same kind of row: immutable once
+     * written, so a quarantine here is permanent too.
+     */
+    private val guideEventsFlow = UploadFlow(
+        name = "guide-events",
+        pending = guideEventDao::pendingUpload,
+        keyOf = GuideEventEntity::eventId,
+        send = { id, rows ->
+            val response = api.postGuideEvents(GuideEventsBatchRequest(id, rows.map { it.toDto() }))
+            reconcileIngest("guide-events", response, rows.size)
+        },
+        markSynced = { rows -> guideEventDao.markSynced(rows.map { it.eventId }) },
+        quarantine = { rows -> guideEventDao.markQuarantined(rows.map { it.eventId }) },
+        prune = { guideEventDao.pruneSynced(now() - EVENT_RETENTION_MS) },
+    )
+
+    /**
+     * Sessions differ from the other three flows twice.
      *
      * **Quarantine is not permanent here.** A sample or an event is immutable
      * once written, so a row the server refused will be refused forever and
@@ -419,7 +448,7 @@ class HrSyncStore(
      * One table's upload, as a set of lambdas over the shared pipeline.
      *
      * [prune] is null for the one table with no retention rule, which is
-     * sessions. Everything else about the three is the same shape, which is the
+     * sessions. Everything else about the four is the same shape, which is the
      * point: the error contract is subtle enough that a second copy of it would
      * be a second chance to get it wrong.
      */

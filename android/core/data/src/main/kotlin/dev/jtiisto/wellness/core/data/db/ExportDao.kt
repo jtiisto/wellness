@@ -14,8 +14,8 @@ import androidx.room.Transaction
  *
  * `hr_samples` is the one table that would have broken that bound — an hour of
  * capture is thousands of RR rows — so it enters as [hrSampleSummaries],
- * aggregated in SQL. Sessions and set events are per-workout counts and come
- * through whole.
+ * aggregated in SQL. Sessions, set events and guide events are per-workout
+ * counts and come through whole.
  */
 data class ExportSnapshot(
     val trackers: List<JournalTrackerEntity> = emptyList(),
@@ -27,13 +27,14 @@ data class ExportSnapshot(
     val hrSessions: List<HrSessionEntity> = emptyList(),
     val hrSampleSummaries: List<HrSampleSummary> = emptyList(),
     val setEvents: List<SetEventEntity> = emptyList(),
+    val guideEvents: List<GuideEventEntity> = emptyList(),
 )
 
 /**
- * The export's read side: nine tables, **one transaction**.
+ * The export's read side: ten tables, **one transaction**.
  *
  * The atomicity is the point, and it is why this is a DAO of its own rather
- * than nine calls from the exporter. A sync landing between reading the trackers
+ * than ten calls from the exporter. A sync landing between reading the trackers
  * and reading the entries would produce a file describing a state the device
  * was never in — entries stamped against tracker tokens that the same file says
  * are older. An export is a debugging artefact; one that lies about consistency
@@ -73,6 +74,9 @@ abstract class ExportDao {
     @Query("SELECT * FROM set_events ORDER BY clientTimestampMs, rowid")
     abstract suspend fun setEvents(): List<SetEventEntity>
 
+    @Query("SELECT * FROM guide_events ORDER BY clientTimestampMs, rowid")
+    abstract suspend fun guideEvents(): List<GuideEventEntity>
+
     @Transaction
     open suspend fun snapshot(): ExportSnapshot = ExportSnapshot(
         trackers = trackers(),
@@ -84,5 +88,6 @@ abstract class ExportDao {
         hrSessions = hrSessions(),
         hrSampleSummaries = hrSampleSummaries(),
         setEvents = setEvents(),
+        guideEvents = guideEvents(),
     )
 }
