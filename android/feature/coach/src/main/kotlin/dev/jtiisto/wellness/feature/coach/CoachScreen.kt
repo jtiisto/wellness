@@ -17,7 +17,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.outlined.CalendarToday
@@ -56,6 +58,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import androidx.lifecycle.Lifecycle
@@ -189,71 +193,93 @@ private fun CoachContent(
     // null closes it on its own.
     var captureSheetOpen by remember { mutableStateOf(false) }
 
-    // A Box so the guide can sit *over* the day rather than replace it: the day
-    // stays composed behind the paper, which is what makes dismissing return to
-    // the row the guide was opened from instead of the top of the workout.
-    Box(modifier = Modifier.fillMaxSize()) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                // Paper over the day blocks fingers, not screen readers: the
-                // covered content must also leave the semantics tree, or
-                // TalkBack's linear traversal walks straight through the
-                // overlay into controls nobody can see (the deep-review find).
-                .then(
-                    if (state.guide != null) Modifier.clearAndSetSemantics { }
-                    else Modifier
-                ),
+    Column(modifier = Modifier.fillMaxSize()) {
+        TopAppBar(
+            title = { Text("Coach".uppercase(), style = LogbookTheme.type.section) },
+            colors = TopAppBarDefaults.topAppBarColors(
+                // Paper, like everything else — the bar is not a second surface.
+                containerColor = palette.paper,
+                titleContentColor = palette.ink,
+            ),
+            windowInsets = WindowInsets(0),
+            actions = {
+                // No chip when idle — `state.hr` is null precisely then.
+                state.hr?.let { hr ->
+                    HrBpmChip(display = hr, onClick = { captureSheetOpen = true })
+                }
+                SyncStatusIndicator(
+                    status = state.syncStatus,
+                    syncing = state.isSyncing,
+                    // The colour exception is documented; the type is not —
+                    // the label reads in Logbook's own mono, not Graphite's.
+                    textStyle = LogbookTheme.type.meta,
+                    labelColor = palette.inkSoft,
+                    modifier = Modifier.padding(end = LogbookSpace.grid * 3),
+                )
+            },
+        )
+
+        CalendarPicker(state = state, actions = actions)
+
+        WorkoutDayView(day = state.day, actions = actions, modifier = Modifier.weight(1f))
+    }
+
+    // The guide, in a window of its own — beside the sheets in every sense,
+    // including the one that matters here: a `Dialog` is how every secondary
+    // surface in this app already gets a window, and a window is the only thing
+    // that can cover the NavigationBar (user ruling). The bar belongs to the
+    // Scaffold that hosts this screen, so no layer composed inside the tab could
+    // ever have reached it. Still not a nav route — there are five, and
+    // `DestinationScreen` errors on anything else by design.
+    //
+    // `state.guide` going null — a dismiss, a day change, an exercise leaving
+    // the plan — takes the window down; the run behind it lives in the ViewModel
+    // and survives all three. The day is still composed underneath, so a dismiss
+    // returns to the row the guide was opened from rather than the top of the
+    // workout.
+    state.guide?.let { guide ->
+        Dialog(
+            onDismissRequest = actions.onDismissGuide,
+            properties = DialogProperties(
+                // The whole display, bars and NavigationBar included.
+                usePlatformDefaultWidth = false,
+                // The app is edge-to-edge; a fitted decor would letterbox the
+                // paper inside the safe area and show the day through the gap.
+                // The content takes `safeDrawing` for itself instead, below.
+                decorFitsSystemWindows = false,
+                // The overlay's own BackHandler is the single consumer of back,
+                // so a press cannot be answered twice. Nothing is "outside" a
+                // full-screen guide, and a stray tap must not end a ride.
+                dismissOnBackPress = false,
+                dismissOnClickOutside = false,
+            ),
         ) {
-            TopAppBar(
-                title = { Text("Coach".uppercase(), style = LogbookTheme.type.section) },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    // Paper, like everything else — the bar is not a second surface.
-                    containerColor = palette.paper,
-                    titleContentColor = palette.ink,
-                ),
-                windowInsets = WindowInsets(0),
-                actions = {
-                    // No chip when idle — `state.hr` is null precisely then.
-                    state.hr?.let { hr ->
-                        HrBpmChip(display = hr, onClick = { captureSheetOpen = true })
-                    }
-                    SyncStatusIndicator(
-                        status = state.syncStatus,
-                        syncing = state.isSyncing,
-                        // The colour exception is documented; the type is not —
-                        // the label reads in Logbook's own mono, not Graphite's.
-                        textStyle = LogbookTheme.type.meta,
-                        labelColor = palette.inkSoft,
-                        modifier = Modifier.padding(end = LogbookSpace.grid * 3),
-                    )
-                },
-            )
-
-            CalendarPicker(state = state, actions = actions)
-
-            WorkoutDayView(day = state.day, actions = actions, modifier = Modifier.weight(1f))
-        }
-
-        // Beside the sheets, not on a route of its own: the guide is a surface
-        // the day puts up and takes down, and `state.guide` going null — a
-        // dismiss, a day change, an exercise leaving the plan — is what takes it
-        // down. The run behind it lives in the ViewModel and survives all three.
-        state.guide?.let { guide ->
             // Subscribed exactly here, which is exactly while the guide is up:
-            // this lambda is composed only when there is an overlay to draw, so
-            // the ring has no collector at all behind a closed guide, and the
+            // this lambda is composed only when there is a window to draw into,
+            // so the ring has no collector at all behind a closed guide, and the
             // lifecycle-aware collection drops it again when the app leaves the
             // foreground. Nothing is lost by either — every emission is the
             // whole window, so the next one contains what a missed one held.
+            // Reading it inside the dialog's own composition also keeps the
+            // once-a-second window out of the Coach tab's recompose scope.
             val samples by traceSamples.collectAsStateWithLifecycle()
-            GuidanceOverlay(
-                state = guide,
-                samples = samples,
-                onDismiss = actions.onDismissGuide,
-                onStart = actions.onStartGuidance,
-                onExtend = actions.onExtendGuidance,
-            )
+            Box(
+                // Paper to every edge, under the bars: the inset padding goes on
+                // the content, not on the page, or the strip behind the status
+                // bar would show whatever is under this window.
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(palette.paper),
+            ) {
+                GuidanceOverlay(
+                    state = guide,
+                    samples = samples,
+                    onDismiss = actions.onDismissGuide,
+                    onStart = actions.onStartGuidance,
+                    onExtend = actions.onExtendGuidance,
+                    modifier = Modifier.windowInsetsPadding(WindowInsets.safeDrawing),
+                )
+            }
         }
     }
 

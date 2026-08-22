@@ -88,10 +88,24 @@ Both clients receive it for free (raw-blob storage); rendering:
   auto-surface of any kind (user decision: the app cannot know when the
   strength block is done, and capture must never require the screen).
 - **The guidance overlay**: full-canvas paper overlay mounted from
-  `CoachContent` beside the existing sheets (no new nav route — the app has
-  no non-tab destination and this does not create the first one). Dismiss
-  (`✕` / back) returns to the day; reopening restores the same guidance
-  state (state outlives the composable, keyed to the day + exercise).
+  `CoachContent` beside the existing sheets, **in a window of its own** — a
+  full-screen `Dialog` (`usePlatformDefaultWidth = false`,
+  `decorFitsSystemWindows = false`, the content taking `safeDrawing` for
+  itself). Still no new nav route: the app has no non-tab destination and
+  this does not create the first one; a dialog is how every secondary
+  surface here already gets a window. *(Amended 2026-08-22 — it was a layer
+  stacked inside the tab until the user ruled that the guide must cover the
+  **NavigationBar**, which belongs to the Scaffold hosting the tab and is
+  therefore unreachable from anything composed inside one.)* Three things
+  follow from the window rather than from code: it covers the bar, it is
+  touch-modal, and it is the only window the accessibility service reports —
+  so the day behind needs neither a pointer blocker nor its semantics
+  cleared. `FLAG_KEEP_SCREEN_ON` is held on **this** window (see
+  Keep-screen-on), and the window states its own system-bar appearance,
+  which `enableEdgeToEdge` set only on the Activity's. Dismiss (`✕` / back,
+  the overlay's own `BackHandler` being the single consumer) returns to the
+  day; reopening restores the same guidance state (state outlives the
+  composable, keyed to the day + exercise).
 - **A new rolling-sample window**: a Koin-owned ring buffer fed from the
   existing `heartRateData` collector inside `HrCaptureService`, published as
   its own flow beside `HrCaptureState` — never folded into it
@@ -312,6 +326,13 @@ first-class). This deliberately amends the manifest's recorded
 no-keepScreenOn rationale and `coach-heart-rate.md`'s echo of it: the
 guidance display is exactly the "live tachogram" that rationale said did not
 exist. Both comments update in the same commit that introduces the flag.
+
+*(Amended 2026-08-22 with the dialog mounting above.)* The flag rides **the
+guide's own window**, not the Activity's: it is honoured per visible window,
+and once the guide has a window of its own, holding it on the one standing
+behind is a claim about the wrong thing. The release-on-dispose contract is
+unchanged and is now belt-and-braces — the window is torn down with the
+guide either way.
 
 ## Dependencies
 
