@@ -47,20 +47,17 @@ class DatabaseManager:
     def __init__(self, config: MCPConfig):
         self.config = config
 
-    def list_sessions(
-        self,
-        start_ms: Optional[int] = None,
-        end_ms: Optional[int] = None,
-        limit: Optional[int] = None,
-    ) -> list[SessionSummary]:
-        """Recent sessions, newest first, optionally limited to a time window."""
+    def list_sessions(self, limit: Optional[int] = None) -> list[SessionSummary]:
+        """Recent sessions, newest first.
+
+        No time window: retrieval is session-id-driven throughout (see
+        `hr_analysis.db`), and this listing is where a caller with no id starts.
+        """
         if limit is not None and limit < 1:
             raise ValueError("limit must be at least 1")
         effective_limit = min(limit or self.config.max_rows, self.config.max_rows)
         rows = hr_db.list_sessions(
             limit=effective_limit,
-            start_ms=start_ms,
-            end_ms=end_ms,
             db_path=self.config.db_path,
         )
         return [
@@ -85,6 +82,14 @@ class DatabaseManager:
     def load_set_events(self, session_id: str) -> list[dict]:
         """Ordered set-completion markers for one session (see hr_analysis.db)."""
         return hr_db.load_set_events(session_id, db_path=self.config.db_path)
+
+    def load_guide_events(self, session_id: str) -> list[dict]:
+        """Ordered cardio-guide actions for one session (see hr_analysis.db)."""
+        return hr_db.load_guide_events(session_id, db_path=self.config.db_path)
+
+    def guide_events_by_session(self, session_ids) -> dict[str, list[dict]]:
+        """Guide actions for many sessions in one query, keyed by session id."""
+        return hr_db.guide_events_by_session(session_ids, db_path=self.config.db_path)
 
     def session_devices(self, session_id: str) -> tuple[list[str], list[str]]:
         """(device_ids, sensor_types) that contributed beats to one session."""

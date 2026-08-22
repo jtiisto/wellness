@@ -126,6 +126,84 @@ def test_terminal_summary_handles_bout_without_metric_keys():
     assert "bouts detected: 1" in text
 
 
+def _guided_structure(**overrides):
+    """A structure block shaped like `guided.guided_structure`'s output."""
+    base = {
+        "guided": True,
+        "source": "guide_events",
+        "exercise_key": "fixture-ride",
+        "anchor_ms": 1_893_456_000_000,
+        "planned_total_sec": 600,
+        "extension_sec": 300,
+        "total_sec": 900,
+        "extends": [{"client_timestamp_ms": 1_893_456_030_000, "offset_s": 30.0,
+                     "extension_sec": 300}],
+        "extended_index": 1,
+        "discarded_starts": 0,
+        "discarded_extends": 0,
+        "segmentless": False,
+        "coverage": {"scheduled_sec": 900, "fraction": 1.0, "complete": True},
+        "segments": [
+            {"index": 0, "role": "warmup", "duration_s": 300.0, "avg_hr": 118.0,
+             "peak_hr": 124, "fraction_in_band": 1.0, "hr_min": 110, "hr_max": 125},
+            {"index": 1, "role": "work", "duration_s": 600.0, "avg_hr": 147.0,
+             "peak_hr": 155, "fraction_in_band": 0.91, "hr_min": 140,
+             "extended_sec": 300},
+        ],
+        "work": {"avg_hr": 147.0, "peak_hr": 155, "fraction_in_band": 0.91},
+    }
+    base.update(overrides)
+    return base
+
+
+def test_terminal_summary_renders_the_recorded_timeline():
+    text = report_mod.terminal_summary("s", _report(structure=_guided_structure()))
+    assert "guided: fixture-ride" in text
+    assert "timeline 15.0 min (+5 min appended, 1 taps)" in text
+    assert "100% covered" in text
+    assert "0. warmup" in text and "110-125" in text
+    assert "1. work" in text and ">=140" in text and "(+5m)" in text
+    assert "work spans: avg 147.0 peak 155  91% in band" in text
+
+
+def test_terminal_summary_flags_a_capture_that_ended_early():
+    """A bail has to look different from a ride that simply got easy."""
+    text = report_mod.terminal_summary("s", _report(structure=_guided_structure(
+        coverage={"scheduled_sec": 900, "fraction": 0.42, "complete": False})))
+    assert "42% covered" in text
+    assert "INCOMPLETE" in text
+
+
+def test_terminal_summary_names_a_discarded_run():
+    text = report_mod.terminal_summary("s", _report(structure=_guided_structure(
+        discarded_starts=2)))
+    assert "2 earlier run(s) discarded" in text
+
+
+def test_terminal_summary_renders_an_open_ended_segmentless_ride():
+    """A segmentless ride has no recorded length, so there is nothing for it to
+    have fallen short of: `complete: false` here means "no verdict", and calling
+    the ride INCOMPLETE would invent a target to have missed."""
+    text = report_mod.terminal_summary("s", _report(structure=_guided_structure(
+        total_sec=None, planned_total_sec=None, extension_sec=0, segments=[],
+        segmentless=True, extends=[],
+        coverage={"scheduled_sec": None, "fraction": None, "complete": False})))
+    assert "timeline open-ended" in text
+    assert "covered" not in text.split("timeline open-ended")[1].splitlines()[0]
+    assert "INCOMPLETE" not in text
+
+
+def test_terminal_summary_says_when_nothing_was_recorded():
+    text = report_mod.terminal_summary(
+        "s", _report(structure={"guided": False, "source": "none"}))
+    assert "structure: none recorded (unguided capture)" in text
+
+
+def test_terminal_summary_without_a_structure_key_is_unchanged():
+    """The pipeline's own dict carries no structure; only the CLI adds one."""
+    assert "guided" not in report_mod.terminal_summary("s", _report())
+
+
 def test_terminal_summary_says_so_when_no_bouts():
     text = report_mod.terminal_summary("sess-abc", _report())
     assert "bouts detected: none (HR too steady — continuous effort)" in text

@@ -25,8 +25,6 @@ from hr_mcp.config import MCPConfig
 from hr_mcp.database import DatabaseManager, HrDataUnavailable
 from hr_mcp.server import create_mcp_server
 from hr_mcp.tools import (
-    _parse_ms,
-    crop_beats,
     get_aligned_timeseries,
     get_latest_session_report,
     get_session_report,
@@ -63,29 +61,38 @@ def _steady_beats(session_id, start_ms, device_id="AA:BB"):
     return rows
 
 
-def _interval_beats(session_id, start_ms, device_id="AA:BB"):
-    """20 s easy, then 3 x (60 s hard / 45 s easy) — the ported VO2 fixture."""
+def _blocks(session_id, start_ms, blocks, device_id="AA:BB"):
+    """`intervals` rows for a list of (hr_bpm, seconds) blocks, back to back."""
     rows = []
     ts = start_ms
     seq = 0
-
-    def add_block(hr, seconds):
-        nonlocal ts, seq
+    for hr, seconds in blocks:
         rr = int(60_000 / hr)
         for _ in range(int(seconds * hr / 60)):
             ts += rr
             rows.append((device_id, ts, seq, hr, rr, 0, session_id, "garmin_hrm", _RECEIVED_AT))
             seq += 1
-
-    add_block(100, 20)
-    for rep in range(3):
-        add_block(170, 60)
-        if rep < 2:
-            add_block(110, 45)
     return rows
 
 
-def _write(db_path, intervals=(), sessions=()):
+def _interval_beats(session_id, start_ms, device_id="AA:BB", lead_in_s=20):
+    """20 s easy, then 3 x (60 s hard / 45 s easy) — the ported VO2 fixture.
+
+    `lead_in_s=0` drops the easy opening. `get_vo2_summary` lays its expected
+    bouts out from the FIRST BEAT, and the crop that used to trim the lead-in
+    away retired with the rest of the time-window surface — so the alignment a
+    plan-matching test needs now lives in the fixture rather than in a caller's
+    arithmetic.
+    """
+    blocks = [(100, lead_in_s)] if lead_in_s else []
+    for rep in range(3):
+        blocks.append((170, 60))
+        if rep < 2:
+            blocks.append((110, 45))
+    return _blocks(session_id, start_ms, blocks, device_id)
+
+
+def _write(db_path, intervals=(), sessions=(), guide_events=()):
     conn = sqlite3.connect(db_path)
     try:
         conn.executemany(
@@ -98,9 +105,21 @@ def _write(db_path, intervals=(), sessions=()):
             "workout_date, workout_session_id, received_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
             sessions,
         )
+        conn.executemany(
+            "INSERT INTO guide_events (event_id, date, exercise_key, action, "
+            "client_timestamp_ms, session_id, extension_sec, timeline_json, "
+            "received_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            guide_events,
+        )
         conn.commit()
     finally:
         conn.close()
+
+
+def _guide(event_id, session_id, exercise_key, action, ts_ms,
+           extension_sec=None, timeline_json=None, date="2030-01-01"):
+    return (event_id, date, exercise_key, action, ts_ms, session_id,
+            extension_sec, timeline_json, _RECEIVED_AT)
 
 
 @pytest.fixture
@@ -113,15 +132,20 @@ def empty_hr_db(tmp_path):
 
 @pytest.fixture
 def hr_db_path(empty_hr_db):
-    """Two captured sessions: a steady one, and a later interval one.
+    """Three captured sessions, none of them guided.
 
-    Only the steady session gets a `sessions` row, so the listing's LEFT JOIN is
-    exercised from both sides — beats can arrive for a session whose row was
-    never uploaded.
+    A steady one, a later interval one, and an earlier interval one whose first
+    beat IS its first effort (the plan-matching fixture — see
+    `_interval_beats`). Only the steady session gets a `sessions` row, so the
+    listing's LEFT JOIN is exercised from both sides: beats can arrive for a
+    session whose row was never uploaded.
     """
     _write(
         empty_hr_db,
-        intervals=_steady_beats("session-1", T0) + _interval_beats("vo2-session", T0 + 3_600_000),
+        intervals=(_steady_beats("session-1", T0)
+                   + _interval_beats("vo2-session", T0 + 3_600_000)
+                   + _interval_beats("vo2-aligned", T0 - 3_600_000,
+                                     device_id="CC:DD", lead_in_s=0)),
         sessions=[("session-1", "AA:BB", T0, T0 + 300_000, "2030-01-01", None, _RECEIVED_AT)],
     )
     return empty_hr_db
@@ -130,6 +154,70 @@ def hr_db_path(empty_hr_db):
 @pytest.fixture
 def db(hr_db_path):
     return DatabaseManager(MCPConfig.from_db_path(hr_db_path))
+
+
+# ---------------------------------------------------------------- guided rides
+
+# A three-step timeline in the coach wire's own segment shape: a marked warmup,
+# a role-less (therefore work) effort, and a marked cooldown. Every number is
+# invented.
+GUIDED_TIMELINE = (
+    '[{"duration_sec":60,"hr_min":110,"hr_max":125,"label":"ease in","role":"warmup"},'
+    '{"duration_sec":180,"hr_min":140,"hr_max":155},'
+    '{"duration_sec":60,"hr_max":120,"role":"cooldown"}]'
+)
+ANCHOR = T0 + 20_000            # 20 s of clipping-in beats precede START
+EXTENDED_TOTAL_S = 600          # 300 planned + one 300 s extend, all in the work step
+
+
+@pytest.fixture
+def guided_db(empty_hr_db):
+    """Three sessions, each a different shape of guided record.
+
+    `guided-one` is the ordinary case: one ride, ridden to the end, with beats
+    both before START and after the timeline finished. `guided-two` spans two
+    guided exercises — the disambiguation case. `guided-short` is the early
+    bail: the capture stops halfway through the schedule.
+    """
+    _write(
+        empty_hr_db,
+        intervals=(
+            _blocks("guided-one", T0, [
+                (100, 20),      # clipping in, before START
+                (118, 60),      # warmup, inside its 110-125 band
+                (132, 60),      # work, below the 140 floor — the ramp
+                (148, 420),     # work, inside the band (60 s + the 300 s extend)
+                (112, 60),      # cooldown, under the 120 ceiling
+                (105, 30),      # still pedalling after the timeline ended
+            ], device_id="EE:FF")
+            + _blocks("guided-two", T0 + 7_200_000, [
+                (150, 120), (140, 60), (128, 300),
+            ], device_id="EE:FF")
+            + _blocks("guided-short", T0 + 14_400_000, [
+                (118, 60), (145, 180), (146, 60),
+            ], device_id="EE:FF")
+        ),
+        guide_events=[
+            _guide("g-1", "guided-one", "fixture-cardio-intervals", "start",
+                   ANCHOR, timeline_json=GUIDED_TIMELINE),
+            _guide("g-2", "guided-one", "fixture-cardio-intervals", "extend",
+                   ANCHOR + 90_000, extension_sec=300),
+            _guide("g-3", "guided-two", "fixture-cardio-intervals", "start",
+                   T0 + 7_200_000, timeline_json=GUIDED_TIMELINE),
+            _guide("g-4", "guided-two", "fixture-zone2", "start",
+                   T0 + 7_380_000, timeline_json='[{"duration_sec":300,"hr_min":120}]'),
+            _guide("g-5", "guided-short", "fixture-cardio-intervals", "start",
+                   T0 + 14_400_000, timeline_json=GUIDED_TIMELINE),
+            _guide("g-6", "guided-short", "fixture-cardio-intervals", "extend",
+                   T0 + 14_500_000, extension_sec=300),
+        ],
+    )
+    return empty_hr_db
+
+
+@pytest.fixture
+def gdb(guided_db):
+    return DatabaseManager(MCPConfig.from_db_path(guided_db))
 
 
 def _extract_tools(mcp_server):
@@ -141,40 +229,36 @@ def _extract_tools(mcp_server):
 
 
 @pytest.mark.unit
-class TestParseMs:
-    """`_parse_ms` is the tool ergonomics surface: an LLM may pass either an
-    epoch-ms number or an ISO-8601 instant for the crop bounds."""
+class TestNoTimeWindowSurvives:
+    """No tool takes a clock reading — the 2026-08-22 retrieval ruling.
 
-    def test_passes_epoch_ms_through(self):
-        assert _parse_ms(T0) == T0
+    The crop parameters (and the ISO-8601 parser that served them) are gone from
+    every tool, and this pins their absence. The reason is the two-case model:
+    either wellness owns a ride end to end, keyed by one session id, or the ride
+    happened on the watch and this database has nothing to say about it. A tool
+    that accepted a Garmin activity's start time would invite exactly the
+    cross-check that model refuses — and a watch activity started on mounting
+    the bike routinely predates a START pressed after clipping in, so the
+    comparison would warn about nothing at all.
+    """
 
-    def test_accepts_digit_string(self):
-        assert _parse_ms(str(T0)) == T0
+    @pytest.mark.parametrize("tool, args", [
+        (list_sessions, {}),
+        (get_session_report, {"session_id": "session-1"}),
+        (get_aligned_timeseries, {"session_id": "session-1"}),
+        (get_vo2_summary, {"session_id": "session-1"}),
+    ])
+    @pytest.mark.parametrize("window", [{"start_ms": T0}, {"end_ms": T0}])
+    def test_tools_reject_a_time_window(self, db, tool, args, window):
+        with pytest.raises(TypeError):
+            tool(db, **args, **window)
 
-    def test_accepts_iso_8601_with_zulu(self):
-        assert _parse_ms("2030-01-01T00:00:00Z") == T0
+    def test_the_package_no_longer_parses_instants(self):
+        """The ISO-8601 reader existed only for the crop bounds."""
+        import hr_mcp.tools as tools_module
 
-    def test_treats_a_naive_timestamp_as_utc(self):
-        assert _parse_ms("2030-01-01T00:00:00") == T0
-
-    def test_none_and_blank_mean_unbounded(self):
-        assert _parse_ms(None) is None
-        assert _parse_ms("   ") is None
-
-
-@pytest.mark.unit
-class TestCropBeats:
-    def test_rejects_an_inverted_window(self):
-        with pytest.raises(ValueError, match="must be <="):
-            crop_beats([], start_ms=T0 + 1000, end_ms=T0)
-
-    def test_bounds_are_inclusive(self):
-        beats = _steady_beats("s", T0)
-        from hr_analysis.quality import Beat
-
-        parsed = [Beat(ts_ms=r[1], rr_ms=r[4], hr_bpm=r[3], is_gap=False) for r in beats]
-        first, last = parsed[0].ts_ms, parsed[-1].ts_ms
-        assert len(crop_beats(parsed, start_ms=first, end_ms=last)) == len(parsed)
+        assert not hasattr(tools_module, "_parse_ms")
+        assert not hasattr(tools_module, "crop_beats")
 
 
 # ==================== Integration: list_sessions ====================
@@ -185,13 +269,15 @@ class TestListSessions:
     def test_lists_every_captured_session(self, db):
         """PORTED: test_list_sessions."""
         sessions = list_sessions(db)
-        assert {s["session_id"] for s in sessions} == {"session-1", "vo2-session"}
+        assert {s["session_id"] for s in sessions} == {
+            "session-1", "vo2-session", "vo2-aligned"}
         baseline = next(s for s in sessions if s["session_id"] == "session-1")
         assert baseline["beats"] == 420
         assert baseline["duration_s"] > 0
 
     def test_newest_session_first(self, db):
-        assert [s["session_id"] for s in list_sessions(db)] == ["vo2-session", "session-1"]
+        assert [s["session_id"] for s in list_sessions(db)] == [
+            "vo2-session", "session-1", "vo2-aligned"]
 
     def test_workout_date_decorates_a_session_that_has_a_row(self, db):
         by_id = {s["session_id"]: s for s in list_sessions(db)}
@@ -199,25 +285,7 @@ class TestListSessions:
         # Beats arrived, the session row never did — still analysable, still listed.
         assert by_id["vo2-session"]["workout_date"] is None
 
-    def test_window_keeps_sessions_that_overlap_it(self, db):
-        """A window that lands inside the second capture returns only it —
-        whole, not cropped: `beats` still counts the entire session, because
-        that is what analysing it would cover."""
-        whole = {s["session_id"]: s for s in list_sessions(db)}
-        vo2 = whole["vo2-session"]
-        inside = list_sessions(db, start_ms=vo2["start_ms"] + 10_000, end_ms=vo2["end_ms"])
-        assert [s["session_id"] for s in inside] == ["vo2-session"]
-        assert inside[0]["beats"] == vo2["beats"]
-        assert inside[0]["start_ms"] == vo2["start_ms"]
-
-    def test_window_before_any_capture_is_empty(self, db):
-        assert list_sessions(db, end_ms=T0 - 1) == []
-
-    def test_window_bounds_accept_iso_8601(self, db):
-        assert [s["session_id"] for s in list_sessions(db, start_ms="2030-01-01T00:30:00Z")] == \
-            ["vo2-session"]
-
-    def test_limit_applies_after_the_window_filter(self, db):
+    def test_limit_caps_the_listing(self, db):
         assert len(list_sessions(db, limit=1)) == 1
 
     def test_limit_is_capped_by_max_rows(self, hr_db_path):
@@ -235,22 +303,62 @@ class TestListSessions:
                 list_sessions(db, limit=bad)
 
 
+@pytest.mark.integration
+class TestListSessionsGuidedness:
+    """The listing answers the two-case question before anything else is asked.
+
+    `guided` is on every row, present whether true or false: it decides which
+    analysis case applies, and a caller must not have to infer it from a missing
+    key.
+    """
+
+    def test_an_unguided_capture_says_so_and_lists_no_exercises(self, db):
+        row = next(s for s in list_sessions(db) if s["session_id"] == "session-1")
+        assert row["guided"] is False
+        assert "guided_exercises" not in row
+
+    def test_a_guided_capture_describes_each_ride(self, gdb):
+        row = next(s for s in list_sessions(gdb) if s["session_id"] == "guided-one")
+        assert row["guided"] is True
+        ride, = row["guided_exercises"]
+        assert ride["exercise_key"] == "fixture-cardio-intervals"
+        assert ride["anchor_ms"] == ANCHOR
+        assert ride["segments"] == 3
+        # One tap, its 300 s folded in: 300 planned + 300 appended.
+        assert (ride["extends"], ride["extension_sec"]) == (1, 300)
+        assert ride["total_sec"] == EXTENDED_TOTAL_S
+        # Offset into the capture, so "20 s of clipping in" is readable without
+        # subtracting two epoch numbers by hand.
+        assert ride["anchor_offset_s"] > 0
+
+    def test_a_capture_spanning_two_rides_lists_both(self, gdb):
+        row = next(s for s in list_sessions(gdb) if s["session_id"] == "guided-two")
+        assert [r["exercise_key"] for r in row["guided_exercises"]] == [
+            "fixture-cardio-intervals", "fixture-zone2"]
+
+    def test_one_query_serves_the_whole_listing(self, gdb, monkeypatch):
+        """A listing must not cost one guide-event query per row."""
+        calls = []
+        original = gdb.guide_events_by_session
+        monkeypatch.setattr(
+            gdb, "guide_events_by_session",
+            lambda ids: (calls.append(list(ids)), original(ids))[1],
+        )
+        list_sessions(gdb)
+        assert len(calls) == 1 and len(calls[0]) == 3
+
+
 # ==================== Integration: session reports ====================
 
 
 @pytest.mark.integration
 class TestSessionReport:
-    def test_supports_crop(self, db):
-        """PORTED: test_get_session_report_supports_crop."""
-        full = get_session_report(db, "session-1", hrmax=188)
-        crop_start = full["raw_capture_window"]["start_ms"] + 20_000
-        cropped = get_session_report(db, "session-1", start_ms=crop_start, hrmax=188)
-
-        assert cropped["analysis_window"]["source"] == "manual"
-        assert cropped["analysis_window"]["trimmed_before_s"] > 0
-        assert cropped["raw_capture_window"]["beats"] == 420
-        assert cropped["analysis_window"]["start_ms"] >= crop_start
-        assert cropped["quality"]["hr_usable"] is True
+    def test_unguided_session_reports_no_structure(self, db):
+        """Every result says where its structure came from. With nothing
+        recorded and nothing supplied, it says so rather than staying silent."""
+        report = get_session_report(db, "session-1", hrmax=188)
+        assert report["structure"] == {"guided": False, "source": "none"}
+        assert report["quality"]["hr_usable"] is True
 
     def test_uncropped_window_is_the_full_capture(self, db):
         report = get_session_report(db, "session-1")
@@ -270,9 +378,273 @@ class TestSessionReport:
         with pytest.raises(ValueError, match="No data for session nope"):
             get_session_report(db, "nope")
 
-    def test_empty_crop_window_raises(self, db):
-        with pytest.raises(ValueError, match="Crop window contains no beats"):
-            get_session_report(db, "session-1", start_ms=T0 + 10_000_000)
+
+@pytest.mark.integration
+class TestGuidedSessionReport:
+    """A guided session is analysed against the timeline it was ridden to."""
+
+    def test_the_window_is_the_ride_not_the_capture(self, gdb):
+        report = get_session_report(gdb, "guided-one")
+        window = report["analysis_window"]
+        assert window["source"] == "guided"
+        # The 20 s of clipping in and the 30 s of pedalling afterwards are
+        # capture, not ride: both are trimmed, and both are still visible in
+        # raw_capture_window so nothing is hidden.
+        assert window["trimmed_before_s"] > 0
+        assert window["trimmed_after_s"] > 0
+        assert window["start_ms"] >= ANCHOR
+        assert report["raw_capture_window"]["beats"] > window["duration_s"]
+
+    def test_structure_names_the_recorded_authority(self, gdb):
+        structure = get_session_report(gdb, "guided-one")["structure"]
+        assert structure["guided"] is True
+        assert structure["source"] == "guide_events"
+        assert structure["exercise_key"] == "fixture-cardio-intervals"
+        assert structure["anchor_ms"] == ANCHOR
+        assert (structure["planned_total_sec"], structure["extension_sec"]) == (300, 300)
+        assert structure["total_sec"] == EXTENDED_TOTAL_S
+        assert [e["extension_sec"] for e in structure["extends"]] == [300]
+        assert structure["extends"][0]["offset_s"] == 90.0
+
+    def test_appended_minutes_land_in_the_single_work_segment(self, gdb):
+        """The shipped rule, derived offline: with exactly one work-role
+        segment the extension lengthens THAT one and the cooldown shifts later
+        intact — never the last segment, which is what the pre-role rule did."""
+        structure = get_session_report(gdb, "guided-one")["structure"]
+        warmup, work, cooldown = structure["segments"]
+        assert structure["extended_index"] == 1
+        assert (warmup["role"], work["role"], cooldown["role"]) == (
+            "warmup", "work", "cooldown")
+        assert (warmup["start_offset_s"], warmup["end_offset_s"]) == (0.0, 60.0)
+        assert (work["start_offset_s"], work["end_offset_s"]) == (60.0, 540.0)
+        assert (cooldown["start_offset_s"], cooldown["end_offset_s"]) == (540.0, 600.0)
+        assert work["extended_sec"] == 300
+        assert "extended_sec" not in cooldown
+
+    def test_each_segment_is_judged_against_its_own_recorded_band(self, gdb):
+        structure = get_session_report(gdb, "guided-one")["structure"]
+        warmup, work, cooldown = structure["segments"]
+
+        assert warmup["band"] == "range" and (warmup["hr_min"], warmup["hr_max"]) == (110, 125)
+        assert warmup["fraction_in_band"] == 1.0
+        assert warmup["label"] == "ease in"
+
+        # The work step opens 60 s below its 140 floor (the ramp) and holds the
+        # band for the rest: below-band time is real and reported as such.
+        assert work["seconds_below_band"] > 50
+        assert work["seconds_above_band"] == 0.0
+        assert 0.8 < work["fraction_in_band"] < 0.95
+        assert work["time_to_band_s"] > 50
+
+        # A ceiling-only segment has no floor to be below.
+        assert cooldown["band"] == "ceiling" and "hr_min" not in cooldown
+        assert cooldown["seconds_below_band"] == 0.0
+
+    def test_band_seconds_partition_the_covered_time(self, gdb):
+        """in + below + above is the span's covered time, so the three numbers
+        can be read as shares of one whole rather than three measurements."""
+        for segment in get_session_report(gdb, "guided-one")["structure"]["segments"]:
+            total = (segment["seconds_in_band"] + segment["seconds_below_band"]
+                     + segment["seconds_above_band"])
+            assert total == pytest.approx(segment["covered_s"], abs=0.2)
+
+    def test_work_aggregates_exclude_the_preparation(self, gdb):
+        """Warmup and cooldown are around the session, not the session. The
+        aggregate is over work-role spans only — and it agrees with the
+        segments it sums, because it is built from them."""
+        structure = get_session_report(gdb, "guided-one")["structure"]
+        work_segment = structure["segments"][1]
+        work = structure["work"]
+        assert work["segment_indexes"] == [1]
+        assert work["avg_hr"] == work_segment["avg_hr"]
+        assert work["peak_hr"] == work_segment["peak_hr"]
+        assert work["seconds_in_band"] == work_segment["seconds_in_band"]
+        # The cooldown's 112 bpm would drag a whole-ride average below this.
+        assert work["avg_hr"] > structure["segments"][2]["avg_hr"]
+
+    def test_coverage_reports_a_ride_that_ran_to_the_end(self, gdb):
+        coverage = get_session_report(gdb, "guided-one")["structure"]["coverage"]
+        assert coverage["scheduled_sec"] == EXTENDED_TOTAL_S
+        assert coverage["complete"] is True
+        assert coverage["fraction"] == 1.0
+        assert coverage["beats_before_anchor"] > 0
+        assert coverage["beats_after_schedule"] > 0
+
+    def test_coverage_reports_an_early_bail_honestly(self, gdb):
+        """The capture stops halfway through a 600 s schedule. The window is
+        clipped by where the beats end, and the shortfall is stated rather than
+        absorbed — the last segments simply hold no beats."""
+        structure = get_session_report(gdb, "guided-short")["structure"]
+        coverage = structure["coverage"]
+        assert coverage["complete"] is False
+        assert coverage["missing_tail_sec"] > 250
+        assert coverage["fraction"] < 0.6
+        assert structure["segments"][-1]["beats"] == 0
+        assert structure["segments"][-1]["avg_hr"] is None
+
+    def test_detected_bouts_stay_beside_the_recorded_segments(self, gdb):
+        """Two independent readings of the same beats. The signal detector is
+        not silenced by a recorded timeline — where they disagree, that is
+        information."""
+        report = get_session_report(gdb, "guided-one")
+        assert "bouts" in report
+        assert report["structure"]["segments"]
+
+    def test_a_capture_with_two_rides_asks_which_one(self, gdb):
+        """Never a guess: a VO2 session followed by a Zone 2 ride is one
+        capture with two timelines, and analysing the first because it came
+        first would answer a question nobody asked."""
+        answer = get_session_report(gdb, "guided-two")
+        assert answer["needs_exercise_key"] is True
+        assert [r["exercise_key"] for r in answer["guided_exercises"]] == [
+            "fixture-cardio-intervals", "fixture-zone2"]
+        assert "hr" not in answer
+
+    def test_the_exercise_key_chooses_between_them(self, gdb):
+        report = get_session_report(gdb, "guided-two", exercise_key="fixture-zone2")
+        structure = report["structure"]
+        assert structure["exercise_key"] == "fixture-zone2"
+        assert structure["total_sec"] == 300
+        # A floor-only band: min only is a floor, and there is no ceiling to be
+        # above.
+        segment, = structure["segments"]
+        assert segment["band"] == "floor" and segment["seconds_above_band"] == 0.0
+
+    def test_an_unknown_exercise_key_says_what_is_there(self, gdb):
+        with pytest.raises(ValueError, match="fixture-zone2"):
+            get_session_report(gdb, "guided-two", exercise_key="fixture-nothing")
+
+    def test_a_lone_ride_needs_no_key(self, gdb):
+        assert get_session_report(gdb, "guided-one")["structure"]["exercise_key"] \
+            == "fixture-cardio-intervals"
+
+
+@pytest.mark.integration
+class TestGuidedDerivationEdges:
+    """The shapes a record can take that are not the ordinary ride."""
+
+    def test_the_latest_start_wins_and_the_earlier_run_is_counted(self, empty_hr_db):
+        """A fresh run appends a second start; the record is append-only, so
+        the discarded run is reported rather than hidden."""
+        _write(
+            empty_hr_db,
+            intervals=_blocks("s", T0, [(140, 400)], device_id="EE:FF"),
+            guide_events=[
+                _guide("a", "s", "ex", "start", T0, timeline_json=GUIDED_TIMELINE),
+                _guide("b", "s", "ex", "extend", T0 + 10_000, extension_sec=300),
+                _guide("c", "s", "ex", "start", T0 + 60_000,
+                       timeline_json='[{"duration_sec":120,"hr_min":130}]'),
+            ],
+        )
+        db = DatabaseManager(MCPConfig.from_db_path(empty_hr_db))
+        structure = get_session_report(db, "s")["structure"]
+        assert structure["anchor_ms"] == T0 + 60_000
+        assert structure["discarded_starts"] == 1
+        # The extend belonged to the run the anchor discarded — the client drops
+        # the extension when it re-anchors, so keeping it would lengthen a ride
+        # nobody lengthened.
+        assert structure["extension_sec"] == 0
+        assert structure["discarded_extends"] == 1
+        assert structure["total_sec"] == 120
+
+    def test_extends_without_a_start_are_not_a_guided_ride(self, empty_hr_db):
+        """The recorded shape of clipping the strap on mid-ride: the START
+        happened before the session existed, was never recorded, and is never
+        back-filled. Unguided is the honest reading."""
+        _write(
+            empty_hr_db,
+            intervals=_blocks("s", T0, [(140, 300)], device_id="EE:FF"),
+            guide_events=[_guide("a", "s", "ex", "extend", T0 + 5_000, extension_sec=300)],
+        )
+        db = DatabaseManager(MCPConfig.from_db_path(empty_hr_db))
+        assert get_session_report(db, "s")["structure"] == {
+            "guided": False, "source": "none"}
+
+    def test_a_segmentless_ride_is_all_work_and_has_no_recorded_end(self, empty_hr_db):
+        """A `duration` exercise with no authored timeline records `[]`. Its
+        planned length lives in the coach plan, which this database deliberately
+        never reads — so the ride runs from the anchor to wherever the beats
+        end, and the whole of it is work."""
+        _write(
+            empty_hr_db,
+            intervals=_blocks("s", T0, [(100, 30), (138, 300)], device_id="EE:FF"),
+            guide_events=[_guide("a", "s", "ex", "start", T0 + 30_000, timeline_json="[]")],
+        )
+        db = DatabaseManager(MCPConfig.from_db_path(empty_hr_db))
+        structure = get_session_report(db, "s")["structure"]
+        assert structure["segmentless"] is True
+        assert (structure["total_sec"], structure["planned_total_sec"]) == (None, None)
+        assert structure["segments"] == []
+        assert structure["coverage"]["scheduled_sec"] is None
+        # No timeline to tell one part from another: the whole window is the
+        # ride, and it has no band to be in or out of.
+        assert structure["work"]["segment_indexes"] == []
+        assert structure["work"]["avg_hr"] is not None
+        assert structure["work"]["fraction_in_band"] is None
+        # No recorded length means nothing was scheduled. Reporting the window's
+        # own span here would read as a plan that was never written.
+        assert structure["work"]["scheduled_s"] is None
+        assert structure["coverage"]["missing_tail_sec"] is None
+
+    def test_a_malformed_timeline_degrades_to_segmentless(self, empty_hr_db):
+        """Only validated writes reach the column, so an unreadable blob is a
+        hand-edited row. Losing the band beats losing the ride."""
+        _write(
+            empty_hr_db,
+            intervals=_blocks("s", T0, [(138, 200)], device_id="EE:FF"),
+            guide_events=[_guide("a", "s", "ex", "start", T0, timeline_json="{not json")],
+        )
+        db = DatabaseManager(MCPConfig.from_db_path(empty_hr_db))
+        structure = get_session_report(db, "s")["structure"]
+        assert structure["guided"] is True and structure["segmentless"] is True
+
+    def test_an_unknown_role_reads_as_work(self, empty_hr_db):
+        """The server holds the closed set, so a value that gets this far can
+        only be hand-edited — and absence already means work."""
+        _write(
+            empty_hr_db,
+            intervals=_blocks("s", T0, [(145, 200)], device_id="EE:FF"),
+            guide_events=[_guide(
+                "a", "s", "ex", "start", T0,
+                timeline_json='[{"duration_sec":120,"hr_min":130,"role":"warmpu"}]')],
+        )
+        db = DatabaseManager(MCPConfig.from_db_path(empty_hr_db))
+        structure = get_session_report(db, "s")["structure"]
+        assert structure["segments"][0]["role"] == "work"
+        assert structure["work"]["segment_indexes"] == [0]
+
+    def test_the_ride_window_is_half_open(self, empty_hr_db):
+        """A beat landing exactly on the scheduled end belongs to the silence
+        after the ride, not to its last segment — the guide's convention
+        everywhere else, and what stops a boundary beat being counted twice."""
+        _write(
+            empty_hr_db,
+            intervals=[
+                ("EE:FF", T0, 0, 120, 500, 0, "s", "garmin_hrm", _RECEIVED_AT),
+                ("EE:FF", T0 + 60_000, 0, 120, 500, 0, "s", "garmin_hrm", _RECEIVED_AT),
+            ],
+            guide_events=[_guide(
+                "a", "s", "ex", "start", T0,
+                timeline_json='[{"duration_sec":60,"hr_min":100}]')],
+        )
+        db = DatabaseManager(MCPConfig.from_db_path(empty_hr_db))
+        structure = get_session_report(db, "s")["structure"]
+        assert structure["segments"][0]["beats"] == 1
+        assert structure["coverage"]["beats_after_schedule"] == 1
+
+    def test_a_guide_that_never_met_its_capture_says_so(self, empty_hr_db):
+        """Beats and a timeline for the same session that do not overlap at all
+        — the report cannot be built, and the message names the ride."""
+        _write(
+            empty_hr_db,
+            intervals=_blocks("s", T0, [(120, 60)], device_id="EE:FF"),
+            guide_events=[_guide(
+                "a", "s", "ex", "start", T0 + 3_600_000,
+                timeline_json='[{"duration_sec":60,"hr_min":100}]')],
+        )
+        db = DatabaseManager(MCPConfig.from_db_path(empty_hr_db))
+        with pytest.raises(ValueError, match="no beats inside the guided window"):
+            get_session_report(db, "s")
 
 
 @pytest.mark.integration
@@ -370,6 +742,45 @@ class TestAlignedTimeseries:
         with pytest.raises(ValueError, match="resolution_s must be at least 1"):
             get_aligned_timeseries(db, "session-1", resolution_s=0)
 
+    def test_an_unguided_series_says_it_has_no_structure(self, db):
+        assert get_aligned_timeseries(db, "session-1")["structure"] == {
+            "guided": False, "source": "none"}
+
+    def test_a_guided_series_carries_the_boundaries_on_its_own_clock(self, gdb):
+        """Boundaries as offsets into THIS series, so the recorded plan can be
+        laid over the curve without arithmetic — and no metrics, which live in
+        get_session_report and must not be computed twice."""
+        series = get_aligned_timeseries(gdb, "guided-one", resolution_s=10)
+        structure = series["structure"]
+        assert structure["guided"] is True
+        assert [s["role"] for s in structure["segments"]] == [
+            "warmup", "work", "cooldown"]
+        assert structure["segments"][0]["hr_min"] == 110
+        assert "fraction_in_band" not in structure["segments"][0]
+        # The window starts at the first beat AT OR AFTER the anchor, so the
+        # first boundary sits at or just before offset 0.
+        assert structure["segments"][0]["start_offset_s"] <= 0
+        last = structure["segments"][-1]
+        assert last["end_offset_s"] == pytest.approx(EXTENDED_TOTAL_S, abs=1.0)
+
+    def test_whole_capture_opts_out_of_the_guided_window(self, gdb):
+        """The one way to see outside a guided ride: what preceded START and
+        what followed the timeline's end."""
+        ride = get_aligned_timeseries(gdb, "guided-one")
+        whole = get_aligned_timeseries(gdb, "guided-one", whole_capture=True)
+        assert whole["analysis_window"]["start_ms"] < ride["analysis_window"]["start_ms"]
+        assert whole["analysis_window"]["end_ms"] > ride["analysis_window"]["end_ms"]
+        assert len(whole["rows"]) > len(ride["rows"])
+        # Structure is still reported — the ride happened either way — and its
+        # anchor offset now measures from the capture's own start.
+        assert whole["structure"]["guided"] is True
+        assert whole["structure"]["anchor_offset_s"] > 0
+
+    def test_two_rides_ask_which_one_to_bucket(self, gdb):
+        answer = get_aligned_timeseries(gdb, "guided-two")
+        assert answer["needs_exercise_key"] is True
+        assert "rows" not in answer
+
 
 def _write_set_events(db_path, events):
     """(event_id, ts_ms, exercise_key, set_num, item_key, action) rows for
@@ -426,13 +837,33 @@ class TestSetEventMarkers:
         assert [m["exercise_key"] for m in report["set_events"]] == \
             ["ex_squat", "ex_squat", "ex_squat", "fixture_mobility"]
 
-    def test_markers_crop_with_the_analysis_window(self, db):
-        series = get_aligned_timeseries(
-            db, "session-1", start_ms=T0 + 30_000, end_ms=T0 + 80_000)
-        # Only ev-2 and ev-3 fall inside the window; offsets re-anchor to the
-        # cropped window's first beat, same t0 the rows use.
-        assert [m["exercise_key"] for m in series["set_events"]] == ["ex_squat"] * 2
-        assert all(0 <= m["offset_s"] <= 50 for m in series["set_events"])
+    def test_markers_crop_with_the_guided_window(self, empty_hr_db):
+        """The analysis window is now the guided ride's, and the markers crop
+        to it: a toggle from before START belongs to the capture, not the ride,
+        and offsets re-anchor to the window's first beat — the same t0 the rows
+        use, so a marker and a bucket at one offset are one instant."""
+        _write(
+            empty_hr_db,
+            intervals=_blocks("s", T0, [(120, 60), (140, 180)], device_id="EE:FF"),
+            guide_events=[_guide(
+                "a", "s", "ex", "start", T0 + 60_000,
+                timeline_json='[{"duration_sec":120,"hr_min":130}]')],
+        )
+        conn = sqlite3.connect(empty_hr_db)
+        conn.executemany(
+            "INSERT INTO set_events (event_id, date, exercise_key, set_num, "
+            "item_key, action, client_timestamp_ms, session_id, received_at) "
+            "VALUES (?, '2030-01-01', ?, NULL, NULL, 'check', ?, 's', ?)",
+            [("before", "ex_early", T0 + 10_000, _RECEIVED_AT),
+             ("inside", "ex_mid", T0 + 90_000, _RECEIVED_AT)],
+        )
+        conn.commit()
+        conn.close()
+
+        db = DatabaseManager(MCPConfig.from_db_path(empty_hr_db))
+        series = get_aligned_timeseries(db, "s")
+        assert [m["exercise_key"] for m in series["set_events"]] == ["ex_mid"]
+        assert 0 <= series["set_events"][0]["offset_s"] <= 120
 
     def test_report_windows_are_opt_in(self, db):
         """The per-window DFA array is ~85% of a report's bytes; the quality
@@ -450,14 +881,13 @@ class TestSetEventMarkers:
 @pytest.mark.integration
 class TestVo2Summary:
     def test_matches_intent(self, db):
-        """PORTED: test_get_vo2_summary_matches_intent."""
-        vo2_session = next(
-            s for s in list_sessions(db) if s["session_id"] == "vo2-session"
-        )
+        """PORTED: test_get_vo2_summary_matches_intent — the crop that used to
+        align the plan retired with the rest of the time-window surface, so the
+        fixture whose first beat IS its first effort is what the plan is
+        matched against."""
         result = get_vo2_summary(
             db,
-            "vo2-session",
-            start_ms=vo2_session["start_ms"] + 20_000,
+            "vo2-aligned",
             hrmax=188,
             intent={
                 "rounds": 3,
@@ -469,6 +899,7 @@ class TestVo2Summary:
             },
         )
 
+        assert result["structure"]["source"] == "supplied_intent"
         assert result["vo2"]["expected_structure_available"] is True
         assert len(result["vo2"]["work_bouts"]) == 3
         assert result["vo2"]["work_bouts"][0]["peak_hr"] == 170
@@ -513,17 +944,44 @@ class TestVo2Summary:
         assert result["quality"] == report["quality"]
         assert result["hr"] == report["hr"]
 
-    def test_agreement_holds_under_a_crop_window(self, db):
-        """Same agreement with start_ms/end_ms supplied: the single shared
-        _load_window must thread the crop identically into both tools."""
-        crop = {"start_ms": T0 + 3_630_000, "end_ms": T0 + 3_800_000}
-        report = get_session_report(db, "vo2-session", hrmax=188, **crop)
-        result = get_vo2_summary(db, "vo2-session", hrmax=188, **crop)
+    def test_agreement_holds_on_a_guided_session(self, gdb):
+        """Same agreement when the window is derived rather than whole: the one
+        shared `_load_session` must narrow both tools identically."""
+        report = get_session_report(gdb, "guided-one", hrmax=188)
+        result = get_vo2_summary(gdb, "guided-one", hrmax=188)
         assert result["analysis_window"] == report["analysis_window"]
         assert result["quality"] == report["quality"]
         assert result["hr"] == report["hr"]
-        assert result["analysis_window"]["start_ms"] >= crop["start_ms"]
-        assert result["analysis_window"]["end_ms"] <= crop["end_ms"]
+        assert result["structure"] == report["structure"]
+
+    def test_a_guided_session_needs_no_matching(self, gdb):
+        """Its structure is recorded, so there is nothing to match: the
+        recorded reading replaces `vo2` entirely rather than sitting beside a
+        second, invented one."""
+        result = get_vo2_summary(gdb, "guided-one")
+        assert "vo2" not in result
+        assert result["structure"]["guided"] is True
+        assert result["timeseries"]["rows"]
+
+    @pytest.mark.parametrize("intent", [
+        {"rounds": 3, "work_duration_s": 60, "rest_duration_s": 45},
+        {"target_hr_min": 140},          # bounds alone are ignored too
+    ])
+    def test_a_supplied_intent_is_ignored_out_loud(self, gdb, intent):
+        """Ignoring it silently would leave a caller believing their plan drove
+        the numbers."""
+        result = get_vo2_summary(gdb, "guided-one", intent=intent)
+        assert result["structure"]["supplied_intent_ignored"] is True
+        assert "intent" not in result["structure"]
+
+    def test_no_intent_is_not_reported_as_ignored(self, gdb):
+        assert "supplied_intent_ignored" not in get_vo2_summary(
+            gdb, "guided-one")["structure"]
+
+    def test_two_rides_ask_before_matching_anything(self, gdb):
+        answer = get_vo2_summary(gdb, "guided-two")
+        assert answer["needs_exercise_key"] is True
+        assert "vo2" not in answer
 
 
 # ==================== Read-only + absent-database guarantees ====================
@@ -653,6 +1111,26 @@ class TestServerRegistration:
         vo2 = tools["get_vo2_summary"]("vo2-session", resolution_s=15)
         assert vo2["session_id"] == "vo2-session"
         assert vo2["timeseries"]["resolution_s"] == 15
+
+    def test_every_registered_tool_threads_the_exercise_key(self, guided_db):
+        """The disambiguation argument is copy-paste shaped across four
+        wrappers — one that dropped it would silently ask the caller a question
+        they had already answered."""
+        tools = _extract_tools(create_mcp_server(MCPConfig.from_db_path(guided_db)))
+
+        for name, call in (
+            ("get_session_report", lambda: tools["get_session_report"](
+                "guided-two", exercise_key="fixture-zone2")),
+            ("get_aligned_timeseries", lambda: tools["get_aligned_timeseries"](
+                "guided-two", exercise_key="fixture-zone2")),
+            ("get_vo2_summary", lambda: tools["get_vo2_summary"](
+                "guided-two", exercise_key="fixture-zone2")),
+        ):
+            result = call()
+            assert result["structure"]["exercise_key"] == "fixture-zone2", name
+        # The latest session is the guided one; its lone ride needs no key.
+        latest = tools["get_latest_session_report"]()
+        assert latest["structure"]["guided"] is True
 
     def test_starts_without_a_database(self, tmp_path, monkeypatch):
         """Creating the server must not require a capture to have happened."""

@@ -10,13 +10,15 @@ import pytest
 
 from hr_analysis.db import (
     HrDataUnavailable,
+    guide_events_by_session,
     latest_session,
     list_sessions,
     load_beats,
+    load_guide_events,
     session_devices,
 )
 
-from .conftest import T0, beat_rows
+from .conftest import TIMELINE_JSON, T0, beat_rows, guide_row
 
 
 @pytest.mark.unit
@@ -76,31 +78,10 @@ class TestLoadBeats:
         assert len(load_beats(session_id="s-1", db_path=db_path)) == 4
         assert len(load_beats(session_id="s-2", db_path=db_path)) == 7
 
-    def test_time_range_selection_is_inclusive(self, hr_db):
-        db_path, insert = hr_db
-        insert(intervals=beat_rows("s-1", 5))  # beats at T0+800 .. T0+4000
-        beats = load_beats(start_ms=T0 + 1600, end_ms=T0 + 3200, db_path=db_path)
-        assert [b.ts_ms for b in beats] == [T0 + 1600, T0 + 2400, T0 + 3200]
-
-    def test_time_range_spans_sessions(self, hr_db):
-        # A range query is deliberately session-agnostic — it is how a caller
-        # analyses a wall-clock window that straddles a reconnect
-        db_path, insert = hr_db
-        insert(intervals=beat_rows("s-1", 3) + beat_rows("s-2", 3, t0=T0 + 10_000))
-        beats = load_beats(start_ms=T0, end_ms=T0 + 99_999, db_path=db_path)
-        assert len(beats) == 6
-
     def test_unknown_session_is_empty_not_an_error(self, hr_db):
         db_path, insert = hr_db
         insert(intervals=beat_rows("s-1", 3))
         assert load_beats(session_id="nope", db_path=db_path) == []
-
-    def test_requires_a_session_or_a_range(self, hr_db):
-        db_path, _ = hr_db
-        with pytest.raises(ValueError, match="session_id or"):
-            load_beats(db_path=db_path)
-        with pytest.raises(ValueError, match="session_id or"):
-            load_beats(start_ms=T0, db_path=db_path)
 
 
 @pytest.mark.unit
@@ -145,56 +126,196 @@ class TestListSessions:
 
 
 @pytest.mark.unit
-class TestListSessionsWindow:
-    """start_ms/end_ms select whole sessions that OVERLAP the window.
+class TestRetiredTimeWindowSurface:
+    """Retrieval is by session id, ALWAYS (2026-08-22 ruling).
 
-    Added for the MCP's session-listing tool. Overlap rather than a per-beat
-    WHERE: the caller picks a session out of this listing and then analyses all
-    of it, so a partial `beats` count and a start/end cropped to the window
-    would describe something the next call does not do.
+    The wall-clock window these two functions used to accept is gone from the
+    package, and this is what keeps it gone: the reason is not ergonomic but
+    architectural — either wellness owns a ride end to end and the session id is
+    its key, or the ride lives on the watch and this database has nothing to say
+    about it. A caller who could pass a Garmin activity's start time would be
+    inviting the cross-check the two-case model does not do.
+
+    Beats captured before session ids existed stay stored and stay unreachable
+    here. That is the accepted cost, not an oversight.
     """
 
-    @pytest.fixture
-    def two_sessions(self, hr_db):
+    def test_beats_cannot_be_asked_for_by_time(self, hr_db):
         db_path, insert = hr_db
-        insert(intervals=(beat_rows("older", 3)
-                          + beat_rows("newer", 3, t0=T0 + 500_000)))
-        return db_path
+        insert(intervals=beat_rows("s-1", 5))
+        with pytest.raises(TypeError):
+            load_beats(start_ms=T0, end_ms=T0 + 4000, db_path=db_path)
 
-    def test_start_bound_drops_sessions_that_ended_earlier(self, two_sessions):
-        assert [row[0] for row in list_sessions(start_ms=T0 + 500_000, db_path=two_sessions)] \
-            == ["newer"]
+    def test_the_listing_takes_no_window(self, hr_db):
+        db_path, insert = hr_db
+        insert(intervals=beat_rows("s-1", 3))
+        with pytest.raises(TypeError):
+            list_sessions(start_ms=T0, db_path=db_path)
+        with pytest.raises(TypeError):
+            list_sessions(end_ms=T0, db_path=db_path)
 
-    def test_end_bound_drops_sessions_that_started_later(self, two_sessions):
-        assert [row[0] for row in list_sessions(end_ms=T0 + 400_000, db_path=two_sessions)] \
-            == ["older"]
 
-    def test_gap_between_sessions_matches_neither(self, two_sessions):
-        assert list_sessions(start_ms=T0 + 100_000, end_ms=T0 + 400_000,
-                             db_path=two_sessions) == []
+@pytest.fixture
+def legacy_hr_db(tmp_path):
+    """A database holding REAL pre-session-era beats, alongside modern ones.
 
-    def test_partial_overlap_returns_the_whole_session(self, two_sessions):
-        """The window starts mid-capture; the row still reports the full span
-        and every beat, because that is what analysing it would cover."""
-        (sid, _dev, start, end, beats, _wd), = list_sessions(
-            start_ms=T0 + 1600, end_ms=T0 + 100_000, db_path=two_sessions)
-        assert (sid, beats) == ("older", 3)
-        assert (start, end) == (T0 + 800, T0 + 2400)
+    Built by hand rather than through `init_database`, because that is what
+    makes it legacy: today's `intervals.session_id` is NOT NULL, and the rows
+    this guards against were written before it was. The columns the reader
+    touches are the same; only the constraint is the old one.
+    """
+    db_path = tmp_path / "hr.db"
+    conn = sqlite3.connect(db_path)
+    try:
+        conn.execute("""
+            CREATE TABLE intervals (
+                device_id      TEXT    NOT NULL,
+                timestamp_ms   INTEGER NOT NULL,
+                seq            INTEGER NOT NULL,
+                heart_rate_bpm INTEGER NOT NULL,
+                rr_interval_ms INTEGER NOT NULL,
+                is_gap_before  INTEGER NOT NULL DEFAULT 0,
+                session_id     TEXT,
+                sensor_type    TEXT    NOT NULL DEFAULT 'garmin_hrm',
+                received_at    TEXT    NOT NULL,
+                PRIMARY KEY (device_id, timestamp_ms, seq)
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE sessions (
+                session_id         TEXT PRIMARY KEY,
+                device_id          TEXT    NOT NULL,
+                started_at_ms      INTEGER NOT NULL,
+                ended_at_ms        INTEGER,
+                workout_date       TEXT,
+                workout_session_id INTEGER,
+                received_at        TEXT    NOT NULL
+            )
+        """)
+        conn.executemany(
+            "INSERT INTO intervals (device_id, timestamp_ms, seq, heart_rate_bpm,"
+            " rr_interval_ms, is_gap_before, session_id, sensor_type, received_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, 'garmin_hrm', 'x')",
+            # Three sessionless beats, deliberately the NEWEST in the file, so a
+            # listing that leaked them would put the phantom at the top and
+            # `latest_session` would hand it straight on.
+            [("dev-a", T0 + 900_000 + i * 800, 0, 70, 800, 0, None) for i in range(3)]
+            + [("dev-a", T0 + i * 800, 0, 70, 800, 0, "s-1") for i in range(3)],
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return db_path
 
-    def test_window_edges_are_inclusive(self, two_sessions):
-        """A window that merely touches a session's first or last beat matches
-        (HAVING uses >= / <=, pinned here so a future < doesn't slip in)."""
-        assert [row[0] for row in list_sessions(end_ms=T0 + 800,
-                                                db_path=two_sessions)] == ["older"]
-        assert [row[0] for row in list_sessions(start_ms=T0 + 2400,
-                                                end_ms=T0 + 2400,
-                                                db_path=two_sessions)] == ["older"]
 
-    def test_window_filters_before_the_limit_applies(self, two_sessions):
-        """LIMIT after HAVING, so "the most recent session in this window" is
-        the most recent *matching* one, not a match that survived the cap."""
-        assert [row[0] for row in list_sessions(limit=1, end_ms=T0 + 400_000,
-                                                db_path=two_sessions)] == ["older"]
+@pytest.mark.unit
+class TestLegacySessionlessBeats:
+    """Beats from before session ids are stored, and stay unreachable.
+
+    The user ruling: there is little of that data and an access path for it
+    would be the very time-window surface the retrieval ruling retired. What it
+    must NOT do is surface as a phantom session — `GROUP BY session_id` would
+    otherwise collect every sessionless beat ever captured into one row whose id
+    is None, which no other tool can be given (`WHERE session_id = NULL` matches
+    nothing) and which the CLI's fixed-width formatter cannot even print.
+    """
+
+    def test_the_listing_has_no_phantom_session(self, legacy_hr_db):
+        rows = list_sessions(db_path=legacy_hr_db)
+        assert [row[0] for row in rows] == ["s-1"]
+        assert all(row["session_id"] is not None for row in rows)
+
+    def test_latest_session_never_returns_the_phantom(self, legacy_hr_db):
+        """The one that would have hurt: `--latest` and
+        `get_latest_session_report` both start here."""
+        assert latest_session(db_path=legacy_hr_db) == "s-1"
+
+    def test_the_rows_are_still_stored(self, legacy_hr_db):
+        """Unreachable, not deleted — this package never writes."""
+        conn = sqlite3.connect(legacy_hr_db)
+        try:
+            count = conn.execute(
+                "SELECT COUNT(*) FROM intervals WHERE session_id IS NULL").fetchone()[0]
+        finally:
+            conn.close()
+        assert count == 3
+
+    def test_they_cannot_be_loaded_by_asking_for_no_session(self, legacy_hr_db):
+        assert load_beats(None, db_path=legacy_hr_db) == []
+
+
+@pytest.mark.unit
+class TestLoadGuideEvents:
+    """The cardio guide's recorded actions — the structure half of a ride."""
+
+    def test_maps_every_column_of_a_start(self, hr_db):
+        db_path, insert = hr_db
+        insert(guide_events=[guide_row("g-1", "start", T0 + 1000,
+                                       timeline_json=TIMELINE_JSON)])
+        event, = load_guide_events("s-1", db_path=db_path)
+        assert event == {
+            "client_timestamp_ms": T0 + 1000,
+            "exercise_key": "fixture-ride",
+            "action": "start",
+            "extension_sec": None,
+            "timeline_json": TIMELINE_JSON,
+            "date": "2030-01-01",
+            "event_id": "g-1",
+        }
+
+    def test_orders_by_client_stamp_then_id(self, hr_db):
+        """The client stamp is what the derivation measures against, and the id
+        breaks a same-millisecond tie — so "the latest start" cannot depend on
+        the order SQLite happened to store rows in."""
+        db_path, insert = hr_db
+        insert(guide_events=[
+            guide_row("g-c", "extend", T0 + 5000, extension_sec=300),
+            guide_row("g-b", "start", T0 + 1000, timeline_json="[]"),
+            guide_row("g-a", "start", T0 + 1000, timeline_json="[]"),
+        ])
+        events = load_guide_events("s-1", db_path=db_path)
+        assert [e["event_id"] for e in events] == ["g-a", "g-b", "g-c"]
+
+    def test_selects_only_the_requested_session(self, hr_db):
+        db_path, insert = hr_db
+        insert(guide_events=[
+            guide_row("g-1", "start", T0, timeline_json="[]"),
+            guide_row("g-2", "start", T0, session_id="s-2", timeline_json="[]"),
+        ])
+        assert [e["event_id"] for e in load_guide_events("s-1", db_path=db_path)] == ["g-1"]
+
+    def test_a_session_with_no_guide_events_is_empty_not_an_error(self, hr_db):
+        db_path, insert = hr_db
+        insert(intervals=beat_rows("s-1", 3))
+        assert load_guide_events("s-1", db_path=db_path) == []
+
+
+@pytest.mark.unit
+class TestGuideEventsBySession:
+    """The listing's bulk read: one query for many sessions, not one each."""
+
+    def test_groups_events_under_their_session(self, hr_db):
+        db_path, insert = hr_db
+        insert(guide_events=[
+            guide_row("g-1", "start", T0, timeline_json="[]"),
+            guide_row("g-2", "extend", T0 + 60_000, extension_sec=300),
+            guide_row("g-3", "start", T0 + 1000, session_id="s-2", timeline_json="[]"),
+        ])
+        grouped = guide_events_by_session(["s-1", "s-2"], db_path=db_path)
+        assert [e["event_id"] for e in grouped["s-1"]] == ["g-1", "g-2"]
+        assert [e["event_id"] for e in grouped["s-2"]] == ["g-3"]
+
+    def test_a_session_without_events_is_absent_rather_than_empty(self, hr_db):
+        """The caller's `.get(sid, [])` is the "not a guided ride" answer, so a
+        row of nothing would only cost bytes."""
+        db_path, insert = hr_db
+        insert(intervals=beat_rows("s-1", 3))
+        assert guide_events_by_session(["s-1"], db_path=db_path) == {}
+
+    def test_no_session_ids_asks_nothing(self, hr_db):
+        """An empty listing must not build `IN ()`, which is a syntax error."""
+        db_path, _ = hr_db
+        assert guide_events_by_session([], db_path=db_path) == {}
 
 
 @pytest.mark.unit

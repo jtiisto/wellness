@@ -6,12 +6,71 @@ from pathlib import Path
 from . import hrv
 
 
+def _structure_lines(structure):
+    """The guided ride's own reading, when there is one.
+
+    Every report says where its structure came from, because a report read back
+    months later cannot tell a recorded timeline from a supplied one otherwise.
+    An unguided session gets one line saying so; a guided one gets its segments
+    with the share of each spent inside the band it asked for.
+    """
+    if not structure:
+        return []
+    if not structure.get("guided"):
+        return ["  structure: none recorded (unguided capture)"]
+
+    coverage = structure["coverage"]
+    lines = [f"  guided: {structure['exercise_key']}  anchored {structure['anchor_ms']}"]
+    total = structure["total_sec"]
+    extension = structure["extension_sec"]
+    lines.append(
+        f"    timeline {'open-ended' if total is None else f'{total / 60:.1f} min'}"
+        + (f" (+{extension / 60:.0f} min appended, {len(structure['extends'])} taps)"
+           if extension else "")
+        + (f"   {coverage['fraction']:.0%} covered" if coverage["fraction"] is not None else "")
+        # Only a ride with a recorded length can end early. A segmentless one has
+        # none — its planned duration lives in the coach plan, which hr.db does
+        # not carry — so calling it incomplete would invent a target to have
+        # missed.
+        + ("" if coverage["scheduled_sec"] is None or coverage["complete"]
+           else "   INCOMPLETE — capture ends early")
+    )
+    if structure["discarded_starts"]:
+        lines.append(f"    {structure['discarded_starts']} earlier run(s) discarded"
+                     " — the latest START wins")
+    for seg in structure["segments"]:
+        band = _band_text(seg)
+        share = ("   -" if seg["fraction_in_band"] is None
+                 else f"  {seg['fraction_in_band']:.0%} in band")
+        lines.append(
+            f"    {seg['index']}. {seg['role']:8s} {seg['duration_s'] / 60:5.1f}m "
+            f"{band:11s} avg {seg['avg_hr']} peak {seg['peak_hr']}{share}"
+            + (f"  (+{seg['extended_sec'] / 60:.0f}m)" if seg.get("extended_sec") else "")
+        )
+    work = structure["work"]
+    lines.append(f"    work spans: avg {work['avg_hr']} peak {work['peak_hr']}"
+                 + (f"  {work['fraction_in_band']:.0%} in band"
+                    if work["fraction_in_band"] is not None else ""))
+    return lines
+
+
+def _band_text(segment):
+    if "hr_min" in segment and "hr_max" in segment:
+        return f"{segment['hr_min']}-{segment['hr_max']}"
+    if "hr_min" in segment:
+        return f">={segment['hr_min']}"
+    if "hr_max" in segment:
+        return f"<={segment['hr_max']}"
+    return "no band"
+
+
 def terminal_summary(session_id, report):
     lines = []
     a1 = report["alpha1"]
     hr = report["hr"]
     lines.append(f"Session {session_id}")
     lines.append(f"  duration {report['span_s'] / 60:.1f} min   {report['beats']} beats")
+    lines.extend(_structure_lines(report.get("structure")))
     lines.append(f"  RR coverage {report['rr_coverage']:.0%}   gaps: {report['gaps']}"
                  f"   artifacts {report['artifact_frac_overall']:.0%}")
     lines.append(f"  HR  avg {hr['avg']}  max {hr['max']}  min {hr['min']}")

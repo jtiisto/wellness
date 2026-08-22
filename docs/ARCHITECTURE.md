@@ -784,7 +784,8 @@ decisions shape it:
   would be dead weight no session-keyed query could reach.
 - **`timeline_json` is opaque and stored verbatim**: the segments as the guide
   drew them, in the coach wire's own segment shape (`duration_sec` / `hr_min` /
-  `hr_max` / `label`), empty when the plan authored none. It is copied into
+  `hr_max` / `label` / `role`, the last written only when it is not `work` —
+  absence carries that meaning), empty when the plan authored none. It is copied into
   `hr.db` rather than joined from `coach.db` so this database stays
   self-contained — nothing on the analysis side reads the coach's — and because
   a plan edited after the ride must not change what the ride was guided against.
@@ -891,7 +892,9 @@ collide with a real lab, scan or workout date.
 **Analysis CLI (`src/hr_analysis`).** The metrics — DFA α1 over rolling 2-minute
 windows, RMSSD pooled across beat-adjacent runs, duration-weighted HR and zones,
 work/rest bout detection — live in a standalone package run as
-`python -m hr_analysis` (`--list`, `--session ID`, `--latest`). It is **not part
+`python -m hr_analysis` (`--list`, `--session ID`, `--latest`, plus `--exercise
+KEY` and `--whole-capture` for guided sessions — see the analysis contract
+below). It is **not part
 of the FastAPI app**: nothing under `src/modules/` or `src/server.py` imports it,
 so numpy never becomes a dependency of serving a request. It reads `hr.db`
 through the shared `DbAccessor(..., read_only=True)` (sqlite `mode=ro`),
@@ -905,6 +908,101 @@ error — it prints "No sessions found." and exits 0, because starting empty is
 the design, not a failure. numpy is a requirement; matplotlib is optional and
 unpinned, and without it the CLI writes its JSON report and skips only the
 chart.
+
+**Analysis contract: retrieval is session-id-driven, always.** No entry point —
+CLI flag or MCP argument — accepts a wall-clock window. `load_beats` takes a
+session id, `list_sessions` takes a limit, and the only windowing left in the
+package is *derived*: a guided ride's own `[anchor, anchor + total)` span,
+computed from rows the database returned. The reason is the two-case model
+above: either wellness owns a ride end to end (capture and guide, one session
+id) or the ride happened on the watch and this database has nothing to say about
+it. Watch-side activity times therefore participate in **nothing** — never an
+input, never a cross-check, never a warning. A Garmin activity started on
+mounting the bike and a START pressed after clipping in disagree by minutes as a
+matter of course; that misalignment is normal and invisible by construction.
+The accepted cost: beats captured before session ids existed stay stored and are
+unreachable through the tools. There is little of that data, and the access path
+for it would be exactly the surface this ruling retired. Unreachable has to mean
+*invisible*, though: `list_sessions` filters `session_id IS NOT NULL`, because
+`GROUP BY` would otherwise collect every sessionless beat ever captured into one
+phantom row whose id is `None` — a session no other tool can be given
+(`WHERE session_id = NULL` matches nothing) and which the CLI's fixed-width
+formatter cannot print at all.
+
+The two cases produce two analyses, and **every result annotates which one it
+got** in a `structure` block — `guided: true|false`, plus the anchor and the
+extends when true — because a caller reading numbers months later cannot know
+otherwise:
+
+- **Guided** (`src/hr_analysis/guided.py`): the recorded timeline is the
+  authority and nothing is cross-checked against it. The **latest `start`
+  wins** (earlier ones are discarded runs, counted rather than hidden); the
+  `timeline_json` snapshot resolves into offsets; each `extend` **at or after**
+  that anchor applies, and their steps sum. Appended time goes into the segment
+  the client's own rule names — **the single work-role segment**, with the last
+  segment as the fallback — so which segment absorbed it is deterministic
+  offline. Absence of `role` means **work**, mirroring the client, so a pre-role
+  ride reads exactly as it did. The window is half-open and **clipped by where
+  the beats end**, with the shortfall reported as coverage rather than absorbed:
+  an early bail shows `complete: false` and a `missing_tail_sec`, and its unrun
+  segments simply hold no beats. Metrics are per segment against that segment's
+  **own recorded bounds** (floor / ceiling / range, bounds inclusive) — seconds
+  in, below and above the band, which partition its covered time — plus a
+  `work` aggregate over the work-role spans only, summed from the per-segment
+  numbers so the total agrees with the parts. The recorded segments **are** the
+  ride's bouts; the signal-detected `bouts` array stays beside them as an
+  independent reading of the same beats. A supplied `IntervalIntent` is ignored
+  and **said to be ignored**.
+- **Beats are duration-weighted over the whole ride BEFORE they are
+  partitioned.** `hr._durations_s` reads a beat's weight off its successor —
+  the timestamp delta, capped by that beat's own RR when it is gap-flagged or
+  implausibly far — and invents a median tail for the last beat it is handed.
+  Weighting each segment's slice separately would therefore pay every boundary
+  beat that invented tail instead of the capped truth (a beat at 0:09 whose
+  0:15 successor is gap-flagged earns one RR, not a median of the half-ride
+  before it). Weighting once leaves exactly one invented tail per ride, the
+  real last beat's — and **that tail is clipped at the ride's end**, where the
+  weight is minted, because a guess about time after the last beat otherwise
+  overruns the schedule into time no segment covers and drops silently out of
+  the totals (a ten-second ride with beats at 0:08 and 0:09.5 reads 55 bpm with
+  the clip and 50 without, the latter crediting a second of riding that never
+  happened). Clipping there is what makes the partition exhaustive *by
+  construction* rather than approximately. It is also the one deliberate
+  difference from `hr.hr_summary` over the same window, which pays that final
+  tail in full because a beat list has no end and a ride does. A beat whose
+  weighted span **straddles a boundary has it split at the boundary**, each
+  part judged against the band in force then —
+  which is what keeps the per-segment seconds a partition of the ride's, and
+  the work aggregate addable from the parts. Discrete facts (beat count, peak,
+  min, first/last reading, time to band) deliberately do *not* split: those
+  belong to the segment holding the beat's timestamp, the client's own
+  membership rule. Time is attributed where it was spent; a beat is where it
+  happened. The completeness verdict is likewise measured in **raw
+  milliseconds** against the scheduled end (a two-second tolerance, one beat's
+  silence at 1 Hz) rather than against the tenth-of-a-second offsets printed
+  beside it — a verdict must not inherit a display's precision.
+- **Unguided**: today's supplied-`IntervalIntent` structure over the session's
+  own beats, unchanged.
+
+**One capture can span two guided exercises** (a VO2 session, then a Zone 2
+ride). The per-session tools take an optional `exercise_key`: with exactly one
+guided exercise it is chosen automatically, and with several and no key the tool
+**never guesses** — it returns `{needs_exercise_key: true, guided_exercises:
+[…]}` and the caller re-calls. One deliberate divergence from the client: these
+averages are weighted by each beat's wall-clock duration (the package's own
+idiom, which also caps a dropout so a stale sample is not credited the silence),
+while the app's auto-fill weights by beat — so the two can differ by a beat or
+two, and mixing the weightings inside one report would be worse.
+
+A **segmentless** guided ride (a `duration` exercise whose author wrote no
+timeline records `[]`) has no recorded length at all: its planned duration lives
+in the coach plan's `target_duration_min`, which `hr.db` deliberately does not
+carry. Such a ride is analysed from its anchor to wherever the beats end, and
+the whole of it is work. Everything downstream of that hole reports it as a hole
+rather than filling it: `coverage.scheduled_sec`, `coverage.missing_tail_sec`
+and `work.scheduled_s` are all null, and the ride gets **no completeness
+verdict** — there is no recorded length for it to have fallen short of, so
+calling it incomplete would invent a target it missed.
 
 `hr_analysis/quality.py` carries a **⚠ PARITY** block: its five signal-quality
 thresholds (20% ectopic deviation, 1.5 omission factor, ≤5% artifact fraction,
@@ -979,7 +1077,7 @@ Three **FastMCP** servers expose wellness data to LLMs:
 
 - **Journal MCP** - Strictly read-only. Opens SQLite in read-only mode (`?mode=ro`). Validates all queries to ensure only SELECT/WITH statements run. Auto-applies row limits. Exposes `get_schedule_adherence`, which computes schedule adherence server-side (in Python, over the canonical `schedule_json` / `polarity` / `target_json` columns): per tracker over a window it counts scheduled vs. logged/done days and reports a per-polarity metric (`adherence` / `avoidance` / `coverage`). When a tracker has a **target** in effect on a day, "done" for that day is whether the day's *value* meets the effective-dated target (not the `completed` checkbox — this fixes the accumulator undercount, where value logging never sets the checkbox); the result then adds `target` (echoed as of window end), `target_met_days`, `target_partial_days` (both targeted-day-only), and `blended_met_days` — the per-polarity rate's numerator, which on days *before* a target took effect falls back to that day's untargeted criterion (positive → checkbox, negative → no-entry avoided), so a window spanning the target's introduction isn't misread as failed. Weekly Trends buckets display `blended_met_days` for the same reason. **No-entry rule:** a scheduled day with no entry counts as *met* for negative-polarity trackers (absence = avoided) and *missed* for positive/neutral. "No entry" here is the emptiness rule above — `entry_present`, not row existence — so a row an uncheck emptied restores the avoided verdict. Non-numeric values (a tracker converted from/to type `note` shares the `entries.value` column) coerce to "no usable value" → *missed*, mirrored in the client twin (`_coerce_numeric` / `coerceNumericValue` — a raw NaN comparison silently read as in-range). An un-normalized legacy weekly tracker (`schedule_json` NULL, `meta_json` `frequency`/`weeklyDay`) is judged weekly via the same fallback the client uses, not daily. The default window is `days` calendar days inclusive of both ends (days=7 → today + 6 prior, matching the PWA dot row); a tracker whose entries all precede the window is still reported (an abandoned habit at 0% is signal), while never-used / first-active-after-window trackers are omitted. `get_journal_summary` stays entries-based — completion and adherence are deliberately separate — but its entry counts (`total_entries`, `active_days`, per-category and per-tracker counts) go through the emptiness rule: an emptied row is not an entry anywhere the tool counts. The `completed = 1` numerator is unchanged by construction, so `completion_rate_percent` reads against *present* entries — a dataset with retracted rows reports a (correctly) higher rate than it did before the rule (pinned by `test_get_journal_summary_ignores_emptied_rows`).
 - **Coach MCP** - Read-only for queries and logs. Write access for workout plan management (creating/updating/deleting/moving plans). Deleting a plan is guarded: plans with workout logs attached cannot be deleted, preserving training history integrity. Rescheduling is a single atomic tool, `move_workout_plan(from_date, to_date, swap)` — the session row moves with its identity and children intact (never delete-and-recreate), the vacated date gets a sync tombstone, the destination sheds any stale one, and `swap=true` exchanges two days' plans without tombstoning either. Its worked-plan guard is deliberately narrower than delete's date-based one: only a log *belonging to the plan* (session-linked, or with exercise rows referencing its planned exercises) pins it — an off-plan extra-Zone-2 log is a resident of the date, not the plan, and never blocks a move. Uses a mode-switching connection manager. Workout logs include pre/post workout stats (readiness metrics, recovery data) when available.
-- **HR MCP** - Read-only, five tools over captured heart-rate sessions: `list_sessions`, `get_session_report`, `get_latest_session_report`, `get_aligned_timeseries` (compact HR buckets, the fallback when automatic bout detection disagrees with what you expected), and `get_vo2_summary` (a planned interval structure matched against detected bouts). **Results are lean by default** — an hour-long session's full form exceeded the MCP tool-result limit, so the standard shapes carry the core the analysis actually reads: the HR curve plus `set_events`, the offset-aligned set-completion markers captured during the workout (present in both the report and the timeseries, cropped with the analysis window, optional identity fields omitted-never-null). The RR-quality detail is opt-in: `include_windows=true` restores the report's per-window DFA array (~85% of its bytes; the quality block's trusted/total counts summarize it), and `include_quality=true` restores the timeseries' full rows (RR coverage, artifact fraction, beat counts — roughly 3× the size); `get_vo2_summary`'s embedded fallback series is always lean. The package contains **no SQL at all** — every read delegates to `hr_analysis.db`, so an MCP report and a `python -m hr_analysis` report of the same session agree by construction, and read-only becomes a *structural* property of the code rather than a promise: the connections are the shared `mode=ro` accessor's, so nothing here can write `hr.db` or create one. Two tests pin that shape — an AST guard asserting no module in the package imports sqlite3 or calls a connection method, and a hash check that the database file is byte-identical after every tool has run. Unlike coach/journal it **starts without its database**: HR history starts empty by design and `hr.db` appears only when the first capture batch is accepted, so absence is reported per call (the same sentence the CLI prints) instead of the server refusing to launch — an existing path that is not a file stays a hard configuration error. `list_sessions`' time window selects whole sessions that **overlap** it rather than filtering individual beats, so a listing describes what a follow-up analysis call would actually analyse — a window-cropped beat count beside a session the report tool then reads in full would misstate it. `flags.analysis_window_uncertain` on the report shape is always `false` — a dead field kept for wire compatibility with existing consumers.
+- **HR MCP** - Read-only, five tools over captured heart-rate sessions: `list_sessions`, `get_session_report`, `get_latest_session_report`, `get_aligned_timeseries` (compact HR buckets, the fallback for reading a session's shape yourself), and `get_vo2_summary` (a planned interval structure matched against detected bouts — **for unguided captures only**; a guided one has its structure recorded, so that tool returns the recorded reading and omits `vo2` entirely). **A capture is named by its session id, never by a clock — no tool accepts a time window** (the analysis contract under §HR); every per-session tool takes that id, with `get_latest_session_report` the one selector that picks its own. The listing carries `guided` on every row plus a `guided_exercises` entry per recorded ride, each per-session tool takes an optional `exercise_key` to choose between two rides in one capture — returning `{needs_exercise_key, guided_exercises}` rather than guessing when several exist and none is named — and every result carries a `structure` block naming its authority. A guided session's analysis window is the ride itself; `get_aligned_timeseries`'s `whole_capture=true` is the one way to see outside it. The docstrings are the analysis LLM's whole manual for the surface and are written to teach the two-case rule, including that misalignment with any watch-side activity time is normal and never worth reporting. **Results are lean by default** — an hour-long session's full form exceeded the MCP tool-result limit, so the standard shapes carry the core the analysis actually reads: the HR curve plus `set_events`, the offset-aligned set-completion markers captured during the workout (present in both the report and the timeseries, cropped with the analysis window, optional identity fields omitted-never-null). The RR-quality detail is opt-in: `include_windows=true` restores the report's per-window DFA array (~85% of its bytes; the quality block's trusted/total counts summarize it), and `include_quality=true` restores the timeseries' full rows (RR coverage, artifact fraction, beat counts — roughly 3× the size); `get_vo2_summary`'s embedded fallback series is always lean. The package contains **no SQL at all** — every read delegates to `hr_analysis.db`, so an MCP report and a `python -m hr_analysis` report of the same session agree by construction, and read-only becomes a *structural* property of the code rather than a promise: the connections are the shared `mode=ro` accessor's, so nothing here can write `hr.db` or create one. Two tests pin that shape — an AST guard asserting no module in the package imports sqlite3 or calls a connection method, and a hash check that the database file is byte-identical after every tool has run. Unlike coach/journal it **starts without its database**: HR history starts empty by design and `hr.db` appears only when the first capture batch is accepted, so absence is reported per call (the same sentence the CLI prints) instead of the server refusing to launch — an existing path that is not a file stays a hard configuration error. The listing's guided-ness comes from **one** guide-events query for the whole page, not one per row. `flags.analysis_window_uncertain` on the report shape is always `false` — a dead field kept for wire compatibility with existing consumers.
 
 All three run over stdio transport when invoked by Claude Code CLI. They can also be configured for HTTP/SSE transport (default ports 8000 journal, 8002 coach, 8004 HR).
 

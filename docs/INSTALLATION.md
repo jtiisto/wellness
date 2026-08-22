@@ -316,11 +316,13 @@ Read-only throughout — the `hr` module's batch endpoints are the only writer o
 
 | Tool | Description |
 |------|-------------|
-| `list_sessions` | Captured sessions (newest first), optionally limited to a time window |
-| `get_session_report` | Full analysis of one session: HR + zones, RMSSD, DFA alpha1, work/rest bouts, quality |
+| `list_sessions` | Captured sessions (newest first), each saying whether the cardio guide recorded a timeline for it |
+| `get_session_report` | Full analysis of one session: HR + zones, RMSSD, DFA alpha1, bouts, quality — and, for a guided session, per-segment time in band against the recorded timeline |
 | `get_latest_session_report` | The same report for the most recent capture |
-| `get_aligned_timeseries` | Compact HR/quality buckets, for reading a session's shape when bout detection is uncertain |
-| `get_vo2_summary` | Planned VO2/HIIT intervals vs. what the capture actually shows |
+| `get_aligned_timeseries` | Compact HR/quality buckets plus the guide's segment boundaries, for reading a session's shape yourself |
+| `get_vo2_summary` | A planned interval structure vs. what the capture shows — for unguided captures; a guided one already carries its own |
+
+A capture is named by its **session id** and never by a clock — no tool accepts a time window, and a guided ride's analysable extent comes from the timeline the guide recorded rather than from a caller's. Every per-session tool takes that id; `get_latest_session_report` is the one selector and picks the newest capture itself. Where one capture spans two guided exercises, the per-session tools take an `exercise_key` and ask rather than guess when it is missing.
 
 The metrics come from the shared `src/hr_analysis` package, so these tools and the `python -m hr_analysis` CLI report the same numbers.
 

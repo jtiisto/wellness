@@ -180,9 +180,12 @@ class HrGoldenFixtureTest {
                 clientTimestampMs = 1770000030000,
                 sessionId = SESSION,
                 // Opaque to this protocol: the segments as the guide drew them,
-                // in the coach wire's shape, escaped into one string.
-                timelineJson = """[{"duration_sec":420,"hr_min":118,"hr_max":134,"label":"warmup"},""" +
-                    """{"duration_sec":240,"hr_max":142}]""",
+                // in the coach wire's shape, escaped into one string. `role`
+                // rides last, and only where it is not "work" — absence is
+                // work, so the second segment carries none.
+                timelineJson =
+                    """[{"duration_sec":420,"hr_min":118,"hr_max":134,"label":"warmup","role":"warmup"},""" +
+                        """{"duration_sec":240,"hr_max":142}]""",
             ),
             GuideEventEntity(
                 eventId = "77777777-8888-9999-aaaa-bbbbbbbbbbbb",

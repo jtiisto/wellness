@@ -7,13 +7,21 @@ registration layer over them.
 The metrics themselves are never computed here — every number comes from the
 shared `hr_analysis` package, so an MCP report and a `python -m hr_analysis`
 report of the same session agree by construction.
+
+**Retrieval is by session id, always** (see `hr_analysis.db`). No tool here
+takes a wall-clock window: what a session covers is the session's own business,
+and a *guided* session's analysable extent is derived from the timeline the
+guide recorded rather than supplied by a caller. Every result therefore says
+where its structure came from — `structure.guided`, plus the anchor and the
+extends when it is true — because a caller reading numbers later cannot know.
 """
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import Any
 
+from hr_analysis import guided
+from hr_analysis.guided import GuidedExerciseRequired
 from hr_analysis.hr import time_weighted_mean_hr
 from hr_analysis.intent import parse_intent
 from hr_analysis.pipeline import analyze
@@ -24,26 +32,13 @@ from hr_analysis.vo2 import summarize_vo2
 from .database import DatabaseManager, SessionSummary
 
 
-def _parse_ms(value: int | str | None) -> int | None:
-    """Accept epoch milliseconds or an ISO-8601 instant; return epoch ms."""
-    if value is None:
-        return None
-    if isinstance(value, int):
-        return value
-    text = value.strip()
-    if not text:
-        return None
-    if text.isdigit():
-        return int(text)
-    normalized = text.replace("Z", "+00:00")
-    dt = datetime.fromisoformat(normalized)
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return int(dt.timestamp() * 1000)
+def _session_dict(session: SessionSummary, rides: list) -> dict[str, Any]:
+    """One listing row, decorated with what the guide recorded for it.
 
-
-def _session_dict(session: SessionSummary) -> dict[str, Any]:
-    return {
+    `guided` is always present — it is the answer to the two-case question, and
+    a caller must not have to infer it from a missing key.
+    """
+    row = {
         "session_id": session.session_id,
         "device_id": session.device_id,
         "start_ms": session.start_ms,
@@ -51,46 +46,13 @@ def _session_dict(session: SessionSummary) -> dict[str, Any]:
         "duration_s": session.duration_s,
         "beats": session.beats,
         "workout_date": session.workout_date,
+        "guided": bool(rides),
     }
-
-
-def crop_beats(
-    beats: list[Beat],
-    start_ms: int | str | None = None,
-    end_ms: int | str | None = None,
-) -> list[Beat]:
-    """Restrict a beat list to an inclusive [start, end] window."""
-    crop_start = _parse_ms(start_ms)
-    crop_end = _parse_ms(end_ms)
-    if crop_start is not None and crop_end is not None and crop_start > crop_end:
-        raise ValueError("start_ms/start_time must be <= end_ms/end_time")
-    return [
-        beat for beat in beats
-        if (crop_start is None or beat.ts_ms >= crop_start)
-        and (crop_end is None or beat.ts_ms <= crop_end)
-    ]
-
-
-def _load_window(
-    db: DatabaseManager,
-    session_id: str,
-    start_ms: int | str | None,
-    end_ms: int | str | None,
-) -> tuple[list[Beat], list[Beat]]:
-    """(whole capture, cropped analysis window) for one session.
-
-    The shared preamble of every per-session tool, and the only place they read
-    beats: `get_vo2_summary` composes a report, a VO2 summary and a time series,
-    all of which want the same beats, and the pulse-bridge original loaded the
-    session from SQLite three times per call to build them.
-    """
-    raw_beats = db.load_beats(session_id)
-    if not raw_beats:
-        raise ValueError(f"No data for session {session_id}")
-    beats = crop_beats(raw_beats, start_ms=start_ms, end_ms=end_ms)
-    if not beats:
-        raise ValueError("Crop window contains no beats")
-    return raw_beats, beats
+    if rides:
+        row["guided_exercises"] = [
+            ride.brief(session_start_ms=session.start_ms) for ride in rides
+        ]
+    return row
 
 
 def _window_dict(
@@ -117,19 +79,71 @@ def _check_resolution(resolution_s: int) -> None:
         raise ValueError("resolution_s must be at least 1")
 
 
+def _guided_choice(session_id: str, exc: GuidedExerciseRequired) -> dict[str, Any]:
+    """The answer to "which of these two rides did you mean?".
+
+    Returned rather than raised, and returned instead of a report: one capture
+    can span a VO2 session and a Zone 2 ride, and analysing the first because it
+    came first would answer a question nobody asked. The caller re-calls with
+    `exercise_key`.
+    """
+    return {
+        "session_id": session_id,
+        "needs_exercise_key": True,
+        "guided_exercises": [ride.brief() for ride in exc.rides],
+        "message": str(exc),
+    }
+
+
+def _load_session(
+    db: DatabaseManager,
+    session_id: str,
+    exercise_key: str | None,
+    whole_capture: bool = False,
+) -> tuple[list[Beat], list[Beat], Any]:
+    """(whole capture, analysed window, chosen ride or None) for one session.
+
+    The shared preamble of every per-session tool, and the only place they read
+    beats: `get_vo2_summary` composes a report, a structure summary and a time
+    series, all of which want the same beats.
+
+    A guided session narrows to `[anchor, anchor + total)` — the ride is what
+    the numbers are about, and beats logged while clipping in are not part of
+    it. An unguided one is analysed whole, exactly as before.
+
+    Raises `GuidedExerciseRequired` when the session holds several rides and no
+    key chose one; the public tools turn that into the ask.
+    """
+    raw_beats = db.load_beats(session_id)
+    if not raw_beats:
+        raise ValueError(f"No data for session {session_id}")
+
+    rides = guided.guided_rides(db.load_guide_events(session_id))
+    ride = guided.select_ride(rides, exercise_key)
+    if ride is None or whole_capture:
+        return raw_beats, raw_beats, ride
+
+    window = guided.ride_beats(raw_beats, ride)
+    if not window:
+        raise ValueError(
+            f"Session {session_id} has no beats inside the guided window for "
+            f"'{ride.exercise_key}' (anchored at {ride.anchor_ms}). The capture "
+            f"and the guide do not overlap."
+        )
+    return raw_beats, window, ride
+
+
 def list_sessions(
     db: DatabaseManager,
-    start_ms: int | str | None = None,
-    end_ms: int | str | None = None,
     limit: int | None = None,
 ) -> list[dict[str, Any]]:
-    """Return recent captured sessions, newest first."""
-    sessions = db.list_sessions(
-        start_ms=_parse_ms(start_ms),
-        end_ms=_parse_ms(end_ms),
-        limit=limit,
-    )
-    return [_session_dict(session) for session in sessions]
+    """Return recent captured sessions, newest first, with their guided-ness."""
+    sessions = db.list_sessions(limit=limit)
+    events = db.guide_events_by_session([s.session_id for s in sessions])
+    return [
+        _session_dict(session, guided.guided_rides(events.get(session.session_id, [])))
+        for session in sessions
+    ]
 
 
 def _set_event_markers(
@@ -161,14 +175,34 @@ def _set_event_markers(
     return markers
 
 
+def _structure(
+    raw_beats: list[Beat],
+    ride: Any,
+    intent: Any = None,
+) -> dict[str, Any]:
+    """The authority annotation, and for a guided session the whole reading.
+
+    `source="unknown"` is what `parse_intent` returns for an absent intent, so
+    it is also the test for "the caller supplied one" — and a guided session
+    says so about ANY intent it was handed, target bounds included, because
+    those are ignored in favour of the recorded bands just as the bout layout
+    is.
+    """
+    supplied = intent is not None and intent.source != "unknown"
+    if ride is None:
+        return guided.unguided_structure(intent)
+    return guided.guided_structure(raw_beats, ride, intent_supplied=supplied)
+
+
 def _build_report(
     db: DatabaseManager,
     session_id: str,
     raw_beats: list[Beat],
     beats: list[Beat],
+    ride: Any,
     hrmax: int | None,
-    cropped: bool,
     include_windows: bool,
+    intent: Any = None,
 ) -> dict[str, Any]:
     report = analyze(beats, hrmax=hrmax)
     raw_start_ms = raw_beats[0].ts_ms
@@ -189,10 +223,13 @@ def _build_report(
         },
         "analysis_window": _window_dict(
             beats,
-            "manual" if cropped else "full_capture",
+            "guided" if ride is not None else "full_capture",
             raw_start_ms,
             raw_end_ms,
         ),
+        # Where the structure came from — the recorded timeline, a supplied
+        # plan, or nothing at all. Always present, never inferred.
+        "structure": _structure(raw_beats, ride, intent),
         "quality": {
             "rr_coverage": report["rr_coverage"],
             "gaps": report["gaps"],
@@ -205,6 +242,10 @@ def _build_report(
         "hr": report["hr"],
         "rmssd_ms": report["rmssd_ms"],
         "alpha1": report["alpha1"],
+        # Signal-DETECTED work/rest bouts, independent of any recorded
+        # structure: on a guided session these are a second opinion about the
+        # same beats, and disagreement with the recorded segments is
+        # information rather than an error.
         "bouts": report["bouts"],
         # The per-window DFA/quality detail is ~85% of the report's bytes and
         # is summarized by the quality block's trusted/total counts — opt in
@@ -227,26 +268,23 @@ def get_session_report(
     db: DatabaseManager,
     session_id: str,
     hrmax: int | None = None,
-    start_ms: int | str | None = None,
-    end_ms: int | str | None = None,
+    exercise_key: str | None = None,
     include_windows: bool = False,
 ) -> dict[str, Any]:
-    """Analyze one session, optionally cropped to an explicit time window."""
-    raw_beats, beats = _load_window(db, session_id, start_ms, end_ms)
+    """Analyze one session — over its guided timeline when it has one."""
+    try:
+        raw_beats, beats, ride = _load_session(db, session_id, exercise_key)
+    except GuidedExerciseRequired as exc:
+        return _guided_choice(session_id, exc)
     return _build_report(
-        db,
-        session_id,
-        raw_beats,
-        beats,
-        hrmax,
-        cropped=start_ms is not None or end_ms is not None,
-        include_windows=include_windows,
+        db, session_id, raw_beats, beats, ride, hrmax, include_windows,
     )
 
 
 def get_latest_session_report(
     db: DatabaseManager,
     hrmax: int | None = None,
+    exercise_key: str | None = None,
     include_windows: bool = False,
 ) -> dict[str, Any]:
     """Analyze the most recently started session."""
@@ -254,7 +292,8 @@ def get_latest_session_report(
     if not sessions:
         raise ValueError("No sessions found")
     return get_session_report(
-        db, sessions[0].session_id, hrmax=hrmax, include_windows=include_windows,
+        db, sessions[0].session_id, hrmax=hrmax, exercise_key=exercise_key,
+        include_windows=include_windows,
     )
 
 
@@ -262,6 +301,7 @@ def _build_timeseries(
     db: DatabaseManager,
     session_id: str,
     beats: list[Beat],
+    ride: Any,
     resolution_s: int,
     include_quality: bool,
 ) -> dict[str, Any]:
@@ -319,6 +359,13 @@ def _build_timeseries(
             "end_ms": beats[-1].ts_ms,
             "duration_s": round((beats[-1].ts_ms - beats[0].ts_ms) / 1000.0, 1),
         },
+        # The recorded structure as offsets on THIS series' own clock, so a
+        # caller can lay the bands over the curve without arithmetic. Boundaries
+        # only — the per-segment metrics live in get_session_report.
+        "structure": (
+            guided.unguided_structure() if ride is None
+            else guided.guided_brief(ride, t0)
+        ),
         "set_events": _set_event_markers(
             db, session_id,
             t0_ms=t0,
@@ -333,15 +380,20 @@ def get_aligned_timeseries(
     db: DatabaseManager,
     session_id: str,
     resolution_s: int = 5,
-    start_ms: int | str | None = None,
-    end_ms: int | str | None = None,
+    exercise_key: str | None = None,
+    whole_capture: bool = False,
     include_quality: bool = False,
 ) -> dict[str, Any]:
-    """Return compact HR buckets (+ set markers) for one session."""
+    """Return compact HR buckets (+ set markers and guide boundaries)."""
     _check_resolution(resolution_s)
-    _, beats = _load_window(db, session_id, start_ms, end_ms)
+    try:
+        _, beats, ride = _load_session(
+            db, session_id, exercise_key, whole_capture=whole_capture,
+        )
+    except GuidedExerciseRequired as exc:
+        return _guided_choice(session_id, exc)
     return _build_timeseries(
-        db, session_id, beats, resolution_s, include_quality=include_quality,
+        db, session_id, beats, ride, resolution_s, include_quality=include_quality,
     )
 
 
@@ -350,37 +402,42 @@ def get_vo2_summary(
     session_id: str,
     intent: dict[str, Any] | None = None,
     hrmax: int | None = None,
-    start_ms: int | str | None = None,
-    end_ms: int | str | None = None,
+    exercise_key: str | None = None,
     resolution_s: int = 5,
 ) -> dict[str, Any]:
-    """Return expected/detected VO2 interval summary plus fallback time series."""
+    """Match a supplied interval plan to the beats — UNGUIDED sessions only.
+
+    A guided session needs no matching: its structure is recorded, so this
+    returns that reading in `structure` and omits `vo2` entirely. Any supplied
+    intent is ignored and said to be ignored.
+    """
     interval_intent = parse_intent(intent)
     _check_resolution(resolution_s)
-    raw_beats, beats = _load_window(db, session_id, start_ms, end_ms)
+    try:
+        raw_beats, beats, ride = _load_session(db, session_id, exercise_key)
+    except GuidedExerciseRequired as exc:
+        return _guided_choice(session_id, exc)
 
-    detected = detect_bouts(beats)
     base_report = _build_report(
-        db,
-        session_id,
-        raw_beats,
-        beats,
-        hrmax,
-        cropped=start_ms is not None or end_ms is not None,
-        include_windows=False,
+        db, session_id, raw_beats, beats, ride, hrmax,
+        include_windows=False, intent=interval_intent,
     )
-    vo2 = summarize_vo2(beats, detected, interval_intent, hrmax=hrmax)
 
-    return {
+    result = {
         "session_id": session_id,
         "analysis_window": base_report["analysis_window"],
+        "structure": base_report["structure"],
         "quality": base_report["quality"],
         "hr": base_report["hr"],
-        "vo2": vo2,
-        # The embedded fallback series is always lean — an hour at 5s in full
-        # form is what blew the tool result limit; get_aligned_timeseries with
-        # include_quality=true is the escape hatch for the RR detail.
-        "timeseries": _build_timeseries(
-            db, session_id, beats, resolution_s, include_quality=False,
-        ),
     }
+    if ride is None:
+        result["vo2"] = summarize_vo2(
+            beats, detect_bouts(beats), interval_intent, hrmax=hrmax,
+        )
+    # The embedded fallback series is always lean — an hour at 5s in full
+    # form is what blew the tool result limit; get_aligned_timeseries with
+    # include_quality=true is the escape hatch for the RR detail.
+    result["timeseries"] = _build_timeseries(
+        db, session_id, beats, ride, resolution_s, include_quality=False,
+    )
+    return result

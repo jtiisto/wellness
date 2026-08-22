@@ -69,7 +69,13 @@ class TestGoldenPayloads:
         # Each action carries only its own payload, and the timeline arrives as
         # the opaque string it is — stored verbatim, never parsed here.
         assert [r["extension_sec"] for r in rows] == [None, 300, None]
-        assert rows[0]["timeline_json"].startswith('[{"duration_sec":420')
+        # The snapshot carries `role` in the coach wire's canonical key order
+        # (role last), and only where it is not "work" — absence IS work, so a
+        # role-less segment beside a marked one is the shape a real ride has.
+        assert rows[0]["timeline_json"] == (
+            '[{"duration_sec":420,"hr_min":118,"hr_max":134,"label":"warmup",'
+            '"role":"warmup"},{"duration_sec":240,"hr_max":142}]'
+        )
         assert rows[1]["timeline_json"] is None
         # A ride whose plan authored no timeline records an empty one, which is
         # different from having recorded none at all.

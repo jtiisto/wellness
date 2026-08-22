@@ -394,17 +394,22 @@ weight no session-keyed analysis could reach.
   schema committed), emitted from the ViewModel's start/extend actions iff
   the capture publishes a session id, uploaded on the existing HR sync
   cadence.
-- **Follow-up round, planned**: `hr_analysis` goes **session-id-driven**
-  (user's simplified model, 2026-08-22). Retrieval is by session id
-  always; the time-window (`start_ms`/`end_ms`) retrieval surface retires
-  from the tools and MCP. A session with guide events analyzes against the
-  recorded timeline (latest `start` wins, snapshot + timestamped extends,
-  per-segment time-in-band against the recorded bounds); a session without
-  them keeps today's supplied-`IntervalIntent` structure. Garmin times
+- **Analysis round, SHIPPED 2026-08-22**: `hr_analysis` is
+  **session-id-driven** (user's simplified model). Retrieval is by session
+  id always — the time-window (`start_ms`/`end_ms`) surface is retired
+  from the CLI and MCP, and historical no-session-id beats stay stored but
+  tool-unreachable. A session with guide events analyzes against the
+  recorded timeline (latest `start` wins by timestamp then event id;
+  snapshot + timestamped extends absorbed by the work segment; per-segment
+  time-in-band against the recorded bounds, duration-weighted over the
+  whole ride then partitioned at boundaries — a straddling beat's span is
+  clipped, discrete facts stay with the beat's own segment); a session
+  without them keeps supplied-`IntervalIntent` structure. Guided reports
+  carry `structure` and omit `vo2`; ambiguous sessions return the
+  guided-exercise list and ask for `exercise_key`. Garmin times
   participate in nothing — the no-capture ride lives entirely outside this
   system (watch + garmy), where wellness records only the completion
-  checkbox. Historical no-session-id beats stay stored but unreachable
-  through the tools. Playbook: `plans/cardio-guidance/plan.md` §Follow-up.
+  checkbox. Contract detail: `docs/ARCHITECTURE.md` §HR.
 
 ## Open Questions
 

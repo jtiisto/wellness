@@ -1,6 +1,11 @@
 """Offline analysis of captured RR/HR sessions: DFA alpha1 threshold detection,
 RMSSD, duration-weighted HR summary, and signal-based work/rest segmentation.
 
+A session the cardio guide recorded a timeline for is additionally read against
+that timeline — `guided` derives the ride's absolute schedule from the recorded
+anchor, snapshot and extends, and measures each segment against the band it
+asked for. Retrieval is by session id throughout; see `db` for the ruling.
+
 A standalone CLI package (`python -m hr_analysis`), NOT part of the FastAPI
 app: nothing under `src/modules/` or in `src/server.py` imports it, so numpy
 never becomes a dependency of serving a request. It reads the `hr` module's

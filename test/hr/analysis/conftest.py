@@ -52,7 +52,7 @@ def hr_db(tmp_path):
     db_path = tmp_path / "hr.db"
     init_database(DbAccessor(db_path))
 
-    def insert(intervals=(), sessions=()):
+    def insert(intervals=(), sessions=(), guide_events=()):
         conn = sqlite3.connect(db_path)
         try:
             conn.executemany(
@@ -65,8 +65,30 @@ def hr_db(tmp_path):
                 "ended_at_ms, workout_date, workout_session_id, received_at) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 sessions)
+            conn.executemany(
+                "INSERT INTO guide_events (event_id, date, exercise_key, action, "
+                "client_timestamp_ms, session_id, extension_sec, timeline_json, "
+                "received_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                guide_events)
             conn.commit()
         finally:
             conn.close()
 
     return db_path, insert
+
+
+def guide_row(event_id, action, ts_ms, *, session_id="s-1", exercise_key="fixture-ride",
+              date="2030-01-01", extension_sec=None, timeline_json=None):
+    """One `guide_events` row in the column order `hr_db`'s insert expects."""
+    return (event_id, date, exercise_key, action, ts_ms, session_id,
+            extension_sec, timeline_json, "2030-01-01T00:00:00Z")
+
+
+# A three-step timeline in the coach wire's own segment shape: a marked warmup,
+# a role-less (therefore work) effort, and a marked cooldown. Every number is
+# invented; the shape is what matters.
+TIMELINE_JSON = (
+    '[{"duration_sec":300,"hr_min":112,"hr_max":126,"label":"ease in","role":"warmup"},'
+    '{"duration_sec":600,"hr_min":138,"hr_max":152},'
+    '{"duration_sec":180,"hr_max":118,"role":"cooldown"}]'
+)
