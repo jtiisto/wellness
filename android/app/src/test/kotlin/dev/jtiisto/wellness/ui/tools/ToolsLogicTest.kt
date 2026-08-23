@@ -1,6 +1,8 @@
 package dev.jtiisto.wellness.ui.tools
 
 import dev.jtiisto.wellness.core.data.db.ServerProfileEntity
+import java.time.ZoneId
+import java.util.Locale
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -125,5 +127,31 @@ class ToolsLogicTest {
     @DisplayName("the empty state talks about saved servers, since the built-in one is always listed")
     fun emptyStateCopy() {
         assertEquals("No saved servers.", ToolsCopy.EMPTY_PROFILES)
+    }
+
+    // ---- the build row's label ---------------------------------------------
+
+    @Test
+    @DisplayName("the build label is the stamped instant, human-readable in the given locale and zone")
+    fun buildLabelFormatsTheStamp() {
+        // 2030-01-03T12:00:00Z — the far-future fixture convention, at UTC so
+        // the expectation is exact.
+        assertEquals(
+            "Built Jan 3, 2030, 12:00\u202FPM",
+            ToolsCopy.buildLabel("1893672000000", Locale.US, ZoneId.of("UTC")),
+        )
+        // Whitespace from the file read is not a parse failure.
+        assertEquals(
+            "Built Jan 3, 2030, 12:00\u202FPM",
+            ToolsCopy.buildLabel("1893672000000\n", Locale.US, ZoneId.of("UTC")),
+        )
+    }
+
+    @Test
+    @DisplayName("a stamp that will not parse degrades to unknown — a wrong time is worse than none")
+    fun buildLabelDegrades() {
+        assertEquals("Build unknown", ToolsCopy.buildLabel(null, Locale.US, ZoneId.of("UTC")))
+        assertEquals("Build unknown", ToolsCopy.buildLabel("", Locale.US, ZoneId.of("UTC")))
+        assertEquals("Build unknown", ToolsCopy.buildLabel("not-a-stamp", Locale.US, ZoneId.of("UTC")))
     }
 }

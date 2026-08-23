@@ -241,7 +241,7 @@ class ToolsViewModelTest {
                 switcher = switcher,
                 appScope = appScope,
                 debugLog = debugLog,
-                buildStamp = "1.2.3 (dev)",
+                buildStamp = "Built Jan 3, 2030, 12:00 PM",
                 io = UnconfinedTestDispatcher(scope.testScheduler),
             )
         }
@@ -670,6 +670,6 @@ class ToolsViewModelTest {
     @Test
     @DisplayName("the build stamp is rendered from the value the app module supplied")
     fun buildStampIsRendered() = toolsTest { world, vm ->
-        assertEquals("1.2.3 (dev)", vm.uiState.value.buildStamp)
+        assertEquals("Built Jan 3, 2030, 12:00 PM", vm.uiState.value.buildStamp)
     }
 }

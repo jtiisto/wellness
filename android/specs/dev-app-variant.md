@@ -28,7 +28,6 @@ create("dev") {
     versionNameSuffix = "-dev"
     matchingFallbacks += "debug"       // libraries resolve their debug variant
     signingConfig = signingConfigs.getByName("debug")
-    buildConfigField("String", "BUILD_STAMP", "\"${buildStamp(appVersionName, isRelease = false)}\"")
 }
 ```
 
@@ -66,7 +65,8 @@ stay there. It moves to `:app`:
   where that decision belonged anyway).
 
 The dev app's address book starts empty → resolves to its built-in = the test
-server. Tools shows the nickname (`Built-in`) and `BUILD_STAMP` as today.
+server. Tools shows the nickname (`Built-in`) and the build-instant row (the
+stamped-asset mechanism — see tools-hardening.md §7, superseded entry).
 Cleartext HTTP inside the tailnet is already permitted app-wide
 (`usesCleartextTraffic="true"`).
 

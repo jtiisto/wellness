@@ -10,6 +10,7 @@ import dev.jtiisto.wellness.core.data.di.AppVersionName
 import dev.jtiisto.wellness.core.data.network.JournalApi
 import dev.jtiisto.wellness.hr.ServiceHrCaptureController
 import dev.jtiisto.wellness.ui.tools.StrapViewModel
+import dev.jtiisto.wellness.ui.tools.ToolsCopy
 import dev.jtiisto.wellness.ui.tools.ToolsViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import org.koin.android.ext.koin.androidContext
@@ -41,7 +42,18 @@ val appModule = module {
             // user navigated away from the tab that started it.
             appScope = get(AppScope),
             debugLog = get(),
-            buildStamp = BuildConfig.BUILD_STAMP,
+            // The stamped asset BuildStampTask wrote at assemble time — read
+            // once per ViewModel, formatted for the device's locale and zone.
+            // runCatching: an APK genuinely missing its own asset should show
+            // "Build unknown", not crash the Tools tab.
+            buildStamp = ToolsCopy.buildLabel(
+                raw = runCatching {
+                    androidContext().assets.open("build_stamp.txt")
+                        .bufferedReader().use { it.readText() }
+                }.getOrNull(),
+                locale = java.util.Locale.getDefault(),
+                zone = java.time.ZoneId.systemDefault(),
+            ),
         )
     }
 

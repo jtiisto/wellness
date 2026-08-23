@@ -179,7 +179,9 @@ private fun ServerSection(state: ToolsUiState, onPing: () -> Unit, modifier: Mod
         }
 
         Text(
-            text = "Build ${state.buildStamp}",
+            // The label carries its own verb ("Built Aug 22, 2026, 11:21 AM"),
+            // formatted by ToolsLogic.buildLabel from the stamped asset.
+            text = state.buildStamp,
             style = LogbookTheme.type.meta,
             // Read when it matters (which build is this?) — prose floor, not ghost.
             color = palette.inkSoft,

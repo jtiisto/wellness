@@ -1,6 +1,11 @@
 package dev.jtiisto.wellness.ui.tools
 
 import dev.jtiisto.wellness.core.data.db.ServerProfileEntity
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.time.format.FormatStyle
+import java.util.Locale
 
 /**
  * One row of the server list.
@@ -143,4 +148,26 @@ object ToolsCopy {
     fun deleteActiveBody(nickname: String): String =
         "Delete \"$nickname\"? This also wipes all local data loaded from it and returns to " +
             "the built-in server. The app will close; reopen it to continue."
+
+    /**
+     * The build row: the binary's own build instant, human-readable —
+     * `Built Aug 22, 2026, 11:21 AM` in the device's locale and zone.
+     *
+     * [raw] is `build_stamp.txt`'s content, epoch milliseconds written at
+     * assemble time (see BuildStampTask in build-logic). It replaced the
+     * commit-anchored GitStamp string (user ruling 2026-08-22): every device
+     * in this fleet runs the debug or dev variant, which the old design
+     * deliberately left as a bare version — indistinguishable builds on every
+     * phone that mattered. A stamp that will not parse degrades to the same
+     * literal the old design used for a missing git: a wrong time would be
+     * worse than no answer.
+     */
+    fun buildLabel(raw: String?, locale: Locale, zone: ZoneId): String {
+        val epochMs = raw?.trim()?.toLongOrNull() ?: return "Build unknown"
+        val time = DateTimeFormatter
+            .ofLocalizedDateTime(FormatStyle.MEDIUM, FormatStyle.SHORT)
+            .withLocale(locale)
+            .format(Instant.ofEpochMilli(epochMs).atZone(zone))
+        return "Built $time"
+    }
 }

@@ -35,9 +35,10 @@ android {
     namespace = "dev.jtiisto.wellness"
 
     buildFeatures {
-        // The Tools tab's build row reads BUILD_STAMP from here. The convention
-        // plugin leaves this off by default; :app opts in because it is the one
-        // module with a screen to show it on.
+        // WELLNESS_BASE_URL lives here. The convention plugin leaves this off
+        // by default; :app opts in because it is the one module born knowing a
+        // server. (The Tools row's build stamp is a generated asset now, not a
+        // BuildConfig field — see the androidComponents block at the bottom.)
         buildConfig = true
     }
 
@@ -49,11 +50,9 @@ android {
 
     buildTypes {
         debug {
-            buildConfigField("String", "BUILD_STAMP", "\"${buildStamp(appVersionName, isRelease = false)}\"")
             buildConfigField("String", "WELLNESS_BASE_URL", "\"$prodBaseUrl\"")
         }
         release {
-            buildConfigField("String", "BUILD_STAMP", "\"${buildStamp(appVersionName, isRelease = true)}\"")
             buildConfigField("String", "WELLNESS_BASE_URL", "\"$prodBaseUrl\"")
         }
         // Installs alongside the daily driver: the suffixed applicationId is
@@ -69,7 +68,6 @@ android {
             // this is what points the dev variant at their debug ones.
             matchingFallbacks += "debug"
             signingConfig = signingConfigs.getByName("debug")
-            buildConfigField("String", "BUILD_STAMP", "\"${buildStamp(appVersionName, isRelease = false)}\"")
             buildConfigField("String", "WELLNESS_BASE_URL", "\"$devBaseUrl\"")
         }
     }
@@ -94,4 +92,18 @@ dependencies {
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.koin.android)
     implementation(libs.koin.androidx.compose)
+}
+
+// The Tools row's build stamp: an execution-time generated asset per variant,
+// not a BuildConfig field — see BuildStampTask for why (configuration-cache
+// preservation; GitStamp's commit anchoring retired 2026-08-22, user ruling:
+// the whole fleet runs debug/dev, which the old design left identityless).
+androidComponents {
+    onVariants { variant ->
+        val stamp = tasks.register(
+            "generate${variant.name.replaceFirstChar { it.uppercase() }}BuildStamp",
+            BuildStampTask::class.java,
+        )
+        variant.sources.assets?.addGeneratedSourceDirectory(stamp, BuildStampTask::outputDir)
+    }
 }
