@@ -2,6 +2,8 @@ package dev.jtiisto.wellness.feature.trends.ui
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -409,7 +411,17 @@ fun PickerField(
             shape = LogbookShapes.square,
             dragHandle = { LogbookSheetHandle() },
         ) {
-            Column(modifier = Modifier.padding(bottom = SHEET_BOTTOM)) {
+            Column(
+                modifier = Modifier
+                    // The labs panel list is taller than the sheet: without
+                    // this the options past the fold simply clip, unreachable
+                    // (found on device with ~25 panels — every other picker's
+                    // list was short enough that the missing scroll never
+                    // showed). The sheet's drag interop is unaffected: the
+                    // handle still moves the sheet, the list scrolls itself.
+                    .verticalScroll(rememberScrollState())
+                    .padding(bottom = SHEET_BOTTOM),
+            ) {
                 Text(
                     text = title.uppercase(),
                     style = LogbookTheme.type.section,
