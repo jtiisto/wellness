@@ -401,10 +401,15 @@ data class SleepTonight(
  * recovery payload uses, so this overlays the sleep card row for row.
  *
  * [needMin] was fixed the previous evening and is compared against [sleptMin],
- * the raw minutes the watch recorded. [debtMin] is the debt carried *into* that
- * night and is never negative. [gap] marks a night following a missing sleep
- * record: the ledger has nothing to carry from, so the debt resets to zero and
- * no line should be drawn across the break. The key is omitted when false.
+ * the raw minutes the watch recorded. [debtMin] is the debt on **waking** from
+ * that night — what it left behind, never negative — so the debt that bought
+ * *this* night's need is the PREVIOUS consecutive row's [debtMin], and the last
+ * row's value is the one the tonight card is showing. [gap] marks a night
+ * following a missing sleep record: the ledger had nothing to carry INTO it, so
+ * its need holds no debt component (the prior day's strain term remains) and no
+ * line should be drawn across the break.
+ * The flag says nothing about this row's own [debtMin], which is routinely
+ * nonzero. The key is omitted when false.
  */
 @Serializable
 data class SleepDebtDay(

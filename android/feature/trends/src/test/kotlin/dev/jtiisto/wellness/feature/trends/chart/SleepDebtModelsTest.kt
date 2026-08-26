@@ -14,10 +14,13 @@ import org.junit.jupiter.api.Test
  *
  * Two things here are worth more than the coordinates: the y floor shared with
  * `SleepCard` — without it the worst week of the year draws exactly like the
- * best — and the split at a reset, which is the difference between "a night's
- * sleep cleared the debt" and "the watch recorded nothing, so the ledger
- * restarted". Both are invisible in a diff and obvious on a device, which is
- * precisely the kind of rule that has to be pinned here.
+ * best — and the split at a reset, which keeps the line from drawing a trend
+ * across a night the watch never recorded. Both are invisible in a diff and
+ * obvious on a device, which is precisely the kind of rule that has to be
+ * pinned here.
+ *
+ * The debt series is the debt **on waking**: every value below is what that
+ * night left behind, which is why a `gap` row carries one like any other.
  *
  * All values are invented; dates follow the far-future fixture convention.
  */
@@ -115,8 +118,8 @@ class SleepDebtModelsTest {
         val debt = requireNotNull(section.debtPlot)
 
         // Two runs: the two nights before the reset, and the three from it on.
-        // Drawn as one line, the segment falling into the gap day would claim a
-        // night's sleep paid the balance off.
+        // Drawn as one line, the segment crossing the gap day would trend
+        // through a night nobody has a number for.
         assertEquals(2, debt.lines.size)
         assertEquals(listOf(2, 3), debt.lines.map { it.points.size })
         assertEquals(listOf(PlotTone.SCAN, PlotTone.SCAN), debt.lines.map { it.tone })
@@ -140,7 +143,7 @@ class SleepDebtModelsTest {
         val section = requireNotNull(
             sleepDebtSection(
                 listOf(
-                    night("2030-01-21", debt = 0.0, gap = true),
+                    night("2030-01-21", debt = 27.5, gap = true),
                     night("2030-01-22", debt = 30.0),
                     night("2030-01-23", debt = 45.0),
                 ),
@@ -199,8 +202,10 @@ class SleepDebtModelsTest {
             ),
         )
 
+        // "woke with", not "debt": the value is what the night LEFT, and the
+        // bare label read as the balance it started with.
         assertEquals(
-            listOf("slept" to "7:18", "need" to "7:39", "debt" to "0:11"),
+            listOf("slept" to "7:18", "need" to "7:39", "woke with" to "0:11"),
             section.needPlot.anchors.first().rows.map { it.label to it.value },
         )
     }
@@ -213,9 +218,12 @@ class SleepDebtModelsTest {
         val gapAnchor = section.needPlot.anchors[2]
         assertEquals("2030-01-23", gapAnchor.key)
         assertEquals(
-            listOf("slept", "need", "debt", "reset"),
+            listOf("slept", "need", "woke with", "reset"),
             gapAnchor.rows.map { it.label },
         )
+        // The reset row explains the NEED above it, not the debt beside it —
+        // which is a real number the night earned, printed like any other.
+        assertEquals("0:28", gapAnchor.rows[2].value)
         assertEquals("missing night", gapAnchor.rows.last().value)
         // Every other night says only its three numbers.
         assertEquals(3, section.needPlot.anchors[3].rows.size)
@@ -228,7 +236,7 @@ class SleepDebtModelsTest {
 
         assertEquals(listOf("slept", "need"), section.needLegend.map { it.label })
         assertEquals(listOf(PlotTone.PRIMARY, PlotTone.SECONDARY), section.needLegend.map { it.tone })
-        assertEquals(listOf("debt", "reset"), section.debtLegend.map { it.label })
+        assertEquals(listOf("debt on waking", "reset"), section.debtLegend.map { it.label })
         assertEquals(listOf(PlotTone.SCAN, PlotTone.WARN), section.debtLegend.map { it.tone })
     }
 
@@ -241,10 +249,12 @@ class SleepDebtModelsTest {
 
     // ---- fixtures ----------------------------------------------------------
 
+    // The gap night carries a debt like every other row: it is the night's own
+    // product, and only the debt it ENTERED on was reset away.
     private fun fiveNights(): List<SleepDebtDay> = listOf(
         night("2030-01-21", debt = 0.0),
         night("2030-01-22", debt = 42.5),
-        night("2030-01-23", debt = 0.0, gap = true),
+        night("2030-01-23", debt = 27.5, gap = true),
         night("2030-01-24", debt = 18.0),
         night("2030-01-25", debt = 12.5),
     )

@@ -286,8 +286,13 @@ class TrendsDtoTest {
         assertEquals("2030-01-21", first.date)
         assertEquals(480.0, first.needMin)
         assertEquals(400.5, first.sleptMin)
-        assertEquals(0.0, first.debtMin)
+        assertEquals(40.0, first.debtMin)
         assertEquals(9.4, first.strainEst)
+
+        // The contract that makes the card and the panel one statement: the
+        // last row is yesterday's night, so what it woke owing IS tonight's
+        // debt. A fixture that let these drift would let the app drift too.
+        assertEquals(sleep.days.last().debtMin, tonight.debtMin)
     }
 
     @Test
@@ -300,9 +305,13 @@ class TrendsDtoTest {
 
         val days = decode("health-sleep.json", SleepDebtDto.serializer()).days
         assertEquals(listOf(false, false, true, false, false), days.map { it.gap })
-        // The reset night's debt is zero BECAUSE the ledger restarted, which is
-        // the whole reason the flag has to survive the decode.
-        assertEquals(0.0, days[2].debtMin)
+        // The reset is on the debt entering that night — its need holds no debt
+        // component (the strain term remains, so it need not be the chart's
+        // lowest). The debt it emits is the debt on waking, its own product and
+        // nonzero here: the flag must survive the decode to break the line and
+        // ring the point, never to explain away a value.
+        assertEquals(27.5, days[2].debtMin)
+        assertEquals(468.0, days[2].needMin)
     }
 
     @Test
@@ -311,8 +320,8 @@ class TrendsDtoTest {
         val days = decode("health-sleep.json", SleepDebtDto.serializer()).days
 
         assertEquals(listOf(480.0, 510.5, 468.0, 455.5, 472.0), days.map { it.needMin })
-        assertEquals(listOf(400.5, 465.0, 512.5, 430.0, 388.5), days.map { it.sleptMin })
-        assertEquals(listOf(0.0, 42.5, 0.0, 0.0, 12.5), days.map { it.debtMin })
+        assertEquals(listOf(400.5, 465.0, 412.5, 430.0, 388.5), days.map { it.sleptMin })
+        assertEquals(listOf(40.0, 22.5, 27.5, 12.5, 41.5), days.map { it.debtMin })
         assertEquals(listOf(9.4, 12.0, 6.5, 4.0, 7.5), days.map { it.strainEst })
     }
 

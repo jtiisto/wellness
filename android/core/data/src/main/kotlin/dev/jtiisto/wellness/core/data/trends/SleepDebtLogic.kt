@@ -29,8 +29,8 @@ import kotlin.math.roundToLong
  * standing on something incomplete — a cached copy, a watch that has not synced,
  * or a payload naming a different night. [ATTENTION] is reserved for the one
  * thing a reader must not miss: the ledger reset because a night went
- * unrecorded, so today's debt is zero for a reason that is not "you slept
- * enough".
+ * unrecorded, so tonight's number stands on a chain that restarted yesterday
+ * rather than on the whole record.
  */
 enum class TonightJudgment { SETTLED, PARTIAL, ATTENTION }
 
@@ -77,8 +77,9 @@ fun sleepTonightModel(
     val tonight = dto.tonight ?: return null
 
     // The trailing row is the night just past — the one tonight's debt was
-    // carried out of. A gap there is what makes tonight's zero debt a hole in
-    // the record rather than a clean slate.
+    // carried out of, and (inside the server's carry window) the row whose own
+    // `debt_min` this number equals. A gap there means that night began a fresh
+    // ledger, so the figure below stands on a record with a hole in it.
     val resetLastNight = dto.days.lastOrNull()?.gap == true
 
     val debtLine = buildString {

@@ -17,7 +17,7 @@ Hand-authored payloads for the twelve `GET /api/trends/*` endpoints, pinned by
 | `journal-tracker-actionable.json` | **no `weekly_usage` key**, `completed` as 1/0/null, a note-era string value, a one-sided target segment, a paused week with `rate: null` |
 | `journal-tracker-neutral.json` | `weekly_usage` **present** — the API's only omitted key, in its present form |
 | `health-recovery.json` / `-unavailable.json` | `hrv_band` nesting incl. a null `low_floor`, an all-null day |
-| `health-sleep.json` | the ledger: `as_of`, a `tonight` with `strain_partial: true`, one `gap: true` night and four with the key **omitted** |
+| `health-sleep.json` | the ledger: `as_of`, a `tonight` with `strain_partial: true`, one `gap: true` night (carrying a **nonzero** `debt_min` — the flag is about the debt entering a night, never the debt on waking it emits) and four with the key **omitted**; `tonight.debt_min` **equals** the last day row's, as the wire contract promises inside the carry window |
 | `health-sleep-unavailable.json` | the degradation — `available: false`, no `as_of`, no `tonight`, empty `days` |
 | `health-composition.json` / `-unavailable.json` | all eight nullable scan metrics, a scan missing bone data |
 | `health-labs.json` / `-unavailable.json` | a chartable test, a text-only test, a `prefix`/`flag` test, a second panel |

@@ -9,7 +9,12 @@ import kotlin.math.min
 
 /**
  * The sleep-need history panel: what each night asked for, what it got, and the
- * debt the ledger was carrying into it.
+ * debt it left behind.
+ *
+ * The debt series is the debt **on waking** — the server emits each night's own
+ * product, not the balance it started with — so the last point is the number the
+ * tonight card is showing, and the point beside a night explains the *next*
+ * night's need rather than its own.
  *
  * Its own file rather than another section of `HealthModels.kt`, which already
  * carries six cards; nothing here is shared with them beyond the geometry
@@ -166,9 +171,12 @@ private fun sleepDebtAnchors(
             rows = buildList {
                 add(TooltipRow("slept", hoursMinutes(day.sleptMin)))
                 add(TooltipRow("need", hoursMinutes(day.needMin)))
-                add(TooltipRow("debt", hoursMinutes(day.debtMin)))
-                // Why the debt beside it is zero. Without this the reset reads
-                // as a night that finally cleared the ledger.
+                // "woke with", not "debt": the row is what this night LEFT,
+                // and a bare label would be read as what it was carrying.
+                add(TooltipRow("woke with", hoursMinutes(day.debtMin)))
+                // Why the need beside it carries no debt: the ledger had
+                // nothing to carry INTO this night. Without the row a reset
+                // reads as an unexplained easy target.
                 if (day.gap) add(TooltipRow("reset", "missing night"))
             },
         )
@@ -176,13 +184,15 @@ private fun sleepDebtAnchors(
 )
 
 /**
- * The debt line, broken wherever the ledger restarted.
+ * The debt on waking, broken wherever the ledger restarted.
  *
- * A gap row is a night the watch recorded nothing before, so its debt is zero
- * by *reset* rather than by recovery. Drawing a segment down into it would
- * claim a night's sleep paid the balance off, which is the one thing this chart
- * must not say — so each continuous run gets its own polyline and the gap day
- * carries an open ring instead.
+ * A gap row is a night the watch recorded nothing before, so the run of nights
+ * ending at the previous point and the run starting here are not one chain: the
+ * ledger was cleared between them by a night nobody observed. A segment drawn
+ * across that break would draw a trend through a night that has no datum — so
+ * each continuous run gets its own polyline and the gap day carries an open ring
+ * instead. (The gap row's own value is a real debt like any other, and is
+ * plotted; only the connection to what came before is withheld.)
  */
 private fun debtPlot(
     days: List<SleepDebtDay>,
@@ -237,8 +247,8 @@ private fun debtPlot(
  * Split the nights into runs the ledger carried through without restarting.
  *
  * A gap row **begins** the run it belongs to rather than ending the previous
- * one: its own debt is the post-reset zero, so it is the first point of what
- * comes after, not the last point of what came before.
+ * one: the unobserved night sits immediately BEFORE it, so it is the first
+ * point of what comes after, not the last point of what came before.
  */
 private fun continuousRuns(days: List<SleepDebtDay>): List<List<SleepDebtDay>> {
     val runs = mutableListOf<MutableList<SleepDebtDay>>()
@@ -255,7 +265,7 @@ private val NEED_LEGEND = listOf(
 )
 
 private val DEBT_LEGEND = listOf(
-    LegendEntry("debt", PlotTone.SCAN),
+    LegendEntry("debt on waking", PlotTone.SCAN),
     LegendEntry("reset", PlotTone.WARN),
 )
 

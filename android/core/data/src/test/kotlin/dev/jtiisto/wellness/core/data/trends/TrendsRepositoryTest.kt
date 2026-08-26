@@ -429,9 +429,11 @@ class TrendsRepositoryTest {
         const val END = "2026-08-08"
         const val WEIGHT = """{"available":true,"series":[{"date":"2026-07-01","kg":80}]}"""
         const val CARDIO = """{"weeks":[],"steady_sessions":[]}"""
+        // tonight's debt equals the last row's, as the wire promises inside the
+        // carry window — the rows are the debt on WAKING from each night.
         const val SLEEP =
             """{"available":true,"as_of":"2030-01-25","tonight":{"date":"2030-01-26",""" +
-                """"need_min":495,"debt_min":41.5,"strain_est":8,"strain_partial":true},""" +
+                """"need_min":495,"debt_min":12.5,"strain_est":8,"strain_partial":true},""" +
                 """"days":[{"date":"2030-01-24","need_min":455.5,"slept_min":430,""" +
                 """"debt_min":0,"strain_est":4},{"date":"2030-01-25","need_min":472,""" +
                 """"slept_min":388.5,"debt_min":12.5,"strain_est":7.5,"gap":true}]}"""

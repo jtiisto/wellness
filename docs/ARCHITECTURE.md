@@ -653,22 +653,37 @@ same `daily_health_metrics` rows into a nightly ledger:
 strain_partial}, days: [{date, need_min, slept_min, debt_min, strain_est,
 gap}]}`. Each night is keyed by its **WAKE date** (Garmin's own `metric_date`),
 and carries the need that was already determined the evening before —
-`need = baseline + debt + f(previous day's strain)`, where the strain estimate
+`need = baseline + the debt it ENTERED on + f(previous day's strain)`, where the
+strain estimate
 comes from that day's activity (a max-HR form when the watch recorded one, a
 calorie-only fallback otherwise, clamped to 0..21 — missing inputs count as
 zero, so strain is always present) and the shortfall left over
 (`need − slept`, after a device bias applied to the arithmetic only —
-`slept_min` ships raw for display) carries forward as a capped fraction. `debt`
-resets to **0 across a gap**: a night whose previous calendar day has no scored
-sleep — a missing row or a sleepless one — starts a fresh ledger and is flagged
-`gap: true`. History's first night is that same reset WITHOUT the flag (an
-epoch, not a hole). The ledger always replays from the start of history, so
-`start`/`end` clip only what is emitted and a 4-week request agrees with an
-all-history one on every shared row; `as_of` (the last scored night over the
-FULL history) and `tonight` ignore the range entirely. Contract for the
-clients: `days` always present, `debt_min` never negative, `strain_est` on
-every row, optional keys (`gap`, `as_of`, `tonight`, and tonight's
-`strain_partial`) **omitted, never null**.
+`slept_min` ships raw for display) carries forward as a capped fraction. A
+row's `debt_min` is the debt **on waking** from that night — the night's own
+product, `min(cap, half · max(0, need − slept_weq))` — not the debt it started
+with. The night's own need is therefore explained by the row **before** it:
+`need = baseline + previous consecutive row's debt_min + f(strain)`. The
+outgoing side is what is emitted for one reason: on a request whose `end` is
+today — the only shape the app sends — `tonight.debt_min` then **equals the
+last emitted row's `debt_min`** whenever that row is today's or yesterday's,
+so the headline card and the chart's last point are the same number by
+construction (they diverge — card 0 — only past that carry window; and a
+clipped `end` hides newer rows from `days` while `tonight`, which ignores the
+range, still carries them — deliberate, and pinned as such).
+The debt entering a night resets to **0 across a gap**: a night whose previous
+calendar day has no scored sleep — a missing row or a sleepless one — starts a
+fresh ledger and is flagged `gap: true`, which is why its need carries no debt
+component (baseline plus the prior day's strain term — not necessarily
+baseline itself); the flag says nothing about the row's own `debt_min`, which is
+whatever that night left behind and is routinely nonzero. History's first night
+is that same reset WITHOUT the flag (an epoch, not a hole). The ledger always
+replays from the start of history, so `start`/`end` clip only what is emitted
+and a 4-week request agrees with an all-history one on every shared row; `as_of`
+(the last scored night over the FULL history) and `tonight` ignore the range
+entirely. Contract for the clients: `days` always present, `debt_min` never
+negative, `strain_est` on every row, optional keys (`gap`, `as_of`, `tonight`,
+and tonight's `strain_partial`) **omitted, never null**.
 
 The algorithm is fully parameterized: its fitted constants were regressed from
 the user's own private sleep history, which makes the NUMBERS personal data

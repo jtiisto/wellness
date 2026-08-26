@@ -861,6 +861,16 @@ def sleep_series(garmin_db, params, *, start=None, end, today):
     living in a gitignored module (see modules/sleep_params.example.py), so the
     caller resolves them and this stays a pure function of (rows, params).
 
+    A row's `debt_min` is the debt ON WAKING from that night — the night's own
+    product, what the sleeper got up owing — NOT the debt it was carrying when
+    it started. The need arithmetic is unchanged and still consumes the debt
+    ENTERING the night, which on consecutive rows is simply the PREVIOUS row's
+    emitted `debt_min`: `need = baseline + previous row's debt + f(strain)`.
+    Emitting the outgoing side buys one property the incoming side could not:
+    `tonight.debt_min` EQUALS the last emitted row's `debt_min` whenever that
+    row is today's or yesterday's, so the card and the chart's last point agree
+    by construction and diverge (card 0) only past that carry window.
+
     The ledger is CAUSAL — a night's need was fixed the previous evening — so
     it replays from the start of history on every request: `start`/`end` clip
     only what is EMITTED, never what is computed, and a 4-week request agrees
@@ -895,42 +905,51 @@ def sleep_series(garmin_db, params, *, start=None, end, today):
 
     today_iso = today.isoformat()
     yesterday_iso = (today - timedelta(days=1)).isoformat()
-    debt, tonight_debt, days = 0.0, 0.0, []
+    entering, tonight_debt, days = 0.0, 0.0, []
     for i, ds in enumerate(sorted(slept_by_date)):
         prev = (date.fromisoformat(ds) - timedelta(days=1)).isoformat()
         # Nothing to carry from (missing row, or one Garmin scored no sleep
         # for) → the ledger restarts. History's first night is that same reset
-        # WITHOUT the flag: an epoch, not a hole in the record.
+        # WITHOUT the flag: an epoch, not a hole in the record. The reset is on
+        # the ENTERING side only: the flag explains why this night's need fell
+        # back to baseline, never that its outgoing debt is zero.
         gap = prev not in slept_by_date
         if gap:
-            debt = 0.0
+            entering = 0.0
         strain_prev = strain_by_date.get(prev, 0.0)
-        need = params.baseline_min + debt + _strain_need_term(params, strain_prev)
+        need = params.baseline_min + entering + _strain_need_term(params, strain_prev)
         slept = slept_by_date[ds]
+        # What the night left behind: the debt on WAKING, and the row's
+        # `debt_min`. slept_min ships RAW for display; only this arithmetic
+        # applies the device bias.
+        outgoing = min(params.debt_cap_min,
+                       params.debt_half_weight
+                       * max(0.0, need - (slept - params.sleep_bias_min)))
 
         if (start is None or ds >= start) and ds <= end:
             row = {"date": ds, "need_min": round(need, 1),
-                   "slept_min": round(slept, 1), "debt_min": round(debt, 1),
+                   "slept_min": round(slept, 1), "debt_min": round(outgoing, 1),
                    "strain_est": round(strain_prev, 1)}
             if gap and i > 0:
                 row["gap"] = True
             days.append(row)
 
-        # slept_min ships RAW for display; only the debt math applies the
-        # device bias. Rounding is presentational — the ledger chains on the
-        # unrounded values.
-        debt = min(params.debt_cap_min,
-                   params.debt_half_weight
-                   * max(0.0, need - (slept - params.sleep_bias_min)))
+        # Tomorrow's need is bought by tonight's shortfall. Rounding is
+        # presentational — the ledger chains on the unrounded value, so an
+        # emitted row and the need it explains can differ in the last decimal.
+        entering = outgoing
         if ds in (yesterday_iso, today_iso):
             # Tonight carries the PREVIOUS LEDGER POSITION: the last scored
-            # night's outgoing debt, accepted while that night is no older
-            # than yesterday — which covers the after-midnight request and
-            # the not-yet-synced morning. An older last night is a gap and
-            # tonight resets to 0 exactly as the ledger itself would. Sorted
-            # order lets today overwrite yesterday, and a future-dated row
-            # (sync-job clock skew) can never become tonight's carry.
-            tonight_debt = debt
+            # night's outgoing debt — the very number that night's row now
+            # emits, which is what makes the card and the last plotted point
+            # one statement. Accepted while that night is no older than
+            # yesterday, covering the after-midnight request and the
+            # not-yet-synced morning; an older last night is a gap and tonight
+            # resets to 0 exactly as the ledger itself would (the only case
+            # where card and last point differ). Sorted order lets today
+            # overwrite yesterday, and a future-dated row (sync-job clock
+            # skew) can never become tonight's carry.
+            tonight_debt = outgoing
 
     tonight_strain = strain_by_date.get(today_iso, 0.0)
     out = {"available": True}

@@ -124,13 +124,14 @@ class SleepDebtLogicTest {
     }
 
     @Test
-    @DisplayName("a trailing gap says WHY the debt is zero, and takes the card to ATTENTION")
+    @DisplayName("a trailing gap says the record has a hole, and takes the card to ATTENTION")
     fun trailingGapFlagsTheCard() {
         val model = requireNotNull(
             sleepTonightModel(dto(debt = 0.0, days = listOf(day("2030-01-25", gap = true))), null, NOW, TODAY),
         )
 
-        // Without the suffix a reset reads as a night that cleared the ledger.
+        // The suffix composes onto either debt wording; on a zero it is what
+        // stops the reset reading as a night that cleared the ledger.
         assertEquals("no sleep debt · reset — missing night", model.debtLine)
         assertEquals(TonightJudgment.ATTENTION, model.judgment)
         assertTrue(model.flagged, "the mono ! is the only thing marking it — never a colour")
@@ -214,11 +215,14 @@ class SleepDebtLogicTest {
         const val TODAY = "2030-01-26"
         const val NOW = 1_800_000_000_000L
 
+        // A gap row's `debt_min` is that night's own product like any other —
+        // the reset applies to the debt it started on, not to what it left —
+        // so the flag does not change the number here.
         fun day(date: String, gap: Boolean = false) = SleepDebtDay(
             date = date,
             needMin = 472.0,
             sleptMin = 388.5,
-            debtMin = if (gap) 0.0 else 12.5,
+            debtMin = 12.5,
             strainEst = 7.5,
             gap = gap,
         )
