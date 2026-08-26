@@ -196,6 +196,21 @@ class TrendsRepositoryTest {
     }
 
     @Test
+    @DisplayName("an offline sleep ledger is served from its range-keyed row, gap flag and all")
+    fun sleepServesCache() = runTest {
+        seedCache("health/sleep:12w", SLEEP, 600L)
+
+        val result = throwingRepository(IOException("offline")).healthSleep(START, END, "12w")
+
+        assertEquals(600L, result.staleFetchedAt)
+        assertEquals("2030-01-25", result.value.asOf)
+        assertEquals(495.0, result.value.tonight?.needMin)
+        // The whole point of caching the RAW body: the omitted-key defaults are
+        // re-applied on the way out, so a cached copy says what the wire said.
+        assertEquals(listOf(false, true), result.value.days.map { it.gap })
+    }
+
+    @Test
     @DisplayName("a network failure with no cached copy rethrows rather than inventing one")
     fun networkFailureWithoutCacheRethrows() = runTest {
         val error = assertThrows<Exception> {
@@ -354,6 +369,7 @@ class TrendsRepositoryTest {
         api.journalTrackers()
         api.journalTracker("fixture/tracker", START, END, "4w")
         api.healthRecovery(START, END, "4w")
+        api.healthSleep(START, END, "4w")
         api.healthComposition(END)
         api.healthLabs(END)
 
@@ -363,6 +379,7 @@ class TrendsRepositoryTest {
                 "health/composition",
                 "health/labs",
                 "health/recovery:4w",
+                "health/sleep:4w",
                 "journal/fixture/tracker:4w",
                 "journal/trackers",
                 "overview",
@@ -412,6 +429,12 @@ class TrendsRepositoryTest {
         const val END = "2026-08-08"
         const val WEIGHT = """{"available":true,"series":[{"date":"2026-07-01","kg":80}]}"""
         const val CARDIO = """{"weeks":[],"steady_sessions":[]}"""
+        const val SLEEP =
+            """{"available":true,"as_of":"2030-01-25","tonight":{"date":"2030-01-26",""" +
+                """"need_min":495,"debt_min":41.5,"strain_est":8,"strain_partial":true},""" +
+                """"days":[{"date":"2030-01-24","need_min":455.5,"slept_min":430,""" +
+                """"debt_min":0,"strain_est":4},{"date":"2030-01-25","need_min":472,""" +
+                """"slept_min":388.5,"debt_min":12.5,"strain_est":7.5,"gap":true}]}"""
         const val COMPOSITION = """{"available":false,"scans":[]}"""
         const val EXERCISE_DETAIL =
             """{"exercise":{"slug":"fixture-press","name":"Fixture Press","equipment":null,""" +

@@ -71,6 +71,30 @@ class ChartInkTest {
     }
 
     @Test
+    @DisplayName("sleep need: the same ink-soft bars, and a target line that must not read as a mean")
+    fun sleepNeedIsBarsUnderASolidTarget() {
+        // The bars are the sleep card's, unchanged — a night has to look the
+        // same weight on both charts. The need is plate 1 as a SOLID line: it
+        // is a computed target, and the dash every other PRIMARY/SECONDARY line
+        // carries would say "rolling mean", which is exactly what it is not.
+        assertEquals(
+            SeriesStyle(SeriesInk.INK_SOFT, SeriesMark.BAR),
+            seriesStyle(PlotTone.PRIMARY, ChartInk.SLEEP_NEED),
+        )
+        assertEquals(
+            SeriesStyle(SeriesInk.PLATE_1, SeriesMark.LINE),
+            seriesStyle(PlotTone.SECONDARY, ChartInk.SLEEP_NEED),
+        )
+        assertFalse(isDashedMark(seriesStyle(PlotTone.SECONDARY, ChartInk.SLEEP_NEED).mark))
+        assertEquals(LegendSwatch.LINE, legendSwatch(PlotTone.SECONDARY, ChartInk.SLEEP_NEED))
+
+        // The debt chart below it declares no plan, so its two series fall to
+        // the default: a solid ink line, and the reset as an open ring.
+        assertEquals(SeriesStyle(SeriesInk.INK, SeriesMark.LINE), seriesStyle(PlotTone.SCAN))
+        assertEquals(SeriesStyle(SeriesInk.INK, SeriesMark.RING), seriesStyle(PlotTone.WARN))
+    }
+
+    @Test
     @DisplayName("the aerobic proxy plots raw sessions, so its PRIMARY is ink and solid, not a mean")
     fun aerobicSubjectIsInk() {
         assertEquals(

@@ -323,12 +323,13 @@ class JournalTrendsViewModel(
 // ---- Health ----------------------------------------------------------------
 
 /**
- * Four independent sources on one screen, and only one of them is load-bearing.
+ * Five independent sources on one screen, and only one of them is load-bearing.
  *
- * Recovery is the screen; weight, composition and labs are extras that hide
- * when their source is unavailable, which is the normal state for a phone that
- * has never synced a DEXA scan. Only recovery's failure becomes a visible
- * error.
+ * Recovery is the screen; the sleep ledger, weight, composition and labs are
+ * extras that hide when their source is unavailable, which is the normal state
+ * for a phone that has never synced a DEXA scan — or, for the ledger, for any
+ * machine without the fitted parameters. Only recovery's failure becomes a
+ * visible error.
  */
 class HealthViewModel(
     private val repository: TrendsRepository,
@@ -340,18 +341,20 @@ class HealthViewModel(
     private val _state = MutableStateFlow(HealthUiState())
     val uiState: StateFlow<HealthUiState> = _state.asStateFlow()
 
-    // One key per slice, because the four do not all move with the range.
+    // One key per slice, because the five do not all move with the range.
     // Composition and labs are end-only requests: a range change does not
     // change what was asked for, so it must not throw away an answer that is
     // already on screen — which is exactly what a refetch would do to a card
     // whose earlier cache write had failed and whose network is now gone.
     private var loadedRecoveryRange: String? = null
+    private var loadedSleepKey: String? = null
     private var loadedWeightRange: String? = null
     private var loadedCompositionEnd: String? = null
     private var loadedLabsEnd: String? = null
 
     override fun forgetLoaded() {
         loadedRecoveryRange = null
+        loadedSleepKey = null
         loadedWeightRange = null
         loadedCompositionEnd = null
         loadedLabsEnd = null
@@ -382,6 +385,24 @@ class HealthViewModel(
                         fetch = { repository.healthRecovery(window.start, window.end, range) },
                     )
                     if (settled) loadedRecoveryRange = range
+                }
+            }
+            // Keyed by range AND end date, unlike the sibling slices: the
+            // payload's `tonight` is a fact about a calendar day, so a retained
+            // ViewModel reactivated tomorrow must refetch even at the same
+            // range — recovery can afford yesterday's copy, tonight cannot.
+            val sleepKey = "$range|${window.end}"
+            if (sleepKey != loadedSleepKey) {
+                launch {
+                    // The ledger is range-keyed like recovery even though the
+                    // arithmetic behind it is not: `start` clips the rows that
+                    // come back, and the history panel is those rows.
+                    val settled = loadSlice(
+                        name = "health/sleep",
+                        assign = { slice -> _state.update { it.copy(sleep = slice) } },
+                        fetch = { repository.healthSleep(window.start, window.end, range) },
+                    )
+                    if (settled) loadedSleepKey = sleepKey
                 }
             }
             if (range != loadedWeightRange) {

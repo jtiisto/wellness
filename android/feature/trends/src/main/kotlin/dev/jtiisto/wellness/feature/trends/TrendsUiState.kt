@@ -7,6 +7,7 @@ import dev.jtiisto.wellness.core.data.trends.ExerciseSummary
 import dev.jtiisto.wellness.core.data.trends.LabsDto
 import dev.jtiisto.wellness.core.data.trends.OverviewDto
 import dev.jtiisto.wellness.core.data.trends.RecoveryDto
+import dev.jtiisto.wellness.core.data.trends.SleepDebtDto
 import dev.jtiisto.wellness.core.data.trends.TrackerDetailDto
 import dev.jtiisto.wellness.core.data.trends.TrackerSummary
 import dev.jtiisto.wellness.core.data.trends.TrendsPrefs
@@ -80,6 +81,7 @@ data class JournalTrendsUiState(
 data class HealthUiState(
     val range: String = TrendsPrefs.DEFAULT_RANGE,
     val recovery: Slice<RecoveryDto> = Slice.Loading,
+    val sleep: Slice<SleepDebtDto> = Slice.Loading,
     val weight: Slice<WeightDto> = Slice.Loading,
     val composition: Slice<CompositionDto> = Slice.Loading,
     val labs: Slice<LabsDto> = Slice.Loading,

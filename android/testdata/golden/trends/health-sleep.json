@@ -1,0 +1,49 @@
+{
+  "available": true,
+  "as_of": "2030-01-25",
+  "tonight": {
+    "date": "2030-01-26",
+    "need_min": 495,
+    "debt_min": 41.5,
+    "strain_est": 8,
+    "strain_partial": true
+  },
+  "days": [
+    {
+      "date": "2030-01-21",
+      "need_min": 480,
+      "slept_min": 400.5,
+      "debt_min": 0,
+      "strain_est": 9.4
+    },
+    {
+      "date": "2030-01-22",
+      "need_min": 510.5,
+      "slept_min": 465,
+      "debt_min": 42.5,
+      "strain_est": 12
+    },
+    {
+      "date": "2030-01-23",
+      "need_min": 468,
+      "slept_min": 512.5,
+      "debt_min": 0,
+      "strain_est": 6.5,
+      "gap": true
+    },
+    {
+      "date": "2030-01-24",
+      "need_min": 455.5,
+      "slept_min": 430,
+      "debt_min": 0,
+      "strain_est": 4
+    },
+    {
+      "date": "2030-01-25",
+      "need_min": 472,
+      "slept_min": 388.5,
+      "debt_min": 12.5,
+      "strain_est": 7.5
+    }
+  ]
+}

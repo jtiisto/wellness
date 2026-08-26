@@ -1,6 +1,8 @@
 [run]
 source = src
-omit = src/modules/user_queries.py
+omit =
+    src/modules/user_queries.py
+    src/modules/sleep_params.py
 
 [report]
 exclude_lines =

@@ -16,10 +16,12 @@ import org.junit.jupiter.api.Test
  * The Trends wire contract, against the fixtures in `testdata/golden/trends/`.
  *
  * Three things are worth more than the rest here, and each has burned a phase
- * somewhere: `weekly_usage` is the only key the API ever omits, `completed` is
- * an integer and not a boolean, and a tracker value can be a *string* left over
- * from the tracker's note era — which a `Double?` property would turn into a
- * failure of the entire payload, not of the one row.
+ * somewhere: omitted keys carry defaults (`weekly_usage`, and the sleep
+ * ledger's `as_of`/`tonight`/`gap`/`strain_partial` — the spec's Omitted-keys
+ * table is the inventory), `completed` is an integer and not a boolean, and a
+ * tracker value can be a *string* left over from the tracker's note era —
+ * which a `Double?` property would turn into a failure of the entire payload,
+ * not of the one row.
  */
 class TrendsDtoTest {
 
@@ -260,6 +262,85 @@ class TrendsDtoTest {
         val unavailable = decode("health-recovery-unavailable.json", RecoveryDto.serializer())
         assertFalse(unavailable.available)
         assertTrue(unavailable.days.isEmpty())
+    }
+
+    @Test
+    @DisplayName("the sleep ledger decodes: as_of, tonight, and a gap night among four without one")
+    fun sleepDecodes() {
+        val sleep = decode("health-sleep.json", SleepDebtDto.serializer())
+
+        assertTrue(sleep.available)
+        assertEquals("2030-01-25", sleep.asOf)
+        assertEquals(5, sleep.days.size)
+
+        val tonight = requireNotNull(sleep.tonight)
+        assertEquals("2030-01-26", tonight.date)
+        assertEquals(495.0, tonight.needMin)
+        assertEquals(41.5, tonight.debtMin)
+        assertEquals(8.0, tonight.strainEst)
+        // Always true on the wire; the default exists to say what an ABSENT key
+        // would mean, not to describe what the server sends.
+        assertTrue(tonight.strainPartial)
+
+        val first = sleep.days.first()
+        assertEquals("2030-01-21", first.date)
+        assertEquals(480.0, first.needMin)
+        assertEquals(400.5, first.sleptMin)
+        assertEquals(0.0, first.debtMin)
+        assertEquals(9.4, first.strainEst)
+    }
+
+    @Test
+    @DisplayName("gap defaults to false where the key is omitted, and is true only where it is present")
+    fun sleepGapDefaultsFalse() {
+        // The wire omits `gap` on every ordinary night — a non-default property
+        // would fail the whole payload on the first one.
+        val fixture = fixture("health-sleep.json")
+        assertEquals(1, Regex("\"gap\"").findAll(fixture).count())
+
+        val days = decode("health-sleep.json", SleepDebtDto.serializer()).days
+        assertEquals(listOf(false, false, true, false, false), days.map { it.gap })
+        // The reset night's debt is zero BECAUSE the ledger restarted, which is
+        // the whole reason the flag has to survive the decode.
+        assertEquals(0.0, days[2].debtMin)
+    }
+
+    @Test
+    @DisplayName("every sleep measurement decodes from an integer AND a decimal wire form")
+    fun sleepNumbersArriveBothWays() {
+        val days = decode("health-sleep.json", SleepDebtDto.serializer()).days
+
+        assertEquals(listOf(480.0, 510.5, 468.0, 455.5, 472.0), days.map { it.needMin })
+        assertEquals(listOf(400.5, 465.0, 512.5, 430.0, 388.5), days.map { it.sleptMin })
+        assertEquals(listOf(0.0, 42.5, 0.0, 0.0, 12.5), days.map { it.debtMin })
+        assertEquals(listOf(9.4, 12.0, 6.5, 4.0, 7.5), days.map { it.strainEst })
+    }
+
+    @Test
+    @DisplayName("a tonight without strain_partial decodes to false — the default is load-bearing")
+    fun sleepTonightStrainPartialDefaultsFalse() {
+        // No fixture carries this shape (the server always sends true today),
+        // so the omitted-key contract is pinned inline: dropping the property
+        // default would fail THIS decode, not just re-encode symmetry.
+        val tonight = json.decodeFromString(
+            SleepTonight.serializer(),
+            """{"date":"2030-01-26","need_min":480,"debt_min":0,"strain_est":3.5}""",
+        )
+        assertFalse(tonight.strainPartial)
+    }
+
+    @Test
+    @DisplayName("an unavailable ledger has no as_of and no tonight — both keys are simply absent")
+    fun sleepUnavailableOmitsEverything() {
+        val payload = fixture("health-sleep-unavailable.json")
+        assertFalse(payload.contains("as_of"))
+        assertFalse(payload.contains("tonight"))
+
+        val sleep = decode("health-sleep-unavailable.json", SleepDebtDto.serializer())
+        assertFalse(sleep.available)
+        assertNull(sleep.asOf)
+        assertNull(sleep.tonight)
+        assertTrue(sleep.days.isEmpty())
     }
 
     @Test

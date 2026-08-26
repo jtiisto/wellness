@@ -350,6 +350,17 @@ health DB for the body-weight chart:
 | `WELLNESS_TRUSTED_CLIENTS` | loopback + Tailscale ranges | Comma-separated CIDRs of allowed client sources (the app 403s everything else — the server binds 0.0.0.0 and Tailscale is the auth layer, so LAN strays must be refused in-app). Setting the variable REPLACES the default set (`127.0.0.0/8, ::1/128, 100.64.0.0/10, fd7a:115c:a1e0::/48`); the single value `*` disables the guard. |
 | `WELLNESS_CORS_ORIGINS` | *(empty — CORS off)* | Comma-separated origins granted cross-origin API access. The PWA is same-origin and the native app sends no Origin header, so leave unset unless a browser client on another origin genuinely needs access. |
 
+The Health tab's sleep need/debt panel additionally needs
+`src/modules/sleep_params.py` — the fitted constants, which are personal data
+(regressed from a private sleep history) and therefore **untracked**. Copy
+`src/modules/sleep_params.example.py` (placeholder values, correct shape) and
+fill in your own. Without the file the endpoint returns
+`{"available": false}` and the panel hides; the example values are never used
+as a fallback. Deployment: `bin/deploy-prod.sh` **seeds** the file to prod when
+prod does not have one and never overwrites an existing prod copy — if dev and
+prod diverge, the deploy warns and leaves prod's copy alone, so a prod-only
+refit is safe from a routine deploy.
+
 ### Disabling modules (optional)
 
 All modules are enabled by default — a fresh checkout serves every tab.

@@ -100,6 +100,9 @@ sync_dir() {
         # packages stayed importable in prod forever. The shipped code dirs
         # (src/public/mcp_servers) have no prod-local content to protect; the
         # db excludes are belt-and-suspenders should a data dir ever ship.
+        # sleep_params.py is excluded here (which also shields it from
+        # --delete) and handled by the protected-seed step below: prod may
+        # carry live-tuned values that a wholesale sync would clobber.
         rsync -a --delete \
             --exclude='__pycache__' \
             --exclude='*.pyc' \
@@ -107,6 +110,7 @@ sync_dir() {
             --exclude='*.db' \
             --exclude='*.db-wal' \
             --exclude='*.db-shm' \
+            --exclude='modules/sleep_params.py' \
             "$src/" "$dest/"
     fi
 }
@@ -177,6 +181,22 @@ done < "$MANIFEST"
 # The server expects data/ to exist (it creates the DB files itself; the dir
 # is no longer a ship-dir so rsync --delete can never touch live databases).
 mkdir -p "$PROD_DIR/data"
+
+# Personal sleep params: untracked (gitignored) config the prod copy of which
+# may be tuned live. A first deploy seeds it; after that, a diverged prod copy
+# is never overwritten — only warned about. Reconcile by hand, then redeploy.
+# (Same never-clobber philosophy as the workout-hook templates above.)
+SLEEP_PARAMS="src/modules/sleep_params.py"
+if [ -f "$PROJECT_ROOT/$SLEEP_PARAMS" ]; then
+    if [ ! -f "$PROD_DIR/$SLEEP_PARAMS" ]; then
+        echo "  Seeding $SLEEP_PARAMS (absent in production)..."
+        cp "$PROJECT_ROOT/$SLEEP_PARAMS" "$PROD_DIR/$SLEEP_PARAMS"
+    elif ! cmp -s "$PROJECT_ROOT/$SLEEP_PARAMS" "$PROD_DIR/$SLEEP_PARAMS"; then
+        echo -e "  ${YELLOW}$SLEEP_PARAMS differs between dev and prod — NOT overwritten; reconcile manually${NC}"
+    fi
+elif [ -f "$PROD_DIR/$SLEEP_PARAMS" ]; then
+    echo -e "  ${YELLOW}$SLEEP_PARAMS missing in dev but present in prod — left untouched${NC}"
+fi
 
 # Deploys never delete from prod bin/ (hooks may carry prod-local versions),
 # so dead scripts used to accumulate silently. Warn about strays — anything

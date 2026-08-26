@@ -6,9 +6,11 @@ Status: **approved 2026-08-09** (v2 after Codex review — 5 blockers + 12 major
 
 > **v2.1 (code-review fix round, 2026-08-09):** Codex on the working tree found 1 BLOCKER + 2 MAJOR + 2 MINOR; direct inspection added 1 MINOR + 1 NIT. All fixed: (a) **Selection discipline** — a shared in-memory `selection` flow leads and storage follows; fallback reconciliation consults storage only when nothing was chosen this session and re-checks after the suspending read; writes are generation-guarded under a mutex so a superseded fallback becomes a no-op, never a queued overwrite (the guard is defensive — no reachable interleaving pins it — and is documented as such). Selections that drive fetches are never seeded from storage before the confirming list arrives. (b) **Health per-slice load keys** — recovery/weight keyed by range, composition/labs by end date; a range change no longer refetches (or degrades) range-immune slices; Retry clears all four. (c) **Ink is typed `Dp`** on `PlotDot`/`PlotRect` radii — scaling ink through `LogicalScale` no longer compiles. (d) **Domain-bounded union anchors** — every date inside the plotted x domain carrying any rendered datum (raw value, rolling mean, band, score) gets exactly one anchor; dates outside the domain get neither marks nor anchors. (e) **labPanel fallback persists** via the same discipline, with one declared divergence: an EMPTY panel list keeps the remembered panel (nothing fetches on it; Strength/Journal clear on empty because a stale slug would otherwise be requested — and their clear is in-memory only, storage keeps the id for re-adoption). (f) Anchor-merge label fallback no longer throws on unlabeled contributions. Round-1 accepted choices stand: `dotsBelowLines` on RHR only; t-score null renders "—" (PWA prints literal "null" — a bug, not ported); third stack colour borrows Journal amber pending device review; `Cache-Control: no-store` headers on all trends GETs; `dateTicks` returns domain-space x.
 
+> **v2.2 (sleep need / sleep debt, 2026-08-26):** a twelfth endpoint, `GET /api/trends/health/sleep`, and the first thing in this module the PWA does not also render. Three amendments to the text above: the endpoint count is **12**; the "single omitted key is `weekly_usage`" claim is superseded (sleep omits `as_of`, `tonight`, `gap`, `strain_partial`); and the Health screen gains a headline card above the charts. The card's rules and its `hoursMinutes` formatter live in **`:core:data`**, not `:feature:trends` — a home-screen widget is the next phase and cannot depend on a feature module. Unlike the four v2.1 load keys, the ledger's loaded key is **range AND end date** (`"$range|$end"`): `tonight` is a fact about a calendar day, so a retained ViewModel reactivated after midnight refetches at the same range where recovery would not; the model itself is computed at every composition (never `remember`ed) so the cached-copy age and the today comparison cannot freeze on a stale clock. Full rules in §Sleep need.
+
 ## Goal
 
-Port the PWA Trends module at behavioral parity: 5 read-only chart screens (Overview / Strength / Cardio / Journal / Health) over 11 GET endpoints, network-first fetching with `payload_cache` fallback and a staleness badge, the full `chart-logic.js` pure-geometry port (13 functions, 21 transcribed test cases), and a persisted range selector (4w/12w/6m/All) — all rendered through the Phase 5.5 Graphite Signal chart foundation (`core/ui/chart/`), which means **every major chart ships with scrub/pin/tooltip interactivity the PWA does not have** (plan-mandated native addition; the PWA has zero chart interactivity — verified).
+Port the PWA Trends module at behavioral parity: 5 read-only chart screens (Overview / Strength / Cardio / Journal / Health) over 12 GET endpoints (11 ported; `/health/sleep` is native-first — see §Sleep need), network-first fetching with `payload_cache` fallback and a staleness badge, the full `chart-logic.js` pure-geometry port (13 functions, 21 transcribed test cases), and a persisted range selector (4w/12w/6m/All) — all rendered through the Phase 5.5 Graphite Signal chart foundation (`core/ui/chart/`), which means **every major chart ships with scrub/pin/tooltip interactivity the PWA does not have** (plan-mandated native addition; the PWA has zero chart interactivity — verified).
 
 Porting sources (behavior is theirs; PWA repo read-only):
 - `public/js/trends/chart-logic.js` — all 13 pure functions + private `round2` (observable via `linePath` output)
@@ -51,6 +53,7 @@ Slug/id appear **raw** in cache keys, URL-encoded in request paths (PWA parity).
 | `journalTrackers()` | `journal/trackers` | none |
 | `journalTracker(id, start?, end, range)` | `journal/{rawId}:{range}` | `start?`, `end` |
 | `healthRecovery(start?, end, range)` | `health/recovery:{range}` | `start?`, `end` |
+| `healthSleep(start?, end, range)` | `health/sleep:{range}` | `start?`, `end` |
 | `healthComposition(end)` | `health/composition` — date-less, overwritten daily | `end` only |
 | `healthLabs(end)` | `health/labs` — date-less, overwritten daily | `end` only |
 
@@ -58,7 +61,9 @@ Slug/id appear **raw** in cache keys, URL-encoded in request paths (PWA parity).
 
 ### `:core:data` — `trends/` vertical
 
-**DTOs** (`TrendsDtos.kt`, kotlinx.serialization, shared `WellnessJson` — which has **no naming strategy**, so every multi-word field carries `@SerialName` with the exact wire name shown below; golden-fixture decode tests enforce completeness). Typing rules: **every physiological/measurement field is `Double`** (`avg_hr`, `rhr`, `sleep_score` included — the wire flips int/float freely); `Int` only for true counts/ordinals (`reps`, `set_count`, `session_count`, `count_30d`, `hard_sets`, `interval_sessions`, `scheduled_days`, `met`, `partial_days`, `missed`, `count`, streaks). Nullability mirrors the wire exactly; the API's **single omitted key** is `weekly_usage` → default-null property.
+**DTOs** (`TrendsDtos.kt`, kotlinx.serialization, shared `WellnessJson` — which has **no naming strategy**, so every multi-word field carries `@SerialName` with the exact wire name shown below; golden-fixture decode tests enforce completeness). Typing rules: **every physiological/measurement field is `Double`** (`avg_hr`, `rhr`, `sleep_score` included — the wire flips int/float freely); `Int` only for true counts/ordinals (`reps`, `set_count`, `session_count`, `count_30d`, `hard_sets`, `interval_sessions`, `scheduled_days`, `met`, `partial_days`, `missed`, `count`, streaks). Nullability mirrors the wire exactly.
+
+**Omitted keys** (every one carries a default here; everything else arrives as a value, an explicit null, or an empty list): `weekly_usage` on `/journal/tracker/{id}`, and — added with the sleep ledger — `as_of`, `tonight`, `gap` and `strain_partial` on `/health/sleep`. *(Before the ledger this section read "the API's single omitted key is `weekly_usage`"; that claim is superseded, and `weekly_usage` remains the only omitted key on the eleven original endpoints.)*
 
 ```kotlin
 // GET /overview
@@ -143,6 +148,16 @@ RecoveryDto(available: Boolean, days: List<RecoveryDay>)
               @SerialName("sleep_hours") sleepHours: Double?, @SerialName("sleep_score") sleepScore: Double?)
   HrvBand(low: Double, high: Double, @SerialName("low_floor") lowFloor: Double?)
 
+// GET /health/sleep
+SleepDebtDto(available: Boolean, @SerialName("as_of") asOf: DateString? = null,
+             tonight: SleepTonight? = null, days: List<SleepDebtDay>)
+  SleepTonight(date: DateString, @SerialName("need_min") needMin: Double,
+               @SerialName("debt_min") debtMin: Double, @SerialName("strain_est") strainEst: Double,
+               @SerialName("strain_partial") strainPartial: Boolean = false)   // always true on the wire
+  SleepDebtDay(date: DateString, @SerialName("need_min") needMin: Double,
+               @SerialName("slept_min") sleptMin: Double, @SerialName("debt_min") debtMin: Double,
+               @SerialName("strain_est") strainEst: Double, gap: Boolean = false)  // omitted when false
+
 // GET /health/composition
 CompositionDto(available: Boolean, scans: List<Scan>)
   Scan(date: DateString, @SerialName("lean_kg") leanKg: Double?, @SerialName("fat_kg") fatKg: Double?,
@@ -159,7 +174,7 @@ LabsDto(available: Boolean, panels: List<LabPanel>)
          @SerialName("ref_text") refText: String?)
 ```
 
-**`TrendsApi`** (JournalApi conventions): 11 suspend functions returning **raw body text** (`bodyAsText()`), nullable `start`/`end` appended only when non-null. `/overview` and `/journal/trackers` take no params; `/health/composition` + `/health/labs` take `end` only. Slug/id path segments URL-encoded. Pinned by `TrendsApiTest` (MockEngine): every path, query omission-vs-presence, URL encoding of a slug needing it.
+**`TrendsApi`** (JournalApi conventions): 12 suspend functions returning **raw body text** (`bodyAsText()`), nullable `start`/`end` appended only when non-null. `/overview` and `/journal/trackers` take no params; `/health/composition` + `/health/labs` take `end` only; `/health/sleep` takes `start?` + `end` like `/health/recovery`. Slug/id path segments URL-encoded. Pinned by `TrendsApiTest` (MockEngine): every path, query omission-vs-presence, URL encoding of a slug needing it.
 
 **`TrendsRepository`** (Koin singleton):
 ```kotlin
@@ -176,6 +191,7 @@ class TrendsRepository(api: TrendsApi, cacheDao: PayloadCacheDao, json: Json = W
     suspend fun journalTrackers(): FetchResult<TrackersDto>
     suspend fun journalTracker(id: String, start: DateString?, end: DateString, range: String): FetchResult<TrackerDetailDto>
     suspend fun healthRecovery(start: DateString?, end: DateString, range: String): FetchResult<RecoveryDto>
+    suspend fun healthSleep(start: DateString?, end: DateString, range: String): FetchResult<SleepDebtDto>
     suspend fun healthComposition(end: DateString): FetchResult<CompositionDto>
     suspend fun healthLabs(end: DateString): FetchResult<LabsDto>
 }
@@ -254,7 +270,37 @@ round2(v): Double                                     // JS Math.round semantics
 - **Strength**: exercise picker (persisted `ui.exercise`, fallback-to-first when stale; duplicate-name suffix rule). ProgressionCard: primary = top-set weight, second = e1RM, optional RPE series on fixed right-axis domain [5,10] (toggle; only sessions with `topSetRpe != null`); `muted = offPlan` carried on points; assisted-equipment subtitle variant (`"effective load (bw − assist) · e1RM ({unit})"`). VolumeCard: `foldVolumeStacks`, y formatter `v >= 1000 ? round(v/100)/10 + "t" : formatNum(v)`, partial-week visual distinction. PRBoard: per exercise — name, plateau chip, slug, best e1RM + `weight×reps (assist N) · date` detail, `allTime` null-guarded (deviation 7).
 - **Cardio**: weekly stacked bars keys `[planned, extra]`; interval legend line when summed `intervalSessions > 0`. AerobicProxyCard: HR y-axis **fixed pad 4 bpm** (not proportional), dot radius `dotSizeScale(2.5, 7, durations)`, off-plan muted, empty text "No steady sessions with HR in range".
 - **Journal**: tracker picker (persisted, fallback-to-first; label `"{name} ({unit})"` when unit present). Card visibility: ValueTarget iff `type == "quantifiable"`; Adherence iff `actionable`; Usage iff `weeklyUsage != null` (the omitted key). ValueTargetCard: `coerceNumeric` BEFORE filtering (F1); constant-series collapse to text; y domain includes non-null band bounds; **x domain `[xMin, xMax+1]`** (F15); segments `x1 = dayIndex(end)+1` (inclusive wire → exclusive geometry); draw order: band rects → 7d mean → dots. UsageCard: single-key bars, height 120, integer y labels. AdherenceCard: 360×64, index xScale with `max(n-0.5, 0.5)` guard, three-rect painter's layering, in-progress overlay, title `Weekly {metricKind}` (fallback "adherence"), 🔥 current/best streaks.
-- **Health**: HrvCard: band via `dailyBandSegments` over `hrvBand` (Garmin's own baseline — never recomputed), y includes band bounds + `lowFloor`, x domain `+1`, **dot warn-tone iff `lowFloor != null && hrv < lowFloor`**. RhrCard: x domain NOT extended, dots under lines, 7d + 28d means. SleepCard: y-max **floored at 9h**, bars via `stackedBarLayout` with per-index closure mapping index→`dayIndex`→x, fixed 8h guide, sleep-score dots on fixed [0,100] right axis with literal "100"/"0" labels. BodyCard: weight + 7d mean + DEXA scans filtered **lexically** to the weight series' date span with `totalKg != null`; rings + connecting line when ≥2; empty-filter legend note "no scans in range — see composition below". CompositionCard: **range-immune, always all scans**; 5 fixed-order MiniMetric strips (Lean kg / Fat kg / Body fat % / VAT kg / A/G ratio) + shared `YY-MM` axis + whole-body BMD table (`bmdTotal != null` rows). LabsSection: panel picker (persisted, fallback-to-first); chartable/tabular partition; origin = lexically smallest date across ALL panel tests; MiniLab: reference band from the **latest observation only** (one-sided ranges clamp via `steppedBandRects` null handling), **warn-tone iff the obs carries `flag`** — never a recomputed range comparison; `prefix` charts at the numeric value but displays with prefix; table rows `text ?? (prefix + value ?? '—')` + unit, flagged rows toned, sub-label `"{date} · ref {refText}"`.
+- **Health**: order down the page is **tonight card → HRV → Resting HR → Sleep → Sleep need → Body → Composition → Labs** (see §Sleep need for the first and the fifth). HrvCard: band via `dailyBandSegments` over `hrvBand` (Garmin's own baseline — never recomputed), y includes band bounds + `lowFloor`, x domain `+1`, **dot warn-tone iff `lowFloor != null && hrv < lowFloor`**. RhrCard: x domain NOT extended, dots under lines, 7d + 28d means. SleepCard: y-max **floored at 9h**, bars via `stackedBarLayout` with per-index closure mapping index→`dayIndex`→x, fixed 8h guide, sleep-score dots on fixed [0,100] right axis with literal "100"/"0" labels. BodyCard: weight + 7d mean + DEXA scans filtered **lexically** to the weight series' date span with `totalKg != null`; rings + connecting line when ≥2; empty-filter legend note "no scans in range — see composition below". CompositionCard: **range-immune, always all scans**; 5 fixed-order MiniMetric strips (Lean kg / Fat kg / Body fat % / VAT kg / A/G ratio) + shared `YY-MM` axis + whole-body BMD table (`bmdTotal != null` rows). LabsSection: panel picker (persisted, fallback-to-first); chartable/tabular partition; origin = lexically smallest date across ALL panel tests; MiniLab: reference band from the **latest observation only** (one-sided ranges clamp via `steppedBandRects` null handling), **warn-tone iff the obs carries `flag`** — never a recomputed range comparison; `prefix` charts at the numeric value but displays with prefix; table rows `text ?? (prefix + value ?? '—')` + unit, flagged rows toned, sub-label `"{date} · ref {refText}"`.
+
+### Sleep need (native-first, added 2026-08-26)
+
+`GET /api/trends/health/sleep?start&end` is the one endpoint here the PWA does **not** render — the server computes a causal sleep-need / sleep-debt ledger and the native client is its first consumer. Two surfaces, and the split between them is deliberate.
+
+**Where the logic lives.** `sleepTonightModel` / `hoursMinutes` / `TonightJudgment` / `SleepTonightModel` sit in **`:core:data`** (`trends/SleepDebtLogic.kt`), not beside the chart builders, and the card composable sits in **`:core:ui`** (`SleepTonightCard.kt`). The card is planned to move to a start screen and to a Glance widget rendered by a `CoroutineWorker` with no `:feature:trends` on its classpath; everything it needs is therefore already on a module a widget can reach. `JournalUiLogic` is the precedent for pure display rules living in `:core:data`.
+
+**Tonight card** — directly under `RangeToolbar`, above the recovery sections. Absent (not an error, not a placeholder) when the slice is unavailable, `available: false`, or carries no `tonight`. Model rules, each pinned verbatim by `SleepDebtLogicTest`:
+
+| Field | Rule |
+|---|---|
+| `needText` | `hoursMinutes(tonight.need_min)` — `H:MM`, one `roundToInt` on the **total** minutes (so 59.6 → `1:00`, never `0:60`), negatives clamped to zero |
+| `debtLine` | `no sleep debt` when `debt_min == 0`, else `debt H:MM`; ` · reset — missing night` appended when `days.last().gap` |
+| `strainLine` | `strain N.N` — fixed one decimal (an instrument reading on a 0–21 scale, deliberately **not** the integer-collapsing `jsNumberString` rule), plus ` · so far` when `strain_partial` |
+| `freshnessLine` | precedence, not concatenation: `tonight.date != today` → `for <date>`; else `as_of` absent → `no scored nights yet`; else `as_of != today` → `data through <as_of>`; else null |
+| `cachedLine` | `cached · Nm/Nh ago` — the **same wording rule** as `TrendsScreenLogic.staleBadgeText`, deliberately duplicated in `:core:data` because a widget cannot depend on a feature module. Comments on both sides say so |
+| `judgment` | trailing `gap` → `ATTENTION` + `flagged` (the mono `!`, never a colour); else stale cache **or** any `freshnessLine` → `PARTIAL`; else `SETTLED` |
+
+`today` and `now` are parameters, never read inside — the function stays pure, and a widget rendering at 03:00 gets the same answer as a test.
+
+**Sleep-need panel** — `sleepDebtSection(days, tonight)` in `feature/trends/.../chart/SleepDebtModels.kt` (its own file; `HealthModels.kt` already carries six cards). Rendered after the recovery sections and before Body, as `LogbookSection("Sleep need", sub "h · need vs slept", trailing = latest)`. Null when `days` is empty.
+
+- **Need vs slept**: `slept_min/60` as daily bars via `stackedBarLayout` with the index→`dayIndex`→x closure, exactly as `sleepCardModel`; `need_min/60` as a `PlotTone.SECONDARY` polyline via `seriesToPoints`. y-max = `max(slept.max, need.max, 9.0) * 1.05` — the **9h floor is shared with `SleepCard`** so a night is the same size on both. **No 8h guide**: the need line *is* the guide, and a second reference would invite reading a personal target against a generic one.
+- **Debt**: `debt_min/60` in `PlotTone.SCAN`, **split into one `PlotLine` per continuous run** — a `gap` row *begins* its run, so no segment is ever drawn down into a reset — with a `PlotTone.WARN` ring on each gap day. Own canvas rather than a second axis (a different quantity in the same unit). Null under two rows. Debt y-max floors at 1h, so a debt-free fortnight does not get scaled to look like a bad one.
+- Both charts share **one x scale and one anchor list**, so a scrub reads the same date on either.
+- `ChartInk.SLEEP_NEED`: `PRIMARY` = ink-soft BAR (as `SLEEP`'s hours), `SECONDARY` = plate 1 **LINE** — solid, because a computed target is not an annotation of the bars beneath it and a dash would read as "rolling mean". Legends mandatory on both charts (`slept`/`need`, `debt`/`reset`); the debt canvas takes no plan and so resolves through the default.
+
+**Wiring.** `HealthUiState.sleep: Slice<SleepDebtDto>`; `HealthViewModel` keys it on `loadedSleepRange` (cleared in `forgetLoaded`) as a fifth `loadSlice` branch under the same `supervisorScope`. Its failure is **swallowed** — recovery stays the screen's only `ScreenError` — and its `staleFetchedAt` joins `staleStamps`. Cache key `health/sleep:{range}`: the ledger is range-independent but the *response* is clipped, so a 4-week copy served to an All request would silently shorten the panel. No Room migration (`payload_cache` is generic), no Koin change.
+
+**Contract guarantees relied on** (server-stated): `days` always present; `debt_min` never negative; `strain_est` on every row; optional fields omitted, never null; debt independent of the requested `start`. Rows are keyed by **wake** date, so they overlay `SleepCard` 1:1.
 
 ### fetchCached & staleness
 Per the repository contract above. Badge text: oldest `staleFetchedAt` among the screen's rendered stale slices; `max(1, round((now-oldest)/60000))` minutes; `<60` → `cached · {m}m ago`, else `cached · {round(m/60)}h ago`; tooltip/contentDescription "Offline — showing cached data". No HTTP-layer caching exists (no Ktor cache plugin) — keep it that way or the fallback semantics double up.
@@ -276,6 +322,7 @@ Tooltip label = the anchor's date (`MM-DD`) or week label. Null formatting: a ro
 | SleepCard | day | hours, score |
 | BodyCard | day + scan dates | kg, 7d mean; DEXA total on scan dates (same-date weight AND scan → both rows) |
 | MiniMetric / MiniLab *(pending gate decision)* | scan / observation | value + unit (+ prefix, flag, ref band for labs) |
+| Sleep-need + sleep-debt charts | wake date (**one anchor list, shared by both**) | `slept` / `need` / `debt` in `h:mm`; plus a `reset` → `missing night` row on a gap day |
 
 The scrub modifier must not steal vertical scroll (guaranteed by `chartScrub`'s slop logic — device-verified in Phase 5.5, re-verified in this phase's device matrix).
 
@@ -285,7 +332,7 @@ The scrub modifier must not steal vertical scroll (guaranteed by `chartScrub`'s 
 2. `steppedBandRects.x1` is exclusive; server `target_segments` are inclusive both ends → `+1` on conversion AND x-domain `xMax+1` on band-bearing charts (HRV, ValueTarget). RHR/Body do NOT extend. Dots sit left-of-center on band charts — intentional.
 3. `dailyBandSegments` merges runs **across missing days**; only a null/incomplete band breaks (test #20).
 4. `rollingMean` output: same length as input, nulls preserved, callers filter. Window is trailing-inclusive; gaps don't dilute.
-5. `weekly_usage` is the API's **only omitted key** → default-null property. Everything else arrives as null/[]/value.
+5. `weekly_usage` is the **only omitted key on the eleven ported endpoints** → default-null property; everything else there arrives as null/[]/value. `/health/sleep` adds four more (`as_of`, `tonight`, `gap`, `strain_partial`), each with a default whose value is what the key's *absence* means — `gap = false`, `strainPartial = false` — rather than what the server happens to send (it always sends `strain_partial: true`).
 6. `completed` is `1|0|null` → `Int?`. `in_range` is null whenever `start` wasn't sent (All range!) — UI treats null as "no in-range block". `TrackerValue.value` is `JsonElement?` — never a numeric type.
 7. Staleness exists only in `FetchResult.staleFetchedAt` — set when a cached copy was actually served (its stored stamp, not now), null on fresh success. No global staleness state.
 8. `weight:{range}` cache entry is shared Overview↔Health; each consumer's freshness is its own envelope. Composition/labs keys are date-less on purpose.
@@ -310,7 +357,9 @@ The scrub modifier must not steal vertical scroll (guaranteed by `chartScrub`'s 
 | `ChartGeometryTest` — transcribed 1:1 from `trends-chart-logic.test.js` | :feature:trends | 21 + negative-coordinate round2 pins |
 | `ChartPrimitivesTest` — rangeStart (4 ranges + unknown id), spread (index dedupe, ends included, n≥size), jsNumberString (integral / fractional / negative-half / `-0.0`), YAxis dedup rule | :feature:trends | new (~14) |
 | `TrendsScreenLogicTest` — statTileDelta (incl. negative-half rounding), foldVolumeStacks, pickerLabels, constantSeriesNote, labsPartition, dayChart/dateTicks, adherence layering, selection fallback, logical→px transform at 180/360/720 px (bar centers, vertices, anchors), anchor merge (dedupe, sort, same-date weight+scan) | :feature:trends | new (~30) |
-| `TrendsApiTest` (MockEngine) — all 11 paths, query omission vs presence, end-only endpoints, slug/id URL encoding | :core:data | new (~12) |
+| `TrendsApiTest` (MockEngine) — all 12 paths, query omission vs presence, end-only endpoints, slug/id URL encoding | :core:data | new (~12) |
+| `SleepDebtLogicTest` — `hoursMinutes` rounding table (incl. 59.6 → `1:00`), null-model matrix, judgment matrix (settled / stale / `as_of` lag / date mismatch / gap), every line string verbatim | :core:data | new (~16) |
+| `SleepDebtModelsTest` — empty → null, bar x through the index closure at a pinned frame, the 9h floor and the above-floor case, need tone SECONDARY, debt split at a gap into two `PlotLine`s + the WARN ring, shared anchors and their `h:mm` rows, legends, `latest` | :feature:trends | new (~14) |
 | `TrendsRepositoryTest` — full failure matrix rows 1–5 (incl. upsert-throw, cache-read-throw, fresh-decode failure), staleness stamp = served copy's, concurrent shared-key fetches (Overview + Health interleavings), cancellation propagation, cache-key inventory | :core:data | new (~16) |
 | `TrendsDtoTest` — golden fixtures decode; weekly_usage present/absent; completed 1/0/null; in_range null; hrv_band nesting; mixed numeric/note-string tracker values; every Double field decoded from integer AND decimal wire forms; available:false variants | :core:data | new (~16) |
 | `TrendsPrefsTest` — defaults, write-through, ui.-prefix isolation | :core:data | new (~6) |

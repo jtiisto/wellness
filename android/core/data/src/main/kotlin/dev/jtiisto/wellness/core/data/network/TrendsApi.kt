@@ -9,7 +9,7 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.encodeURLPathPart
 
 /**
- * The eleven read-only Trends aggregate endpoints.
+ * The twelve read-only Trends aggregate endpoints.
  *
  * Every call returns the **raw body text** rather than a decoded DTO: the
  * repository caches exactly what came off the wire, so a later server field
@@ -52,6 +52,14 @@ class TrendsApi(
     suspend fun healthRecovery(start: DateString?, end: DateString): String =
         fetch(RECOVERY_PATH, start, end)
 
+    /**
+     * Range-bounded like recovery, but only in what comes *back*: the server's
+     * ledger always replays from the start of history, so `start` clips the
+     * rows rather than the arithmetic behind them.
+     */
+    suspend fun healthSleep(start: DateString?, end: DateString): String =
+        fetch(SLEEP_PATH, start, end)
+
     /** Range-immune: every scan up to [end], however far back. */
     suspend fun healthComposition(end: DateString): String = fetch(COMPOSITION_PATH, null, end)
 
@@ -83,6 +91,7 @@ class TrendsApi(
         const val TRACKERS_PATH = "$BASE_PATH/journal/trackers"
         const val TRACKER_PATH = "$BASE_PATH/journal/tracker"
         const val RECOVERY_PATH = "$BASE_PATH/health/recovery"
+        const val SLEEP_PATH = "$BASE_PATH/health/sleep"
         const val COMPOSITION_PATH = "$BASE_PATH/health/composition"
         const val LABS_PATH = "$BASE_PATH/health/labs"
     }

@@ -314,6 +314,11 @@ fun adherenceRects(
  * yesterday is a screen showing yesterday's data, and rounding that down to the
  * fresher number would be a comfortable lie. Recomputed on recomposition
  * rather than on a timer — the badge is a fact about the fetch, not a clock.
+ *
+ * The age wording is **duplicated** in `SleepDebtLogic.cachedText` over in
+ * `:core:data`: the tonight card is built there so a future home-screen widget
+ * can build it too, and a widget cannot depend on a feature module. Change one,
+ * change the other.
  */
 fun staleBadgeText(stamps: List<Long>, now: Long): String? {
     val oldest = stamps.minOrNull() ?: return null

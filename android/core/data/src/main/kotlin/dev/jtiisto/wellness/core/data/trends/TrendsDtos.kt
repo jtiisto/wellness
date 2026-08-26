@@ -6,7 +6,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
 
 /**
- * The eleven Trends aggregate payloads.
+ * The twelve Trends aggregate payloads.
  *
  * Two typing rules run through all of them, and both are load-bearing:
  *
@@ -16,9 +16,11 @@ import kotlinx.serialization.json.JsonElement
  *   quantity, and an `Int` property fails the whole decode the first time a
  *   heart rate arrives as `52.0`. `Int` is reserved for things that count:
  *   reps, sessions, scheduled days, streaks.
- * - **Nullability mirrors the wire exactly.** `weekly_usage` is the API's only
- *   *omitted* key — everything else arrives as a value, an explicit null, or an
- *   empty list — so it is the only property here carrying a default.
+ * - **Nullability mirrors the wire exactly.** Omitted keys are the exception
+ *   and each one carries a default here: `weekly_usage` on a tracker detail,
+ *   and — since the sleep ledger arrived — `as_of`, `tonight`, `gap` and
+ *   `strain_partial` on `/health/sleep`. Everything else arrives as a value, an
+ *   explicit null, or an empty list.
  *
  * The shared `WellnessJson` has no naming strategy, so every multi-word field
  * carries an explicit `@SerialName`. Golden-fixture decode tests enforce that.
@@ -353,6 +355,65 @@ data class HrvBand(
     val low: Double,
     val high: Double,
     @SerialName("low_floor") val lowFloor: Double?,
+)
+
+// ---- GET /health/sleep -----------------------------------------------------
+
+/**
+ * The sleep-need ledger: what tonight asks for, and what every night since has.
+ *
+ * [asOf] is the latest date in the *whole* history carrying a scored night —
+ * never clipped by the requested range — so a stale watch sync stays visible at
+ * any zoom. It is omitted when nothing has ever been scored and whenever the
+ * source is unavailable; [tonight] is omitted only in the unavailable case.
+ *
+ * Unavailable is a supported state, not an error: the server answers 200 with
+ * `{"available": false, "days": []}` when the Garmin database or the fitted
+ * parameters are missing on that machine.
+ */
+@Serializable
+data class SleepDebtDto(
+    val available: Boolean,
+    @SerialName("as_of") val asOf: DateString? = null,
+    val tonight: SleepTonight? = null,
+    val days: List<SleepDebtDay>,
+)
+
+/**
+ * The upcoming night.
+ *
+ * [strainPartial] is always true on the wire and defaults to false here for the
+ * same reason every optional key does — the default is what the *absence* of
+ * the key means, not what the server happens to send. Today's activity is still
+ * accumulating, so tonight's need is a number that will still move.
+ */
+@Serializable
+data class SleepTonight(
+    val date: DateString,
+    @SerialName("need_min") val needMin: Double,
+    @SerialName("debt_min") val debtMin: Double,
+    @SerialName("strain_est") val strainEst: Double,
+    @SerialName("strain_partial") val strainPartial: Boolean = false,
+)
+
+/**
+ * One night, keyed by the date it was **woken from** — the same keying the
+ * recovery payload uses, so this overlays the sleep card row for row.
+ *
+ * [needMin] was fixed the previous evening and is compared against [sleptMin],
+ * the raw minutes the watch recorded. [debtMin] is the debt carried *into* that
+ * night and is never negative. [gap] marks a night following a missing sleep
+ * record: the ledger has nothing to carry from, so the debt resets to zero and
+ * no line should be drawn across the break. The key is omitted when false.
+ */
+@Serializable
+data class SleepDebtDay(
+    val date: DateString,
+    @SerialName("need_min") val needMin: Double,
+    @SerialName("slept_min") val sleptMin: Double,
+    @SerialName("debt_min") val debtMin: Double,
+    @SerialName("strain_est") val strainEst: Double,
+    val gap: Boolean = false,
 )
 
 // ---- GET /health/composition -----------------------------------------------

@@ -26,6 +26,10 @@ server.log
 # User-specific queries (contains personal medical data)
 src/modules/user_queries.py
 
+# Fitted sleep-need constants (regressed from private health data — the
+# numbers themselves are personal; sleep_params.example.py documents the shape)
+src/modules/sleep_params.py
+
 # Personal medical retrospectives — belong in the private health repo
 /retrospectives/
 

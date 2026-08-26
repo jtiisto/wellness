@@ -89,6 +89,9 @@ class TrendsRepository(
     suspend fun healthRecovery(start: DateString?, end: DateString, range: String): FetchResult<RecoveryDto> =
         fetchCached(recoveryKey(range), RecoveryDto.serializer()) { api.healthRecovery(start, end) }
 
+    suspend fun healthSleep(start: DateString?, end: DateString, range: String): FetchResult<SleepDebtDto> =
+        fetchCached(sleepKey(range), SleepDebtDto.serializer()) { api.healthSleep(start, end) }
+
     suspend fun healthComposition(end: DateString): FetchResult<CompositionDto> =
         fetchCached(KEY_COMPOSITION, CompositionDto.serializer()) { api.healthComposition(end) }
 
@@ -193,6 +196,14 @@ class TrendsRepository(
         fun trackerKey(id: String, range: String) = "journal/$id:$range"
 
         fun recoveryKey(range: String) = "health/recovery:$range"
+
+        /**
+         * Keyed by range like recovery, even though the ledger behind it is
+         * range-independent: what the *response* holds is the clipped window,
+         * and a 4-week copy served to an All request would silently shorten the
+         * history panel.
+         */
+        fun sleepKey(range: String) = "health/sleep:$range"
     }
 }
 

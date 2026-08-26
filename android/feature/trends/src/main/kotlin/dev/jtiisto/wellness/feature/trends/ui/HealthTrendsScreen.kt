@@ -28,6 +28,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.jtiisto.wellness.core.data.trends.RecoveryDay
+import dev.jtiisto.wellness.core.data.trends.sleepTonightModel
+import dev.jtiisto.wellness.core.ui.SleepTonightCard
 import dev.jtiisto.wellness.core.ui.theme.LogbookSection
 import dev.jtiisto.wellness.core.ui.theme.LogbookSpace
 import dev.jtiisto.wellness.core.ui.theme.LogbookTheme
@@ -51,9 +53,12 @@ import dev.jtiisto.wellness.feature.trends.chart.labsSectionModel
 import dev.jtiisto.wellness.feature.trends.chart.latestIsFlagged
 import dev.jtiisto.wellness.feature.trends.chart.rhrCardModel
 import dev.jtiisto.wellness.feature.trends.chart.sleepCardModel
+import dev.jtiisto.wellness.feature.trends.chart.sleepDebtSection
+import dev.jtiisto.wellness.feature.trends.staleFetchedAt
 import dev.jtiisto.wellness.feature.trends.staleStamps
 import dev.jtiisto.wellness.feature.trends.valueOrNull
 import org.koin.androidx.compose.koinViewModel
+import java.time.LocalDate
 
 /** How much taller than its strip a mini chart's gesture area reaches. */
 private val STRIP_TOUCH_PADDING = 8.dp
@@ -78,13 +83,13 @@ private val SLEEP_LEGEND = listOf(
 )
 
 /**
- * Health: recovery, body composition and labs.
+ * Health: tonight's sleep need, recovery, body composition and labs.
  *
- * Recovery is the only slice whose failure is the screen's failure. Weight,
- * DEXA scans and lab reports come from sources a given install may simply not
- * have, so their sections are absent rather than broken — but any of them
- * serving a cached copy still counts toward the stale note, which is one thing
- * this screen does better than the PWA.
+ * Recovery is the only slice whose failure is the screen's failure. The sleep
+ * ledger, weight, DEXA scans and lab reports come from sources a given install
+ * may simply not have, so their sections are absent rather than broken — but
+ * any of them serving a cached copy still counts toward the stale note, which
+ * is one thing this screen does better than the PWA.
  */
 @Composable
 fun HealthTrendsScreen(onRange: (String) -> Unit, modifier: Modifier = Modifier) {
@@ -104,9 +109,29 @@ fun HealthTrendsScreen(onRange: (String) -> Unit, modifier: Modifier = Modifier)
     ) {
         RangeToolbar(
             range = state.range,
-            staleStamps = staleStamps(state.recovery, state.weight, state.composition, state.labs),
+            staleStamps = staleStamps(
+                state.recovery,
+                state.sleep,
+                state.weight,
+                state.composition,
+                state.labs,
+            ),
             onRange = onRange,
         )
+
+        // Directly under the toolbar and above the charts: it is the one thing
+        // on this screen that is about *tonight* rather than about a window,
+        // and the range segments over it say what the rest of the page covers.
+        // Computed at every composition like the stale caption is — never
+        // remembered, so the cached-copy age and the today comparison can't
+        // freeze on a stale clock while the slice object stays identical.
+        val tonight = sleepTonightModel(
+            dto = state.sleep.valueOrNull,
+            staleFetchedAt = state.sleep.staleFetchedAt,
+            now = System.currentTimeMillis(),
+            today = LocalDate.now().toString(),
+        )
+        tonight?.let { SleepTonightCard(it) }
 
         when (val slice = state.recovery) {
             is Slice.Error -> ScreenError(slice.text, viewModel::retry)
@@ -117,6 +142,45 @@ fun HealthTrendsScreen(onRange: (String) -> Unit, modifier: Modifier = Modifier)
                 } else {
                     RecoveryCards(slice.value.days, state.range, pinEpoch)
                 }
+        }
+
+        val sleep = state.sleep.valueOrNull
+        if (sleep != null && sleep.available && sleep.days.isNotEmpty()) {
+            val section = remember(sleep) { sleepDebtSection(sleep.days, sleep.tonight) }
+            if (section != null) {
+                LogbookSection(
+                    title = "Sleep need",
+                    sub = "h · need vs slept",
+                    trailing = {
+                        section.latest?.let {
+                            Text(
+                                text = it,
+                                style = LogbookTheme.type.meta.copy(fontWeight = FontWeight.Medium),
+                                color = LogbookTheme.palette.ink,
+                                modifier = Modifier.padding(start = LogbookSpace.grid * 2),
+                            )
+                        }
+                    },
+                ) {
+                    LegendRow(section.needLegend, chart = ChartInk.SLEEP_NEED)
+                    PlotCanvas(
+                        model = section.needPlot,
+                        identity = listOf("sleepNeed", state.range, pinEpoch),
+                        chart = ChartInk.SLEEP_NEED,
+                    )
+                    section.debtPlot?.let { plot ->
+                        // The debt rides its own canvas rather than a second
+                        // axis on the first: it is a different quantity in the
+                        // same unit, and stacking them would invite reading a
+                        // debt line as a shorter night.
+                        LegendRow(section.debtLegend)
+                        PlotCanvas(
+                            model = plot,
+                            identity = listOf("sleepDebt", state.range, pinEpoch),
+                        )
+                    }
+                }
+            }
         }
 
         val weight = state.weight.valueOrNull

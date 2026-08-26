@@ -647,6 +647,48 @@ value but display with the prefix, and sub-2-observation or qualitative
 results fall back to a latest-value table. Labs stay local: read-only
 accessor, never uploaded anywhere.
 
+**Phase 4 — sleep need / debt.** `/api/trends/health/sleep?start&end` turns the
+same `daily_health_metrics` rows into a nightly ledger:
+`{available, as_of, tonight: {date, need_min, debt_min, strain_est,
+strain_partial}, days: [{date, need_min, slept_min, debt_min, strain_est,
+gap}]}`. Each night is keyed by its **WAKE date** (Garmin's own `metric_date`),
+and carries the need that was already determined the evening before —
+`need = baseline + debt + f(previous day's strain)`, where the strain estimate
+comes from that day's activity (a max-HR form when the watch recorded one, a
+calorie-only fallback otherwise, clamped to 0..21 — missing inputs count as
+zero, so strain is always present) and the shortfall left over
+(`need − slept`, after a device bias applied to the arithmetic only —
+`slept_min` ships raw for display) carries forward as a capped fraction. `debt`
+resets to **0 across a gap**: a night whose previous calendar day has no scored
+sleep — a missing row or a sleepless one — starts a fresh ledger and is flagged
+`gap: true`. History's first night is that same reset WITHOUT the flag (an
+epoch, not a hole). The ledger always replays from the start of history, so
+`start`/`end` clip only what is emitted and a 4-week request agrees with an
+all-history one on every shared row; `as_of` (the last scored night over the
+FULL history) and `tonight` ignore the range entirely. Contract for the
+clients: `days` always present, `debt_min` never negative, `strain_est` on
+every row, optional keys (`gap`, `as_of`, `tonight`, and tonight's
+`strain_partial`) **omitted, never null**.
+
+The algorithm is fully parameterized: its fitted constants were regressed from
+the user's own private sleep history, which makes the NUMBERS personal data
+even though they are only numbers, so they live in a gitignored
+`src/modules/sleep_params.py` (the `user_queries.py` precedent) with a tracked
+`sleep_params.example.py` documenting the dataclass shape under deliberately
+absurd placeholders. `trends_queries.sleep_series` takes the params as an
+argument and the router resolves them through a seam, so the repo carries the
+parameterization and never a value. Two degradation states share one shape —
+absent Garmin DB **or** absent params module → `{"available": false,
+"days": []}` at HTTP 200 (no `as_of`, no `tonight`); the example values are
+never substituted as a fallback. Accepted edges: Garmin captures no naps, so
+the nap term of the original model is simply absent (~6% of nights read a
+little high); tonight's `strain_est` is partial by definition (`strain_partial`
+says so — the day is still accumulating); and a request made after midnight but
+before sleep still reports the previous ledger position — tonight inherits the
+last scored night's outgoing debt while that night is no older than yesterday
+(an older gap resets it to 0, exactly as the ledger would) — stabilizing once
+the night is scored and synced.
+
 **Frontend** (`public/js/trends/`): hand-rolled SVG charts — all
 data→geometry math is PURE in `chart-logic.js` (node:test target, the
 sync-logic purity pattern); components are thin htm/preact consumers styled

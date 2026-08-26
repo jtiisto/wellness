@@ -150,6 +150,24 @@ enum class ChartInk(val series: Map<PlotTone, SeriesStyle>) {
     ),
 
     /**
+     * Need against slept: the same hours-as-bars subject the sleep card draws,
+     * with the ledger's target laid over it.
+     *
+     * The bars stay ink-soft for the reason they do on [SLEEP] — a night's sleep
+     * in full ink would be the heaviest thing on the screen — and the need line
+     * is this chart's first extra series, so it takes plate 1. It is a solid
+     * line rather than the dashed one PRIMARY/SECONDARY usually key to, because
+     * a need is a *computed target*, not an annotation of the bars beneath it:
+     * dashing it would say "rolling mean", which is precisely what it is not.
+     */
+    SLEEP_NEED(
+        mapOf(
+            PlotTone.PRIMARY to SeriesStyle(SeriesInk.INK_SOFT, SeriesMark.BAR),
+            PlotTone.SECONDARY to SeriesStyle(SeriesInk.PLATE_1, SeriesMark.LINE),
+        ),
+    ),
+
+    /**
      * Steady sessions: one series of raw readings, sized by duration. Its
      * PRIMARY is the subject rather than a mean, so it is ink and solid.
      */

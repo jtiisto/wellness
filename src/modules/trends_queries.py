@@ -26,6 +26,7 @@ Conventions (see docs/ARCHITECTURE.md "Trends" and the plan spec):
 """
 import bisect
 import json
+import math
 import sqlite3
 from collections import Counter, defaultdict
 from datetime import date, timedelta
@@ -827,6 +828,126 @@ def recovery_series(garmin_db, *, start=None, end):
             "sleep_score": r["sleep_score"],
         })
     return {"available": True, "days": days}
+
+
+def _strain_estimate(params, active_cal, steps, max_hr) -> float:
+    """A calendar day's training strain (0..21) from its Garmin daily row.
+    Missing inputs count as zero, so strain is ALWAYS computable — a night is
+    never left without a prior-day term; only the estimator FORM degrades (the
+    max-HR regression when the watch recorded one, else the calorie-only
+    fallback)."""
+    if max_hr is not None:
+        c = params.strain_coeffs
+        s = (c.log_ac * math.log1p(active_cal or 0)
+             + c.steps_k * (steps or 0) / 1000
+             + c.max_hr * max_hr
+             + c.intercept)
+    else:
+        f = params.strain_fallback
+        s = f.slope * (active_cal or 0) + f.intercept
+    return max(0.0, min(21.0, s))
+
+
+def _strain_need_term(params, strain) -> float:
+    """Minutes of need bought by a day's strain. Deliberately NOT floored at
+    zero: the fitted quadratic dips slightly negative on very easy days, and
+    clamping it there would bias every rest night upward."""
+    return params.strain_quad_a * strain * strain + params.strain_quad_b * strain
+
+
+def sleep_series(garmin_db, params, *, start=None, end, today):
+    """Nightly sleep need vs. slept, plus the debt ledger behind them, from the
+    Garmin daily metrics. `params` carries the fitted constants — personal data
+    living in a gitignored module (see modules/sleep_params.example.py), so the
+    caller resolves them and this stays a pure function of (rows, params).
+
+    The ledger is CAUSAL — a night's need was fixed the previous evening — so
+    it replays from the start of history on every request: `start`/`end` clip
+    only what is EMITTED, never what is computed, and a 4-week request agrees
+    with an all-history one on every shared row. Rows are keyed by WAKE date,
+    matching Garmin's own metric_date.
+
+    Same external-source contract as recovery_series: absent DB / missing
+    table / schema drift → {"available": False, "days": []}, never a 500.
+    """
+    if not Path(garmin_db.path).exists():
+        return {"available": False, "days": []}
+    try:
+        with garmin_db.get_db() as conn:
+            # user_id is half this table's primary key; pinning it keeps one
+            # row per calendar date, which the previous-day lookups assume.
+            rows = conn.execute(
+                "SELECT metric_date AS date, sleep_duration_hours, "
+                "active_calories, total_steps, max_heart_rate "
+                "FROM daily_health_metrics WHERE user_id = 1 "
+                "ORDER BY metric_date"
+            ).fetchall()
+    except sqlite3.Error:
+        return {"available": False, "days": []}
+
+    strain_by_date, slept_by_date = {}, {}
+    for r in rows:
+        ds = str(r["date"])
+        strain_by_date[ds] = _strain_estimate(
+            params, r["active_calories"], r["total_steps"], r["max_heart_rate"])
+        if r["sleep_duration_hours"] is not None:
+            slept_by_date[ds] = r["sleep_duration_hours"] * 60
+
+    today_iso = today.isoformat()
+    yesterday_iso = (today - timedelta(days=1)).isoformat()
+    debt, tonight_debt, days = 0.0, 0.0, []
+    for i, ds in enumerate(sorted(slept_by_date)):
+        prev = (date.fromisoformat(ds) - timedelta(days=1)).isoformat()
+        # Nothing to carry from (missing row, or one Garmin scored no sleep
+        # for) → the ledger restarts. History's first night is that same reset
+        # WITHOUT the flag: an epoch, not a hole in the record.
+        gap = prev not in slept_by_date
+        if gap:
+            debt = 0.0
+        strain_prev = strain_by_date.get(prev, 0.0)
+        need = params.baseline_min + debt + _strain_need_term(params, strain_prev)
+        slept = slept_by_date[ds]
+
+        if (start is None or ds >= start) and ds <= end:
+            row = {"date": ds, "need_min": round(need, 1),
+                   "slept_min": round(slept, 1), "debt_min": round(debt, 1),
+                   "strain_est": round(strain_prev, 1)}
+            if gap and i > 0:
+                row["gap"] = True
+            days.append(row)
+
+        # slept_min ships RAW for display; only the debt math applies the
+        # device bias. Rounding is presentational — the ledger chains on the
+        # unrounded values.
+        debt = min(params.debt_cap_min,
+                   params.debt_half_weight
+                   * max(0.0, need - (slept - params.sleep_bias_min)))
+        if ds in (yesterday_iso, today_iso):
+            # Tonight carries the PREVIOUS LEDGER POSITION: the last scored
+            # night's outgoing debt, accepted while that night is no older
+            # than yesterday — which covers the after-midnight request and
+            # the not-yet-synced morning. An older last night is a gap and
+            # tonight resets to 0 exactly as the ledger itself would. Sorted
+            # order lets today overwrite yesterday, and a future-dated row
+            # (sync-job clock skew) can never become tonight's carry.
+            tonight_debt = debt
+
+    tonight_strain = strain_by_date.get(today_iso, 0.0)
+    out = {"available": True}
+    if slept_by_date:
+        # Freshness is the whole history's last scored night — never clipped
+        # by the requested range, so a stale sync is visible at any zoom.
+        out["as_of"] = max(slept_by_date)
+    out["tonight"] = {
+        "date": today_iso,
+        "need_min": round(params.baseline_min + tonight_debt
+                          + _strain_need_term(params, tonight_strain), 1),
+        "debt_min": round(tonight_debt, 1),
+        "strain_est": round(tonight_strain, 1),
+        "strain_partial": True,   # today's activity is still accumulating
+    }
+    out["days"] = days
+    return out
 
 
 def composition_series(bodyspec_db, *, end):

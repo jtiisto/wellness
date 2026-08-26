@@ -1,6 +1,6 @@
 # Trends golden fixtures
 
-Hand-authored payloads for the eleven `GET /api/trends/*` endpoints, pinned by
+Hand-authored payloads for the twelve `GET /api/trends/*` endpoints, pinned by
 `TrendsDtoTest` in `:core:data`, which loads them off the unit-test classpath as
 `/golden/trends/<name>.json`.
 
@@ -17,6 +17,8 @@ Hand-authored payloads for the eleven `GET /api/trends/*` endpoints, pinned by
 | `journal-tracker-actionable.json` | **no `weekly_usage` key**, `completed` as 1/0/null, a note-era string value, a one-sided target segment, a paused week with `rate: null` |
 | `journal-tracker-neutral.json` | `weekly_usage` **present** — the API's only omitted key, in its present form |
 | `health-recovery.json` / `-unavailable.json` | `hrv_band` nesting incl. a null `low_floor`, an all-null day |
+| `health-sleep.json` | the ledger: `as_of`, a `tonight` with `strain_partial: true`, one `gap: true` night and four with the key **omitted** |
+| `health-sleep-unavailable.json` | the degradation — `available: false`, no `as_of`, no `tonight`, empty `days` |
 | `health-composition.json` / `-unavailable.json` | all eight nullable scan metrics, a scan missing bone data |
 | `health-labs.json` / `-unavailable.json` | a chartable test, a text-only test, a `prefix`/`flag` test, a second panel |
 
@@ -36,6 +38,12 @@ from somewhere real would be visible on sight.
 That prefix rule is the point. A fixture full of medical-sounding strings is not
 automatically safe and a bare-looking number is not automatically invented;
 provenance is what makes a fixture safe, and these have none to trace.
+
+**Dates.** New fixtures use the far-future `2030-01-*` convention (CLAUDE.md), so
+a date here can never collide with a real one. The files written before that
+convention landed still carry `2026-07-*` dates; they are equally invented, and
+they are left alone rather than rewritten, because every assertion in
+`TrendsDtoTest` and `CardModelsTest` names them.
 
 There is **no generator script** here, deliberately: the journal and coach
 fixtures were captured from a seeded dev server and needed filtering afterwards,

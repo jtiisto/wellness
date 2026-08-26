@@ -21,7 +21,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 
 /**
- * The Trends wire surface: eleven URLs, three query shapes, and one rule about
+ * The Trends wire surface: twelve URLs, three query shapes, and one rule about
  * when a parameter is sent at all.
  *
  * An empty `start=` is not the same request as no `start` — the server reads
@@ -67,6 +67,7 @@ class TrendsApiTest {
         api.journalTrackers()
         api.journalTracker("fixture-tracker", null, END)
         api.healthRecovery(null, END)
+        api.healthSleep(null, END)
         api.healthComposition(END)
         api.healthLabs(END)
 
@@ -82,6 +83,7 @@ class TrendsApiTest {
                 "/api/trends/journal/trackers",
                 "/api/trends/journal/tracker/fixture-tracker",
                 "/api/trends/health/recovery",
+                "/api/trends/health/sleep",
                 "/api/trends/health/composition",
                 "/api/trends/health/labs",
             ),
@@ -159,8 +161,24 @@ class TrendsApiTest {
         api.cardio(START, END)
         api.journalTracker("fixture-tracker", null, END)
         api.healthRecovery(START, END)
+        api.healthSleep(START, END)
 
         assertTrue(requestedUrls.all { it.contains("end=$END") }, requestedUrls.toString())
+    }
+
+    @Test
+    @DisplayName("sleep takes the same start?/end shape as recovery, All range included")
+    fun sleepQueryShape() = runTest {
+        val api = api()
+        api.healthSleep(START, END)
+        api.healthSleep(null, END)
+
+        assertTrue(requestedUrls[0].contains("start=$START"), requestedUrls[0])
+        assertTrue(requestedUrls[0].contains("end=$END"), requestedUrls[0])
+        // The server's ledger replays from history's start regardless, so an
+        // absent lower bound clips only what comes back — but it still has to
+        // be absent rather than empty, or the date pattern rejects it.
+        assertTrue(requestedUrls[1].endsWith("?end=$END"), requestedUrls[1])
     }
 
     // ---- encoding ----------------------------------------------------------

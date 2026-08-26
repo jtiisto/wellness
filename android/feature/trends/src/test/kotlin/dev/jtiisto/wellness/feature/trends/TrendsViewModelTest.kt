@@ -12,6 +12,7 @@ import dev.jtiisto.wellness.core.data.trends.ExercisesDto
 import dev.jtiisto.wellness.core.data.trends.FetchResult
 import dev.jtiisto.wellness.core.data.trends.LabsDto
 import dev.jtiisto.wellness.core.data.trends.RecoveryDto
+import dev.jtiisto.wellness.core.data.trends.SleepDebtDto
 import dev.jtiisto.wellness.core.data.trends.TrackerDetailDto
 import dev.jtiisto.wellness.core.data.trends.TrackersDto
 import dev.jtiisto.wellness.core.data.trends.TrendsPrefs
@@ -517,7 +518,7 @@ class TrendsViewModelTest {
     // ---- Health ------------------------------------------------------------
 
     @Test
-    @DisplayName("all four Health sources load together, each independent of the rest")
+    @DisplayName("all five Health sources load together, each independent of the rest")
     fun healthLoadsEverything() = runTest(dispatcher) {
         stubHealth()
         val viewModel = HealthViewModel(repository, prefs, debugLog, today)
@@ -527,18 +528,23 @@ class TrendsViewModelTest {
 
         val state = viewModel.uiState.value
         assertTrue(state.recovery is Slice.Ready)
+        assertTrue(state.sleep is Slice.Ready)
         assertTrue(state.weight is Slice.Ready)
         assertTrue(state.composition is Slice.Ready)
         assertTrue(state.labs is Slice.Ready)
+        // The ledger is range-keyed like recovery — `start` clips what comes
+        // back even though the arithmetic behind it always runs from history.
+        coVerify(exactly = 1) { repository.healthSleep("2026-05-16", "2026-08-08", "12w") }
         // Composition and labs are range-immune: an end date and nothing else.
         coVerify(exactly = 1) { repository.healthComposition("2026-08-08") }
         coVerify(exactly = 1) { repository.healthLabs("2026-08-08") }
     }
 
     @Test
-    @DisplayName("three of the four sources can fail and the screen still works")
+    @DisplayName("four of the five sources can fail and the screen still works")
     fun healthSwallowsTheOptionalSources() = runTest(dispatcher) {
         stubHealth()
+        coEvery { repository.healthSleep(any(), any(), any()) } throws IOException("offline")
         coEvery { repository.weight(any(), any(), any()) } throws IOException("offline")
         coEvery { repository.healthComposition(any()) } throws IOException("offline")
         coEvery { repository.healthLabs(any()) } throws IOException("offline")
@@ -549,15 +555,37 @@ class TrendsViewModelTest {
 
         val state = viewModel.uiState.value
         assertTrue(state.recovery is Slice.Ready, "the one that matters survived its siblings")
+        assertTrue(state.sleep is Slice.Error)
         assertTrue(state.weight is Slice.Error)
         assertTrue(state.composition is Slice.Error)
         assertTrue(state.labs is Slice.Error)
     }
 
     @Test
+    @DisplayName("a sleep failure costs the card and the panel, never the screen")
+    fun healthSleepFailureIsSwallowed() = runTest(dispatcher) {
+        stubHealth()
+        // A fresh clone of the server has no fitted sleep parameters at all, so
+        // this is an ordinary state rather than an outage — and the ledger is
+        // the newest thing on the screen. It must not be able to take the
+        // recovery charts down with it.
+        coEvery { repository.healthSleep(any(), any(), any()) } throws IOException("offline")
+        val viewModel = HealthViewModel(repository, prefs, debugLog, today)
+
+        viewModel.onActive()
+        advanceUntilIdle()
+
+        val state = viewModel.uiState.value
+        assertEquals(Slice.Error("Offline — check connection"), state.sleep)
+        assertTrue(state.recovery is Slice.Ready, "recovery stays the screen's only error")
+        assertTrue(state.labs is Slice.Ready)
+    }
+
+    @Test
     @DisplayName("the stale badge counts every cached slice the screen is showing")
     fun healthBadgeCoversEverySlice() = runTest(dispatcher) {
         coEvery { repository.healthRecovery(any(), any(), any()) } returns FetchResult(RECOVERY, 900L)
+        coEvery { repository.healthSleep(any(), any(), any()) } returns FetchResult(SLEEP, 800L)
         coEvery { repository.weight(any(), any(), any()) } returns FetchResult(WEIGHT, null)
         coEvery { repository.healthComposition(any()) } returns FetchResult(COMPOSITION, 500L)
         coEvery { repository.healthLabs(any()) } returns FetchResult(LABS, 700L)
@@ -570,8 +598,8 @@ class TrendsViewModelTest {
         // The PWA badges recovery alone; here composition's older stamp is the
         // one the badge will report, which is the honest answer.
         assertEquals(
-            listOf(900L, 500L, 700L),
-            staleStamps(state.recovery, state.weight, state.composition, state.labs),
+            listOf(900L, 800L, 500L, 700L),
+            staleStamps(state.recovery, state.sleep, state.weight, state.composition, state.labs),
         )
     }
 
@@ -588,6 +616,9 @@ class TrendsViewModelTest {
 
         coVerify(exactly = 2) { repository.healthRecovery(any(), any(), any()) }
         coVerify(exactly = 2) { repository.weight(any(), any(), any()) }
+        // The ledger's rows ARE the requested window, so it refetches with it.
+        coVerify(exactly = 1) { repository.healthSleep("2026-07-11", "2026-08-08", "4w") }
+        coVerify(exactly = 2) { repository.healthSleep(any(), any(), any()) }
         // End-only requests: the range is not part of the question they ask.
         coVerify(exactly = 1) { repository.healthComposition(any()) }
         coVerify(exactly = 1) { repository.healthLabs(any()) }
@@ -628,8 +659,39 @@ class TrendsViewModelTest {
         advanceUntilIdle()
 
         coVerify(exactly = 2) { repository.healthRecovery(any(), any(), any()) }
+        // Retry clears loadedSleepKey along with the rest: without that the
+        // ledger's key would survive and the one slice a user came back to
+        // retry would be the one that never refetched.
+        coVerify(exactly = 2) { repository.healthSleep(any(), any(), any()) }
         coVerify(exactly = 2) { repository.healthComposition(any()) }
         coVerify(exactly = 2) { repository.healthLabs(any()) }
+    }
+
+    @Test
+    @DisplayName("crossing midnight refetches the ledger — tonight is a fact about a calendar day")
+    fun healthSleepRefetchesAcrossMidnight() = runTest(dispatcher) {
+        stubHealth()
+        var day = LocalDate.parse("2026-08-08")
+        val viewModel = HealthViewModel(repository, prefs, debugLog) { day }
+        viewModel.onActive()
+        advanceUntilIdle()
+
+        // Same range, same day: the retained ViewModel serves what it has.
+        viewModel.onInactive()
+        viewModel.onActive()
+        advanceUntilIdle()
+        coVerify(exactly = 1) { repository.healthSleep(any(), any(), any()) }
+
+        // Same range, NEXT day: recovery may keep yesterday's copy, but the
+        // ledger's payload names tonight by calendar date, so its loaded key
+        // carries the end date and rolls over with it.
+        viewModel.onInactive()
+        day = day.plusDays(1)
+        viewModel.onActive()
+        advanceUntilIdle()
+        coVerify(exactly = 2) { repository.healthSleep(any(), any(), any()) }
+        coVerify(exactly = 1) { repository.healthSleep(any(), "2026-08-09", any()) }
+        coVerify(exactly = 1) { repository.healthRecovery(any(), any(), any()) }
     }
 
     @Test
@@ -762,6 +824,7 @@ class TrendsViewModelTest {
 
     private fun stubHealth(labs: LabsDto = LABS, labsDelayMs: Long = 0) {
         coEvery { repository.healthRecovery(any(), any(), any()) } returns FetchResult(RECOVERY, null)
+        coEvery { repository.healthSleep(any(), any(), any()) } returns FetchResult(SLEEP, null)
         coEvery { repository.weight(any(), any(), any()) } returns FetchResult(WEIGHT, null)
         coEvery { repository.healthComposition(any()) } returns FetchResult(COMPOSITION, null)
         coEvery { repository.healthLabs(any()) } coAnswers {
@@ -779,6 +842,7 @@ class TrendsViewModelTest {
         val WEIGHT = WeightDto(available = true, series = listOf(WeightPoint("2026-07-01", 80.0)))
         val CARDIO = CardioDto(weeks = emptyList(), steadySessions = emptyList())
         val RECOVERY = RecoveryDto(available = true, days = emptyList())
+        val SLEEP = SleepDebtDto(available = false, days = emptyList())
         val COMPOSITION = CompositionDto(available = false, scans = emptyList())
         val LABS = LabsDto(available = false, panels = emptyList())
         val TWO_PANELS = LabsDto(

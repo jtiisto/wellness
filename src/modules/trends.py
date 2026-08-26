@@ -32,10 +32,24 @@ from config import (get_module_db_path, get_garmin_db_path,
 from modules import trends_queries
 from modules.db import DbAccessor
 
+# The sleep ledger's fitted constants are personal data and live in a
+# gitignored module (modules/sleep_params.example.py documents the shape).
+# Absent params degrade exactly like an absent source DB — the example values
+# are never used as a fallback.
+try:
+    from modules.sleep_params import PARAMS as SLEEP_PARAMS
+except ImportError:
+    SLEEP_PARAMS = None
+
 logger = logging.getLogger(__name__)
 
 # YYYY-MM-DD; range params are local calendar dates (repo convention).
 _DATE_PATTERN = r"^\d{4}-\d{2}-\d{2}$"
+
+
+def _get_sleep_params():
+    """Resolution seam for the sleep constants (tests override this)."""
+    return SLEEP_PARAMS
 
 
 def _date_params(start: Optional[str], end: Optional[str]):
@@ -188,6 +202,21 @@ def create_router() -> APIRouter:
         # supported state ({"available": false}), never an error.
         start, end = _date_params(start, end)
         return trends_queries.recovery_series(garmin_db, start=start, end=end)
+
+    @router.get("/health/sleep")
+    def health_sleep(
+        start: Optional[str] = Query(None, pattern=_DATE_PATTERN),
+        end: Optional[str] = Query(None, pattern=_DATE_PATTERN),
+    ):
+        # Two supported unavailable states, same shape: no Garmin DB, and no
+        # fitted params on this machine (a fresh clone has neither).
+        start, end = _date_params(start, end)
+        params = _get_sleep_params()
+        if params is None:
+            return {"available": False, "days": []}
+        return trends_queries.sleep_series(
+            garmin_db, params, start=start, end=end, today=date.today()
+        )
 
     @router.get("/health/composition")
     def health_composition(
