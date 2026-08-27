@@ -648,16 +648,18 @@ results fall back to a latest-value table. Labs stay local: read-only
 accessor, never uploaded anywhere.
 
 **Phase 4 — sleep need / debt.** `/api/trends/health/sleep?start&end` turns the
-same `daily_health_metrics` rows into a nightly ledger:
+same `daily_health_metrics` rows — plus, for the strain term only, the Garmin
+DB's `timeseries` heart-rate stream and `activities` windows — into a nightly
+ledger:
 `{available, as_of, tonight: {date, need_min, debt_min, strain_est,
 strain_partial}, days: [{date, need_min, slept_min, debt_min, strain_est,
 gap}]}`. Each night is keyed by its **WAKE date** (Garmin's own `metric_date`),
 and carries the need that was already determined the evening before —
 `need = baseline + the debt it ENTERED on + f(previous day's strain)`, where the
 strain estimate
-comes from that day's activity (a max-HR form when the watch recorded one, a
-calorie-only fallback otherwise, clamped to 0..21 — missing inputs count as
-zero, so strain is always present) and the shortfall left over
+comes from that day's activity (see the tiered estimator below; clamped to
+0..21 — missing inputs count as zero, so strain is always present)
+and the shortfall left over
 (`need − slept`, after a device bias applied to the arithmetic only —
 `slept_min` ships raw for display) carries forward as a capped fraction. A
 row's `debt_min` is the debt **on waking** from that night — the night's own
@@ -684,6 +686,40 @@ and a 4-week request agrees with an all-history one on every shared row; `as_of`
 entirely. Contract for the clients: `days` always present, `debt_min` never
 negative, `strain_est` on every row, optional keys (`gap`, `as_of`, `tonight`,
 and tonight's `strain_partial`) **omitted, never null**.
+
+**The strain estimator is tiered**, best evidence first, decided **per calendar
+day** rather than per response:
+
+1. **Hybrid (primary)** — Banister TRIMP over the day's actual heart rate. Two
+   sources are kept separate because their fidelity differs: the all-day wrist
+   stream (`timeseries.heart_rate`, optical, sampled) and the day's activity
+   windows (`activities.avg_heart_rate`, usually a chest strap). Wrist samples
+   falling inside an activity window are dropped — that time is already counted,
+   better, by the strap — so the two TRIMP totals partition the day and carry
+   their own fitted weights. Each wrist sample is worth the day's **measured**
+   median sample gap (clamped to a sane cadence range), so a denser or sparser
+   export re-weights itself instead of silently rescaling every day. A day's
+   heart-rate reserve floor is its own `resting_heart_rate`, with a
+   parameterized fallback; the reserve ceiling is a personal HR max.
+2. **Daily-feature regression** — the older form, on days with a
+   `max_heart_rate` on the daily row.
+3. **Calorie-only fallback** — days without one.
+
+Degradation here is per-day and per-table, and never reaches the endpoint's
+`available` flag: a day whose wrist stream is too sparse to trust (watch off the
+wrist, below a parameterized sample minimum) simply drops a tier, its activity
+TRIMP going down with it rather than standing on a day with no baseline; and a
+Garmin DB with no `timeseries`/`activities` tables at all — every DB predating
+them — serves the same full ledger it always did, on tier 2. Only
+`daily_health_metrics` itself is load-bearing for `available`.
+
+The full-history wrist scan is far too expensive to redo per request, so a day's
+TRIMP pair is **memoized per (database path, process)** once it is older than a
+7-day recompute window — comfortable margin over the sync job's 3-day backfill.
+Everything from the window forward is recomputed on every request, so fresh data
+always outranks the memo where data can still move; keying by database path is
+what keeps the memo from crossing between databases (and makes the test suite's
+per-test databases independent).
 
 The algorithm is fully parameterized: its fitted constants were regressed from
 the user's own private sleep history, which makes the NUMBERS personal data

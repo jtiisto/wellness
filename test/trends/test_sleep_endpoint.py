@@ -7,10 +7,13 @@ src/modules/sleep_params.py exists on the machine running the suite.
 """
 
 import importlib
+import math
+import shutil
 import sqlite3
 import sys
-from dataclasses import dataclass
-from datetime import date, timedelta
+from dataclasses import dataclass, fields, replace
+from datetime import date, datetime, time, timedelta
+from types import SimpleNamespace
 
 import pytest
 
@@ -18,14 +21,26 @@ import pytest
 # Structural twin of src/modules/sleep_params.example.py (that file's name is
 # not importable). The values are INVENTED and chosen so every expectation
 # below is hand-computable:
-#     strain = 0.5*ln(1+active_cal) + 2.0*steps/1000 + 0.05*max_hr - 10
-#              (or 0.002*active_cal + 1.0 when max_hr is NULL), clamped [0, 21]
+#     strain = tier 1 (hybrid, see below) when the day's HR stream can carry it,
+#              else 0.5*ln(1+active_cal) + 2.0*steps/1000 + 0.05*max_hr - 10,
+#              else 0.002*active_cal + 1.0 (max_hr NULL), clamped [0, 21]
 #     f(s)   = 0.5*s^2 - 2*s          (the strain term added to need)
 #     weq    = slept_min - 10         (bias applied to the debt math only)
 #     debt'  = min(100, 0.4 * max(0, need - weq))
 # `debt'` is the debt on WAKING from that night: the value the row EMITS as
 # `debt_min`, and the debt ENTERING the next night (so a row's `need` is
 # 400 + the PREVIOUS row's debt_min + f(strain), on consecutive rows).
+#
+# Tier 1 (hybrid) is TRIMP over the day's heart-rate evidence:
+#     banister(hr, mins) = mins * hrr * 0.64 * exp(1.92*hrr),
+#                          hrr = (hr - rest) / (200 - rest), 0 when hrr <= 0
+#     rest    = that date's resting_heart_rate, else 60
+#     trimp_out = sum over wrist samples OUTSIDE the day's activity windows,
+#                 each worth the day's median sample gap in minutes ([0.5, 5])
+#     trimp_act = sum over the day's activities of banister(avg_hr, duration)
+#     strain    = 1.0 + 0.25*trimp_out + 1.2*trimp_act, clamped [0, 21]
+# hr_max 200 with rest 50 makes the reserve 150, so the sample HRs below give
+# round hrr fractions (110 -> 0.4, 125 -> 0.5, 95 -> 0.3, 140 -> 0.6).
 @dataclass(frozen=True)
 class StrainCoeffs:
     log_ac: float
@@ -41,6 +56,16 @@ class StrainFallback:
 
 
 @dataclass(frozen=True)
+class HybridStrainCoeffs:
+    ban_out: float
+    ban_act: float
+    intercept: float
+    hr_max: float
+    rest_hr_fallback: float
+    min_samples: int
+
+
+@dataclass(frozen=True)
 class SleepParams:
     baseline_min: float
     debt_half_weight: float
@@ -50,6 +75,7 @@ class SleepParams:
     sleep_bias_min: float
     strain_coeffs: StrainCoeffs
     strain_fallback: StrainFallback
+    hybrid: HybridStrainCoeffs
 
 
 _PARAMS = SleepParams(
@@ -62,7 +88,18 @@ _PARAMS = SleepParams(
     strain_coeffs=StrainCoeffs(
         log_ac=0.5, steps_k=2.0, max_hr=0.05, intercept=-10.0),
     strain_fallback=StrainFallback(slope=0.002, intercept=1.0),
+    hybrid=HybridStrainCoeffs(
+        ban_out=0.25, ban_act=1.2, intercept=1.0,
+        hr_max=200.0, rest_hr_fallback=60.0, min_samples=3),
 )
+
+
+def _banister(hr, rest, minutes, hr_max=200.0):
+    """The estimator's TRIMP kernel, re-derived here from the formula in the
+    comment above rather than imported — a test that called the production
+    helper would pin nothing. Used only to spell out the pinned literals."""
+    hrr = (hr - rest) / (hr_max - rest)
+    return minutes * hrr * 0.64 * math.exp(1.92 * hrr) if hrr > 0 else 0.0
 
 
 @pytest.mark.unit
@@ -94,11 +131,28 @@ def _iso(d):
     return d.isoformat()
 
 
-def _write_db(path, rows, decoys=()):
+def _write_db(path, rows, decoys=(), *, rest_hr=None,
+              timeseries=None, ts_decoys=(), activities=None, act_decoys=()):
     """rows: (metric_date, sleep_duration_hours, active_calories, total_steps,
     max_heart_rate), inserted as user_id 1; `decoys` are the same shape under
     user_id 2. The composite (user_id, metric_date) key mirrors the real
-    Garmin table — the reader filters user_id, so the column must be here."""
+    Garmin table — the reader filters user_id, so the column must be here.
+
+    `rest_hr` is {metric_date: bpm} for the daily table's resting_heart_rate
+    (the hybrid strain tier's per-day HR reserve floor); rows left out keep the
+    column NULL, which is what the estimator's own fallback is for.
+
+    `timeseries` and `activities` feed the hybrid tier and default to NONE —
+    meaning the TABLE IS NOT CREATED. That is the shape of every Garmin DB
+    older than these tables, and the tier-2 pins throughout this file depend on
+    it: the estimator must drop a tier, never take the endpoint down with it.
+    Pass a list (even an empty one) to create the table.
+        timeseries: (metric_type, timestamp_ms, value) under user_id 1
+        activities: (activity_id, activity_date, start_time_iso,
+                     duration_seconds, avg_heart_rate) under user_id 1
+    `ts_decoys`/`act_decoys` are the same shapes under user_id 2 — both readers
+    pin user_id = 1, and these are what make that filter load-bearing.
+    """
     conn = sqlite3.connect(path)
     conn.execute("""
         CREATE TABLE daily_health_metrics (
@@ -108,18 +162,72 @@ def _write_db(path, rows, decoys=()):
             active_calories INTEGER,
             total_steps INTEGER,
             max_heart_rate INTEGER,
+            resting_heart_rate INTEGER,
             PRIMARY KEY (user_id, metric_date)
         )
     """)
-    conn.executemany(
-        "INSERT INTO daily_health_metrics VALUES (1,?,?,?,?,?)", rows)
+    insert = ("INSERT INTO daily_health_metrics "
+              "(user_id, metric_date, sleep_duration_hours, active_calories, "
+              "total_steps, max_heart_rate) VALUES (%d,?,?,?,?,?)")
+    conn.executemany(insert % 1, rows)
     # Decoy rows under user_id 2: the reader's WHERE user_id = 1 is what keeps
     # them out of every exact-JSON pin, so the filter is load-bearing here.
-    conn.executemany(
-        "INSERT INTO daily_health_metrics VALUES (2,?,?,?,?,?)", decoys)
+    conn.executemany(insert % 2, decoys)
+    for metric_date, bpm in (rest_hr or {}).items():
+        conn.execute(
+            "UPDATE daily_health_metrics SET resting_heart_rate = ? "
+            "WHERE user_id = 1 AND metric_date = ?", (bpm, metric_date))
+
+    if timeseries is not None:
+        conn.execute("""
+            CREATE TABLE timeseries (
+                user_id INTEGER NOT NULL,
+                metric_type VARCHAR NOT NULL,
+                timestamp INTEGER NOT NULL,
+                value FLOAT NOT NULL,
+                meta_data JSON,
+                PRIMARY KEY (user_id, metric_type, timestamp)
+            )
+        """)
+        ts_insert = ("INSERT INTO timeseries "
+                     "(user_id, metric_type, timestamp, value) "
+                     "VALUES (%d,?,?,?)")
+        conn.executemany(ts_insert % 1, timeseries)
+        conn.executemany(ts_insert % 2, ts_decoys)
+    if activities is not None:
+        conn.execute("""
+            CREATE TABLE activities (
+                user_id INTEGER NOT NULL,
+                activity_id VARCHAR NOT NULL,
+                activity_date DATE NOT NULL,
+                start_time VARCHAR,
+                duration_seconds INTEGER,
+                avg_heart_rate INTEGER,
+                PRIMARY KEY (user_id, activity_id)
+            )
+        """)
+        act_insert = ("INSERT INTO activities (user_id, activity_id, "
+                      "activity_date, start_time, duration_seconds, "
+                      "avg_heart_rate) VALUES (%d,?,?,?,?,?)")
+        conn.executemany(act_insert % 1, activities)
+        conn.executemany(act_insert % 2, act_decoys)
     conn.commit()
     conn.close()
     return path
+
+
+def _ms(day, hh, mm):
+    """Epoch milliseconds at LOCAL hh:mm on `day`. The reader buckets samples
+    by local calendar date (`date(timestamp/1000,'unixepoch','localtime')`),
+    so the fixture has to speak local time too — a UTC-built timestamp would
+    land on the wrong day for most of the world."""
+    return int(datetime.combine(day, time(hh, mm)).timestamp() * 1000)
+
+
+def _iso_at(day, hh, mm):
+    """An activity `start_time` the way the sync tool writes it: a local ISO
+    datetime string with no offset."""
+    return datetime.combine(day, time(hh, mm)).isoformat()
 
 
 @pytest.fixture
@@ -496,3 +604,487 @@ class TestSleepEndpoint:
             assert c.get(
                 "/wellness/api/trends/health/sleep?start=2026-02-30"
             ).status_code == 422
+
+
+@pytest.fixture
+def tmp_hybrid_db(tmp_path):
+    """Three nights whose strain comes off three DIFFERENT estimator tiers, so
+    one exact-JSON pin covers the whole ladder:
+
+      d(2) — wrist stream, NO resting_heart_rate  -> tier 1 on the rest fallback
+      d(1) — wrist stream + an activity window    -> tier 1 on a per-day rest
+      d(0) — no stream at all, max_heart_rate NULL-> tier 3 (calorie fallback)
+
+    Every value is INVENTED — never paste rows from the real ~/.garmy DB here;
+    this repo is public. Sample HRs are chosen against the params' hr_max 200
+    so the heart-rate reserve fractions are round (rest 50 -> 110 is 0.4,
+    125 is 0.5, 95 is 0.3, 140 is 0.6)."""
+    today = date.today()
+
+    def d(n):
+        return _iso(today - timedelta(days=n))
+
+    def day(n):
+        return today - timedelta(days=n)
+
+    rows = [
+        # (wake date, sleep h, active_cal, steps, max_hr)
+        (d(2), 7.0, 0, 0, None),
+        (d(1), 7.0, 0, 0, None),
+        (d(0), 7.0, 0, 0, None),
+    ]
+    timeseries = [
+        # d(2): four samples two minutes apart, all 140 bpm. No
+        # resting_heart_rate for this date, so the reserve floor is the
+        # params' rest_hr_fallback (60) and the reserve is 140.
+        ("heart_rate", _ms(day(2), 8, 0), 140.0),
+        ("heart_rate", _ms(day(2), 8, 2), 140.0),
+        ("heart_rate", _ms(day(2), 8, 4), 140.0),
+        ("heart_rate", _ms(day(2), 8, 6), 140.0),
+        # d(1): six samples two minutes apart. The middle two sit INSIDE the
+        # activity window below and must not reach trimp_out — they are loud
+        # (180 bpm) precisely so double-counting them would be unmissable.
+        ("heart_rate", _ms(day(1), 8, 0), 110.0),
+        ("heart_rate", _ms(day(1), 8, 2), 125.0),
+        ("heart_rate", _ms(day(1), 8, 4), 180.0),
+        ("heart_rate", _ms(day(1), 8, 6), 180.0),
+        ("heart_rate", _ms(day(1), 8, 8), 95.0),
+        # At rest exactly: hrr = 0, so it buys no strain (recovery is not
+        # training) while still counting toward the sample minimum and the
+        # cadence — which is why it keeps the 2-minute spacing.
+        ("heart_rate", _ms(day(1), 8, 10), 50.0),
+        # Decoy metric on d(1): the reader's metric_type = 'heart_rate' filter
+        # is the only thing keeping this out of the pin below.
+        ("stress", _ms(day(1), 8, 1), 199.0),
+    ]
+    # Decoy stream under user_id 2 on d(1), loud enough to move every number
+    # if the reader stopped pinning user_id.
+    ts_decoys = [("heart_rate", _ms(day(1), 8, 1), 195.0),
+                 ("heart_rate", _ms(day(1), 8, 3), 195.0),
+                 ("heart_rate", _ms(day(1), 8, 5), 195.0)]
+    activities = [
+        # 08:03 + 240 s = the window [08:03, 08:07] on d(1), avg 140 bpm.
+        ("act-1", d(1), _iso_at(day(1), 8, 3), 240, 140),
+    ]
+    act_decoys = [("act-2", d(1), _iso_at(day(1), 9, 0), 3600, 190)]
+    _write_db(tmp_path / "garmin_hybrid.db", rows,
+              rest_hr={d(1): 50},
+              timeseries=timeseries, ts_decoys=ts_decoys,
+              activities=activities, act_decoys=act_decoys)
+    return {"today": today, "path": tmp_path / "garmin_hybrid.db"}
+
+
+@pytest.mark.integration
+class TestHybridStrainTier:
+    """The primary (tier-1) strain estimator: Banister TRIMP over the all-day
+    wrist stream plus the day's activity windows, each weighted separately.
+    The tier is per DAY and per TABLE — a day it cannot score, and a Garmin DB
+    that has no `timeseries`/`activities` at all, both fall back to the older
+    estimators rather than taking the endpoint's `available` flag with them.
+    """
+
+    def test_hybrid_math_pin(self, tmp_hybrid_db, client, monkeypatch):
+        today = tmp_hybrid_db["today"]
+
+        def d(n):
+            return _iso(today - timedelta(days=n))
+
+        with _fresh_client(tmp_hybrid_db["path"], monkeypatch) as c:
+            data = c.get("/wellness/api/trends/health/sleep").json()
+
+        # --- d(2), tier 1 on the fallback rest (60), reserve 140 ------------
+        # Median sample gap 2 min (clamped range [0.5, 5]), four samples:
+        #   hrr = (140-60)/140 = 0.571428571, exp(1.92*hrr) = 2.995594943
+        #   per sample = 2.0 * 0.571428571 * 0.64 * 2.995594943 = 2.191063730
+        #   trimp_out  = 4 * 2.191063730 = 8.764254918,  trimp_act = 0
+        #   strain     = 1.0 + 0.25*8.764254918 = 3.191063730 -> 3.2
+        assert round(4 * _banister(140, 60, 2.0), 9) == 8.764254918
+        # --- d(1), tier 1 on the day's own rest (50), reserve 150 -----------
+        # The window [08:03, 08:07] eats the two 180 bpm samples and the
+        # 08:10 sample sits at rest (hrr = 0, worth nothing), leaving
+        # 110/125/95 at 2 min each:
+        #   1.103590931 + 1.671485500 + 0.683101125 = 3.458177556 = trimp_out
+        #   trimp_act = banister(140, 4 min) = 4.0*0.6*0.64*3.164516 = 4.860695986
+        #   strain    = 1.0 + 0.25*3.458177556 + 1.2*4.860695986
+        #             = 1.0 + 0.864544389 + 5.832835184 = 7.697379573 -> 7.7
+        assert round(sum(_banister(hr, 50, 2.0)
+                         for hr in (110, 125, 95)), 9) == 3.458177556
+        assert _banister(50, 50, 2.0) == 0.0
+        assert round(_banister(140, 50, 4.0), 9) == 4.860695986
+        # --- d(0): no stream -> tier 3, 0.002*0 + 1.0 = 1.0 -----------------
+        assert data == {
+            "available": True,
+            "as_of": d(0),
+            # tonight = 400 + today's outgoing 1.692026799 + f(1.0)
+            #         = 400 + 1.692026799 - 1.5 = 400.192026799 -> 400.2
+            "tonight": {"date": d(0), "need_min": 400.2, "debt_min": 1.7,
+                        "strain_est": 1.0, "strain_partial": True},
+            "days": [
+                # Epoch night: no previous row, so need = 400 + f(0.0).
+                # weq 410 beats it -> woke owing nothing.
+                {"date": d(2), "need_min": 400.0, "slept_min": 420.0,
+                 "debt_min": 0.0, "strain_est": 0.0},
+                # Bought by d(2)'s hybrid 3.191063730 (emitted 3.2, chained
+                # unrounded): f = 0.5*3.191063730^2 - 2*3.191063730
+                #               = 5.091447 - 6.382127 = -1.290683596
+                # need = 400 + 0 - 1.290683596 = 398.709316404 -> 398.7,
+                # weq 410 -> another surplus, out 0.
+                {"date": d(1), "need_min": 398.7, "slept_min": 420.0,
+                 "debt_min": 0.0, "strain_est": 3.2},
+                # Bought by d(1)'s hybrid 7.697379573:
+                #   f = 0.5*7.697379573^2 - 2*7.697379573
+                #     = 29.624826 - 15.394759 = 14.230066997
+                #   need = 400 + 0 + 14.230066997 = 414.230066997 -> 414.2
+                #   out  = 0.4 * (414.230066997 - 410) = 1.692026799 -> 1.7
+                {"date": d(0), "need_min": 414.2, "slept_min": 420.0,
+                 "debt_min": 1.7, "strain_est": 7.7},
+            ],
+        }
+
+    def test_activity_window_excludes_wrist_samples(
+            self, tmp_hybrid_db, client, monkeypatch):
+        """A wrist sample taken DURING an activity is already represented, at
+        better fidelity, by that activity's strap average — counting it twice
+        would inflate the day. The fixture's two 180 bpm samples sit strictly
+        inside [08:03, 08:07], and the emission is pinned to the value that
+        leaves them out."""
+        today = tmp_hybrid_db["today"]
+
+        def d(n):
+            return _iso(today - timedelta(days=n))
+
+        with _fresh_client(tmp_hybrid_db["path"], monkeypatch) as c:
+            days = {r["date"]: r for r in
+                    c.get("/wellness/api/trends/health/sleep").json()["days"]}
+
+        # d(0)'s night is bought by d(1)'s strain, so it is where the exclusion
+        # shows up.
+        assert days[d(0)]["strain_est"] == 7.7
+        assert days[d(0)]["need_min"] == 414.2
+
+        # Had the two in-window samples been counted, each would have added
+        # 5.857712882 (hrr = 130/150 = 0.866666667) to trimp_out — turning
+        # 3.458177556 into 15.173603321 and the strain into
+        #   1.0 + 0.25*15.173603321 + 1.2*4.860695986 = 10.626236 -> 10.6,
+        # which drags the night's need to 435.2 and its debt to 10.1. The
+        # difference is far larger than any rounding could explain.
+        counted_twice = (1.0
+                         + 0.25 * (sum(_banister(hr, 50, 2.0)
+                                       for hr in (110, 125, 95))
+                                   + 2 * _banister(180, 50, 2.0))
+                         + 1.2 * _banister(140, 50, 4.0))
+        assert round(counted_twice, 1) == 10.6
+        assert days[d(0)]["strain_est"] != round(counted_twice, 1)
+        assert days[d(0)]["debt_min"] == 1.7
+
+    def test_day_below_min_samples_drops_a_tier(
+            self, tmp_path, client, monkeypatch):
+        """A day whose wrist stream is too sparse to trust (watch off the
+        wrist) is not scored by the hybrid tier AT ALL — its activity TRIMP
+        goes down with it rather than standing alone on a day with no
+        out-of-activity baseline. Two databases identical but for the sample
+        count straddle the threshold. Values are INVENTED — never paste rows
+        from the real ~/.garmy DB here; this repo is public."""
+        today = date.today()
+
+        def d(n):
+            return _iso(today - timedelta(days=n))
+
+        def day(n):
+            return today - timedelta(days=n)
+
+        # Tier 2 is available on d(1) for the sparse case to fall back to:
+        # 0.5*ln(1+0) + 2.0*4000/1000 + 0.05*100 - 10 = 0 + 8 + 5 - 10 = 3.0
+        rows = [(d(1), 7.0, 0, 4000, 100), (d(0), 7.0, 0, 4000, 100)]
+        activity = [("act-1", d(1), _iso_at(day(1), 12, 0), 180, 115)]
+
+        def build(name, sample_minutes):
+            return _write_db(
+                tmp_path / name, rows, rest_hr={d(1): 50},
+                timeseries=[("heart_rate", _ms(day(1), 8, m), 110.0)
+                            for m in sample_minutes],
+                activities=list(activity))
+
+        # min_samples is 3: two samples is below it, four is above.
+        sparse = build("garmin_sparse.db", (0, 2))
+        dense = build("garmin_dense.db", (0, 2, 4, 6))
+
+        with _fresh_client(sparse, monkeypatch) as c:
+            sparse_days = c.get(
+                "/wellness/api/trends/health/sleep").json()["days"]
+        with _fresh_client(dense, monkeypatch) as c:
+            dense_days = c.get(
+                "/wellness/api/trends/health/sleep").json()["days"]
+
+        # Sparse: tier 2 exactly as before this estimator existed. The 115 bpm
+        # activity contributed nothing — the day was skipped whole.
+        assert sparse_days[-1] == {"date": d(0), "need_min": 398.5,
+                                   "slept_min": 420.0, "debt_min": 0.0,
+                                   "strain_est": 3.0}      # f(3.0) = -1.5
+        # Dense: tier 1.
+        #   trimp_out = 4 * 1.103590931 = 4.414363726
+        #   trimp_act = banister(115, 3 min), hrr = 65/150 = 0.433333333,
+        #               exp = 2.297909967 -> 1.911861093
+        #   strain    = 1.0 + 1.103590931 + 2.294233312 = 4.397824243 -> 4.4
+        #   f(strain) = 9.670516 - 8.795649 = 0.874780550 -> need 400.9
+        assert round(4 * _banister(110, 50, 2.0), 9) == 4.414363726
+        assert round(_banister(115, 50, 3.0), 9) == 1.911861093
+        assert dense_days[-1] == {"date": d(0), "need_min": 400.9,
+                                  "slept_min": 420.0, "debt_min": 0.0,
+                                  "strain_est": 4.4}
+
+    def test_cadence_is_the_median_gap_and_it_clamps(
+            self, tmp_path, client, monkeypatch):
+        """The per-day sample weight is the MEDIAN gap, clamped to [0.5, 5.0]
+        minutes — pinned so neither half can silently change. Day A's gaps are
+        [1, 1, 1, 9] min: median 1.0 while the MEAN is 3.0, and a mean-cadence
+        implementation would emit strain 2.7 against the pinned 1.6. Day B's
+        gaps are [10, 10, 10, 10]: median 10 clamps to 5.0, and an unclamped
+        implementation would emit 6.7 against the pinned 3.8. Both days are
+        5 x 110 bpm at rest-fallback 60 (hrr 50/140), banister/min
+        0.453757559…; A: 1 + 0.25*(5*1.0*0.45376) = 1.5672 -> 1.6;
+        B: 1 + 0.25*(5*5.0*0.45376) = 3.8360 -> 3.8. Values are INVENTED —
+        never paste rows from the real ~/.garmy DB here; this repo is public."""
+        today = date.today()
+
+        def d(n):
+            return today - timedelta(days=n)
+
+        stream = (
+            # Day d(2): offsets 0,1,2,3,12 min -> gaps [1,1,1,9]
+            [("heart_rate", _ms(d(2), 10, 0) + m * 60000, 110)
+             for m in (0, 1, 2, 3, 12)]
+            # Day d(1): offsets 0,10,20,30,40 -> gaps [10,10,10,10]
+            + [("heart_rate", _ms(d(1), 10, 0) + m * 60000, 110)
+               for m in (0, 10, 20, 30, 40)]
+        )
+        path = _write_db(
+            tmp_path / "garmin_cadence.db",
+            [(_iso(d(2)), 7.0, None, None, None),
+             (_iso(d(1)), 7.0, None, None, None),
+             (_iso(d(0)), 7.0, None, None, None)],
+            timeseries=stream, activities=[])
+        with _fresh_client(path, monkeypatch) as c:
+            data = c.get("/wellness/api/trends/health/sleep").json()
+
+        by_date = {r["date"]: r for r in data["days"]}
+        # d(2)'s hybrid strain (median cadence) shows on wake-row d(1);
+        # d(1)'s (clamped cadence) on wake-row d(0). All nights sleep 7.0 h
+        # against sub-420 needs, so every debt is 0 and needs read the strain
+        # terms directly: f(1.5672) = -1.906 -> 398.1; f(3.8360) = -0.315
+        # -> 399.7; tonight rides d(0)'s tier-3 strain 1.0 -> 398.5.
+        assert by_date[_iso(d(1))]["strain_est"] == 1.6
+        assert by_date[_iso(d(1))]["need_min"] == 398.1
+        assert by_date[_iso(d(0))]["strain_est"] == 3.8
+        assert by_date[_iso(d(0))]["need_min"] == 399.7
+        assert data["tonight"]["need_min"] == 398.5
+
+    def test_missing_source_table_drops_the_tier_not_the_endpoint(
+            self, tmp_path, client, monkeypatch):
+        """Per-TABLE degradation. A wrist stream with no `activities` table
+        cannot tell training time from the rest of the day, so the hybrid tier
+        stands down entirely rather than attributing an unknown workout to the
+        out-of-activity weight — and the ledger still ships, on tier 2. (The
+        both-tables-absent case is every other fixture in this file, whose
+        pins would move if the tier ever leaked in.) Values are INVENTED —
+        never paste rows from the real ~/.garmy DB here; this repo is
+        public."""
+        today = date.today()
+
+        def d(n):
+            return _iso(today - timedelta(days=n))
+
+        def day(n):
+            return today - timedelta(days=n)
+
+        path = _write_db(
+            tmp_path / "garmin_no_activities.db",
+            [(d(1), 7.0, 0, 4000, 100), (d(0), 7.0, 0, 4000, 100)],
+            rest_hr={d(1): 50},
+            timeseries=[("heart_rate", _ms(day(1), 8, m), 110.0)
+                        for m in (0, 2, 4, 6)],
+            activities=None)          # table simply does not exist
+        with _fresh_client(path, monkeypatch) as c:
+            data = c.get("/wellness/api/trends/health/sleep").json()
+
+        assert data["available"] is True
+        # Tier 2 (3.0), not the 2.1 those four samples would have scored.
+        assert data["days"][-1]["strain_est"] == 3.0
+        assert data["days"][-1]["need_min"] == 398.5
+
+    def test_unusable_activity_rows_are_skipped_whole(
+            self, tmp_path, client, monkeypatch):
+        """Two junk activity rows the sync tool can produce — one with no
+        parseable `start_time`, one with no duration. Neither may take the
+        day's tier down, and neither may contribute a strap term: a row whose
+        window cannot be placed would double-count the wrist samples underneath
+        it, and a zero-length one has no time to weight. Values are INVENTED —
+        never paste rows from the real ~/.garmy DB here; this repo is
+        public."""
+        today = date.today()
+
+        def d(n):
+            return _iso(today - timedelta(days=n))
+
+        def day(n):
+            return today - timedelta(days=n)
+
+        path = _write_db(
+            tmp_path / "garmin_junk_activities.db",
+            [(d(1), 7.0, 0, 4000, 100), (d(0), 7.0, 0, 4000, 100)],
+            rest_hr={d(1): 50},
+            timeseries=[("heart_rate", _ms(day(1), 8, m), 110.0)
+                        for m in (0, 2, 4, 6)],
+            activities=[("act-unplaceable", d(1), None, 600, 130),
+                        ("act-instant", d(1), _iso_at(day(1), 20, 0), 0, 130)])
+        with _fresh_client(path, monkeypatch) as c:
+            days = c.get("/wellness/api/trends/health/sleep").json()["days"]
+
+        # Wrist only: 1.0 + 0.25 * 4 * 1.103590931 = 2.103590931 -> 2.1.
+        # Neither 130 bpm row added a thing (and the day did NOT fall back to
+        # tier 2's 3.0).
+        assert days[-1]["strain_est"] == 2.1
+
+    def test_degenerate_hr_ceiling_scores_zero_not_negative(
+            self, tmp_path, client, monkeypatch):
+        """A params file whose `hr_max` sits at or below the day's resting HR
+        leaves no heart-rate reserve at all. Every TRIMP increment is zero
+        rather than sign-flipped, so the day scores the intercept — nonsense
+        in, nothing out, never a negative strain masquerading as an easy day.
+        Values are INVENTED — never paste rows from the real ~/.garmy DB here;
+        this repo is public."""
+        today = date.today()
+
+        def d(n):
+            return _iso(today - timedelta(days=n))
+
+        def day(n):
+            return today - timedelta(days=n)
+
+        broken = replace(
+            _PARAMS, hybrid=replace(_PARAMS.hybrid, hr_max=40.0))
+        path = _write_db(
+            tmp_path / "garmin_no_reserve.db",
+            [(d(1), 7.0, 0, 4000, 100), (d(0), 7.0, 0, 4000, 100)],
+            rest_hr={d(1): 50},
+            timeseries=[("heart_rate", _ms(day(1), 8, m), 110.0)
+                        for m in (0, 2, 4, 6)],
+            activities=[("act-1", d(1), _iso_at(day(1), 12, 0), 180, 115)])
+        with _fresh_client(path, monkeypatch, params=broken) as c:
+            days = c.get("/wellness/api/trends/health/sleep").json()["days"]
+
+        # Tier 1 still owns the day; it just scores 1.0 + 0.25*0 + 1.2*0.
+        # Tier 2 would have said 3.0, so this also proves the tier ran.
+        assert days[-1]["strain_est"] == 1.0
+
+    def test_params_predating_the_tier_still_serve_the_ledger(
+            self, tmp_path, client, monkeypatch):
+        """A `sleep_params.py` written before this tier existed has no `hybrid`
+        field at all (the file is gitignored and hand-maintained, so it can lag
+        the code). The estimator skips the tier rather than raising — the same
+        judgement as an absent source table. Values are INVENTED — never paste
+        rows from the real ~/.garmy DB here; this repo is public."""
+        today = date.today()
+
+        def d(n):
+            return _iso(today - timedelta(days=n))
+
+        def day(n):
+            return today - timedelta(days=n)
+
+        legacy = SimpleNamespace(**{f.name: getattr(_PARAMS, f.name)
+                                    for f in fields(_PARAMS)
+                                    if f.name != "hybrid"})
+        assert not hasattr(legacy, "hybrid")
+        path = _write_db(
+            tmp_path / "garmin_legacy_params.db",
+            [(d(1), 7.0, 0, 4000, 100), (d(0), 7.0, 0, 4000, 100)],
+            rest_hr={d(1): 50},
+            timeseries=[("heart_rate", _ms(day(1), 8, m), 110.0)
+                        for m in (0, 2, 4, 6)],
+            activities=[("act-1", d(1), _iso_at(day(1), 12, 0), 180, 115)])
+        with _fresh_client(path, monkeypatch, params=legacy) as c:
+            data = c.get("/wellness/api/trends/health/sleep").json()
+
+        assert data["available"] is True
+        assert data["days"][-1]["strain_est"] == 3.0    # tier 2
+
+    def test_settled_days_are_memoized_recent_days_are_not(
+            self, tmp_path, client, monkeypatch):
+        """The full-history wrist scan is far too expensive to redo per
+        request, so a day older than the 7-day recompute window is computed
+        ONCE per (database path, process) and read from a module-level memo
+        afterwards; everything from the window forward is recomputed every
+        time (the sync backfills three days, and the memo must never outrank
+        fresh data there).
+
+        What this pins is exactly that rule and nothing more: the memo is
+        per-process and keyed by DB path, so the third request below — the
+        same bytes at a NEW path — is cold and sees the change the second
+        request was right to ignore. Values are INVENTED — never paste rows
+        from the real ~/.garmy DB here; this repo is public."""
+        today = date.today()
+
+        def d(n):
+            return _iso(today - timedelta(days=n))
+
+        def day(n):
+            return today - timedelta(days=n)
+
+        # Four streamed days spanning the boundary: d(20) well outside the
+        # 7-day window, d(8) immediately outside it, d(7) the first day INSIDE
+        # it (today - 7), and d(1) well inside. Each is followed by a night
+        # that reports its strain. All four carry the SAME stream, so every
+        # divergence below can only come from the memo.
+        streamed = (20, 8, 7, 1)
+        path = _write_db(
+            tmp_path / "garmin_memo.db",
+            [(d(n), 7.0, 0, 0, None)
+             for n in (20, 19, 8, 7, 6, 1, 0)],
+            rest_hr={d(n): 50 for n in streamed},
+            timeseries=[("heart_rate", _ms(day(n), 8, m), 110.0)
+                        for n in streamed for m in (0, 2, 4, 6)],
+            activities=[])
+
+        with _fresh_client(path, monkeypatch) as c:
+            first = {r["date"]: r for r in
+                     c.get("/wellness/api/trends/health/sleep").json()["days"]}
+            # 1.0 + 0.25 * 4 * 1.103590931 = 2.103590931 -> 2.1 on all four
+            # (each night is bought by the PREVIOUS day's strain).
+            for n in (19, 7, 6, 0):
+                assert first[d(n)]["strain_est"] == 2.1
+
+            # One identical edit to both streams: 110 -> 170 bpm, which would
+            # score 1.0 + 0.25 * 4 * 4.757472437 = 5.757472437 -> 5.8.
+            edit = sqlite3.connect(path)
+            edit.execute("UPDATE timeseries SET value = 170.0 "
+                         "WHERE metric_type = 'heart_rate'")
+            edit.commit()
+            edit.close()
+
+            second = {r["date"]: r for r in
+                      c.get("/wellness/api/trends/health/sleep").json()["days"]}
+
+        assert round(1.0 + 0.25 * 4 * _banister(170, 50, 2.0), 9) == 5.757472437
+        # Inside the window: recomputed, so the edit lands. d(6) is bought by
+        # d(7) = today - 7, the first day the rule calls mutable.
+        assert second[d(0)]["strain_est"] == 5.8
+        assert second[d(6)]["strain_est"] == 5.8
+        # Outside it: the settled value stands, edit or no edit — including
+        # d(7)'s night, bought by d(8), the day one step past the boundary
+        # (and one the warm scan deliberately re-reads and then discards, so
+        # that a local midnight the clock skipped can never truncate the
+        # cutoff day itself).
+        assert second[d(19)]["strain_est"] == 2.1
+        assert second[d(7)]["strain_est"] == 2.1
+
+        # Same data, new path -> cold memo, and the old day recomputes to the
+        # edited value. This is what makes the assertion above a statement
+        # about the CACHE rather than about some filter dropping old days.
+        copied = tmp_path / "garmin_memo_copy.db"
+        shutil.copy(path, copied)
+        with _fresh_client(copied, monkeypatch) as c:
+            cold = {r["date"]: r for r in
+                    c.get("/wellness/api/trends/health/sleep").json()["days"]}
+        for n in (19, 7, 6, 0):
+            assert cold[d(n)]["strain_est"] == 5.8

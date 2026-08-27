@@ -28,8 +28,10 @@ import bisect
 import json
 import math
 import sqlite3
+import statistics
+import threading
 from collections import Counter, defaultdict
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 
 from modules.coach_logs import AD_HOC_LOG_SLUGS
@@ -830,13 +832,225 @@ def recovery_series(garmin_db, *, start=None, end):
     return {"available": True, "days": days}
 
 
-def _strain_estimate(params, active_cal, steps, max_hr) -> float:
-    """A calendar day's training strain (0..21) from its Garmin daily row.
-    Missing inputs count as zero, so strain is ALWAYS computable — a night is
-    never left without a prior-day term; only the estimator FORM degrades (the
-    max-HR regression when the watch recorded one, else the calorie-only
-    fallback)."""
-    if max_hr is not None:
+# ---- hybrid strain: Banister TRIMP over the all-day HR stream --------------
+#
+# TRIMP increment for a span of `minutes` held at heart rate `hr`:
+#     dt * hrr * 0.64 * exp(1.92 * hrr),  hrr = (hr - rest) / (hr_max - rest)
+# The two shape constants are Banister's published male form — NOT fitted
+# personal values, which is why they live here and not in sleep_params.
+_TRIMP_K, _TRIMP_EXP = 0.64, 1.92
+
+# Wrist cadence bounds (minutes). The Garmin stream samples every ~2 min today,
+# but the cadence is measured per day rather than assumed, so a denser or
+# sparser export re-weights itself instead of silently scaling every TRIMP.
+_TRIMP_DT_MIN, _TRIMP_DT_MAX = 0.5, 5.0
+
+# A day this far back is immutable: the sync job backfills three days, so a
+# week is margin. Everything from the cutoff forward is recomputed per request.
+_TRIMP_RECENT_DAYS = 7
+
+# Module-level memo: (db_path, date) -> (trimp_out, trimp_act). The full-history
+# wrist scan is ~250k rows, far too much to redo per request, and the result for
+# a settled day can never change. Keying by DB PATH as well as date is what
+# keeps the test suite honest — every test points GARMIN_DB_PATH at its own
+# fresh tmp file, so no test can read another's memo (and re-pointing the env
+# var in production starts cold too). `_trimp_scanned` records, per path, the
+# settled-history marker of the one full pass: (floor_ms, row_count) — the
+# count of wrist rows OLDER than the floor at scan time. A warm request
+# re-counts at that stored floor and a mismatch forces a full rescan: that is
+# what catches a backfill deeper than the recent window, or a database file
+# swapped in place, which the recompute window alone would never see. After a
+# clean check the SQL window shrinks to the recent days. The memo is NOT keyed
+# by the fitted params (a module-level import, constant per process), and all
+# shared state is touched only under `_trimp_lock` — FastAPI serves sync
+# routes from a threadpool, so two requests can race this module.
+_trimp_cache = {}
+_trimp_scanned = {}
+_trimp_lock = threading.Lock()
+
+
+def _banister(hr, rest, hr_max, minutes) -> float:
+    """One TRIMP increment: `minutes` spent at heart rate `hr`. Below (or at)
+    resting the increment is zero — recovery is not strain — and a degenerate
+    reserve (rest >= hr_max) yields zero rather than a sign flip."""
+    if hr is None or minutes is None or minutes <= 0:
+        return 0.0
+    span = hr_max - rest
+    if span <= 0:
+        return 0.0
+    hrr = (hr - rest) / span
+    if hrr <= 0:
+        return 0.0
+    return minutes * hrr * _TRIMP_K * math.exp(_TRIMP_EXP * hrr)
+
+
+def _local_midnight_ms(d: date) -> int:
+    """Epoch milliseconds at local midnight starting `d` — the same local
+    calendar boundary sqlite's `date(..., 'localtime')` grouping uses."""
+    return int(datetime.combine(d, time.min).timestamp() * 1000)
+
+
+def _hybrid_trimp(conn, db_path, params, today):
+    """{date: (trimp_out, trimp_act)} for every day the hybrid tier can score.
+
+    Two heart-rate sources, kept SEPARATE because their quality differs: the
+    all-day wrist stream (`timeseries.heart_rate`, optical, sampled) and the
+    activity windows (`activities.avg_heart_rate`, usually a chest strap).
+    Wrist samples falling inside one of the day's activity windows are dropped
+    — the strap already accounts for that time, at better fidelity — so the two
+    terms partition the day and can carry their own weights.
+
+    A day is ABSENT from the result when it can't be scored (fewer than
+    `min_samples` wrist samples, i.e. a watch off the wrist), and the whole
+    result is empty when either source table is missing or errors. Both are
+    per-day/per-table degradation: the caller drops that day to the next
+    estimator tier. Neither ever reaches the endpoint's `available` flag —
+    every Garmin DB predating these tables still serves a full ledger.
+    """
+    hybrid = getattr(params, "hybrid", None)
+    if hybrid is None:
+        # A params module written before this tier exists: skip it rather than
+        # 500. Same philosophy as an absent source table.
+        return {}
+
+    cutoff_date = today - timedelta(days=_TRIMP_RECENT_DAYS)
+    cutoff = cutoff_date.isoformat()
+    floor_ms = _local_midnight_ms(cutoff_date - timedelta(days=1))
+    with _trimp_lock:
+        marker = _trimp_scanned.get(db_path)
+    try:
+        warm = False
+        if marker is not None:
+            # Verify the settled history is still the one we scanned: count
+            # the wrist rows older than THAT pass's floor and compare. A
+            # mismatch means a backfill deeper than the recent window or a
+            # database file swapped in place — either way the memo is a lie
+            # and the pass falls back to a full rescan. The COUNT rides the
+            # same PK index as the reads (~10 ms), cheap insurance per request.
+            old_floor, old_count = marker
+            cur_count = conn.execute(
+                "SELECT COUNT(*) FROM timeseries WHERE user_id = 1 "
+                "AND metric_type = 'heart_rate' AND timestamp < ?",
+                (old_floor,)).fetchone()[0]
+            warm = cur_count == old_count
+        # user_id + metric_type is the PRIMARY KEY prefix, so this is an index
+        # SEARCH rather than a scan of every metric in the table — and the warm
+        # window's `timestamp >=` rides the same index (verified with EXPLAIN
+        # QUERY PLAN). Pinning user_id also matches every other reader here.
+        sql = ("SELECT date(timestamp/1000,'unixepoch','localtime') d, "
+               "timestamp, value FROM timeseries "
+               "WHERE user_id = 1 AND metric_type = 'heart_rate'")
+        args = []
+        if warm:
+            # The whole point of the memo: after the first pass only the
+            # mutable tail is read back. The floor is one day LOOSE because a
+            # local midnight is not always a real instant (a DST jump can skip
+            # it), and an instant an hour either side of the intended boundary
+            # would silently truncate the cutoff day's own samples. Reading a
+            # day too many costs one day of rows; the `ds < cutoff` skip below
+            # is what discards the spill, and it is a settled day's memo that
+            # would otherwise be overwritten with a partial recomputation.
+            sql += " AND timestamp >= ?"
+            args.append(floor_ms)
+        samples = defaultdict(list)
+        for r in conn.execute(sql, args):
+            samples[str(r["d"])].append((r["timestamp"], r["value"]))
+
+        # Activities are a few hundred rows all told — read whole, no window.
+        windows, acts = defaultdict(list), defaultdict(list)
+        for r in conn.execute(
+                "SELECT activity_date, start_time, duration_seconds, "
+                "avg_heart_rate FROM activities "
+                "WHERE user_id = 1 AND avg_heart_rate IS NOT NULL"):
+            try:
+                start = datetime.fromisoformat(
+                    str(r["start_time"])).timestamp() * 1000
+            except (TypeError, ValueError):
+                # start_time is a local ISO string on every row the sync tool
+                # writes. A row that won't parse is dropped WHOLE — its TRIMP
+                # with its window — because keeping the strap term without the
+                # exclusion it justifies would count that workout twice.
+                continue
+            seconds = r["duration_seconds"] or 0
+            ds = str(r["activity_date"])
+            windows[ds].append((start, start + seconds * 1000))
+            acts[ds].append((r["avg_heart_rate"], seconds / 60.0))
+
+        rest_by_date = {
+            str(r["metric_date"]): r["resting_heart_rate"]
+            for r in conn.execute(
+                "SELECT metric_date, resting_heart_rate "
+                "FROM daily_health_metrics WHERE user_id = 1")
+        }
+        settled_count = conn.execute(
+            "SELECT COUNT(*) FROM timeseries WHERE user_id = 1 "
+            "AND metric_type = 'heart_rate' AND timestamp < ?",
+            (floor_ms,)).fetchone()[0]
+    except sqlite3.Error:
+        return {}
+
+    # Everything below touches the shared memo: one lock for the whole
+    # read-purge-recompute-publish sequence, so a concurrent request sees
+    # either the state before this pass or after it, never a torn middle.
+    # Contention is a single user's occasional double-poll; correctness wins.
+    with _trimp_lock:
+        # Drop what this pass is about to recompute: the recent window always,
+        # and everything when the pass is a cold full scan.
+        for key in [k for k in _trimp_cache
+                    if k[0] == db_path and (not warm or k[1] >= cutoff)]:
+            del _trimp_cache[key]
+        out = {d: v for (p, d), v in _trimp_cache.items() if p == db_path}
+
+        for ds, points in samples.items():
+            if warm and ds < cutoff:
+                continue                  # already settled; the memo owns it
+            points.sort()
+            # Two samples are the minimum that can establish a cadence at all.
+            if len(points) < max(2, hybrid.min_samples):
+                continue
+            gaps = [(points[i][0] - points[i - 1][0]) / 60000.0
+                    for i in range(1, len(points))]
+            dt_min = min(_TRIMP_DT_MAX,
+                         max(_TRIMP_DT_MIN, statistics.median(gaps)))
+            rest = rest_by_date.get(ds)
+            rest = hybrid.rest_hr_fallback if rest is None else float(rest)
+
+            # A workout can cross local midnight: its window starts on its
+            # activity_date, so the samples it must exclude may bucket to the
+            # NEXT calendar date. Windows only ever spill forward, so checking
+            # the previous day's windows too closes the double-count.
+            prev_ds = (date.fromisoformat(ds) - timedelta(days=1)).isoformat()
+            day_windows = (list(windows.get(ds, ()))
+                           + list(windows.get(prev_ds, ())))
+            trimp_out = sum(
+                _banister(hr, rest, hybrid.hr_max, dt_min)
+                for ts, hr in points
+                if not any(lo <= ts <= hi for lo, hi in day_windows)
+            )
+            trimp_act = sum(_banister(hr, rest, hybrid.hr_max, minutes)
+                            for hr, minutes in acts.get(ds, ()))
+            _trimp_cache[(db_path, ds)] = out[ds] = (trimp_out, trimp_act)
+
+        _trimp_scanned[db_path] = (floor_ms, settled_count)
+    return out
+
+
+def _strain_estimate(params, active_cal, steps, max_hr, trimp=None) -> float:
+    """A calendar day's training strain (0..21). Missing inputs count as zero,
+    so strain is ALWAYS computable — a night is never left without a prior-day
+    term; only the estimator FORM degrades, per day, down three tiers:
+
+    1. HYBRID (`trimp` present): Banister TRIMP off the all-day wrist stream
+       and the day's activity windows, weighted separately — the two sources
+       differ in fidelity, so they are not summed into one number first.
+    2. The daily-feature regression, when the watch recorded a max_heart_rate.
+    3. The calorie-only fallback.
+    """
+    if trimp is not None:
+        h = params.hybrid
+        trimp_out, trimp_act = trimp
+        s = h.intercept + h.ban_out * trimp_out + h.ban_act * trimp_act
+    elif max_hr is not None:
         c = params.strain_coeffs
         s = (c.log_ac * math.log1p(active_cal or 0)
              + c.steps_k * (steps or 0) / 1000
@@ -856,10 +1070,14 @@ def _strain_need_term(params, strain) -> float:
 
 
 def sleep_series(garmin_db, params, *, start=None, end, today):
-    """Nightly sleep need vs. slept, plus the debt ledger behind them, from the
-    Garmin daily metrics. `params` carries the fitted constants — personal data
-    living in a gitignored module (see modules/sleep_params.example.py), so the
-    caller resolves them and this stays a pure function of (rows, params).
+    """Nightly sleep need vs. slept, plus the debt ledger behind them, from
+    the Garmin daily metrics — with the day-strain input upgraded, where the
+    data allows, by the hybrid TRIMP tier over the wrist stream and activity
+    windows (see `_hybrid_trimp`; per-day/per-table fallback, module-level
+    memo). `params` carries the fitted constants — personal data living in a
+    gitignored module (see modules/sleep_params.example.py) resolved by the
+    caller. The ledger arithmetic itself is a deterministic function of the
+    rows and params; the memo only short-circuits recomputing settled days.
 
     A row's `debt_min` is the debt ON WAKING from that night — the night's own
     product, what the sleeper got up owing — NOT the debt it was carrying when
@@ -878,7 +1096,11 @@ def sleep_series(garmin_db, params, *, start=None, end, today):
     matching Garmin's own metric_date.
 
     Same external-source contract as recovery_series: absent DB / missing
-    table / schema drift → {"available": False, "days": []}, never a 500.
+    table / schema drift on `daily_health_metrics` → {"available": False,
+    "days": []}, never a 500. The strain estimator's richer sources
+    (`timeseries`, `activities`) degrade one tier further down instead: they
+    are absent from older Garmin DBs and their absence must never take the
+    ledger with them.
     """
     if not Path(garmin_db.path).exists():
         return {"available": False, "days": []}
@@ -892,6 +1114,10 @@ def sleep_series(garmin_db, params, *, start=None, end, today):
                 "FROM daily_health_metrics WHERE user_id = 1 "
                 "ORDER BY metric_date"
             ).fetchall()
+            # One pass for the whole history (memoized past the recent window),
+            # not one per emitted day.
+            trimp_by_date = _hybrid_trimp(
+                conn, str(garmin_db.path), params, today)
     except sqlite3.Error:
         return {"available": False, "days": []}
 
@@ -899,7 +1125,8 @@ def sleep_series(garmin_db, params, *, start=None, end, today):
     for r in rows:
         ds = str(r["date"])
         strain_by_date[ds] = _strain_estimate(
-            params, r["active_calories"], r["total_steps"], r["max_heart_rate"])
+            params, r["active_calories"], r["total_steps"], r["max_heart_rate"],
+            trimp=trimp_by_date.get(ds))
         if r["sleep_duration_hours"] is not None:
             slept_by_date[ds] = r["sleep_duration_hours"] * 60
 
