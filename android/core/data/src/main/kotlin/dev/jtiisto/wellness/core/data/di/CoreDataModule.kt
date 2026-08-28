@@ -17,6 +17,7 @@ import dev.jtiisto.wellness.core.data.hr.GuideEventRecorder
 import dev.jtiisto.wellness.core.data.hr.HrBeatReader
 import dev.jtiisto.wellness.core.data.hr.HrCaptureStore
 import dev.jtiisto.wellness.core.data.hr.HrSyncStore
+import dev.jtiisto.wellness.core.data.journal.JournalDayPeek
 import dev.jtiisto.wellness.core.data.journal.JournalSyncStore
 import dev.jtiisto.wellness.core.data.journal.JournalUiPrefs
 import dev.jtiisto.wellness.core.data.network.AnalysisApi
@@ -39,6 +40,7 @@ import dev.jtiisto.wellness.core.data.sync.SyncFlushScheduler
 import dev.jtiisto.wellness.core.data.sync.SyncFlushWorker
 import dev.jtiisto.wellness.core.data.sync.SyncOrchestrator
 import dev.jtiisto.wellness.core.data.sync.SyncScheduler
+import dev.jtiisto.wellness.core.data.trends.TrendsCachePeek
 import dev.jtiisto.wellness.core.data.trends.TrendsPrefs
 import dev.jtiisto.wellness.core.data.trends.TrendsRepository
 import io.ktor.client.HttpClient
@@ -149,6 +151,19 @@ fun coreDataModule(builtInUrl: String) = module {
     single { SyncErrorEvents() }
     single { JournalUiPrefs(dao = get(), session = get(), json = get()) }
     single { TrendsPrefs(dao = get(), session = get()) }
+
+    // The home-screen widget's two readers, and the reason they are separate
+    // classes rather than methods on the repository and the store below: their
+    // whole dependency graph is pre-resolution-safe ON PURPOSE. A launcher
+    // renders the widget in a process it may itself have created, with no
+    // Activity and no boot behind it, and every line under `config = get()`
+    // resolves through `requireConfig()`, which throws exactly then. These two
+    // ask for a DAO and the shared Json, so the widget draws — from whatever
+    // the last fetch left in the cache — before, and regardless of whether,
+    // this process has decided which server it talks to.
+    single { TrendsCachePeek(cacheDao = get(), json = get()) }
+    single { JournalDayPeek(journalDao = get(), json = get()) }
+
     single { TrendsRepository(api = get(), cacheDao = get(), debugLog = get(), session = get(), json = get()) }
     single { DataExporter(dao = get(), clientVersion = get(AppVersionName)) }
 

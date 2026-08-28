@@ -787,14 +787,14 @@ class JournalSyncStore(
         dirtyGeneration = dirtyGeneration,
     )
 
-    private fun decodeTracker(row: JournalTrackerEntity): TrackerDto =
-        TrackerDtoSerializer.fromJson(parseObject(row.dataJson), json)
+    // The decode direction moved to `JournalDecode.kt` when the widget's
+    // `JournalDayPeek` became its second consumer — it reads the same rows from
+    // the same DAO and must read them the same way. These two bind this store's
+    // own `json` so the call sites stay as they were; the rules live over there.
 
-    private fun JournalEntryEntity.toDto(): EntryDto = EntryDto(
-        value = valueJson?.let(json::parseToJsonElement),
-        completed = completed,
-        lastModifiedAt = lastModifiedAt,
-    )
+    private fun decodeTracker(row: JournalTrackerEntity): TrackerDto = decodeTracker(row, json)
+
+    private fun JournalEntryEntity.toDto(): EntryDto = toDto(json)
 
     private fun groupByDate(rows: Collection<JournalEntryEntity>): Map<DateString, Map<String, EntryDto>> =
         rows.groupBy { it.date }.mapValues { (_, day) -> day.associate { it.trackerId to it.toDto() } }

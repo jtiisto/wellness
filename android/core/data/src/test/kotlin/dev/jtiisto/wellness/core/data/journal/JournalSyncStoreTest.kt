@@ -1235,9 +1235,13 @@ internal open class FakeJournalDao : JournalDao() {
     override suspend fun listSettledDeletedTrackerIds(): List<String> =
         trackers.values.filter { it.deleted && !it.isDirty }.map { it.id }
 
-    override fun observeTrackers(): Flow<List<JournalTrackerEntity>> = revision.map {
+    override fun observeTrackers(): Flow<List<JournalTrackerEntity>> = revision.map { activeTrackers() }
+
+    override suspend fun listActiveTrackers(): List<JournalTrackerEntity> = activeTrackers()
+
+    /** The `deleted = 0` + `ORDER BY category, name` twin the DAO documents. */
+    private fun activeTrackers(): List<JournalTrackerEntity> =
         trackers.values.filterNot { it.deleted }.sortedWith(compareBy({ it.category }, { it.name }))
-    }
 
     override suspend fun getEntry(date: DateString, trackerId: String): JournalEntryEntity? =
         entries[key(date, trackerId)]
@@ -1250,7 +1254,11 @@ internal open class FakeJournalDao : JournalDao() {
         entries.values.filter { it.isDirty }.map { EntryGeneration(it.date, it.trackerId, it.dirtyGeneration) }
 
     override fun observeDay(date: DateString): Flow<List<JournalEntryEntity>> =
-        revision.map { entries.values.filter { it.date == date } }
+        revision.map { entriesOn(date) }
+
+    override suspend fun listEntriesForDate(date: DateString): List<JournalEntryEntity> = entriesOn(date)
+
+    private fun entriesOn(date: DateString): List<JournalEntryEntity> = entries.values.filter { it.date == date }
 
     override fun observeAllEntries(): Flow<List<JournalEntryEntity>> = revision.map { entries.values.toList() }
 

@@ -42,6 +42,20 @@ data class SettledDelete(val id: String, val expectedGeneration: Long?)
 data class EntryRef(val date: DateString, val trackerId: String)
 
 /**
+ * One day as a surface sees it: the trackers it lists, and the entries that
+ * judge them — read together, in one transaction.
+ *
+ * The pairing is the point. Read as two separate queries, a sync transaction
+ * committing between them yields a rollup built from two different generations
+ * of the same day: a tracker list from before an edit and an entry list from
+ * after it, or the reverse. Nothing in the resulting tally would look wrong.
+ */
+data class JournalDaySnapshot(
+    val trackers: List<JournalTrackerEntity>,
+    val entries: List<JournalEntryEntity>,
+)
+
+/**
  * Everything one upload response changes, applied as a single transaction.
  *
  * Deliberately values and not pre-built rows for the parts that must merge with
@@ -148,6 +162,21 @@ abstract class JournalDao {
     @Query("SELECT * FROM journal_trackers WHERE deleted = 0 ORDER BY category, name")
     abstract fun observeTrackers(): Flow<List<JournalTrackerEntity>>
 
+    /**
+     * The same rows as [observeTrackers], read once instead of observed — for
+     * callers that want one snapshot rather than a subscription (the widget's
+     * day peek, through [daySnapshot]).
+     *
+     * **The filter and the ordering are deliberately a twin of [observeTrackers]'s
+     * and must be changed with it.** No test in this project can pin that the two
+     * SQL strings agree — the JVM suites fake the DAO rather than run SQLite, and
+     * the instrumented suite does not cover this pair — so the duplication is
+     * held together by this comment and nothing else. A surface listing rows the
+     * user has deleted is the bug it is guarding.
+     */
+    @Query("SELECT * FROM journal_trackers WHERE deleted = 0 ORDER BY category, name")
+    abstract suspend fun listActiveTrackers(): List<JournalTrackerEntity>
+
     // ---- entry reads -----------------------------------------------------
 
     @Query("SELECT * FROM journal_entries WHERE date = :date AND trackerId = :trackerId")
@@ -164,6 +193,25 @@ abstract class JournalDao {
 
     @Query("SELECT * FROM journal_entries WHERE date = :date")
     abstract fun observeDay(date: DateString): Flow<List<JournalEntryEntity>>
+
+    /** [observeDay]'s rows, read once. Twinned with it the same way. */
+    @Query("SELECT * FROM journal_entries WHERE date = :date")
+    abstract suspend fun listEntriesForDate(date: DateString): List<JournalEntryEntity>
+
+    /**
+     * [date]'s trackers and entries, from one point in time.
+     *
+     * A composed read rather than two calls: see [JournalDaySnapshot] for what
+     * the transaction is buying. This is the only read in the DAO that needs
+     * one, because it is the only one whose two halves are compared against
+     * each other rather than merely displayed side by side.
+     */
+    @Transaction
+    open suspend fun daySnapshot(date: DateString): JournalDaySnapshot =
+        JournalDaySnapshot(
+            trackers = listActiveTrackers(),
+            entries = listEntriesForDate(date),
+        )
 
     /**
      * Every stored entry. The 7-day prune keeps this to a couple of hundred
