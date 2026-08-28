@@ -92,6 +92,14 @@ dependencies {
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.koin.android)
     implementation(libs.koin.androidx.compose)
+
+    // The home-screen widget lives here (Glance renders into RemoteViews, so it
+    // cannot live in a library the launcher never loads). work-runtime is
+    // declared directly rather than leaned on: :core:data takes it as
+    // `implementation`, so it is not on this module's compile classpath, and the
+    // widget's hourly refresh is scheduled from :app.
+    implementation(libs.androidx.glance.appwidget)
+    implementation(libs.androidx.work.runtime)
 }
 
 // The Tools row's build stamp: an execution-time generated asset per variant,

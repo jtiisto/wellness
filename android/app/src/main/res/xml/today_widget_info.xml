@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    The "Today" widget's declaration to the launcher. See specs/widget.md.
+
+    The default placement is 3x2 — the CARD bucket, which holds the tally, the
+    rule and the whole sleep block — and the resize floor of 110x40dp is what
+    lets it be dragged down to the 2x1 STRIP (tally only) without the host
+    refusing. Growing past 3x3 reaches PAGE; nothing is ever shrunk to fit, so
+    the buckets add and drop whole elements instead.
+
+    updatePeriodMillis is 0 on purpose: the AppWidget framework's own alarm
+    cannot be made conditional on connectivity, and would fight TodayWidgetWorker
+    (hourly, CONNECTED, unique KEEP), which is the only thing that puts new data
+    on this surface.
+
+    initialLayout is Glance's own stock loading layout, shipped inside
+    glance-appwidget — the frame between placement and the first composition is
+    not ours to design. previewLayout is a static RemoteViews mock for the
+    picker; Glance 1.2's generated previews are a follow-up, not a v1 gate.
+-->
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:description="@string/widget_today_description"
+    android:initialLayout="@layout/glance_default_loading_layout"
+    android:minHeight="110dp"
+    android:minResizeHeight="40dp"
+    android:minResizeWidth="110dp"
+    android:minWidth="180dp"
+    android:previewLayout="@layout/today_widget_preview"
+    android:resizeMode="horizontal|vertical"
+    android:targetCellHeight="2"
+    android:targetCellWidth="3"
+    android:updatePeriodMillis="0"
+    android:widgetCategory="home_screen" />

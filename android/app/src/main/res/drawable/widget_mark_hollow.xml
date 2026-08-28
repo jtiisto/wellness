@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    The hollow mark: "something needs doing" in ink, "no verdict yet" in
+    ink-faint — one shape, two states, told apart only by the tint.
+
+    Geometry ported from InkJudgment.ATTENTION / PENDING and WeekMark.OPEN_DOT:
+    a stroke-only circle inset by half its stroke, matching the source's
+    `radius - hairline / 2f` — 6 - 1.85/2 = 5.075 at stroke 1.85 on viewport 12.
+
+    The authored stroke colour is IRRELEVANT: every use site draws this through
+    ColorFilter.tint(ColorProvider), which is how the one-ink rule survives into
+    a surface that cannot read LogbookTheme.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="12dp"
+    android:height="12dp"
+    android:viewportWidth="12"
+    android:viewportHeight="12">
+    <path
+        android:strokeColor="#000000"
+        android:strokeWidth="1.85"
+        android:pathData="M6,6 m-5.075,0 a5.075,5.075 0 1,0 10.15,0 a5.075,5.075 0 1,0 -10.15,0" />
+</vector>

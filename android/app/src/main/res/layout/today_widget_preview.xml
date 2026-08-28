@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    What the widget picker shows before a widget exists: paper, an eyebrow and a
+    number, set in the same mono at the same 12dp margin as the real surface.
+
+    Static and light-mode only, deliberately. This is a RemoteViews still life in
+    a picker sheet, not the widget — it never renders live data, and giving it a
+    night variant would be maintaining a second palette for a thumbnail. The real
+    surface swaps through day/night ColorProviders; see TodayWidgetPalette.
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#FBFAF7"
+    android:orientation="vertical"
+    android:padding="12dp">
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:fontFamily="monospace"
+        android:text="TONIGHT\'S SLEEP NEED"
+        android:textColor="#6A6D73"
+        android:textSize="10sp" />
+
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:fontFamily="monospace"
+        android:text="8:05"
+        android:textColor="#17191B"
+        android:textSize="24sp"
+        android:textStyle="bold" />
+</LinearLayout>

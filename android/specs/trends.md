@@ -313,6 +313,8 @@ round2(v): Double                                     // JS Math.round semantics
 
 **Contract guarantees relied on** (server-stated): `days` always present; `debt_min` never negative and measured on **waking** (v2.3); `strain_est` on every row; optional fields omitted, never null; debt independent of the requested `start`; on `end=today` requests (this client's only shape), `tonight.debt_min == days.last().debt_min` while the last row is today's or yesterday's. Rows are keyed by **wake** date, so they overlay `SleepCard` 1:1. Full server-side definition in `../../docs/ARCHITECTURE.md` (Phase 4 — sleep need / debt), which this section defers to.
 
+The widget surface over this model — the home-screen widget anticipated by v2.2 — is specified in `specs/widget.md`; it consumes `sleepTonightModel` unchanged and adds nothing to these rules.
+
 ### Pull to refresh, and the on-demand Garmin sync behind it (added 2026-08-27)
 
 A pull on any of the five sub-screens refetches that screen **and** asks the server to sync Garmin

@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    The half mark: "part of the way, or worth an eye."
+
+    Two paths, exactly as InkJudgment.PARTIAL / WeekMark.HALF_DOT draw it: the
+    left half fills at the full radius (the Canvas original clips right of
+    centre and draws a whole circle), and then the outline closes the circle
+    "so the missing half reads as unfinished rather than as a smaller dot" —
+    the glyph file's own words, and the reason this is not just a scaled dot.
+
+    The ring is inset by half its stroke, matching the source's
+    `radius - hairline / 2f`: 6 - 1.85/2 = 5.075 at stroke 1.85. That stroke is
+    1.85/12 of the box, within 0.05dp of BOTH source ratios (1.4dp/9dp for the
+    judgment glyph, 1.2dp/8dp for the tally dot), which is what lets one
+    drawable set serve both sizes.
+
+    The authored fill/stroke colours are IRRELEVANT: every use site draws this
+    through ColorFilter.tint(ColorProvider), which is how the one-ink rule
+    survives into a surface that cannot read LogbookTheme.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="12dp"
+    android:height="12dp"
+    android:viewportWidth="12"
+    android:viewportHeight="12">
+    <path
+        android:fillColor="#000000"
+        android:pathData="M6,0 A6,6 0 0,0 6,12 Z" />
+    <path
+        android:strokeColor="#000000"
+        android:strokeWidth="1.85"
+        android:pathData="M6,6 m-5.075,0 a5.075,5.075 0 1,0 10.15,0 a5.075,5.075 0 1,0 -10.15,0" />
+</vector>

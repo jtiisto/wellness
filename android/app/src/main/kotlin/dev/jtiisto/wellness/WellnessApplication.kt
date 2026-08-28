@@ -2,12 +2,15 @@ package dev.jtiisto.wellness
 
 import android.app.Application
 import dev.jtiisto.wellness.core.ble.di.bleModule
+import dev.jtiisto.wellness.core.data.di.AppScope
 import dev.jtiisto.wellness.core.data.di.coreDataModule
 import dev.jtiisto.wellness.di.appModule
 import dev.jtiisto.wellness.feature.analysis.di.analysisModule
 import dev.jtiisto.wellness.feature.coach.di.coachModule
 import dev.jtiisto.wellness.feature.journal.di.journalModule
 import dev.jtiisto.wellness.feature.trends.di.trendsModule
+import dev.jtiisto.wellness.widget.WidgetBackgroundRefresh
+import kotlinx.coroutines.CoroutineScope
 import org.koin.android.ext.koin.androidContext
 import org.koin.android.ext.koin.androidLogger
 import org.koin.core.context.startKoin
@@ -38,5 +41,12 @@ class WellnessApplication : Application() {
         // anything that could talk to it. A failure leaves everything unstarted
         // and the UI on a recovery screen; see [bootWellness].
         bootWellness(koin)
+
+        // Deliberately outside that gate: the home-screen tally is local Room
+        // and needs no server, so it re-renders when the app backgrounds even on
+        // a process that never resolved one. Without it the widget would carry
+        // yesterday's ticks for up to an hour after the user logged them and
+        // left. No fetch — that is the worker's job.
+        WidgetBackgroundRefresh(this, koin.get<CoroutineScope>(AppScope)).start()
     }
 }

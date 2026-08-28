@@ -1,4 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Wellness</string>
+
+    <!--
+        What the widget picker calls the "Today" widget, and what it says under
+        the name. The label is claimed by the manifest receiver (a later phase);
+        both are read by the launcher, never by the app.
+    -->
+    <string name="widget_today_label">Today</string>
+    <string name="widget_today_description">Today\'s trackers and tonight\'s sleep need.</string>
 </resources>

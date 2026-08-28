@@ -52,6 +52,26 @@ kover {
                     "dev.jtiisto.wellness.core.ble.connection.GarminHrmConnection$*",
                     "dev.jtiisto.wellness.core.ble.device.PrefsKnownDeviceStorage",
                     "dev.jtiisto.wellness.core.ble.device.PrefsKnownDeviceStorage$*",
+                    // Home-screen widget glue: a Glance session, an AppWidget
+                    // provider, a WorkManager job and a process-lifecycle
+                    // observer. None of them can execute off a device — they
+                    // need a GlanceId, an AppWidget host, WorkManager's runtime
+                    // or a real process lifecycle — and they are verified on the
+                    // emulator against specs/widget.md §Size buckets.
+                    // The exclusion is the usual claim: these files hold no
+                    // decisions. Every one they would have made lives in
+                    // TodayWidgetLogic (keys, fetch window, the 90-minute
+                    // freshness rule, shouldFetch, buckets, the tally fit rule,
+                    // drawable and tint mapping), TodayWidgetPalette, or the two
+                    // pre-resolution-safe peeks in :core:data — all counted.
+                    // TodayWidgetContent needs no entry: it is composables only.
+                    "dev.jtiisto.wellness.widget.TodayWidget",
+                    "dev.jtiisto.wellness.widget.TodayWidget$*",
+                    "dev.jtiisto.wellness.widget.TodayWidgetReceiver",
+                    "dev.jtiisto.wellness.widget.TodayWidgetWorker",
+                    "dev.jtiisto.wellness.widget.TodayWidgetWorker$*",
+                    "dev.jtiisto.wellness.widget.WidgetBackgroundRefresh",
+                    "dev.jtiisto.wellness.widget.WidgetBackgroundRefresh$*",
                 )
                 packages(
                     "dev.jtiisto.wellness.core.ui.theme",

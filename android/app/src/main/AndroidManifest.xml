@@ -60,6 +60,22 @@
             android:exported="false"
             android:foregroundServiceType="connectedDevice" />
 
+        <!-- The "Today" home-screen widget. exported=false is correct and not a
+             restriction: the system delivers APPWIDGET_UPDATE to a provider it
+             found through @xml/today_widget_info regardless, and nothing else
+             has any business broadcasting to it. See specs/widget.md. -->
+        <receiver
+            android:name=".widget.TodayWidgetReceiver"
+            android:exported="false"
+            android:label="@string/widget_today_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/today_widget_info" />
+        </receiver>
+
         <!-- Exports and debug-log dumps reach a share sheet through here.
              exported=false with grantUriPermissions=true is the whole contract:
              no other app may address the provider, and the only access anyone

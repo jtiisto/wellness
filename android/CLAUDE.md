@@ -16,13 +16,14 @@ Native Android client for the Wellness system (Journal, Coach, Trends, Analysis)
 - Kotlin + Jetpack Compose, Material 3
 - minSdk 35 (Pixel 10+)
 - Ktor (HTTP), Koin (DI), kotlinx.serialization
+- Glance 1.2 (home-screen widget)
 - Single Room database with isDirty + dirtyGeneration flags
 - MVI architecture with StateFlow
 - Package: `dev.jtiisto.wellness`
 
 ## Module Structure
 - `build-logic/` — convention plugins (`wellness.android.application|library|feature`); module config lives here, not copy-pasted
-- `app/` — MainActivity, nav shell, Koin bootstrap, WorkManager init
+- `app/` — MainActivity, nav shell, Koin bootstrap, WorkManager init, home-screen widget (Glance; `widget/`, spec: `specs/widget.md`)
 - `core/data/` — Room, Ktor, DTOs, repositories, sync engine (headless-testable; no Compose deps)
 - `core/ui/` — M3 theme + shared composables
 - `feature/{journal,coach,trends,analysis}/` — ViewModels + screens only; features depend on `core/*`, never on each other; UI never touches DAOs
