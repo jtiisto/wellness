@@ -25,12 +25,16 @@ data class ProgressionCardModel(
  *
  * Assisted equipment gets its own subtitle: the plotted number is bodyweight
  * *minus* the assistance, so a rising line means less help, and calling that
- * "top set" without saying so reads backwards.
+ * "top set" without saying so reads backwards. The wording is a bounded
+ * QUALIFIER, not a sentence — the section head's contract measures the sub
+ * first and lets the title wrap, and the earlier "effective load (bw −
+ * assist)" phrasing was wide enough to crush "Assisted Pull-Up" into a
+ * one-letter-per-line column (device report, 2026-08-27).
  */
 fun progressionCardModel(detail: ExerciseDetailDto, showRpe: Boolean): ProgressionCardModel {
     val assisted = detail.exercise.equipment == "assisted"
     val subtitle = if (assisted) {
-        "effective load (bw − assist) · e1RM (${detail.unit})"
+        "bw − assist · e1RM (${detail.unit})"
     } else {
         "top set · e1RM (${detail.unit})"
     }

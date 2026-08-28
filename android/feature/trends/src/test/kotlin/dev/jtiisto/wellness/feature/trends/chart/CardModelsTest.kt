@@ -141,7 +141,10 @@ class CardModelsTest {
         )
 
         assertEquals("top set · e1RM (kg)", plain.subtitle)
-        assertEquals("effective load (bw − assist) · e1RM (kg)", assisted.subtitle)
+        // Qualifier-length on purpose: the section head measures the sub first
+        // and the title wraps, so a sentence here crushed the exercise name
+        // into a vertical letter column on device (2026-08-27).
+        assertEquals("bw − assist · e1RM (kg)", assisted.subtitle)
     }
 
     @Test
