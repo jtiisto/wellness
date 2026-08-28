@@ -111,7 +111,7 @@ Glance has no `Canvas`, so the two mark families the app draws — `InkJudgment`
 | `widget_mark_half` | left half-disc fill + filled even-odd annulus, outer 6 / inner 4.15 | PARTIAL (ink) | partial (ink) |
 | `widget_mark_hollow` | filled even-odd annulus, outer 6 / inner 4.15 | ATTENTION (ink) · PENDING (inkFaint) | not-yet (inkFaint) |
 
-**Every path is a fill — no vector strokes.** The first device build drew the filled mark and lost the other two (hollow invisible, half reading as a plain dot), and the structural difference between the working mark and the broken ones was exactly stroke-vs-fill. The annulus is the stroked ring's geometry restated as fill (centreline 5.075, thickness 1.85 — outer edge 6, inner 4.15): identical pixels where both render, and only one of them survives every launcher's RemoteViews pipeline.
+**Every path is a fill — no vector strokes.** Kept as belt-and-braces, with its history told straight: the first device build showed only the filled marks, this was diagnosed as stroke paths dying in the launcher's RemoteViews pipeline, and the marks were re-authored as fills (the annulus is the stroked ring's geometry restated — centreline 5.075, thickness 1.85, outer edge 6, inner 4.15). The second device build showed the *same* symptom, which broke the theory: the real killer was the **ten-child container budget** (§Glance constraints) dropping every mark after the fifth — the drawables were never given the chance to render. Fill-only stays because it is the more conservative authoring and the fills are now proven on-device; the stroke variant was never exonerated.
 
 Two rules govern their use:
 
@@ -134,6 +134,8 @@ The tally element is a **rendering of `categoryRollup`, and owns no judgment of 
   | 4 | `5/8` | the sentence does not fit either |
 
   One ladder for every bucket, walked against the widget's **real** content width (`SizeMode.Exact`). The first cut froze a "≤ 7 dots" rule onto STRIP — rung 2's arithmetic evaluated at the 110 dp floor — because under `Responsive` the width handed to the rule *was* the floor and the freeze at least made that honest. With the width telling the truth the freeze became the bug (a 220 dp strip refusing dots it could hold), so the rule retired; at the 110 dp floor the arithmetic still answers exactly as the frozen rule did, and the test suite pins that.
+
+  **Width is not the only budget.** A Glance container renders at most **ten children** and silently drops the rest (§Glance constraints), and a dropped child is a truncated dot row — the confident wrong answer the ladder exists to prevent, and exactly what the second device build showed (five met dots survived, every half and open mark after them vanished). So a rung is only open if the row can legally render it: rung 1 spends one child per dot plus the weight spacer plus the count (dots + 2 ≤ 10 → at most 8 dots with text), rung 2 one per dot (at most 10 dots alone); above that the ladder falls to the sentence, which states the full tally in one child.
 
   Rung 4 is the **floor of the never-truncate rule, not an exception to it**: `N/M` is the shortest true statement of a tally, so it is drawn even where the estimate says it will clip, because there is nothing left to fall back to. The dot list is never shortened at any rung — a truncated row of dots is a confident wrong answer about the day.
 
@@ -226,6 +228,14 @@ Each is a Glance platform limit, taken deliberately rather than worked around:
 4. **Fractional sp survives** (11.5 sp, 10.5 sp) and is rounded to whole sp **only if a device renders it badly** — a device-check item, not a pre-emptive change.
 5. **Launcher-controlled corner radius**, with no inner rounding of our own: the host's shape is the one piece of chrome we do not get to author, and drawing a second radius inside it would read as a card floating on a card.
 6. **Honesty lines at PAGE only** — the measured compromise stated in §Size buckets.
+
+## Glance constraints
+
+Platform facts that shaped code, found the hard way and load-bearing enough to name:
+
+- **Ten children per container, silently enforced.** A Glance `Row`/`Column`/`Box` renders at most ten children; the eleventh onward is dropped at render with no error surfaced to the app. Discovered on-device as "only completed trackers show": five dots plus their five gap `Spacer`s consumed the whole budget and every later mark vanished. Two consequences in code: gaps are **padding on the views, never `Spacer` children** (a spacer is a child too — padding sits inside a view's bounds, so a padded 8 dp mark is sized 12×8 to keep its 8×8 canvas), and the child budget is a **term of the tally fit ladder** (§Tally semantics), so a row that cannot legally render its dots falls to the one-child sentence instead of being truncated. Audited ceilings: tally row ≤ 10 (8 dots + spacer + count, or 10 dots alone), sleep block 6, every other container ≤ 5.
+- **`SizeMode.Responsive` reports the matched bucket size, not the real one.** Any logic that consumes `LocalSize` arithmetically (the fit ladder, the bucket thresholds) needs `SizeMode.Exact`. §Size buckets carries the post-mortem.
+- **Vector marks are authored fill-only** — §Mark vocabulary carries that history, including the misdiagnosis.
 
 ## Testing & Kover posture
 

@@ -259,12 +259,21 @@ fun tallyLayout(
     // handed in here WAS the floor, so a 220dp strip laid out as if it had 86dp
     // of content and drew a lone fraction in a field of paper (first device
     // report). With the width telling the truth, the arithmetic is the rule.
+    // Width is not the only budget. A Glance container renders AT MOST
+    // [GLANCE_MAX_CHILDREN] children and silently drops the rest — which is a
+    // truncated dot row, the confident wrong answer this ladder exists to
+    // prevent, discovered exactly that way on a device (five met dots survived,
+    // every half and open mark after them vanished). So a rung is only open if
+    // the row can legally RENDER it: dots-with-count spends one child per dot
+    // plus the weight spacer plus the text; dots alone spend one per dot.
     val dotsWidth = dotsWidthDp(dots.size)
     val textWidth = textWidthDp(text, fontScale)
     return when {
-        dotsWidth + TALLY_SEPARATION_DP + textWidth <= content ->
+        dots.size + 2 <= GLANCE_MAX_CHILDREN &&
+            dotsWidth + TALLY_SEPARATION_DP + textWidth <= content ->
             TallyLayout(dots = dots, text = text)
-        dotsWidth <= content -> TallyLayout(dots = dots, text = null)
+        dots.size <= GLANCE_MAX_CHILDREN && dotsWidth <= content ->
+            TallyLayout(dots = dots, text = null)
         // The count is what is left when the marks will not fit: it states the
         // same fact in fewer characters, and it never lies by omission.
         else -> countOnly(rollup, text, content, fontScale)
@@ -366,6 +375,14 @@ private const val TALLY_SEPARATION_DP = 8f
 private const val EYEBROW_ADVANCE_DP = 6.3f
 
 /** `12n − 4`: what STRIP's 86dp of content holds, and the rule it became. */
+/**
+ * Glance's hard cap on children per Row/Column/Box: the generated RemoteViews
+ * layout pool has ten slots, and an eleventh child is DROPPED at render with no
+ * error surfaced to the app. Layout code keeps gaps as padding rather than
+ * Spacer children for the same reason — a spacer is a child too.
+ */
+private const val GLANCE_MAX_CHILDREN = 10
+
 private fun dotsWidthDp(count: Int): Float =
     TALLY_DOT_DP * count + TALLY_DOT_GAP_DP * (count - 1)
 

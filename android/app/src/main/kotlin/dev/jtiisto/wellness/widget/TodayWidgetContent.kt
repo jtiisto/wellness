@@ -180,12 +180,23 @@ private fun TallyRow(layout: TallyLayout, spoken: String) {
             .semantics { contentDescription = spoken },
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        // The gaps are start-padding on the marks, never Spacer children: a
+        // Glance container renders AT MOST TEN children and silently drops the
+        // rest, and the first device build spent the whole budget on five dots
+        // plus their five spacers — every mark after the fifth simply vanished,
+        // which read as "only completed trackers show". The same limit is a
+        // term in the fit ladder now; see tallyLayout. Padding sits inside a
+        // view's bounds, so the padded marks are sized 12×8 to keep an 8×8
+        // canvas for the glyph.
         layout.dots?.forEachIndexed { index, dot ->
-            if (index > 0) Spacer(GlanceModifier.width(4.dp))
             Image(
                 provider = ImageProvider(dotDrawable(dot)),
                 contentDescription = null,
-                modifier = GlanceModifier.size(8.dp),
+                modifier = if (index > 0) {
+                    GlanceModifier.size(width = 12.dp, height = 8.dp).padding(start = 4.dp)
+                } else {
+                    GlanceModifier.size(8.dp)
+                },
                 colorFilter = ColorFilter.tint(
                     when (dotTint(dot)) {
                         WidgetTint.INK -> WIDGET_INK
@@ -223,10 +234,16 @@ private fun SleepBlock(model: SleepTonightModel?, showStrain: Boolean, showHones
             .fillMaxWidth()
             .semantics { contentDescription = sleepSpoken(model) },
     ) {
+        // Rhythm is top-padding on each line, not Spacer children — the same
+        // ten-child container budget the tally row ran into: at PAGE with both
+        // honesty lines, line-plus-spacer children counted eleven and the
+        // cached badge would have been the one silently dropped.
         SleepEyebrow(model)
-        Spacer(GlanceModifier.height(2.dp))
 
-        Row(verticalAlignment = Alignment.Bottom) {
+        Row(
+            verticalAlignment = Alignment.Bottom,
+            modifier = GlanceModifier.padding(top = 2.dp),
+        ) {
             if (model?.flagged == true) {
                 Text(
                     text = INK_BANG,
@@ -245,29 +262,45 @@ private fun SleepBlock(model: SleepTonightModel?, showStrain: Boolean, showHones
                 )
             }
         }
-        Spacer(GlanceModifier.height(2.dp))
-
         if (model == null) {
-            Text(text = "no data yet", style = WIDGET_META_SOFT)
+            Text(
+                text = "no data yet",
+                style = WIDGET_META_SOFT,
+                modifier = GlanceModifier.padding(top = 2.dp),
+            )
         } else {
             // Two lines because a gap night's `· reset — missing night` suffix
             // needs them at PAGE, and truncating the reason would leave the
             // bang unexplained.
-            Text(text = model.debtLine, style = WIDGET_META_INK, maxLines = 2)
+            Text(
+                text = model.debtLine,
+                style = WIDGET_META_INK,
+                maxLines = 2,
+                modifier = GlanceModifier.padding(top = 2.dp),
+            )
         }
 
         if (model != null && showStrain) {
-            Spacer(GlanceModifier.height(2.dp))
-            Text(text = model.strainLine, style = WIDGET_META_SOFT)
+            Text(
+                text = model.strainLine,
+                style = WIDGET_META_SOFT,
+                modifier = GlanceModifier.padding(top = 2.dp),
+            )
         }
         if (model != null && showHonesty) {
             model.freshnessLine?.let {
-                Spacer(GlanceModifier.height(2.dp))
-                Text(text = it, style = WIDGET_META_SOFT)
+                Text(
+                    text = it,
+                    style = WIDGET_META_SOFT,
+                    modifier = GlanceModifier.padding(top = 2.dp),
+                )
             }
             model.cachedLine?.let {
-                Spacer(GlanceModifier.height(2.dp))
-                Text(text = it.uppercase(), style = WIDGET_EYEBROW)
+                Text(
+                    text = it.uppercase(),
+                    style = WIDGET_EYEBROW,
+                    modifier = GlanceModifier.padding(top = 2.dp),
+                )
             }
         }
     }

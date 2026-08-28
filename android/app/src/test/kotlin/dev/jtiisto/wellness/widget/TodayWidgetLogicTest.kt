@@ -337,10 +337,12 @@ class TodayWidgetLogicTest {
     @Test
     @DisplayName("when both will not fit, the dots stay and the count goes")
     fun dotsWinOverText() {
-        val layout = tally(CategoryRollup(habitsMet = 12), WidgetBucket.CARD, 180f)
+        val layout = tally(CategoryRollup(habitsMet = 10), WidgetBucket.CARD, 180f)
 
-        // 140dp of dots fits 156dp of content; 140 + 8 + 81.9 does not.
-        assertEquals(12, layout?.dots?.size)
+        // 116dp of dots fits 156dp of content; 116 + 8 + 81.9 does not — and
+        // ten is also the whole child budget, so the count could not have
+        // joined the row even if the width had allowed it.
+        assertEquals(10, layout?.dots?.size)
         assertNull(layout?.text)
     }
 
@@ -359,27 +361,54 @@ class TodayWidgetLogicTest {
     @Test
     @DisplayName("the four rungs, in order, as the same tally loses room")
     fun theFitLadder() {
-        // One rollup, four widths: 164dp of dots and 81.9dp of sentence, so each
+        // One rollup, four widths: 92dp of dots and 69.3dp of sentence, so each
         // step is the one below the last thing that stopped fitting. The final
-        // width is under the CARD floor — the parameter under test is the width,
-        // not the bucket, and this is the arithmetic the ladder actually runs.
-        val rollup = CategoryRollup(habitsMet = 14)
+        // width is far under the CARD floor — the parameter under test is the
+        // width, not the bucket, and this is the arithmetic the ladder runs.
+        // Eight habits on purpose: dots-with-count spends 8 + 2 children of the
+        // ten-child render budget, so every rung here is open and only width
+        // decides. The budget itself is pinned separately below.
+        val rollup = CategoryRollup(habitsMet = 8)
 
         val both = tally(rollup, WidgetBucket.CARD, 280f)
-        assertEquals(14, both?.dots?.size)
-        assertEquals("14 OF 14 DONE", both?.text)
+        assertEquals(8, both?.dots?.size)
+        assertEquals("8 OF 8 DONE", both?.text)
 
-        val dotsOnly = tally(rollup, WidgetBucket.CARD, 200f)
-        assertEquals(14, dotsOnly?.dots?.size)
+        val dotsOnly = tally(rollup, WidgetBucket.CARD, 180f)
+        assertEquals(8, dotsOnly?.dots?.size)
         assertNull(dotsOnly?.text)
 
-        val sentence = tally(rollup, WidgetBucket.CARD, 180f)
+        val sentence = tally(rollup, WidgetBucket.CARD, 110f)
         assertNull(sentence?.dots)
-        assertEquals("14 OF 14 DONE", sentence?.text)
+        assertEquals("8 OF 8 DONE", sentence?.text)
 
-        val compact = tally(rollup, WidgetBucket.CARD, 100f)
+        val compact = tally(rollup, WidgetBucket.CARD, 60f)
         assertNull(compact?.dots)
-        assertEquals("14/14", compact?.text)
+        assertEquals("8/8", compact?.text)
+    }
+
+    @Test
+    @DisplayName("the render budget: ten children, dots plus count costing two more")
+    fun theGlanceChildBudget() {
+        // A Glance container renders at most ten children and silently DROPS
+        // the rest — on a device that read as five met dots and every half and
+        // open mark after them gone. So the budget is a term of the ladder, not
+        // a layout accident: at a width where everything fits, nine dots cannot
+        // take the count (9 + spacer + text = 11), ten can stand alone, and
+        // eleven fall to the sentence outright.
+        val wide = 400f
+
+        val nine = tally(CategoryRollup(habitsMet = 5, habitsPartial = 2, habitsNotYet = 2), WidgetBucket.CARD, wide)
+        assertEquals(9, nine?.dots?.size)
+        assertNull(nine?.text)
+
+        val ten = tally(CategoryRollup(habitsMet = 5, habitsPartial = 2, habitsNotYet = 3), WidgetBucket.CARD, wide)
+        assertEquals(10, ten?.dots?.size)
+        assertNull(ten?.text)
+
+        val eleven = tally(CategoryRollup(habitsMet = 5, habitsPartial = 3, habitsNotYet = 3), WidgetBucket.CARD, wide)
+        assertNull(eleven?.dots)
+        assertEquals("5 OF 11 DONE", eleven?.text)
     }
 
     @Test
