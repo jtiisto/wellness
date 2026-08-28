@@ -253,19 +253,12 @@ fun tallyLayout(
     val text = tallyCountText(rollup)
     val content = bucketWidthDp - 2 * WIDGET_PADDING_DP
 
-    // The strip holds one idea, and the width it was given does not change which
-    // one: a 2×1 dragged wider is still a strip. [STRIP_MAX_DOTS] is the general
-    // arithmetic below evaluated at 110dp, frozen as the rule so the answer
-    // cannot drift with a launcher's grid — dots are dp-sized, so no font scale
-    // moves this threshold either.
-    if (bucket == WidgetBucket.STRIP) {
-        return if (dots.size <= STRIP_MAX_DOTS) {
-            TallyLayout(dots = dots, text = null)
-        } else {
-            countOnly(rollup, text, content, fontScale)
-        }
-    }
-
+    // One ladder for every bucket, because [bucketWidthDp] is now the widget's
+    // REAL width (SizeMode.Exact), not a bucket floor. The first cut froze a
+    // seven-dot strip rule at the 110dp minimum — under Responsive the width
+    // handed in here WAS the floor, so a 220dp strip laid out as if it had 86dp
+    // of content and drew a lone fraction in a field of paper (first device
+    // report). With the width telling the truth, the arithmetic is the rule.
     val dotsWidth = dotsWidthDp(dots.size)
     val textWidth = textWidthDp(text, fontScale)
     return when {
@@ -373,8 +366,6 @@ private const val TALLY_SEPARATION_DP = 8f
 private const val EYEBROW_ADVANCE_DP = 6.3f
 
 /** `12n − 4`: what STRIP's 86dp of content holds, and the rule it became. */
-private const val STRIP_MAX_DOTS = 7
-
 private fun dotsWidthDp(count: Int): Float =
     TALLY_DOT_DP * count + TALLY_DOT_GAP_DP * (count - 1)
 

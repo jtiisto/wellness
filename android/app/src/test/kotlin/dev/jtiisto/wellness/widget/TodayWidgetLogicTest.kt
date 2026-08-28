@@ -425,8 +425,12 @@ class TodayWidgetLogicTest {
     }
 
     @Test
-    @DisplayName("the strip draws dots up to seven, and a count above that")
-    fun stripRule() {
+    @DisplayName("at the strip's floor the arithmetic holds seven dots, then the count")
+    fun stripFloorArithmetic() {
+        // 86dp of content: seven dots (80dp) fit alone, eight (92dp) do not.
+        // These are the same answers the retired frozen seven-dot rule gave —
+        // pinned here so the floor keeps behaving after the rule became plain
+        // width arithmetic.
         val seven = tally(CategoryRollup(habitsMet = 4, habitsNotYet = 3), WidgetBucket.STRIP, 110f)
         assertEquals(7, seven?.dots?.size)
         assertNull(seven?.text)
@@ -437,11 +441,15 @@ class TodayWidgetLogicTest {
     }
 
     @Test
-    @DisplayName("a strip dragged wider is still a strip: one idea, not two")
-    fun stripIgnoresExtraWidth() {
+    @DisplayName("a strip dragged wider uses the width it was given")
+    fun stripUsesRealWidth() {
+        // The first device build drew a lone fraction on a strip twice its
+        // floor, because Responsive handed the fit rule the 110dp bucket size
+        // instead of the real one. With SizeMode.Exact the width is the truth:
+        // eight dots and the sentence both fit 376dp of content.
         val layout = tally(CategoryRollup(habitsMet = 4, habitsNotYet = 4), WidgetBucket.STRIP, 400f)
 
-        assertNull(layout?.dots)
+        assertEquals(8, layout?.dots?.size)
         assertEquals("4 OF 8 DONE", layout?.text)
     }
 

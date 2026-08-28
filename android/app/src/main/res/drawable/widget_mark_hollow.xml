@@ -4,10 +4,18 @@
     ink-faint — one shape, two states, told apart only by the tint.
 
     Geometry ported from InkJudgment.ATTENTION / PENDING and WeekMark.OPEN_DOT:
-    a stroke-only circle inset by half its stroke, matching the source's
-    `radius - hairline / 2f` — 6 - 1.85/2 = 5.075 at stroke 1.85 on viewport 12.
+    a ring whose centreline sits at the source's `radius - hairline / 2f`
+    (6 - 1.85/2 = 5.075 at stroke 1.85 on viewport 12) — outer edge 6, inner
+    edge 4.15.
 
-    The authored stroke colour is IRRELEVANT: every use site draws this through
+    Authored as an even-odd FILLED annulus, not a stroked path, on purpose: the
+    first device build drew the filled mark and lost this one entirely, and the
+    difference between them was exactly stroke-vs-fill. Fill-only geometry rides
+    the code path the working mark proves; a stroked ring rides whatever the
+    launcher's RemoteViews pipeline makes of vector strokes. Same pixels when
+    both work — only one of them always works.
+
+    The authored colour is IRRELEVANT: every use site draws this through
     ColorFilter.tint(ColorProvider), which is how the one-ink rule survives into
     a surface that cannot read LogbookTheme.
 -->
@@ -17,7 +25,7 @@
     android:viewportWidth="12"
     android:viewportHeight="12">
     <path
-        android:strokeColor="#000000"
-        android:strokeWidth="1.85"
-        android:pathData="M6,6 m-5.075,0 a5.075,5.075 0 1,0 10.15,0 a5.075,5.075 0 1,0 -10.15,0" />
+        android:fillColor="#000000"
+        android:fillType="evenOdd"
+        android:pathData="M6,6 m-6,0 a6,6 0 1,0 12,0 a6,6 0 1,0 -12,0 M6,6 m-4.15,0 a4.15,4.15 0 1,0 8.3,0 a4.15,4.15 0 1,0 -8.3,0" />
 </vector>

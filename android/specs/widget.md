@@ -22,7 +22,7 @@ Naming and homes:
 
 ## Size buckets
 
-`SizeMode.Responsive` over three sizes. Each bucket is a **floor**, verified to render whole at its own minimum; real launchers give more room.
+`SizeMode.Exact`. Each bucket is a **threshold on the widget's real size** (`widgetBucket`), and every bucket is verified to render whole at its own floor; real launchers give more room, and with Exact the composition *knows* it has more. The first cut used `SizeMode.Responsive` over the three floors, which hands the composition the matched **bucket** size rather than the real one — so a strip stretched to twice its floor still laid out (and fit its tally) as if it were 110×40 dp, drawing a lone fraction in a field of paper. First device report; the mode flipped, and the fit rule reads the truth. STRIP content is vertically centred (one line in a box usually taller than the line); CARD and PAGE read top-down like the card.
 
 | Bucket | DpSize (min) | Cells | Shows |
 |---|---|---|---|
@@ -108,8 +108,10 @@ Glance has no `Canvas`, so the two mark families the app draws — `InkJudgment`
 | Drawable | Geometry | As 9 dp judgment glyph | As 8 dp tally dot |
 |---|---|---|---|
 | `widget_mark_filled` | filled circle r = 6 | SETTLED (ink) | met (ink) |
-| `widget_mark_half` | left half-disc fill + full stroke circle r = 6 − 0.925 | PARTIAL (ink) | partial (ink) |
-| `widget_mark_hollow` | stroke circle r = 6 − 0.925 | ATTENTION (ink) · PENDING (inkFaint) | not-yet (inkFaint) |
+| `widget_mark_half` | left half-disc fill + filled even-odd annulus, outer 6 / inner 4.15 | PARTIAL (ink) | partial (ink) |
+| `widget_mark_hollow` | filled even-odd annulus, outer 6 / inner 4.15 | ATTENTION (ink) · PENDING (inkFaint) | not-yet (inkFaint) |
+
+**Every path is a fill — no vector strokes.** The first device build drew the filled mark and lost the other two (hollow invisible, half reading as a plain dot), and the structural difference between the working mark and the broken ones was exactly stroke-vs-fill. The annulus is the stroked ring's geometry restated as fill (centreline 5.075, thickness 1.85 — outer edge 6, inner 4.15): identical pixels where both render, and only one of them survives every launcher's RemoteViews pipeline.
 
 Two rules govern their use:
 
@@ -131,7 +133,7 @@ The tally element is a **rendering of `categoryRollup`, and owns no judgment of 
   | 3 | `5 OF 8 DONE` alone | the dots do not fit but the sentence does |
   | 4 | `5/8` | the sentence does not fit either |
 
-  At STRIP rungs 1–2 collapse to the frozen rule "dots only when there are ≤ 7 habits" — that threshold *is* rung 2's arithmetic evaluated at 110 dp, kept as a constant so a strip dragged wider still shows one idea rather than two — and a strip above 7 habits enters at rung 3.
+  One ladder for every bucket, walked against the widget's **real** content width (`SizeMode.Exact`). The first cut froze a "≤ 7 dots" rule onto STRIP — rung 2's arithmetic evaluated at the 110 dp floor — because under `Responsive` the width handed to the rule *was* the floor and the freeze at least made that honest. With the width telling the truth the freeze became the bug (a 220 dp strip refusing dots it could hold), so the rule retired; at the 110 dp floor the arithmetic still answers exactly as the frozen rule did, and the test suite pins that.
 
   Rung 4 is the **floor of the never-truncate rule, not an exception to it**: `N/M` is the shortest true statement of a tally, so it is drawn even where the estimate says it will clip, because there is nothing left to fall back to. The dot list is never shortened at any rung — a truncated row of dots is a confident wrong answer about the day.
 

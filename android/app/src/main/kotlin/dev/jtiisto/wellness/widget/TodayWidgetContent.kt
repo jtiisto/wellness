@@ -129,6 +129,14 @@ fun TodayWidgetContent(rollup: CategoryRollup?, model: SleepTonightModel?) {
             .background(WIDGET_PAPER)
             .padding(12.dp)
             .clickable(actionStartActivity<MainActivity>()),
+        // The strip is one line in a box that is usually taller than the line:
+        // centre it. The taller buckets read top-down like the card and stay
+        // anchored to the top of the page.
+        verticalAlignment = if (bucket == WidgetBucket.STRIP) {
+            Alignment.CenterVertically
+        } else {
+            Alignment.Top
+        },
     ) {
         if (tally != null && rollup != null) {
             TallyRow(tally, tallyContentDescription(rollup))

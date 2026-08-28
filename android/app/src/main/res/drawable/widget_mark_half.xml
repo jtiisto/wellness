@@ -8,15 +8,18 @@
     "so the missing half reads as unfinished rather than as a smaller dot" —
     the glyph file's own words, and the reason this is not just a scaled dot.
 
-    The ring is inset by half its stroke, matching the source's
-    `radius - hairline / 2f`: 6 - 1.85/2 = 5.075 at stroke 1.85. That stroke is
-    1.85/12 of the box, within 0.05dp of BOTH source ratios (1.4dp/9dp for the
-    judgment glyph, 1.2dp/8dp for the tally dot), which is what lets one
+    The closing outline is an even-odd FILLED annulus (outer edge 6, inner edge
+    4.15 — the centreline at the source's `radius - hairline / 2f` = 5.075 with
+    stroke 1.85), not a stroked circle: the first device build lost every
+    stroked path while the filled mark drew fine, which left this one reading
+    as a plain dot. Fill-only geometry rides the code path the working mark
+    proves. The 1.85/12 ring thickness is within 0.05dp of BOTH source ratios
+    (1.4dp/9dp judgment glyph, 1.2dp/8dp tally dot), which is what lets one
     drawable set serve both sizes.
 
-    The authored fill/stroke colours are IRRELEVANT: every use site draws this
-    through ColorFilter.tint(ColorProvider), which is how the one-ink rule
-    survives into a surface that cannot read LogbookTheme.
+    The authored colour is IRRELEVANT: every use site draws this through
+    ColorFilter.tint(ColorProvider), which is how the one-ink rule survives into
+    a surface that cannot read LogbookTheme.
 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="12dp"
@@ -27,7 +30,7 @@
         android:fillColor="#000000"
         android:pathData="M6,0 A6,6 0 0,0 6,12 Z" />
     <path
-        android:strokeColor="#000000"
-        android:strokeWidth="1.85"
-        android:pathData="M6,6 m-5.075,0 a5.075,5.075 0 1,0 10.15,0 a5.075,5.075 0 1,0 -10.15,0" />
+        android:fillColor="#000000"
+        android:fillType="evenOdd"
+        android:pathData="M6,6 m-6,0 a6,6 0 1,0 12,0 a6,6 0 1,0 -12,0 M6,6 m-4.15,0 a4.15,4.15 0 1,0 8.3,0 a4.15,4.15 0 1,0 -8.3,0" />
 </vector>

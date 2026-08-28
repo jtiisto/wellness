@@ -45,7 +45,13 @@ import java.time.LocalDate
  */
 class TodayWidget : GlanceAppWidget(), KoinComponent {
 
-    override val sizeMode = SizeMode.Responsive(setOf(STRIP, CARD, PAGE))
+    // Exact, not Responsive, and the difference reached a device: Responsive
+    // hands the composition the matched BUCKET size, so a strip stretched to
+    // twice its floor still laid out — and fit its tally — as if it were
+    // 110×40dp (first device report: a lone fraction in a field of paper).
+    // The bucket thresholds in [widgetBucket] still decide what renders; Exact
+    // just makes the width they and the fit ladder read the truth.
+    override val sizeMode = SizeMode.Exact
 
     override suspend fun provideGlance(context: Context, id: GlanceId) {
         val journalPeek: JournalDayPeek = get()
