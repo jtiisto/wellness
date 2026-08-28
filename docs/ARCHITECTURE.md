@@ -1109,6 +1109,105 @@ ectopic threshold implies) on the Python side, the Android unit suite pins the
 Kotlin side, and the two files' PARITY comments point at each other — a
 threshold cannot be edited on either side unnoticed.
 
+### Garmin: On-Demand Sync Trigger (Headless)
+
+Garmin is the smallest module in the app and the only one that stores nothing at
+all. It is a **command** surface, not a data one: the Garmin data itself keeps
+arriving in `~/.garmy/health.db` (written by `bin/garmin-sync.sh`, from cron or
+from here) and keeps being read by Trends. All this module adds is the ability
+for a client to say *sync now* and ask *are you done yet* — which is what turns a
+Trends pull-to-refresh into fresh data rather than a re-read of this morning's.
+
+It is headless **and** DB-less: the `config.MODULES` entry carries
+`"headless": True` and no `db_env`, so `create_app` calls its factory with no
+argument (the Trends rule) and `GET /api/modules` filters it out (the HR rule).
+
+**Wire contract:**
+
+- **snake_case**, matching Trends — the consuming surface. (HR's camelCase is
+  the documented exception, not a precedent.)
+- **Optional keys are omitted, never null.** The status response is assembled
+  key-by-key for exactly that reason, so absence is a property of the code
+  rather than a serializer setting.
+- `last_finished_at` and `last_synced_at` are **epoch-ms integers**, like every
+  other instant the native client consumes. The `_at` suffix names the concept;
+  the type is the integer.
+
+**`POST /sync` → 200, always**, carrying one of four statuses:
+
+| status | meaning |
+|---|---|
+| `started` | a sync was launched |
+| `running` | one is already in flight — **attach and wait** |
+| `cooldown` | too soon; `retry_in_sec` says how long (always ≥ 1 while blocked) |
+| `unconfigured` | no runnable script; a dev clone without garmy degrades here |
+
+The 200-with-status-enum is a **deliberate deviation** from Analysis's 409 on a
+second submit. A pull gesture treats "already running" as success-shaped: the
+client attaches to the in-flight run and waits for it, and an error status would
+make the UI apologize for doing exactly the right thing. Analysis's 409 is still
+correct *there* — a report submission is a request to create a distinct artifact,
+and refusing it protects a result the user is waiting on.
+
+**`GET /sync/status` → `{"running": bool}`** plus `last_finished_at`,
+`last_outcome` (`"ok"` | `"failed"`) and `last_synced_at` when known. The client
+polls this during the second phase of a Trends pull.
+
+**Single-flight** is per uvicorn process: closure state (`running`,
+`last_attempt_mono`, `last_finished_ms`, `last_outcome`) guarded by an
+`asyncio.Lock` held across the whole check-and-start, so two simultaneous pulls
+cannot both launch. The runner clears `running` in a `finally` — the lesson
+Analysis learned about its own status mark: no failure path may leave the module
+wedged in `running` until a restart. Subprocess handling follows
+`coach._run_hook`: `start_new_session=True` so the timeout's `os.killpg` takes
+out the whole tree (killing just the shell would leave the python child syncing
+on), a 120 s `asyncio.wait_for`, and stdio wired to `DEVNULL` because the script
+owns its own log trail.
+
+**The cooldown** (10 minutes) runs from the last **attempt**, not the last
+success — a failing script must not become a retry loop driven by a user's
+thumb. Two clocks feed it, because neither alone suffices:
+
+- the **in-process monotonic clock**, authoritative while the server lives,
+  amnesiac across a restart (and monotonic so an NTP step cannot stretch or
+  shorten the window);
+- a **durable backstop**: `MAX(synced_at)` from garmy's own `sync_status` table,
+  read through `asyncio.to_thread` behind a `Path.exists()` guard (a read-only
+  connect *raises* on a missing file) with `sqlite3.OperationalError` caught for
+  the missing-table case. Every "cannot tell" case returns the same answer — no
+  evidence — and falls back to the in-process clock.
+
+`synced_at` is garmy's `datetime.utcnow()`: **naive UTC** text, rendered
+`YYYY-MM-DD HH:MM:SS.ffffff` and without the fraction when the microseconds are
+zero; both parse. `MAX()` over that text is lexical, which for this fixed-width
+format is also chronological (a fraction-less stamp sorts before a same-second
+fractional one — the correct order), and `MAX` skips the NULLs garmy leaves on
+pending rows.
+
+A stamp **in the future is ignored** for cooldown purposes. It proves nothing
+about elapsed time; it proves a clock disagreement. Honoring one would compute a
+remaining time longer than the window and wedge the trigger for as long as the
+skew lasted — silently, with a `retry_in_sec` that never expires. One redundant
+garmy run is the cheaper wrong answer. (The stamp is still *reported* in
+`last_synced_at`; ignoring it for a decision is not the same as hiding it.)
+
+**Accepted race:** a pull landing during a cron run can start a second garmy
+process. The closure state cannot see cron's flight, and the `sync_status`
+backstop only partially mitigates it (cron writes that table when it *finishes*,
+not when it starts). The cost is wasted Garmin API calls on an idempotent
+operation, which is not worth a lockfile protocol between two programs that
+otherwise share nothing.
+
+**The script** — `bin/garmin-sync.sh`, tracked and shipped — is prod's **cron
+script too**. Its defaults (`${1:-7}`, `${2:-3}`) reproduce the cron's historical
+7/3 scope, and the module passes `2 2` for an on-demand top-up. Output is
+appended timestamped to `~/.garmy/sync-cron.log` in the format that log has
+always used: the server reads only the exit code, but the user reads the trail,
+and a bare-stdout runner would have ended it. Shipping the file **replaces**
+prod's untracked equivalent — `deploy-prod.sh`'s only never-clobber pattern is
+`*-workout-hook.sh` — so the first deploy after this change should be followed by
+a check of cron's next run.
+
 ## Shared Frontend Utilities
 
 The `public/js/shared/` directory contains cross-module utilities:
@@ -1125,7 +1224,7 @@ The `public/js/shared/` directory contains cross-module utilities:
 
 ### Backend
 
-**FastAPI** serves as the unified web framework. Each module contributes an `APIRouter` via a factory function (`create_router(db_path)`) that initializes its database and returns the router. The factory builds a `DbAccessor` (Journal/Coach/HR) or captures the db_path (Analysis) and binds the route handlers to it as closures — the module holds **no mutable global DB path**, so two routers for the same module can target different databases in one process (proven by `test/test_module_isolation.py`). `server.create_app(db_path_overrides=None)` builds the inner ASGI app and mounts every enabled module's router at its configured prefix — `/api/journal`, `/api/coach`, `/api/analysis`, `/api/trends`, `/api/hr` (a DB-less module like Trends has its factory called with no argument, and a headless one like HR is mounted identically to the rest, only absent from `/api/modules`); production builds it once at the server entrypoint (`python src/server.py`), while tests call it per-test with temp-path overrides to get fully isolated app+DB instances without poking module state. Importing the `server` module is **side-effect-free** — no app is constructed at import time, so the module migrations and the analysis stale-report recovery run only on an actual server start, never as a side effect of a test or tool importing `server`.
+**FastAPI** serves as the unified web framework. Each module contributes an `APIRouter` via a factory function (`create_router(db_path)`) that initializes its database and returns the router. The factory builds a `DbAccessor` (Journal/Coach/HR) or captures the db_path (Analysis) and binds the route handlers to it as closures — the module holds **no mutable global DB path**, so two routers for the same module can target different databases in one process (proven by `test/test_module_isolation.py`). `server.create_app(db_path_overrides=None)` builds the inner ASGI app and mounts every enabled module's router at its configured prefix — `/api/journal`, `/api/coach`, `/api/analysis`, `/api/trends`, `/api/hr`, `/api/garmin` (a DB-less module like Trends has its factory called with no argument, and a headless one like HR is mounted identically to the rest, only absent from `/api/modules`; Garmin is both at once); production builds it once at the server entrypoint (`python src/server.py`), while tests call it per-test with temp-path overrides to get fully isolated app+DB instances without poking module state. Importing the `server` module is **side-effect-free** — no app is constructed at import time, so the module migrations and the analysis stale-report recovery run only on an actual server start, never as a side effect of a test or tool importing `server`.
 
 **Network posture.** There is no per-route auth — Tailscale is the auth
 layer — but the server binds `0.0.0.0`, which also exposes the port on any

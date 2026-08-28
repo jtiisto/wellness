@@ -73,14 +73,26 @@ class SyncScheduler(
      * Sync now: drop the pending debounce and the pending retry *timer*, then
      * execute. The retry attempt counter survives — an immediate request is not
      * evidence that the server recovered.
+     *
+     * Returns the job that does it, as [stop] does and for a related reason: a
+     * caller that asked for this sync on the user's behalf — the pull gesture —
+     * has to be able to tell when it is over.
+     *
+     * **The job is not always the flight.** In the ordinary case it is: the body
+     * awaits [runSync], which awaits [syncFn]. But the busy path returns as soon
+     * as it has set `pendingSync` (the real flight belongs to another job), and
+     * so does the offline check — so a caller waiting for "the sync finished"
+     * must also wait for the owning store's own busy flag to clear. That flag is
+     * observable on both stores precisely for this.
+     *
+     * @param trigger what to record in the debug log as the cause. Callers
+     *   outside this class pass [TRIGGER_PULL]; everything else is internal.
      */
-    fun requestSync() {
-        control.launch {
-            if (stopped) return@launch
-            cancelDebounce()
-            cancelRetryTimer()
-            runSync(TRIGGER_REQUEST)
-        }
+    fun requestSync(trigger: String = TRIGGER_REQUEST): Job = control.launch {
+        if (stopped) return@launch
+        cancelDebounce()
+        cancelRetryTimer()
+        runSync(trigger)
     }
 
     /** Clear retry state entirely, timer and counter. The force-sync hook. */
@@ -301,10 +313,17 @@ class SyncScheduler(
         pollJob = null
     }
 
-    private companion object {
-        const val TRIGGER_DEBOUNCE = "debounce"
-        const val TRIGGER_REQUEST = "request"
-        const val TRIGGER_RETRY = "retry"
-        const val TRIGGER_POLL = "poll"
+    companion object {
+        /**
+         * The pull gesture, and the only trigger name with a caller outside this
+         * class. The other three describe timers nobody else can start, so they
+         * stay private rather than widening the public surface for symmetry.
+         */
+        const val TRIGGER_PULL = "pull"
+
+        private const val TRIGGER_DEBOUNCE = "debounce"
+        private const val TRIGGER_REQUEST = "request"
+        private const val TRIGGER_RETRY = "retry"
+        private const val TRIGGER_POLL = "poll"
     }
 }

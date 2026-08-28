@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -68,51 +69,62 @@ fun OverviewTrendsScreen(
         onDispose { viewModel.onInactive() }
     }
 
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(SECTION_GAP),
+    val isRefreshing by viewModel.isRefreshing.collectAsStateWithLifecycle()
+    val syncBanner by viewModel.syncBanner.collectAsStateWithLifecycle()
+
+    PullToRefreshBox(
+        isRefreshing = isRefreshing,
+        onRefresh = viewModel::refresh,
+        modifier = modifier,
     ) {
-        RangeToolbar(
-            range = state.range,
-            staleStamps = staleStamps(state.overview, state.weight),
-            onRange = onRange,
-        )
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(SECTION_GAP),
+        ) {
+            RangeToolbar(
+                range = state.range,
+                staleStamps = staleStamps(state.overview, state.weight),
+                onRange = onRange,
+            )
 
-        when (val overview = state.overview) {
-            is Slice.Error -> ScreenError(overview.text, viewModel::retry)
-            Slice.Loading -> ScreenLoading()
-            is Slice.Ready -> {
-                val tiles = remember(overview.value) { overviewStatTiles(overview.value) }
-                Row(horizontalArrangement = Arrangement.spacedBy(TILE_GAP)) {
-                    for (tile in tiles) StatTile(tile, onClick = { onNavigate(tile.target) })
-                }
-                remember(overview.value) { prTileModel(overview.value.prs) }?.let { PrTile(it) }
-                val focus = remember(overview.value) { focusRowModels(overview.value) }
-                if (focus.isNotEmpty()) FocusSection(focus)
-            }
-        }
+            SyncBanner(syncBanner)
 
-        val weight = (state.weight as? Slice.Ready)?.value
-        if (weight != null && weight.available && weight.series.isNotEmpty()) {
-            val card = remember(weight) { weightCardModel(weight.series) }
-            if (card != null) {
-                LogbookSection(title = "Body weight", sub = "kg", trailing = {
-                    Text(
-                        text = card.latest,
-                        style = LogbookTheme.type.meta.copy(fontWeight = FontWeight.Medium),
-                        color = LogbookTheme.palette.ink,
-                        modifier = Modifier.padding(start = LogbookSpace.grid * 2),
-                    )
-                }) {
-                    LegendRow(WEIGHT_LEGEND)
-                    PlotCanvas(model = card.plot, identity = listOf("weight", state.range))
+            when (val overview = state.overview) {
+                is Slice.Error -> ScreenError(overview.text, viewModel::retry)
+                Slice.Loading -> ScreenLoading()
+                is Slice.Ready -> {
+                    val tiles = remember(overview.value) { overviewStatTiles(overview.value) }
+                    Row(horizontalArrangement = Arrangement.spacedBy(TILE_GAP)) {
+                        for (tile in tiles) StatTile(tile, onClick = { onNavigate(tile.target) })
+                    }
+                    remember(overview.value) { prTileModel(overview.value.prs) }?.let { PrTile(it) }
+                    val focus = remember(overview.value) { focusRowModels(overview.value) }
+                    if (focus.isNotEmpty()) FocusSection(focus)
                 }
             }
-        }
 
-        Box(modifier = Modifier.height(SCREEN_BOTTOM))
+            val weight = (state.weight as? Slice.Ready)?.value
+            if (weight != null && weight.available && weight.series.isNotEmpty()) {
+                val card = remember(weight) { weightCardModel(weight.series) }
+                if (card != null) {
+                    LogbookSection(title = "Body weight", sub = "kg", trailing = {
+                        Text(
+                            text = card.latest,
+                            style = LogbookTheme.type.meta.copy(fontWeight = FontWeight.Medium),
+                            color = LogbookTheme.palette.ink,
+                            modifier = Modifier.padding(start = LogbookSpace.grid * 2),
+                        )
+                    }) {
+                        LegendRow(WEIGHT_LEGEND)
+                        PlotCanvas(model = card.plot, identity = listOf("weight", state.range))
+                    }
+                }
+            }
+
+            Box(modifier = Modifier.height(SCREEN_BOTTOM))
+        }
     }
 }
 

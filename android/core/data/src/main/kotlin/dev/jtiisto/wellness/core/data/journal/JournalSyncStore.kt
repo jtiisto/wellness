@@ -98,10 +98,21 @@ class JournalSyncStore(
     /** GREEN clean / RED dirty / GRAY offline-or-never-synced. */
     val syncStatus: StateFlow<SyncStatus> = _syncStatus.asStateFlow()
 
+    private val _isSyncing = MutableStateFlow(false)
+
     /** The scheduler's busy hook. Set for the whole of [triggerSync]. */
-    @Volatile
-    var isSyncing: Boolean = false
-        private set
+    val isSyncing: Boolean get() = _isSyncing.value
+
+    /**
+     * The same flag as [isSyncing], observable.
+     *
+     * The scheduler polls the boolean; the masthead's dot and the pull gesture
+     * need to be told — and the gesture needs it for a reason the dot does not
+     * have. `SyncScheduler.requestSync` hands back a job that completes at once
+     * when the flight is somebody else's, so this flow is the only honest answer
+     * to "is a sync still running". One source, so the two can never disagree.
+     */
+    val isSyncingFlow: StateFlow<Boolean> = _isSyncing.asStateFlow()
 
     /**
      * Single-flight, independent of who is calling. The scheduler already
@@ -290,7 +301,7 @@ class JournalSyncStore(
                 _syncStatus.value = SyncStatus.GRAY
                 return ForceSyncModuleResult.Skipped(ForceSyncSkipReason.OFFLINE)
             }
-            isSyncing = true
+            _isSyncing.value = true
             try {
                 return runForceCycle()
             } catch (cancellation: CancellationException) {
@@ -304,7 +315,7 @@ class JournalSyncStore(
                 _syncStatus.value = SyncStatus.RED
                 return ForceSyncModuleResult.Failed(describeForLog(error))
             } finally {
-                isSyncing = false
+                _isSyncing.value = false
             }
         } finally {
             syncMutex.unlock()
@@ -378,7 +389,7 @@ class JournalSyncStore(
             return SyncResult(success = false, reason = SyncSkipReason.OFFLINE)
         }
 
-        isSyncing = true
+        _isSyncing.value = true
         try {
             val clientId = clientId()
             val watermark = dao.getMeta(JournalDao.KEY_LAST_SERVER_SYNC_TIME)
@@ -438,7 +449,7 @@ class JournalSyncStore(
             _syncStatus.value = SyncStatus.RED
             return SyncResult(success = false, error = error)
         } finally {
-            isSyncing = false
+            _isSyncing.value = false
         }
     }
 

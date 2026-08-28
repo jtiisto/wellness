@@ -135,7 +135,9 @@ class SyncScheduler(
     baseRetryMs: Long = 5_000, maxRetryMs: Long = 120_000,
 ) {
     fun scheduleUpload()   // reset debounce timer job
-    fun requestSync()      // cancel debounce + retry TIMER (attempt counter untouched), execute now
+    fun requestSync(trigger: String = TRIGGER_REQUEST): Job
+                           // cancel debounce + retry TIMER (attempt counter untouched), execute now
+    companion object { const val TRIGGER_PULL = "pull" }   // the only public trigger name
     fun resetRetry()       // zero BOTH retry timer and attempt counter (force-sync hook)
     fun onOnline()         // requestSync(); orchestrator decides about polling separately
     fun onOffline()        // stop polling; cancel debounce + retry timer (counter untouched)
@@ -143,6 +145,26 @@ class SyncScheduler(
     fun stop()             // terminal + idempotent: cancel timers/polling; an in-flight syncFn RUNS TO COMPLETION
 }
 ```
+
+**The returned job, and what a caller may conclude from it** (added with the pull gesture,
+2026-08-27). `requestSync` returns the job that does the work, as `stop()` does, because the pull
+gesture has to know when the sync it asked for is over. In the ordinary case the job *is* the flight:
+the body awaits `runSync`, which awaits `syncFn`. On two paths it is not, and both complete near
+instantly —
+
+1. **busy** (`isSyncing()` or an internal flight): `pendingSync` is set and the body returns; the real
+   flight belongs to another job.
+2. **offline**: the online check returns before anything starts.
+
+So a caller waiting for "the sync finished" must **also** await the owning store's own busy flag
+going false, with a cap. Both stores publish that flag as a `StateFlow` for exactly this
+(`CoachSyncStore.isSyncingFlow` since Phase 5; `JournalSyncStore.isSyncingFlow` added here, replacing
+a `@Volatile` boolean — the boolean survives as a computed getter over the same flow, so the
+scheduler's hook and the screen's indicator cannot disagree about one cycle).
+
+`trigger` names the cause in the debug log and nothing else. The `TRIGGER_*` constants stay private
+except `TRIGGER_PULL`, which the Journal and Coach ViewModels pass: widening the other three for
+symmetry would publish names for timers no caller outside the class can start.
 
 ### Connectivity (`sync/ConnectivityMonitor.kt`)
 ```kotlin
@@ -203,7 +225,7 @@ MVI ViewModel + screen replacing the "Tools" stub:
 |---|---|
 | `DirtySetLogicTest` | `dirty-set.test.js` transcribed 1:1 + missing-snapshot-entry case + Long generations |
 | `SyncSchedulerLogicTest` | `sync-scheduler-logic.test.js` transcribed 1:1 + OTHER→RETRY + outcome precedence (success+error → RESET; CONFLICTS+error → RESET) + saturating delay at huge attempts |
-| `SyncSchedulerTest` | debounce coalescing; poll cadence (sequential, no overlap, slow pollCheck > 30 s); backoff 5→10→20→…→120 cap; pendingSync: busy-path skips finally, running flight's finally re-arms; dual timers after ERROR + dirty; retry fires during flight → pendingSync; requestSync/onOffline cancel retry timer but NOT attempt counter; RESET zeroes both; SKIP touches neither; in-flight sync survives scheduleUpload/requestSync/onOffline/stop; CancellationException never classified; two concurrent triggers → one flight; pollCheck throw → no onServerError, no retry; stop() idempotent, post-stop calls no-op |
+| `SyncSchedulerTest` | the returned job spans the flight (virtual time) and completes AT ONCE on the busy path with no flight started; the trigger name reaches the debug log (`pull`, and `request` still the default); debounce coalescing; poll cadence (sequential, no overlap, slow pollCheck > 30 s); backoff 5→10→20→…→120 cap; pendingSync: busy-path skips finally, running flight's finally re-arms; dual timers after ERROR + dirty; retry fires during flight → pendingSync; requestSync/onOffline cancel retry timer but NOT attempt counter; RESET zeroes both; SKIP touches neither; in-flight sync survives scheduleUpload/requestSync/onOffline/stop; CancellationException never classified; two concurrent triggers → one flight; pollCheck throw → no onServerError, no retry; stop() idempotent, post-stop calls no-op |
 | `SyncOrchestratorTest` | polling == foreground && online; online-while-backgrounded → requestSync only; late register gets current state; repeated identical events idempotent; flapping connectivity |
 | `DebugLogLogicTest` | 500-cap boundary, 1 h TTL boundary, prune predicate, unserializable data marker |
 | `DebugLogTest` | live-view TTL: expired entry drops on a tick with no write; fresh entries survive ticks |

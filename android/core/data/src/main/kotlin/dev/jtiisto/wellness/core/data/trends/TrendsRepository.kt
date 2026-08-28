@@ -98,6 +98,23 @@ class TrendsRepository(
     suspend fun healthLabs(end: DateString): FetchResult<LabsDto> =
         fetchCached(KEY_LABS, LabsDto.serializer()) { api.healthLabs(end) }
 
+    // ---- the on-demand Garmin sync ------------------------------------------
+    //
+    // Deliberately NOT through fetchCached, and not merely because there is
+    // nothing worth storing: a cached "started" is a lie the moment it is
+    // written, and an offline fallback would answer a *command* with a stale
+    // success. A server that cannot be reached means the sync did not start,
+    // which is exactly what the caller needs to hear — so the exception is left
+    // to propagate and the ViewModel decides what a failed trigger means.
+
+    /** Ask the server to sync Garmin now. See [GarminSyncTrigger.status]. */
+    suspend fun garminSyncTrigger(): GarminSyncTrigger =
+        json.decodeFromString(GarminSyncTrigger.serializer(), api.garminSyncTrigger())
+
+    /** Whether that sync is still running, and how the last one ended. */
+    suspend fun garminSyncStatus(): GarminSyncStatus =
+        json.decodeFromString(GarminSyncStatus.serializer(), api.garminSyncStatus())
+
     /**
      * Fetch, decode, cache — in that order, and the order is the contract.
      *

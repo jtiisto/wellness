@@ -404,5 +404,10 @@ private fun forceSyncModuleOf(
     override suspend fun forceSync(): ForceSyncModuleResult = store()
     override suspend fun hasDirtyData(): Boolean = dirty()
     override fun resetRetry() = scheduler().resetRetry()
-    override fun requestSync() = scheduler().requestSync()
+
+    // The job is dropped deliberately: a force sync re-arms the scheduler and
+    // moves on, and what it reports on is its own cycle, not this one.
+    override fun requestSync() {
+        scheduler().requestSync()
+    }
 }

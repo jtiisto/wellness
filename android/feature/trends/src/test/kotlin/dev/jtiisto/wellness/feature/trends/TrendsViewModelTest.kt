@@ -10,6 +10,8 @@ import dev.jtiisto.wellness.core.data.trends.ExerciseDetailDto
 import dev.jtiisto.wellness.core.data.trends.ExerciseInfo
 import dev.jtiisto.wellness.core.data.trends.ExercisesDto
 import dev.jtiisto.wellness.core.data.trends.FetchResult
+import dev.jtiisto.wellness.core.data.trends.GarminSyncStatus
+import dev.jtiisto.wellness.core.data.trends.GarminSyncTrigger
 import dev.jtiisto.wellness.core.data.trends.LabsDto
 import dev.jtiisto.wellness.core.data.trends.RecoveryDto
 import dev.jtiisto.wellness.core.data.trends.SleepDebtDto
@@ -479,6 +481,359 @@ class TrendsViewModelTest {
         advanceUntilIdle()
 
         assertTrue(viewModel.uiState.value.cardio is Slice.Ready)
+    }
+
+    // ---- the pull gesture, and the Garmin sync behind it --------------------
+    //
+    // Cardio is the subject throughout: one slice, so what the refresh does to a
+    // chart is visible without picking it out of five.
+
+    /** Cardio, with a knob for how long the fetch takes. */
+    private fun stubCardio(delayMs: () -> Long = { 0 }) {
+        coEvery { repository.cardio(any(), any(), any()) } coAnswers {
+            val wait = delayMs()
+            if (wait > 0) delay(wait)
+            FetchResult(CARDIO, null)
+        }
+    }
+
+    private fun stubGarmin(status: String, running: Boolean = false, outcome: String? = null) {
+        coEvery { repository.garminSyncTrigger() } returns GarminSyncTrigger(status)
+        coEvery { repository.garminSyncStatus() } returns
+            GarminSyncStatus(running = running, lastOutcome = outcome)
+    }
+
+    @Test
+    @DisplayName("a refresh keeps the chart on screen — it must never blank to Loading")
+    fun refreshKeepsReadyValues() = runTest(dispatcher) {
+        var fetchDelay = 0L
+        stubCardio { fetchDelay }
+        stubGarmin("cooldown")
+        val viewModel = CardioViewModel(repository, prefs, debugLog, today)
+        viewModel.onActive()
+        advanceUntilIdle()
+        assertTrue(viewModel.uiState.value.cardio is Slice.Ready)
+
+        fetchDelay = 1_000
+        viewModel.refresh()
+        advanceTimeBy(300)
+        runCurrent()
+
+        // The regression this exists for: `retry()` blanks by design, and a pull
+        // that reused it flashed every chart empty for a round trip.
+        assertTrue(viewModel.uiState.value.cardio is Slice.Ready, "a pull must not blank the chart")
+
+        advanceUntilIdle()
+        assertTrue(viewModel.uiState.value.cardio is Slice.Ready)
+        coVerify(exactly = 2) { repository.cardio(any(), any(), any()) }
+    }
+
+    @Test
+    @DisplayName("keeps-values dies with the refresh: the NEXT range change blanks as it always did")
+    fun keepValuesResetsWhenTheRefreshSettles() = runTest(dispatcher) {
+        var fetchDelay = 0L
+        stubCardio { fetchDelay }
+        stubGarmin("cooldown")
+        val viewModel = CardioViewModel(repository, prefs, debugLog, today)
+        viewModel.onActive()
+        advanceUntilIdle()
+
+        viewModel.refresh()
+        advanceUntilIdle()
+
+        // A range change is a different question, and its answer is not on
+        // screen yet — leaving the flag standing would show 12w charts under a
+        // 4w toolbar.
+        fetchDelay = 1_000
+        prefs.setRange("4w")
+        advanceTimeBy(300)
+        runCurrent()
+
+        assertEquals(Slice.Loading, viewModel.uiState.value.cardio)
+    }
+
+    @Test
+    @DisplayName("the spinner holds through a dependent second wave instead of ending on its gap")
+    fun refreshHoldsThroughSecondWave() = runTest(dispatcher) {
+        // Strength is the two-wave screen: the detail fetch launches only once
+        // the exercise list has landed, across a moment where NOTHING is in
+        // flight. Ending the refresh on that transient zero stopped the spinner
+        // and blanked the detail before it started (review finding).
+        stubStrength()
+        coEvery { repository.strengthExercise(any(), any(), any(), any()) } coAnswers {
+            delay(1_000)
+            FetchResult(EXERCISE_DETAIL, null)
+        }
+        stubGarmin("cooldown")
+        val viewModel = StrengthViewModel(repository, prefs, debugLog, today)
+        viewModel.onActive()
+        advanceUntilIdle()
+        assertTrue(viewModel.uiState.value.detail is Slice.Ready)
+
+        viewModel.refresh()
+        advanceTimeBy(600)      // floor passed; wave 1 settled; detail mid-flight
+        runCurrent()
+
+        assertTrue(viewModel.isRefreshing.value, "the gap between waves is not settlement")
+        assertTrue(viewModel.uiState.value.detail is Slice.Ready, "the second wave must not blank")
+
+        advanceUntilIdle()
+        assertFalse(viewModel.isRefreshing.value)
+        assertTrue(viewModel.uiState.value.detail is Slice.Ready)
+    }
+
+    @Test
+    @DisplayName("a Garmin watch cannot revive a disposed screen")
+    fun completionRefetchDiesWithTheScreen() = runTest(dispatcher) {
+        stubCardio()
+        var running = true
+        coEvery { repository.garminSyncTrigger() } returns GarminSyncTrigger("started")
+        coEvery { repository.garminSyncStatus() } coAnswers {
+            GarminSyncStatus(running = running, lastOutcome = "ok")
+        }
+        val viewModel = CardioViewModel(repository, prefs, debugLog, today)
+        viewModel.onActive()
+        advanceUntilIdle()
+        viewModel.refresh()
+        advanceTimeBy(600)      // spinner done; the watch is polling
+        runCurrent()
+        coVerify(exactly = 2) { repository.cardio(any(), any(), any()) }
+
+        running = false          // the next tick would launch the completion refetch
+        viewModel.onInactive()
+        advanceUntilIdle()
+
+        // The poll, the tracked completion job, and the entry guard together:
+        // nothing fetches after dispose (review HIGH — the sibling was
+        // untracked and could relaunch the collector on a dead screen).
+        coVerify(exactly = 2) { repository.cardio(any(), any(), any()) }
+        assertNull(viewModel.syncBanner.value)
+
+        // A clean return is a rotation: finished loads left their keys, so
+        // nothing refetches...
+        viewModel.onActive()
+        advanceUntilIdle()
+        coVerify(exactly = 2) { repository.cardio(any(), any(), any()) }
+        // ...and a range change is answered by ONE collector — a revived
+        // duplicate would fetch it twice.
+        prefs.setRange("4w")
+        advanceUntilIdle()
+        coVerify(exactly = 1) { repository.cardio(any(), any(), "4w") }
+    }
+
+    @Test
+    @DisplayName("the spinner covers the refetch and its floor, not the Garmin sync behind it")
+    fun refreshSpinnerLifecycle() = runTest(dispatcher) {
+        stubCardio()
+        stubGarmin("started", running = true)
+        val viewModel = CardioViewModel(repository, prefs, debugLog, today)
+        viewModel.onActive()
+        advanceUntilIdle()
+
+        viewModel.refresh()
+        runCurrent()
+        assertTrue(viewModel.isRefreshing.value)
+
+        advanceTimeBy(499)
+        assertTrue(viewModel.isRefreshing.value, "the floor has not elapsed")
+
+        advanceTimeBy(2)
+        assertFalse(viewModel.isRefreshing.value, "phase two speaks through the banner, not the spinner")
+    }
+
+    @Test
+    @DisplayName("a second pull while one is in flight is refused rather than queued")
+    fun refreshIsNotReentrant() = runTest(dispatcher) {
+        var fetchDelay = 2_000L
+        stubCardio { fetchDelay }
+        stubGarmin("cooldown")
+        val viewModel = CardioViewModel(repository, prefs, debugLog, today)
+        viewModel.onActive()
+        advanceUntilIdle()
+
+        viewModel.refresh()
+        runCurrent()
+        viewModel.refresh()
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) { repository.garminSyncTrigger() }
+    }
+
+    @Test
+    @DisplayName("started: the status is polled every 3s and a completion refetches once more")
+    fun startedSyncIsPolledAndRefetched() = runTest(dispatcher) {
+        stubCardio()
+        var running = true
+        coEvery { repository.garminSyncTrigger() } returns GarminSyncTrigger("started")
+        coEvery { repository.garminSyncStatus() } coAnswers {
+            GarminSyncStatus(running = running, lastOutcome = "ok")
+        }
+        val viewModel = CardioViewModel(repository, prefs, debugLog, today)
+        viewModel.onActive()
+        advanceUntilIdle()
+
+        viewModel.refresh()
+        advanceTimeBy(1_000)
+        // Phase one refetched already; the sync itself is still going.
+        coVerify(exactly = 2) { repository.cardio(any(), any(), any()) }
+        assertEquals(TrendsScreenViewModel.BANNER_SYNCING, viewModel.syncBanner.value)
+
+        advanceTimeBy(9_500)
+        coVerify(exactly = 3) { repository.garminSyncStatus() }
+
+        running = false
+        advanceUntilIdle()
+
+        assertNull(viewModel.syncBanner.value)
+        coVerify(exactly = 3) { repository.cardio(any(), any(), any()) }
+    }
+
+    @Test
+    @DisplayName("the completion refetch does not kill the collector it runs through")
+    fun pollSurvivesItsOwnCompletionRefetch() = runTest(dispatcher) {
+        stubCardio()
+        stubGarmin("running", running = false, outcome = "ok")
+        val viewModel = CardioViewModel(repository, prefs, debugLog, today)
+        viewModel.onActive()
+        advanceUntilIdle()
+
+        viewModel.refresh()
+        advanceUntilIdle()
+        // phase one + the completion refetch
+        coVerify(exactly = 3) { repository.cardio(any(), any(), any()) }
+
+        // The regression: routing the internal refetch through
+        // onInactive()/onActive() had the poll cancel itself at the onInactive()
+        // line, and the collector was never relaunched — every later range
+        // change silently fetched nothing.
+        prefs.setRange("4w")
+        advanceUntilIdle()
+
+        assertEquals("4w", viewModel.uiState.value.range)
+        coVerify(exactly = 1) { repository.cardio(any(), any(), "4w") }
+    }
+
+    @Test
+    @DisplayName("cooldown and unconfigured end the gesture at phase one — no poll, no banner")
+    fun cooldownAndUnconfiguredSkipPhaseTwo() = runTest(dispatcher) {
+        stubCardio()
+        stubGarmin("cooldown")
+        val cooling = CardioViewModel(repository, prefs, debugLog, today)
+        cooling.onActive()
+        advanceUntilIdle()
+        cooling.refresh()
+        advanceUntilIdle()
+
+        assertNull(cooling.syncBanner.value)
+        coVerify(exactly = 0) { repository.garminSyncStatus() }
+
+        stubGarmin("unconfigured")
+        val unconfigured = CardioViewModel(repository, prefs, debugLog, today)
+        unconfigured.onActive()
+        advanceUntilIdle()
+        unconfigured.refresh()
+        advanceUntilIdle()
+
+        assertNull(unconfigured.syncBanner.value)
+        coVerify(exactly = 0) { repository.garminSyncStatus() }
+    }
+
+    @Test
+    @DisplayName("an unreachable server still refetches locally: the pull was also a refresh")
+    fun failedTriggerStillRefetches() = runTest(dispatcher) {
+        stubCardio()
+        coEvery { repository.garminSyncTrigger() } throws IOException("offline")
+        val viewModel = CardioViewModel(repository, prefs, debugLog, today)
+        viewModel.onActive()
+        advanceUntilIdle()
+
+        viewModel.refresh()
+        advanceUntilIdle()
+
+        assertFalse(viewModel.isRefreshing.value)
+        assertNull(viewModel.syncBanner.value)
+        coVerify(exactly = 0) { repository.garminSyncStatus() }
+        coVerify(exactly = 2) { repository.cardio(any(), any(), any()) }
+    }
+
+    @Test
+    @DisplayName("a sync that failed says so, transiently, and then stops saying it")
+    fun failedSyncBannerIsTransient() = runTest(dispatcher) {
+        stubCardio()
+        stubGarmin("started", running = false, outcome = "failed")
+        val viewModel = CardioViewModel(repository, prefs, debugLog, today)
+        viewModel.onActive()
+        advanceUntilIdle()
+
+        viewModel.refresh()
+        advanceTimeBy(4_000)
+        assertEquals(TrendsScreenViewModel.BANNER_FAILED, viewModel.syncBanner.value)
+
+        advanceTimeBy(6_001)
+        assertNull(viewModel.syncBanner.value, "a footnote about a past failure is not a state")
+    }
+
+    @Test
+    @DisplayName("leaving the screen stops the poll and takes the banner with it")
+    fun onInactiveStopsThePoll() = runTest(dispatcher) {
+        stubCardio()
+        stubGarmin("started", running = true)
+        val viewModel = CardioViewModel(repository, prefs, debugLog, today)
+        viewModel.onActive()
+        advanceUntilIdle()
+
+        viewModel.refresh()
+        advanceTimeBy(4_000)
+        assertEquals(TrendsScreenViewModel.BANNER_SYNCING, viewModel.syncBanner.value)
+        coVerify(exactly = 1) { repository.garminSyncStatus() }
+
+        // Accepted, and stated in the spec: the watch belongs to this screen's
+        // scope. The data still lands on the server.
+        viewModel.onInactive()
+        advanceUntilIdle()
+
+        assertNull(viewModel.syncBanner.value)
+        assertFalse(viewModel.isRefreshing.value)
+        coVerify(exactly = 1) { repository.garminSyncStatus() }
+    }
+
+    @Test
+    @DisplayName("a poll that gives up at the cap still refetches — a long sync has written something")
+    fun pollCapEndsTheWatch() = runTest(dispatcher) {
+        stubCardio()
+        stubGarmin("started", running = true)
+        val viewModel = CardioViewModel(repository, prefs, debugLog, today)
+        viewModel.onActive()
+        advanceUntilIdle()
+
+        viewModel.refresh()
+        advanceUntilIdle()
+
+        coVerify(exactly = 20) { repository.garminSyncStatus() }
+        assertNull(viewModel.syncBanner.value)
+        coVerify(exactly = 3) { repository.cardio(any(), any(), any()) }
+    }
+
+    @Test
+    @DisplayName("a status request that fails skips its cycle rather than ending the watch")
+    fun aFailedPollSkipsItsCycle() = runTest(dispatcher) {
+        stubCardio()
+        coEvery { repository.garminSyncTrigger() } returns GarminSyncTrigger("started")
+        var polls = 0
+        coEvery { repository.garminSyncStatus() } coAnswers {
+            polls += 1
+            if (polls == 1) throw IOException("dropped") else GarminSyncStatus(running = false)
+        }
+        val viewModel = CardioViewModel(repository, prefs, debugLog, today)
+        viewModel.onActive()
+        advanceUntilIdle()
+
+        viewModel.refresh()
+        advanceUntilIdle()
+
+        // One dropped request says nothing about the sync.
+        assertEquals(2, polls)
+        coVerify(exactly = 3) { repository.cardio(any(), any(), any()) }
     }
 
     // ---- Journal -----------------------------------------------------------

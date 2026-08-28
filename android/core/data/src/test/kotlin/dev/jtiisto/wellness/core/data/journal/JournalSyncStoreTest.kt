@@ -998,6 +998,50 @@ class JournalSyncStoreTest {
         assertTrue(quiesced)
     }
 
+    // ---- the busy flag, which the pull gesture watches ----------------------
+
+    @Test
+    @DisplayName("isSyncingFlow is true for the whole cycle and false on either side of it")
+    fun isSyncingFlowTracksTheCycle() = runTest {
+        val world = World()
+        val store = world.store()
+        val midCycle = mutableListOf<Boolean>()
+        world.onDelta = { midCycle += store.isSyncingFlow.value }
+
+        assertFalse(store.isSyncingFlow.value)
+        store.triggerSync()
+
+        assertEquals(listOf(true), midCycle, "the flag must be up while the delta is in flight")
+        assertFalse(store.isSyncingFlow.value)
+        // One source, so the scheduler's boolean and the screen's flow cannot
+        // disagree about the same cycle.
+        assertEquals(store.isSyncing, store.isSyncingFlow.value)
+    }
+
+    @Test
+    @DisplayName("an offline cycle never raises the flag — there was no flight to report")
+    fun isSyncingFlowStaysDownWhenOffline() = runTest {
+        val world = World()
+        world.online = false
+
+        val result = world.store().triggerSync()
+
+        assertEquals(SyncSkipReason.OFFLINE, result.reason)
+        assertFalse(world.store().isSyncingFlow.value)
+    }
+
+    @Test
+    @DisplayName("a failed cycle lowers the flag again — a spinner must not outlive the error")
+    fun isSyncingFlowClearsAfterAFailure() = runTest {
+        val world = World()
+        world.deltaStatus = HttpStatusCode.InternalServerError
+
+        val result = world.store().triggerSync()
+
+        assertFalse(result.success)
+        assertFalse(world.store().isSyncingFlow.value)
+    }
+
     // ---- harness ---------------------------------------------------------
 
     private fun delta(

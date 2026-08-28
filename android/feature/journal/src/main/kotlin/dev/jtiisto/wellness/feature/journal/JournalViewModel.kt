@@ -10,13 +10,19 @@ import dev.jtiisto.wellness.core.data.journal.TrackerDto
 import dev.jtiisto.wellness.core.data.journal.TrackerType
 import dev.jtiisto.wellness.core.data.journal.getLastNDays
 import dev.jtiisto.wellness.core.data.network.DateString
+import dev.jtiisto.wellness.core.data.sync.SyncErrorEvents
 import dev.jtiisto.wellness.core.data.sync.SyncScheduler
+import dev.jtiisto.wellness.core.data.sync.SyncStatus
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import java.time.LocalDate
 
 /**
@@ -33,6 +39,15 @@ class JournalViewModel(
     private val store: JournalSyncStore,
     private val prefs: JournalUiPrefs,
     private val scheduler: SyncScheduler,
+    /**
+     * Read at the moment of the pull, not observed.
+     *
+     * A lambda rather than the `ConnectivityMonitor` itself, exactly as every
+     * other consumer of it takes the seam — which is also what keeps this class
+     * testable without an Android framework double.
+     */
+    private val isOnline: () -> Boolean,
+    private val errors: SyncErrorEvents,
     private val today: () -> LocalDate = LocalDate::now,
 ) : ViewModel() {
 
@@ -40,6 +55,10 @@ class JournalViewModel(
 
     /** Bumped whenever the screen is shown, so a day rollover re-derives the strip. */
     private val refresh = MutableStateFlow(0)
+
+    private val isRefreshing = MutableStateFlow(false)
+
+    private var refreshJob: Job? = null
 
     private val trackers: StateFlow<List<TrackerDto>> = store.observeTrackers()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(STOP_TIMEOUT_MS), emptyList())
@@ -53,26 +72,38 @@ class JournalViewModel(
         prefs.valueUpdatedTimes,
     ) { expanded, stamps -> expanded to stamps }
 
+    /** What the day view needs that is neither a tracker nor an entry. */
+    private data class ViewInputs(
+        val date: DateString,
+        val status: SyncStatus,
+        val syncing: Boolean,
+        val refreshing: Boolean,
+    )
+
     private val viewInputs = combine(
         selectedDate,
         store.syncStatus,
+        store.isSyncingFlow,
+        isRefreshing,
         refresh,
-    ) { date, status, _ -> date to status }
+    ) { date, status, syncing, refreshing, _ -> ViewInputs(date, status, syncing, refreshing) }
 
     val uiState: StateFlow<JournalUiState> = combine(
         trackers,
         entriesByDate,
         preferences,
         viewInputs,
-    ) { allTrackers, entries, (expanded, stamps), (date, status) ->
+    ) { allTrackers, entries, (expanded, stamps), inputs ->
         buildJournalUiState(
             trackers = allTrackers,
             entriesByDate = entries,
-            selectedDate = date,
+            selectedDate = inputs.date,
             today = today(),
             expandedCategories = expanded,
             valueUpdatedTimes = stamps,
-            syncStatus = status,
+            syncStatus = inputs.status,
+            isSyncing = inputs.syncing,
+            isRefreshing = inputs.refreshing,
         )
     }.stateIn(
         scope = viewModelScope,
@@ -93,8 +124,42 @@ class JournalViewModel(
         viewModelScope.launch { prefs.toggleCategoryExpanded(category) }
     }
 
-    fun syncNow() {
-        scheduler.requestSync()
+    /**
+     * The pull gesture: force a real round trip and *show* that it happened.
+     *
+     * The dot is a pure function of dirty count, watermark and connectivity, so
+     * a successful no-op sync changes nothing on screen — which is precisely the
+     * thing the user pulls to find out. Hence the minimum visible time: half a
+     * second of spinner and a pulsing dot is the answer, and without it a fast
+     * no-op is indistinguishable from a gesture that did not register.
+     *
+     * The scheduler's job is joined **and then** the store's own busy flag is
+     * waited out: the job completes at once when the flight belongs to somebody
+     * else (a background flush, a force sync), and the spinner would otherwise
+     * retract while the sync it attached to was still running. The cap is there
+     * because a wait with no end is a spinner with no end.
+     *
+     * Offline is answered here rather than in the scheduler, which treats it as
+     * a silent skip. A pull is a question, and "nothing happened" is not an
+     * answer to it.
+     */
+    fun refresh() {
+        if (refreshJob?.isActive == true) return
+        refreshJob = viewModelScope.launch {
+            isRefreshing.value = true
+            val floor = launch { delay(MIN_VISIBLE_MS) }
+            if (isOnline()) {
+                scheduler.requestSync(SyncScheduler.TRIGGER_PULL).join()
+                withTimeoutOrNull(SYNC_WAIT_CAP_MS) { store.isSyncingFlow.first { !it } }
+            } else {
+                // Authored text, never a Throwable's message: the snackbar
+                // appears unasked over whatever the user is looking at, and a
+                // Ktor exception's message is the whole response body.
+                errors.postMessage(OFFLINE_MESSAGE)
+            }
+            floor.join()
+            isRefreshing.value = false
+        }
     }
 
     // ---- widget writes -----------------------------------------------------
@@ -156,5 +221,13 @@ class JournalViewModel(
 
     private companion object {
         const val STOP_TIMEOUT_MS = 5_000L
+
+        /** Long enough for a no-op sync to read as an answer. */
+        const val MIN_VISIBLE_MS = 500L
+
+        /** A spinner waiting on somebody else's flight still has to end. */
+        const val SYNC_WAIT_CAP_MS = 15_000L
+
+        const val OFFLINE_MESSAGE = "Offline — nothing synced. Try again when you're connected."
     }
 }

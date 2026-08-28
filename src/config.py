@@ -60,6 +60,17 @@ MODULES = [
         "db_env": "HR_DB_PATH",
         "db_default": DATA_DIR / "hr.db",
     },
+    {
+        # Headless AND DB-less: a command surface (trigger the external garmy
+        # sync, report whether one is in flight) with no PWA tab and no storage
+        # of its own — create_app calls its factory with no argument, like
+        # trends. It reads the Garmin health DB read-only for a cross-restart
+        # cooldown backstop; see ARCHITECTURE.md "Garmin".
+        "id": "garmin",
+        "headless": True,
+        "api_prefix": "/api/garmin",
+        "router_factory": "modules.garmin:create_router",
+    },
 ]
 
 
@@ -115,6 +126,23 @@ def get_questy_db_path():
     degrades gracefully when absent — same contract as the Garmin DB."""
     env = os.environ.get("QUESTY_DB_PATH")
     return Path(env) if env else QUESTY_DB_DEFAULT
+
+
+def get_garmin_sync_cmd():
+    """Resolve the Garmin sync script: GARMIN_SYNC_CMD env var > the tracked
+    bin/garmin-sync.sh if it exists > None.
+
+    Same shape as get_hook_path below. None means the garmin module reports
+    "unconfigured" instead of erroring — a dev clone without garmy degrades
+    rather than failing. The env branch does NOT check existence (matching
+    get_hook_path); the module checks at use, so pointing the variable at a
+    missing file also reads as unconfigured.
+    """
+    env = os.environ.get("GARMIN_SYNC_CMD")
+    if env:
+        return Path(env)
+    default = PROJECT_ROOT / "bin" / "garmin-sync.sh"
+    return default if default.exists() else None
 
 
 def get_hook_path(hook_type):

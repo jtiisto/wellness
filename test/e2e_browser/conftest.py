@@ -82,6 +82,12 @@ def app_server(tmp_path_factory):
         "GARMIN_DB_PATH": str(db_dir / "garmin_health.db"),
         "BODYSPEC_DB_PATH": str(db_dir / "bodyspec.db"),
         "QUESTY_DB_PATH": str(db_dir / "questy.db"),
+        # Nonexistent on purpose: this fixture serves live HTTP on a real port
+        # for the whole session, and bin/garmin-sync.sh is tracked, so without
+        # the pin a request to /api/garmin/sync would fire a REAL garmy sync.
+        # The PWA has no garmin surface today — this is the guard for the day
+        # it gets one.
+        "GARMIN_SYNC_CMD": str(db_dir / "no-such-garmin-sync.sh"),
     }
 
     for k, v in env_vars.items():

@@ -34,6 +34,9 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
+import androidx.compose.material3.pulltorefresh.pullToRefresh
+import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -165,11 +168,18 @@ fun CoachScreen(viewModel: CoachViewModel = koinViewModel()) {
     }
 
     val strapPrompt by viewModel.strapPrompt.collectAsStateWithLifecycle()
+    val isRefreshing by viewModel.isRefreshing.collectAsStateWithLifecycle()
 
     // The flow itself, not its value: collecting it here would keep a
     // once-a-second window alive behind a screen whose guide is shut. It is
     // collected inside the overlay's own composition instead.
-    CoachContent(state = state, actions = actions, traceSamples = viewModel.traceSamples)
+    CoachContent(
+        state = state,
+        actions = actions,
+        isRefreshing = isRefreshing,
+        onRefresh = viewModel::refresh,
+        traceSamples = viewModel.traceSamples,
+    )
 
     strapPrompt?.let { prompt ->
         ConnectStrapSheet(
@@ -185,6 +195,8 @@ fun CoachScreen(viewModel: CoachViewModel = koinViewModel()) {
 private fun CoachContent(
     state: CoachUiState,
     actions: CoachActions,
+    isRefreshing: Boolean,
+    onRefresh: () -> Unit,
     traceSamples: StateFlow<List<TraceSample>>,
 ) {
     val palette = LogbookTheme.palette
@@ -192,6 +204,7 @@ private fun CoachContent(
     // only be open while there is a capture to describe, and `state.hr` going
     // null closes it on its own.
     var captureSheetOpen by remember { mutableStateOf(false) }
+    val pullState = rememberPullToRefreshState()
 
     Column(modifier = Modifier.fillMaxSize()) {
         TopAppBar(
@@ -221,7 +234,32 @@ private fun CoachContent(
 
         CalendarPicker(state = state, actions = actions)
 
-        WorkoutDayView(day = state.day, actions = actions, modifier = Modifier.weight(1f))
+        // A plain Box with the pull modifier rather than `PullToRefreshBox`,
+        // which has no `enabled` parameter in material3 1.4.0 — this is exactly
+        // what that composable does internally, with the one knob it does not
+        // expose. Only the day view is pulled: the app bar and the calendar
+        // strip are fixed furniture, and dragging them would move the control
+        // that says which day is on screen.
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .pullToRefresh(
+                    isRefreshing = isRefreshing,
+                    state = pullState,
+                    // Belt and braces. The guide runs in a window of its own, so
+                    // the gesture cannot physically reach this Box from behind
+                    // it; the gate states the intent rather than enforcing it.
+                    enabled = state.guide == null,
+                    onRefresh = onRefresh,
+                ),
+        ) {
+            WorkoutDayView(day = state.day, actions = actions, modifier = Modifier.fillMaxSize())
+            PullToRefreshDefaults.Indicator(
+                state = pullState,
+                isRefreshing = isRefreshing,
+                modifier = Modifier.align(Alignment.TopCenter),
+            )
+        }
     }
 
     // The guide, in a window of its own — beside the sheets in every sense,

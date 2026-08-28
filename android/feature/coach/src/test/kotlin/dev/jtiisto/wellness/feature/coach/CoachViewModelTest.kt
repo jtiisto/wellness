@@ -21,18 +21,24 @@ import dev.jtiisto.wellness.core.data.hr.HrBeatReader
 import dev.jtiisto.wellness.core.data.hr.HrCaptureStore
 import dev.jtiisto.wellness.core.data.network.CoachApi
 import dev.jtiisto.wellness.core.data.network.DateString
+import dev.jtiisto.wellness.core.data.sync.SyncErrorEvents
+import dev.jtiisto.wellness.core.data.sync.SyncScheduler
 import dev.jtiisto.wellness.core.data.sync.SyncStatus
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.slot
+import io.mockk.verify
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -94,6 +100,18 @@ class CoachViewModelTest {
     private val store = mockk<CoachSyncStore>(relaxed = true)
     private val api = mockk<CoachApi>()
 
+    /** The pull's two seams: connectivity read at the gesture, and the snackbar. */
+    private var online = true
+    private val errors = SyncErrorEvents()
+
+    /** The store's busy flag, which the pull waits out after joining the job. */
+    private val storeSyncing = MutableStateFlow(false)
+
+    /** What the scheduler hands back; completed by default, as a quick sync is. */
+    private var syncJob: Job = Job().apply { complete() }
+
+    private val scheduler = mockk<SyncScheduler>(relaxed = true)
+
     /**
      * The day as the store holds it.
      *
@@ -116,7 +134,8 @@ class CoachViewModelTest {
         every { store.observeAllLogs() } returns logsFlow
         every { store.observeEarliestDate() } returns earliestFlow
         every { store.syncStatus } returns MutableStateFlow(SyncStatus.GREEN)
-        every { store.isSyncingFlow } returns MutableStateFlow(false)
+        every { store.isSyncingFlow } returns storeSyncing
+        every { scheduler.requestSync(any()) } answers { syncJob }
         coEvery { api.workoutStatus(any()) } returns WorkoutStatusDto()
 
         // Stand in for the real transaction: hand the transform the entry as
@@ -224,7 +243,7 @@ class CoachViewModelTest {
 
     private fun kotlinx.coroutines.test.TestScope.viewModel() = CoachViewModel(
         store = store,
-        scheduler = mockk(relaxed = true),
+        scheduler = scheduler,
         api = api,
         captureState = captureState,
         knownStraps = knownStraps,
@@ -233,6 +252,8 @@ class CoachViewModelTest {
         guideEvents = guideEvents,
         beatReader = beatReader,
         traceRing = traceRing,
+        isOnline = { online },
+        errors = errors,
         today = { today },
         now = { nowMs },
         // The strap refresh is a SharedPreferences read in production; here it
@@ -588,6 +609,78 @@ class CoachViewModelTest {
         assertEquals(java.time.YearMonth.of(2026, 8), viewModel.uiState.value.calendar.viewMonth)
     }
 
+    // ---- the pull gesture ---------------------------------------------------------------------
+    //
+    // The journal's twin, deliberately: the two tabs answer the same gesture and
+    // must answer it identically, so these mirror `JournalViewModelTest`.
+
+    @Test
+    @DisplayName("a pull asks the scheduler for a sync, named as a pull")
+    fun refreshRequestsAPullSync() = runVmTest { viewModel ->
+        viewModel.refresh()
+        advanceUntilIdle()
+
+        verify(exactly = 1) { scheduler.requestSync(SyncScheduler.TRIGGER_PULL) }
+    }
+
+    @Test
+    @DisplayName("the spinner is held past a sync that returns instantly")
+    fun refreshHoldsTheMinimumVisibleFloor() = runVmTest { viewModel ->
+        viewModel.refresh()
+        runCurrent()
+        assertTrue(viewModel.isRefreshing.value)
+
+        advanceTimeBy(499)
+        assertTrue(viewModel.isRefreshing.value, "the floor has not elapsed")
+
+        advanceTimeBy(2)
+        assertFalse(viewModel.isRefreshing.value)
+    }
+
+    @Test
+    @DisplayName("a second pull while one is in flight is refused rather than queued")
+    fun refreshIsNotReentrant() = runVmTest { viewModel ->
+        viewModel.refresh()
+        runCurrent()
+        viewModel.refresh()
+        advanceUntilIdle()
+
+        verify(exactly = 1) { scheduler.requestSync(any()) }
+    }
+
+    @Test
+    @DisplayName("the spinner outlives a job that completed instantly, waiting out somebody else's flight")
+    fun refreshWaitsOutAnAttachedFlight() = runVmTest { viewModel ->
+        // The scheduler's busy path: the job is done the moment it is handed
+        // back, because the real flight belongs to a background flush.
+        storeSyncing.value = true
+
+        viewModel.refresh()
+        advanceTimeBy(5_000)
+        assertTrue(viewModel.isRefreshing.value, "the attached flight is still running")
+
+        storeSyncing.value = false
+        advanceUntilIdle()
+        assertFalse(viewModel.isRefreshing.value)
+    }
+
+    @Test
+    @DisplayName("an offline pull syncs nothing and says so, in authored words")
+    fun offlineRefreshPostsAMessage() = runVmTest { viewModel ->
+        online = false
+        val messages = mutableListOf<String>()
+        backgroundScope.launch { errors.messages.collect { messages += it } }
+
+        viewModel.refresh()
+        advanceUntilIdle()
+
+        verify(exactly = 0) { scheduler.requestSync(any()) }
+        assertEquals(
+            listOf("Offline — nothing synced. Try again when you're connected."),
+            messages,
+        )
+    }
+
     // ---- the extra session -------------------------------------------------------------------
 
     @Test
@@ -688,7 +781,7 @@ class CoachViewModelTest {
         publish(plans = mapOf("2026-08-08" to plan(sessionId = 1)))
         val viewModel = CoachViewModel(
             store = store,
-            scheduler = mockk(relaxed = true),
+            scheduler = scheduler,
             api = api,
             captureState = captureState,
             knownStraps = knownStraps,
@@ -697,6 +790,8 @@ class CoachViewModelTest {
             guideEvents = guideEvents,
             beatReader = beatReader,
             traceRing = traceRing,
+            isOnline = { online },
+            errors = errors,
             today = { now },
             io = StandardTestDispatcher(testScheduler),
         )
@@ -1107,6 +1202,8 @@ class CoachViewModelTest {
             guideEvents = guideEvents,
             beatReader = beatReader,
             traceRing = traceRing,
+            isOnline = { online },
+            errors = errors,
             today = { day },
             now = { nowMs },
             io = StandardTestDispatcher(testScheduler),
@@ -1705,6 +1802,8 @@ class CoachViewModelTest {
             guideEvents = guideEvents,
             beatReader = beatReader,
             traceRing = traceRing,
+            isOnline = { online },
+            errors = errors,
             today = { day },
             now = { nowMs },
             io = StandardTestDispatcher(testScheduler),

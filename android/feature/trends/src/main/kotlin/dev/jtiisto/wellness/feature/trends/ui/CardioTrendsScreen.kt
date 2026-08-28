@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -34,52 +35,63 @@ fun CardioTrendsScreen(onRange: (String) -> Unit, modifier: Modifier = Modifier)
         onDispose { viewModel.onInactive() }
     }
 
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(SECTION_GAP),
+    val isRefreshing by viewModel.isRefreshing.collectAsStateWithLifecycle()
+    val syncBanner by viewModel.syncBanner.collectAsStateWithLifecycle()
+
+    PullToRefreshBox(
+        isRefreshing = isRefreshing,
+        onRefresh = viewModel::refresh,
+        modifier = modifier,
     ) {
-        RangeToolbar(
-            range = state.range,
-            staleStamps = staleStamps(state.cardio),
-            onRange = onRange,
-        )
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(SECTION_GAP),
+        ) {
+            RangeToolbar(
+                range = state.range,
+                staleStamps = staleStamps(state.cardio),
+                onRange = onRange,
+            )
 
-        when (val slice = state.cardio) {
-            is Slice.Error -> ScreenError(slice.text, viewModel::retry)
-            Slice.Loading -> ScreenLoading()
-            is Slice.Ready -> {
-                val zone2 = remember(slice.value) { zone2CardModel(slice.value) }
-                LogbookSection(title = "Weekly Zone 2", sub = "min") {
-                    if (zone2.plot == null) {
-                        ChartEmpty("No data in range")
-                    } else {
-                        LegendRow(zone2.legend, chart = ChartInk.CARDIO_ZONE2)
-                        PlotCanvas(
-                            model = zone2.plot,
-                            identity = listOf("cardio", state.range),
-                            chart = ChartInk.CARDIO_ZONE2,
-                        )
+            SyncBanner(syncBanner)
+
+            when (val slice = state.cardio) {
+                is Slice.Error -> ScreenError(slice.text, viewModel::retry)
+                Slice.Loading -> ScreenLoading()
+                is Slice.Ready -> {
+                    val zone2 = remember(slice.value) { zone2CardModel(slice.value) }
+                    LogbookSection(title = "Weekly Zone 2", sub = "min") {
+                        if (zone2.plot == null) {
+                            ChartEmpty("No data in range")
+                        } else {
+                            LegendRow(zone2.legend, chart = ChartInk.CARDIO_ZONE2)
+                            PlotCanvas(
+                                model = zone2.plot,
+                                identity = listOf("cardio", state.range),
+                                chart = ChartInk.CARDIO_ZONE2,
+                            )
+                        }
                     }
-                }
 
-                val proxy = remember(slice.value) { aerobicProxyModel(slice.value.steadySessions) }
-                LogbookSection(title = "Steady-session HR", sub = "avg bpm · dot = duration") {
-                    if (proxy == null) {
-                        ChartEmpty(AEROBIC_EMPTY_TEXT)
-                    } else {
-                        PlotCanvas(
-                            model = proxy,
-                            identity = listOf("aerobic", state.range),
-                            chart = ChartInk.AEROBIC,
-                        )
+                    val proxy = remember(slice.value) { aerobicProxyModel(slice.value.steadySessions) }
+                    LogbookSection(title = "Steady-session HR", sub = "avg bpm · dot = duration") {
+                        if (proxy == null) {
+                            ChartEmpty(AEROBIC_EMPTY_TEXT)
+                        } else {
+                            PlotCanvas(
+                                model = proxy,
+                                identity = listOf("aerobic", state.range),
+                                chart = ChartInk.AEROBIC,
+                            )
+                        }
                     }
                 }
             }
-        }
 
-        Box(modifier = Modifier.height(SCREEN_BOTTOM))
+            Box(modifier = Modifier.height(SCREEN_BOTTOM))
+        }
     }
 }
 

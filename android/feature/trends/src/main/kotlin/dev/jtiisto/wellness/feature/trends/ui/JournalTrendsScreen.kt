@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -55,86 +56,97 @@ fun JournalTrendsScreen(onRange: (String) -> Unit, modifier: Modifier = Modifier
         onDispose { viewModel.onInactive() }
     }
 
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(SECTION_GAP),
+    val isRefreshing by viewModel.isRefreshing.collectAsStateWithLifecycle()
+    val syncBanner by viewModel.syncBanner.collectAsStateWithLifecycle()
+
+    PullToRefreshBox(
+        isRefreshing = isRefreshing,
+        onRefresh = viewModel::refresh,
+        modifier = modifier,
     ) {
-        RangeToolbar(
-            range = state.range,
-            staleStamps = staleStamps(state.trackers, state.detail),
-            onRange = onRange,
-        )
-
-        val trackers = state.trackers.valueOrNull
-        if (trackers != null && trackers.isNotEmpty()) {
-            val options = remember(trackers) { trackerPickerOptions(trackers) }
-            PickerField(
-                title = "Tracker",
-                options = options,
-                value = state.selected,
-                onChange = viewModel::selectTracker,
-                onOpen = { pinEpoch++ },
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(SECTION_GAP),
+        ) {
+            RangeToolbar(
+                range = state.range,
+                staleStamps = staleStamps(state.trackers, state.detail),
+                onRange = onRange,
             )
-        }
 
-        when (val slice = state.trackers) {
-            is Slice.Error -> ScreenError(slice.text, viewModel::retry)
-            Slice.Loading -> ScreenLoading()
-            is Slice.Ready ->
-                if (slice.value.isEmpty()) ChartEmpty("No trackers with entries yet")
-        }
+            SyncBanner(syncBanner)
 
-        (state.detail as? Slice.Ready)?.value?.let { detail ->
-            if (detail.tracker.type == "quantifiable") {
-                val card = remember(detail) { valueTargetCardModel(detail) }
-                LogbookSection(title = card.title, sub = card.subtitle.takeIf { it.isNotEmpty() }) {
-                    when {
-                        card.constant != null -> ConstantSeries(card.constant)
-                        card.plot != null -> PlotCanvas(
-                            model = card.plot,
-                            identity = listOf("valueTarget", state.range, state.selected, pinEpoch),
-                        )
-                        else -> ChartEmpty(card.emptyText.orEmpty())
+            val trackers = state.trackers.valueOrNull
+            if (trackers != null && trackers.isNotEmpty()) {
+                val options = remember(trackers) { trackerPickerOptions(trackers) }
+                PickerField(
+                    title = "Tracker",
+                    options = options,
+                    value = state.selected,
+                    onChange = viewModel::selectTracker,
+                    onOpen = { pinEpoch++ },
+                )
+            }
+
+            when (val slice = state.trackers) {
+                is Slice.Error -> ScreenError(slice.text, viewModel::retry)
+                Slice.Loading -> ScreenLoading()
+                is Slice.Ready ->
+                    if (slice.value.isEmpty()) ChartEmpty("No trackers with entries yet")
+            }
+
+            (state.detail as? Slice.Ready)?.value?.let { detail ->
+                if (detail.tracker.type == "quantifiable") {
+                    val card = remember(detail) { valueTargetCardModel(detail) }
+                    LogbookSection(title = card.title, sub = card.subtitle.takeIf { it.isNotEmpty() }) {
+                        when {
+                            card.constant != null -> ConstantSeries(card.constant)
+                            card.plot != null -> PlotCanvas(
+                                model = card.plot,
+                                identity = listOf("valueTarget", state.range, state.selected, pinEpoch),
+                            )
+                            else -> ChartEmpty(card.emptyText.orEmpty())
+                        }
                     }
                 }
-            }
 
-            if (detail.tracker.actionable) {
-                val card = remember(detail) { adherenceCardModel(detail) }
-                // The streaks say themselves in mono — `run 3 · best 14`. The
-                // flame retires with the rest of the colour emoji: a run is a
-                // number, and a number here is Plex Mono.
-                LogbookSection(
-                    title = card.title,
-                    sub = streakLine(card.currentStreak, card.bestStreak),
-                ) {
-                    LegendRow(card.legend)
-                    PlotCanvas(
-                        model = card.plot,
-                        identity = listOf("adherence", state.range, state.selected, pinEpoch),
-                        touchPadding = LogbookSpace.grid * 2,
-                    )
-                }
-            }
-
-            detail.weeklyUsage?.let { usage ->
-                val plot = remember(usage) { usageCardModel(usage) }
-                LogbookSection(title = "Usage", sub = "times per week") {
-                    if (plot == null) {
-                        ChartEmpty("No data in range")
-                    } else {
+                if (detail.tracker.actionable) {
+                    val card = remember(detail) { adherenceCardModel(detail) }
+                    // The streaks say themselves in mono — `run 3 · best 14`. The
+                    // flame retires with the rest of the colour emoji: a run is a
+                    // number, and a number here is Plex Mono.
+                    LogbookSection(
+                        title = card.title,
+                        sub = streakLine(card.currentStreak, card.bestStreak),
+                    ) {
+                        LegendRow(card.legend)
                         PlotCanvas(
-                            model = plot,
-                            identity = listOf("usage", state.range, state.selected, pinEpoch),
+                            model = card.plot,
+                            identity = listOf("adherence", state.range, state.selected, pinEpoch),
+                            touchPadding = LogbookSpace.grid * 2,
                         )
                     }
                 }
-            }
-        }
 
-        Box(modifier = Modifier.height(SCREEN_BOTTOM))
+                detail.weeklyUsage?.let { usage ->
+                    val plot = remember(usage) { usageCardModel(usage) }
+                    LogbookSection(title = "Usage", sub = "times per week") {
+                        if (plot == null) {
+                            ChartEmpty("No data in range")
+                        } else {
+                            PlotCanvas(
+                                model = plot,
+                                identity = listOf("usage", state.range, state.selected, pinEpoch),
+                            )
+                        }
+                    }
+                }
+            }
+
+            Box(modifier = Modifier.height(SCREEN_BOTTOM))
+        }
     }
 }
 

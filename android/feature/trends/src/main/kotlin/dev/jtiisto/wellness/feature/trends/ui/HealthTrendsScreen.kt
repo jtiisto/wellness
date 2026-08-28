@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -101,138 +102,149 @@ fun HealthTrendsScreen(onRange: (String) -> Unit, modifier: Modifier = Modifier)
         onDispose { viewModel.onInactive() }
     }
 
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(SECTION_GAP),
+    val isRefreshing by viewModel.isRefreshing.collectAsStateWithLifecycle()
+    val syncBanner by viewModel.syncBanner.collectAsStateWithLifecycle()
+
+    PullToRefreshBox(
+        isRefreshing = isRefreshing,
+        onRefresh = viewModel::refresh,
+        modifier = modifier,
     ) {
-        RangeToolbar(
-            range = state.range,
-            staleStamps = staleStamps(
-                state.recovery,
-                state.sleep,
-                state.weight,
-                state.composition,
-                state.labs,
-            ),
-            onRange = onRange,
-        )
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(SECTION_GAP),
+        ) {
+            RangeToolbar(
+                range = state.range,
+                staleStamps = staleStamps(
+                    state.recovery,
+                    state.sleep,
+                    state.weight,
+                    state.composition,
+                    state.labs,
+                ),
+                onRange = onRange,
+            )
 
-        // Directly under the toolbar and above the charts: it is the one thing
-        // on this screen that is about *tonight* rather than about a window,
-        // and the range segments over it say what the rest of the page covers.
-        // Computed at every composition like the stale caption is — never
-        // remembered, so the cached-copy age and the today comparison can't
-        // freeze on a stale clock while the slice object stays identical.
-        val tonight = sleepTonightModel(
-            dto = state.sleep.valueOrNull,
-            staleFetchedAt = state.sleep.staleFetchedAt,
-            now = System.currentTimeMillis(),
-            today = LocalDate.now().toString(),
-        )
-        tonight?.let { SleepTonightCard(it) }
+            SyncBanner(syncBanner)
 
-        when (val slice = state.recovery) {
-            is Slice.Error -> ScreenError(slice.text, viewModel::retry)
-            Slice.Loading -> ScreenLoading()
-            is Slice.Ready ->
-                if (!slice.value.available) {
-                    ChartEmpty("Garmin data unavailable")
-                } else {
-                    RecoveryCards(slice.value.days, state.range, pinEpoch)
-                }
-        }
+            // Directly under the toolbar and above the charts: it is the one thing
+            // on this screen that is about *tonight* rather than about a window,
+            // and the range segments over it say what the rest of the page covers.
+            // Computed at every composition like the stale caption is — never
+            // remembered, so the cached-copy age and the today comparison can't
+            // freeze on a stale clock while the slice object stays identical.
+            val tonight = sleepTonightModel(
+                dto = state.sleep.valueOrNull,
+                staleFetchedAt = state.sleep.staleFetchedAt,
+                now = System.currentTimeMillis(),
+                today = LocalDate.now().toString(),
+            )
+            tonight?.let { SleepTonightCard(it) }
 
-        val sleep = state.sleep.valueOrNull
-        if (sleep != null && sleep.available && sleep.days.isNotEmpty()) {
-            val section = remember(sleep) { sleepDebtSection(sleep.days, sleep.tonight) }
-            if (section != null) {
-                LogbookSection(
-                    title = "Sleep need",
-                    sub = "h · need vs slept",
-                    trailing = {
-                        section.latest?.let {
-                            Text(
-                                text = it,
-                                style = LogbookTheme.type.meta.copy(fontWeight = FontWeight.Medium),
-                                color = LogbookTheme.palette.ink,
-                                modifier = Modifier.padding(start = LogbookSpace.grid * 2),
+            when (val slice = state.recovery) {
+                is Slice.Error -> ScreenError(slice.text, viewModel::retry)
+                Slice.Loading -> ScreenLoading()
+                is Slice.Ready ->
+                    if (!slice.value.available) {
+                        ChartEmpty("Garmin data unavailable")
+                    } else {
+                        RecoveryCards(slice.value.days, state.range, pinEpoch)
+                    }
+            }
+
+            val sleep = state.sleep.valueOrNull
+            if (sleep != null && sleep.available && sleep.days.isNotEmpty()) {
+                val section = remember(sleep) { sleepDebtSection(sleep.days, sleep.tonight) }
+                if (section != null) {
+                    LogbookSection(
+                        title = "Sleep need",
+                        sub = "h · need vs slept",
+                        trailing = {
+                            section.latest?.let {
+                                Text(
+                                    text = it,
+                                    style = LogbookTheme.type.meta.copy(fontWeight = FontWeight.Medium),
+                                    color = LogbookTheme.palette.ink,
+                                    modifier = Modifier.padding(start = LogbookSpace.grid * 2),
+                                )
+                            }
+                        },
+                    ) {
+                        LegendRow(section.needLegend, chart = ChartInk.SLEEP_NEED)
+                        PlotCanvas(
+                            model = section.needPlot,
+                            identity = listOf("sleepNeed", state.range, pinEpoch),
+                            chart = ChartInk.SLEEP_NEED,
+                        )
+                        section.debtPlot?.let { plot ->
+                            // The debt rides its own canvas rather than a second
+                            // axis on the first: it is a different quantity in the
+                            // same unit, and stacking them would invite reading a
+                            // debt line as a shorter night.
+                            LegendRow(section.debtLegend)
+                            PlotCanvas(
+                                model = plot,
+                                identity = listOf("sleepDebt", state.range, pinEpoch),
                             )
                         }
-                    },
-                ) {
-                    LegendRow(section.needLegend, chart = ChartInk.SLEEP_NEED)
-                    PlotCanvas(
-                        model = section.needPlot,
-                        identity = listOf("sleepNeed", state.range, pinEpoch),
-                        chart = ChartInk.SLEEP_NEED,
-                    )
-                    section.debtPlot?.let { plot ->
-                        // The debt rides its own canvas rather than a second
-                        // axis on the first: it is a different quantity in the
-                        // same unit, and stacking them would invite reading a
-                        // debt line as a shorter night.
-                        LegendRow(section.debtLegend)
+                    }
+                }
+            }
+
+            val weight = state.weight.valueOrNull
+            val scans = state.composition.valueOrNull?.takeIf { it.available }?.scans.orEmpty()
+            if (weight != null && weight.available && weight.series.isNotEmpty()) {
+                val card = remember(weight, scans) { bodyCardModel(weight.series, scans) }
+                if (card != null) {
+                    LogbookSection(title = "Body", sub = "kg") {
+                        LegendRow(card.legend, chart = ChartInk.BODY)
                         PlotCanvas(
-                            model = plot,
-                            identity = listOf("sleepDebt", state.range, pinEpoch),
+                            model = card.plot,
+                            identity = listOf("body", state.range, pinEpoch),
+                            chart = ChartInk.BODY,
                         )
                     }
                 }
             }
-        }
 
-        val weight = state.weight.valueOrNull
-        val scans = state.composition.valueOrNull?.takeIf { it.available }?.scans.orEmpty()
-        if (weight != null && weight.available && weight.series.isNotEmpty()) {
-            val card = remember(weight, scans) { bodyCardModel(weight.series, scans) }
-            if (card != null) {
-                LogbookSection(title = "Body", sub = "kg") {
-                    LegendRow(card.legend, chart = ChartInk.BODY)
-                    PlotCanvas(
-                        model = card.plot,
-                        identity = listOf("body", state.range, pinEpoch),
-                        chart = ChartInk.BODY,
-                    )
+            if (scans.isNotEmpty()) {
+                val card = remember(scans) { compositionCardModel(scans) }
+                if (card != null) {
+                    LogbookSection(title = "Composition", sub = "DEXA · all scans") {
+                        for (metric in card.metrics) MiniMetric(metric, pinEpoch)
+                        PlotCanvas(
+                            model = card.axis,
+                            identity = listOf("compositionAxis", scans.size),
+                            scrubEnabled = false,
+                        )
+                        for (row in card.bone) BoneTableRow(row)
+                    }
                 }
             }
-        }
 
-        if (scans.isNotEmpty()) {
-            val card = remember(scans) { compositionCardModel(scans) }
-            if (card != null) {
-                LogbookSection(title = "Composition", sub = "DEXA · all scans") {
-                    for (metric in card.metrics) MiniMetric(metric, pinEpoch)
-                    PlotCanvas(
-                        model = card.axis,
-                        identity = listOf("compositionAxis", scans.size),
-                        scrubEnabled = false,
-                    )
-                    for (row in card.bone) BoneTableRow(row)
+            val labs = state.labs.valueOrNull
+            if (labs != null && labs.available && labs.panels.isNotEmpty()) {
+                val section = remember(labs, state.labPanel) { labsSectionModel(labs.panels, state.labPanel) }
+                if (section != null) {
+                    LogbookSection(title = "Labs", sub = "ref band from latest") {
+                        PickerField(
+                            title = "Panel",
+                            options = section.panelOptions,
+                            value = section.selectedPanel,
+                            onChange = viewModel::selectLabPanel,
+                            onOpen = { pinEpoch++ },
+                        )
+                        for (chart in section.charts) MiniLab(chart, section.selectedPanel, pinEpoch)
+                        for (row in section.rows) LabTableRow(row)
+                    }
                 }
             }
-        }
 
-        val labs = state.labs.valueOrNull
-        if (labs != null && labs.available && labs.panels.isNotEmpty()) {
-            val section = remember(labs, state.labPanel) { labsSectionModel(labs.panels, state.labPanel) }
-            if (section != null) {
-                LogbookSection(title = "Labs", sub = "ref band from latest") {
-                    PickerField(
-                        title = "Panel",
-                        options = section.panelOptions,
-                        value = section.selectedPanel,
-                        onChange = viewModel::selectLabPanel,
-                        onOpen = { pinEpoch++ },
-                    )
-                    for (chart in section.charts) MiniLab(chart, section.selectedPanel, pinEpoch)
-                    for (row in section.rows) LabTableRow(row)
-                }
-            }
+            Box(modifier = Modifier.height(SCREEN_BOTTOM))
         }
-
-        Box(modifier = Modifier.height(SCREEN_BOTTOM))
     }
 }
 

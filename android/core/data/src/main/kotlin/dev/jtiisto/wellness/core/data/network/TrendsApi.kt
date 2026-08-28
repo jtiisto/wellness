@@ -1,15 +1,18 @@
 package dev.jtiisto.wellness.core.data.network
 
 import io.ktor.client.HttpClient
+import io.ktor.client.request.HttpRequestBuilder
 import io.ktor.client.request.get
 import io.ktor.client.request.header
 import io.ktor.client.request.parameter
+import io.ktor.client.request.post
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpHeaders
 import io.ktor.http.encodeURLPathPart
 
 /**
- * The twelve read-only Trends aggregate endpoints.
+ * The twelve read-only Trends aggregate endpoints — and the two `garmin`
+ * commands the Trends pull gesture fires.
  *
  * Every call returns the **raw body text** rather than a decoded DTO: the
  * repository caches exactly what came off the wire, so a later server field
@@ -20,6 +23,13 @@ import io.ktor.http.encodeURLPathPart
  * different request, and the server reads its absence as "no lower bound".
  * `end` is always sent: without it the server would fall back to *its* local
  * today, which is not necessarily the device's.
+ *
+ * The two `/api/garmin` methods are the one thing here that is not a trends
+ * aggregate and not even a read. They live in this class because Trends is
+ * their only caller — the pull on a chart screen is what asks the server to go
+ * and fetch new Garmin data — and splitting a `GarminApi` off for two methods
+ * would cost a Koin registration to say the same thing. If a second consumer
+ * ever appears, that split is the moment.
  */
 class TrendsApi(
     private val client: HttpClient,
@@ -66,6 +76,22 @@ class TrendsApi(
     /** Range-immune, same reason as composition: reports are months apart. */
     suspend fun healthLabs(end: DateString): String = fetch(LABS_PATH, null, end)
 
+    // ---- /api/garmin: the on-demand sync a pull asks for ---------------------
+
+    /**
+     * Ask the server to run a Garmin sync now.
+     *
+     * A command, so a POST — and one that answers 200 with a *status word*
+     * rather than an error for the already-running and cooling-down cases: a
+     * pull gesture treats "somebody is already doing it" as success-shaped. The
+     * body is `{"status": "started"|"running"|"cooldown"|"unconfigured"}`.
+     */
+    suspend fun garminSyncTrigger(): String =
+        client.post(config.endpoint(GARMIN_SYNC_PATH)) { noStore() }.bodyAsText()
+
+    /** Whether that sync is still running, and how the last one ended. */
+    suspend fun garminSyncStatus(): String = fetch(GARMIN_SYNC_STATUS_PATH)
+
     /**
      * The no-cache headers mirror the PWA's `cache: 'no-store'`. No HTTP cache
      * is installed today, and none should be: a response served from one would
@@ -76,9 +102,14 @@ class TrendsApi(
         client.get(config.endpoint(path)) {
             if (start != null) parameter("start", start)
             if (end != null) parameter("end", end)
-            header(HttpHeaders.CacheControl, "no-store")
-            header(HttpHeaders.Pragma, "no-cache")
+            noStore()
         }.bodyAsText()
+
+    /** One statement of the no-cache rule, for the reads and the command alike. */
+    private fun HttpRequestBuilder.noStore() {
+        header(HttpHeaders.CacheControl, "no-store")
+        header(HttpHeaders.Pragma, "no-cache")
+    }
 
     companion object {
         const val BASE_PATH = "/api/trends"
@@ -94,5 +125,10 @@ class TrendsApi(
         const val SLEEP_PATH = "$BASE_PATH/health/sleep"
         const val COMPOSITION_PATH = "$BASE_PATH/health/composition"
         const val LABS_PATH = "$BASE_PATH/health/labs"
+
+        /** The headless `garmin` module — a sibling of trends, not a part of it. */
+        const val GARMIN_BASE_PATH = "/api/garmin"
+        const val GARMIN_SYNC_PATH = "$GARMIN_BASE_PATH/sync"
+        const val GARMIN_SYNC_STATUS_PATH = "$GARMIN_SYNC_PATH/status"
     }
 }

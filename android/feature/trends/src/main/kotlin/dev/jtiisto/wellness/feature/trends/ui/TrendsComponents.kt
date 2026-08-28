@@ -217,6 +217,25 @@ fun StaleCaption(stamps: List<Long>, modifier: Modifier = Modifier) {
     )
 }
 
+/**
+ * What the server-side Garmin sync is doing, in the stale caption's own voice.
+ *
+ * The same idiom deliberately: both are footnotes about where the numbers came
+ * from, and a second visual language for "the data may be about to change"
+ * would be two ways of saying one thing. Absent — not blank — when there is
+ * nothing to report, so an idle screen does not reserve a line for it.
+ */
+@Composable
+fun SyncBanner(text: String?, modifier: Modifier = Modifier) {
+    if (text == null) return
+    Text(
+        text = text.uppercase(),
+        style = LogbookTheme.type.eyebrow,
+        color = LogbookTheme.palette.inkSoft,
+        modifier = modifier.semantics { contentDescription = text },
+    )
+}
+
 // ---- Legend --------------------------------------------------------------------
 
 /**

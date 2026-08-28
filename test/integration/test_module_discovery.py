@@ -51,6 +51,7 @@ class TestHeadlessModules:
     def test_headless_module_is_not_listed(self, client):
         ids = [m["id"] for m in client.get("/api/modules").json()]
         assert "hr" not in ids
+        assert "garmin" not in ids
 
     def test_headless_module_is_still_mounted(self, client):
         """Filtering is a projection over the response, not a mount decision."""
@@ -100,8 +101,8 @@ class TestDisabledModules:
 
     def test_empty_disabled_modules(self, monkeypatch):
         """Empty WELLNESS_DISABLED_MODULES should enable all modules
-        (5: the 4 with a tab plus headless hr)."""
+        (6: the 4 with a tab plus headless hr and garmin)."""
         from config import get_enabled_modules, MODULES
         monkeypatch.setenv("WELLNESS_DISABLED_MODULES", "")
         enabled = get_enabled_modules()
-        assert len(enabled) == len(MODULES) == 5
+        assert len(enabled) == len(MODULES) == 6

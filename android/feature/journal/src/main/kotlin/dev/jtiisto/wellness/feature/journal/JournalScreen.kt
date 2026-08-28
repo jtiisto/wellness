@@ -34,6 +34,7 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -117,6 +118,7 @@ fun JournalScreen(
     JournalContent(
         state = state,
         onOpenConfig = onOpenConfig,
+        onRefresh = viewModel::refresh,
         onSelectDate = viewModel::selectDate,
         onToggleCategory = viewModel::toggleCategory,
         onChecked = viewModel::setChecked,
@@ -131,6 +133,7 @@ fun JournalScreen(
 private fun JournalContent(
     state: JournalUiState,
     onOpenConfig: () -> Unit,
+    onRefresh: () -> Unit,
     onSelectDate: (String) -> Unit,
     onToggleCategory: (String) -> Unit,
     onChecked: (String, Boolean) -> Unit,
@@ -149,43 +152,53 @@ private fun JournalContent(
     Column(modifier = Modifier.fillMaxSize()) {
         JournalHeader(state = state, onOpenConfig = onOpenConfig, onSelectDate = onSelectDate)
 
-        when (state.emptyState) {
-            JournalEmptyState.NO_TRACKERS -> EmptyState(
-                title = "No trackers configured yet.",
-                detail = "Tap the settings icon in the header to add your first tracker.",
-            )
+        // Below the masthead, never around it: the eyebrow, the title and the
+        // date strip are the page's fixed furniture, and dragging them down to
+        // reveal a spinner would move the one thing on screen that says which
+        // day is being looked at.
+        PullToRefreshBox(
+            isRefreshing = state.isRefreshing,
+            onRefresh = onRefresh,
+            modifier = Modifier.weight(1f),
+        ) {
+            when (state.emptyState) {
+                JournalEmptyState.NO_TRACKERS -> EmptyState(
+                    title = "No trackers configured yet.",
+                    detail = "Tap the settings icon in the header to add your first tracker.",
+                )
 
-            JournalEmptyState.NONE_SCHEDULED -> EmptyState(
-                title = "No trackers scheduled for this day.",
-                detail = null,
-            )
+                JournalEmptyState.NONE_SCHEDULED -> EmptyState(
+                    title = "No trackers scheduled for this day.",
+                    detail = null,
+                )
 
-            null -> LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(bottom = SCREEN_BOTTOM),
-            ) {
-                for (group in state.groups) {
-                    item(key = "category-${group.name}") {
-                        SectionHead(
-                            group = group,
-                            onClick = { onToggleCategory(group.name) },
-                            modifier = Modifier.animateItem(),
-                        )
-                    }
-                    if (group.expanded) {
-                        items(
-                            count = group.trackers.size,
-                            key = { index -> group.trackers[index].id },
-                        ) { index ->
-                            TrackerRow(
-                                row = group.trackers[index],
-                                onChecked = onChecked,
-                                onCommitNumeric = onCommitNumeric,
-                                onOpenAccumulator = { accumulatorId = group.trackers[index].id },
-                                onSlider = onSlider,
-                                onNote = onNote,
+                null -> LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(bottom = SCREEN_BOTTOM),
+                ) {
+                    for (group in state.groups) {
+                        item(key = "category-${group.name}") {
+                            SectionHead(
+                                group = group,
+                                onClick = { onToggleCategory(group.name) },
                                 modifier = Modifier.animateItem(),
                             )
+                        }
+                        if (group.expanded) {
+                            items(
+                                count = group.trackers.size,
+                                key = { index -> group.trackers[index].id },
+                            ) { index ->
+                                TrackerRow(
+                                    row = group.trackers[index],
+                                    onChecked = onChecked,
+                                    onCommitNumeric = onCommitNumeric,
+                                    onOpenAccumulator = { accumulatorId = group.trackers[index].id },
+                                    onSlider = onSlider,
+                                    onNote = onNote,
+                                    modifier = Modifier.animateItem(),
+                                )
+                            }
                         }
                     }
                 }
@@ -242,7 +255,15 @@ private fun JournalHeader(
             // the documented reason: the sync state is transient device truth,
             // not decoration. It draws no text, and its four colours are the
             // live-signal set — resolved against this page's own mode.
-            SyncStatusDot(state.syncStatus, modifier = Modifier.padding(end = LogbookSpace.grid))
+            //
+            // The pulse is what a pull has to be able to see. Until the journal
+            // store's busy flag became observable it was permanently static
+            // here, so a sync that changed nothing changed nothing on screen.
+            SyncStatusDot(
+                state.syncStatus,
+                syncing = state.isSyncing,
+                modifier = Modifier.padding(end = LogbookSpace.grid),
+            )
             IconButton(
                 onClick = onOpenConfig,
                 colors = IconButtonDefaults.iconButtonColors(contentColor = palette.ink),
@@ -911,31 +932,49 @@ private fun AccumulatorSheet(row: TrackerRowState, onDismiss: () -> Unit, onAdd:
     }
 }
 
-/** Whatever is not there yet, said in the italic ink-faint voice reserved for absence. */
+/**
+ * Whatever is not there yet, said in the italic ink-faint voice reserved for
+ * absence.
+ *
+ * A one-item `LazyColumn` rather than the `Column` this was, for a reason that
+ * has nothing to do with laziness: the pull gesture is nested-scroll based, so a
+ * child that installs no scroll modifier dispatches nothing and the pull is dead
+ * on an empty day — the one day a user is most likely to pull, having found
+ * nothing. A lazy list installs `Modifier.scrollable` whether or not its content
+ * overflows, so the events flow.
+ *
+ * `Modifier.verticalScroll` would have done the same job and cost the centring:
+ * it measures its content against an unbounded height, leaving
+ * `Arrangement.Center` no slack to centre into, and the message would ride up
+ * under the legend.
+ */
 @Composable
 private fun EmptyState(title: String, detail: String?) {
     val palette = LogbookTheme.palette
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(horizontal = SCREEN_PADDING, vertical = EMPTY_PADDING),
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(horizontal = SCREEN_PADDING, vertical = EMPTY_PADDING),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        Text(
-            text = title,
-            style = LogbookTheme.type.body.copy(fontStyle = FontStyle.Italic),
-            color = palette.inkSoft,
-            textAlign = TextAlign.Center,
-        )
-        detail?.let {
-            Spacer(Modifier.height(LogbookSpace.grid * 2))
+        item {
             Text(
-                text = it,
+                text = title,
                 style = LogbookTheme.type.body.copy(fontStyle = FontStyle.Italic),
                 color = palette.inkSoft,
                 textAlign = TextAlign.Center,
             )
+        }
+        detail?.let { text ->
+            item {
+                Spacer(Modifier.height(LogbookSpace.grid * 2))
+                Text(
+                    text = text,
+                    style = LogbookTheme.type.body.copy(fontStyle = FontStyle.Italic),
+                    color = palette.inkSoft,
+                    textAlign = TextAlign.Center,
+                )
+            }
         }
     }
 }

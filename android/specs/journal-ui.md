@@ -109,6 +109,12 @@ After the phase is green: run `koverHtmlReportAggregated`, read the aggregated l
 9. **Delete**: AlertDialog confirm → soft delete (Phase 2 machinery).
 10. **Server-error snackbar** fires only from the scheduler's server-classified errors, modeled as a **consumable one-shot event** (a Channel/`SharedFlow(replay=0)` bridge) — one failure produces exactly one snackbar; recomposition/rotation never re-shows it.
 11. **Dismissal paths for the form sheet** (all guard-free, PWA parity): scrim tap, swipe-down, system back, navigation away — every path discards silently.
+12. **Pull to refresh** *(2026-08-27; native addition, the PWA has no gesture)*. `PullToRefreshBox` wraps the content `when` — list **and** both empty states — and sits **below** the masthead: the eyebrow, title and date strip are fixed furniture, and dragging them would move the control that says which day is on screen. `JournalViewModel.refresh()` is the handler; the dead `syncNow()` retires into it.
+    - **What it does**: `scheduler.requestSync(TRIGGER_PULL)`, join the job, then await `store.isSyncingFlow == false` capped at 15 s (see core-plumbing for why the job alone is not enough). One pull at a time — a second call while `refreshJob` is active is refused, not queued.
+    - **Minimum visible 500 ms.** The dot is a pure function of dirty count, watermark and connectivity, so a successful no-op sync changes nothing on screen — which is exactly what the user pulled to find out. Without the floor, a fast no-op is indistinguishable from a gesture that never registered.
+    - **Offline is answered, not skipped.** The scheduler treats offline as a silent skip; a pull is a question. `ConnectivityMonitor` is consulted at the gesture (through an injected `() -> Boolean`, the seam every other consumer takes) and `SyncErrorEvents.postMessage` carries **authored text** — `"Offline — nothing synced. Try again when you're connected."` — never `Throwable.message`, per the debug-log permitted-field policy.
+    - **The dot finally pulses.** `JournalUiState` gains `isSyncing` (from the store's new flow) and `isRefreshing`; `SyncStatusDot(syncing = state.isSyncing)` ends the permanently-static state the journal masthead had, and its "Syncing…" content description with it.
+    - **The empty states are a `LazyColumn`, not a `Column`** — the one non-mechanical part. The pull modifier is nested-scroll based, so a child that installs no scroll modifier dispatches nothing and the gesture is dead on an empty day, which is the day a user is most likely to pull. `Modifier.verticalScroll` would have fixed that and cost the centring (it measures against an unbounded height, leaving `Arrangement.Center` no slack); a one-item lazy list installs `Modifier.scrollable` whether or not its content overflows and keeps the drawing identical.
 
 ## Tests
 
@@ -125,6 +131,7 @@ After the phase is green: run `koverHtmlReportAggregated`, read the aggregated l
 | `MergeEntryTest` (store addition) | every `EntryPatch` combination (Unchanged/Set/Set(null) × both fields) on existing and missing rows; absent-vs-explicit-null distinction survives Room round-trip; both-Unchanged = no write, no dirty; entry dirty never marks the tracker |
 | `TrackerWidgetFieldsTest` | `unitOrNull`/`defaultValueOrNull`/`isAccumulator` extraction: missing, JsonNull, malformed, numeric-string cases |
 | `JournalUiPrefsTest` | `ui.` keys never reach an upload body; toggle serialization; stamp pruning at the inclusive cutoff; caption local-date formatting incl. a UTC-midnight-crossing case |
+| `JournalViewModelTest` (:feature:journal) | the pull: `requestSync(TRIGGER_PULL)`, re-entrancy refused and released, the 500 ms floor, a slow sync held past it, the attached-flight wait and its 15 s cap, the offline message verbatim + a leak check on it, `isSyncing` reaching the state |
 
 Instrumented: none new (UI is JVM-logic-tested; screens exercised on device). Existing 15 instrumented tests still pending an emulator session.
 

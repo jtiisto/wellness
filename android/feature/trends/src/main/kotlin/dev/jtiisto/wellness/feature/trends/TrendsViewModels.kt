@@ -28,6 +28,10 @@ import java.time.LocalDate
  * old one started, and a "loaded" key per independent fetch. Nothing here
  * decides what a chart looks like — that is the pure builders' job — so these
  * stay about *when* to ask and *what to do when the answer does not come*.
+ *
+ * The repository is held by [TrendsScreenViewModel] rather than by each of
+ * them: the pull gesture lives on the base and needs it too, and two references
+ * to the same singleton would be two places to keep in step.
  */
 
 /** The toolbar's own state: which range, which sub-screen. */
@@ -61,11 +65,11 @@ class TrendsShellViewModel(private val prefs: TrendsPrefs) : ViewModel() {
  * costs its card, and the tiles carry on.
  */
 class OverviewViewModel(
-    private val repository: TrendsRepository,
+    repository: TrendsRepository,
     prefs: TrendsPrefs,
     debugLog: DebugLog,
     today: () -> LocalDate = LocalDate::now,
-) : TrendsScreenViewModel(prefs, debugLog, today) {
+) : TrendsScreenViewModel(repository, prefs, debugLog, today) {
 
     private val _state = MutableStateFlow(OverviewUiState())
     val uiState: StateFlow<OverviewUiState> = _state.asStateFlow()
@@ -116,11 +120,11 @@ class OverviewViewModel(
  * is can only be settled once the list has arrived.
  */
 class StrengthViewModel(
-    private val repository: TrendsRepository,
+    repository: TrendsRepository,
     prefs: TrendsPrefs,
     debugLog: DebugLog,
     today: () -> LocalDate = LocalDate::now,
-) : TrendsScreenViewModel(prefs, debugLog, today) {
+) : TrendsScreenViewModel(repository, prefs, debugLog, today) {
 
     private val _state = MutableStateFlow(StrengthUiState())
     val uiState: StateFlow<StrengthUiState> = _state.asStateFlow()
@@ -217,11 +221,11 @@ class StrengthViewModel(
 
 /** One payload carries both cards, so this screen has a single slice. */
 class CardioViewModel(
-    private val repository: TrendsRepository,
+    repository: TrendsRepository,
     prefs: TrendsPrefs,
     debugLog: DebugLog,
     today: () -> LocalDate = LocalDate::now,
-) : TrendsScreenViewModel(prefs, debugLog, today) {
+) : TrendsScreenViewModel(repository, prefs, debugLog, today) {
 
     private val _state = MutableStateFlow(CardioUiState())
     val uiState: StateFlow<CardioUiState> = _state.asStateFlow()
@@ -257,11 +261,11 @@ class CardioViewModel(
  * happened in a window — so it is fetched once, like Overview's tiles.
  */
 class JournalTrendsViewModel(
-    private val repository: TrendsRepository,
+    repository: TrendsRepository,
     prefs: TrendsPrefs,
     debugLog: DebugLog,
     today: () -> LocalDate = LocalDate::now,
-) : TrendsScreenViewModel(prefs, debugLog, today) {
+) : TrendsScreenViewModel(repository, prefs, debugLog, today) {
 
     private val _state = MutableStateFlow(JournalTrendsUiState())
     val uiState: StateFlow<JournalTrendsUiState> = _state.asStateFlow()
@@ -332,11 +336,11 @@ class JournalTrendsViewModel(
  * visible error.
  */
 class HealthViewModel(
-    private val repository: TrendsRepository,
+    repository: TrendsRepository,
     prefs: TrendsPrefs,
     debugLog: DebugLog,
     today: () -> LocalDate = LocalDate::now,
-) : TrendsScreenViewModel(prefs, debugLog, today) {
+) : TrendsScreenViewModel(repository, prefs, debugLog, today) {
 
     private val _state = MutableStateFlow(HealthUiState())
     val uiState: StateFlow<HealthUiState> = _state.asStateFlow()

@@ -20,6 +20,7 @@ import dev.jtiisto.wellness.core.data.hr.HrCaptureStore
 import dev.jtiisto.wellness.core.data.journal.journalNumberJson
 import dev.jtiisto.wellness.core.data.network.CoachApi
 import dev.jtiisto.wellness.core.data.network.DateString
+import dev.jtiisto.wellness.core.data.sync.SyncErrorEvents
 import dev.jtiisto.wellness.core.data.sync.SyncScheduler
 import dev.jtiisto.wellness.feature.coach.guidance.EXTENSION_STEP_SEC
 import dev.jtiisto.wellness.feature.coach.guidance.GuidanceKey
@@ -36,16 +37,20 @@ import dev.jtiisto.wellness.feature.coach.guidance.guidedRideFill
 import dev.jtiisto.wellness.feature.coach.guidance.guidedSegmentsJson
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
@@ -89,6 +94,13 @@ class CoachViewModel(
      */
     private val beatReader: HrBeatReader,
     traceRing: HrTraceRing,
+    /**
+     * Read at the moment of the pull, not observed — the seam every other
+     * consumer of `ConnectivityMonitor` takes, and what keeps this class
+     * testable without an Android framework double.
+     */
+    private val isOnline: () -> Boolean,
+    private val errors: SyncErrorEvents,
     private val today: () -> LocalDate = LocalDate::now,
     /**
      * The wall clock a guidance run is anchored at.
@@ -142,6 +154,20 @@ class CoachViewModel(
 
     /** Bumped on resume so a day rollover re-derives "is today". */
     private val refresh = MutableStateFlow(0)
+
+    private val _isRefreshing = MutableStateFlow(false)
+
+    /**
+     * The pull spinner — **deliberately not part of [uiState]**, beside
+     * [strapPrompt] and [traceSamples] and for the same reason: it is transient
+     * gesture state, not anything [buildCoachUiState] derives or decides with.
+     * The state build is at five combined inputs; a sixth would cost a new
+     * bundle and a changed pure signature to carry a boolean the builder never
+     * reads.
+     */
+    val isRefreshing: StateFlow<Boolean> = _isRefreshing.asStateFlow()
+
+    private var refreshJob: Job? = null
 
     private val hooks = WorkoutHooks(api = api, scope = viewModelScope)
 
@@ -295,7 +321,36 @@ class CoachViewModel(
         viewModelScope.launch { withContext(io) { knownStraps.refresh() } }
     }
 
-    fun syncNow() = scheduler.requestSync()
+    /**
+     * The pull gesture: force a real round trip and *show* that it happened.
+     *
+     * The same shape as the journal's, deliberately down to the constants — the
+     * two tabs answer the same gesture and must answer it identically. The
+     * indicator in the app bar is the visible half; the minimum visible time is
+     * what stops a fast no-op from reading as a gesture that never registered.
+     *
+     * The scheduler's job is joined **and then** the store's busy flag is waited
+     * out, because that job completes at once when the flight belongs to
+     * somebody else. Offline is answered here rather than in the scheduler,
+     * which treats it as a silent skip.
+     */
+    fun refresh() {
+        if (refreshJob?.isActive == true) return
+        refreshJob = viewModelScope.launch {
+            _isRefreshing.value = true
+            val floor = launch { delay(MIN_VISIBLE_MS) }
+            if (isOnline()) {
+                scheduler.requestSync(SyncScheduler.TRIGGER_PULL).join()
+                withTimeoutOrNull(SYNC_WAIT_CAP_MS) { store.isSyncingFlow.first { !it } }
+            } else {
+                // Authored text, never a Throwable's message — the debug-log
+                // permitted-field policy applies to the snackbar too.
+                errors.postMessage(OFFLINE_MESSAGE)
+            }
+            floor.join()
+            _isRefreshing.value = false
+        }
+    }
 
     fun toggleExercise(exerciseId: String) {
         expandedExercises.update { expanded ->
@@ -797,5 +852,13 @@ class CoachViewModel(
 
     private companion object {
         const val STOP_TIMEOUT_MS = 5_000L
+
+        /** Long enough for a no-op sync to read as an answer. Journal's twin. */
+        const val MIN_VISIBLE_MS = 500L
+
+        /** A spinner waiting on somebody else's flight still has to end. */
+        const val SYNC_WAIT_CAP_MS = 15_000L
+
+        const val OFFLINE_MESSAGE = "Offline — nothing synced. Try again when you're connected."
     }
 }

@@ -66,6 +66,14 @@ data class JournalUiState(
     val eyebrow: JournalEyebrow = JournalEyebrow.Today(LoggedTally(0, 0)),
     val emptyState: JournalEmptyState? = null,
     val syncStatus: SyncStatus = SyncStatus.GRAY,
+    /**
+     * A sync is in flight — the dot's fourth state, which its three colours
+     * cannot express: RED during an upload and RED because the upload failed
+     * look identical otherwise.
+     */
+    val isSyncing: Boolean = false,
+    /** The pull spinner. Held past a fast no-op so the gesture reads as answered. */
+    val isRefreshing: Boolean = false,
 )
 
 /** The two "nothing to show" cases, which need different words. */
@@ -180,6 +188,8 @@ fun buildJournalUiState(
     expandedCategories: Set<String>,
     valueUpdatedTimes: Map<String, String> = emptyMap(),
     syncStatus: SyncStatus = SyncStatus.GRAY,
+    isSyncing: Boolean = false,
+    isRefreshing: Boolean = false,
     zone: ZoneId = ZoneId.systemDefault(),
     locale: Locale = Locale.getDefault(),
 ): JournalUiState {
@@ -243,6 +253,8 @@ fun buildJournalUiState(
             else -> null
         },
         syncStatus = syncStatus,
+        isSyncing = isSyncing,
+        isRefreshing = isRefreshing,
     )
 }
 

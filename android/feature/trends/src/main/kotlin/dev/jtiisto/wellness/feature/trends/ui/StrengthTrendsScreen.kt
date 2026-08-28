@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -52,93 +53,104 @@ fun StrengthTrendsScreen(onRange: (String) -> Unit, modifier: Modifier = Modifie
         onDispose { viewModel.onInactive() }
     }
 
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(SECTION_GAP),
+    val isRefreshing by viewModel.isRefreshing.collectAsStateWithLifecycle()
+    val syncBanner by viewModel.syncBanner.collectAsStateWithLifecycle()
+
+    PullToRefreshBox(
+        isRefreshing = isRefreshing,
+        onRefresh = viewModel::refresh,
+        modifier = modifier,
     ) {
-        val exercises = state.exercises.valueOrNull
-        RangeToolbar(
-            range = state.range,
-            staleStamps = staleStamps(state.exercises, state.volume, state.detail),
-            onRange = onRange,
-        )
-
-        if (exercises != null && exercises.isNotEmpty()) {
-            val options = remember(exercises) {
-                pickerLabels(exercises.map { NamedItem(it.slug, it.name) })
-            }
-            PickerField(
-                title = "Exercise",
-                options = options,
-                value = state.selected,
-                onChange = viewModel::selectExercise,
-                onOpen = { pinEpoch++ },
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(SECTION_GAP),
+        ) {
+            val exercises = state.exercises.valueOrNull
+            RangeToolbar(
+                range = state.range,
+                staleStamps = staleStamps(state.exercises, state.volume, state.detail),
+                onRange = onRange,
             )
-        }
 
-        when (val slice = state.exercises) {
-            is Slice.Error -> ScreenError(slice.text, viewModel::retry)
-            Slice.Loading -> ScreenLoading()
-            is Slice.Ready ->
-                if (slice.value.isEmpty()) ChartEmpty("No logged sets yet")
-        }
+            SyncBanner(syncBanner)
 
-        (state.detail as? Slice.Ready)?.value?.let { detail ->
-            val card = remember(detail, state.showRpe) { progressionCardModel(detail, state.showRpe) }
-            LogbookSection(title = card.title, sub = card.subtitle) {
-                if (card.plot == null) {
-                    ChartEmpty("No sessions in range")
-                } else {
-                    // The toggle sits with the legend rather than in the head:
-                    // it switches one of the entries beside it, and the head is
-                    // already carrying a name that can run long.
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        LegendRow(
-                            card.legend,
-                            modifier = Modifier.weight(1f),
+            if (exercises != null && exercises.isNotEmpty()) {
+                val options = remember(exercises) {
+                    pickerLabels(exercises.map { NamedItem(it.slug, it.name) })
+                }
+                PickerField(
+                    title = "Exercise",
+                    options = options,
+                    value = state.selected,
+                    onChange = viewModel::selectExercise,
+                    onOpen = { pinEpoch++ },
+                )
+            }
+
+            when (val slice = state.exercises) {
+                is Slice.Error -> ScreenError(slice.text, viewModel::retry)
+                Slice.Loading -> ScreenLoading()
+                is Slice.Ready ->
+                    if (slice.value.isEmpty()) ChartEmpty("No logged sets yet")
+            }
+
+            (state.detail as? Slice.Ready)?.value?.let { detail ->
+                val card = remember(detail, state.showRpe) { progressionCardModel(detail, state.showRpe) }
+                LogbookSection(title = card.title, sub = card.subtitle) {
+                    if (card.plot == null) {
+                        ChartEmpty("No sessions in range")
+                    } else {
+                        // The toggle sits with the legend rather than in the head:
+                        // it switches one of the entries beside it, and the head is
+                        // already carrying a name that can run long.
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            LegendRow(
+                                card.legend,
+                                modifier = Modifier.weight(1f),
+                                chart = ChartInk.PROGRESSION,
+                            )
+                            ToggleSegment(
+                                label = "RPE",
+                                on = state.showRpe,
+                                onToggle = viewModel::toggleRpe,
+                            )
+                        }
+                        PlotCanvas(
+                            model = card.plot,
+                            identity = listOf("progression", state.range, state.selected, pinEpoch),
                             chart = ChartInk.PROGRESSION,
                         )
-                        ToggleSegment(
-                            label = "RPE",
-                            on = state.showRpe,
-                            onToggle = viewModel::toggleRpe,
+                    }
+                }
+            }
+
+            (state.volume as? Slice.Ready)?.value?.let { volume ->
+                val card = remember(volume) { volumeCardModel(volume.weeks) }
+                LogbookSection(title = "Weekly volume", sub = "kg") {
+                    if (card.plot == null) {
+                        ChartEmpty("No data in range")
+                    } else {
+                        LegendRow(card.legend, chart = ChartInk.VOLUME)
+                        PlotCanvas(
+                            model = card.plot,
+                            identity = listOf("volume", state.range, pinEpoch),
+                            chart = ChartInk.VOLUME,
                         )
                     }
-                    PlotCanvas(
-                        model = card.plot,
-                        identity = listOf("progression", state.range, state.selected, pinEpoch),
-                        chart = ChartInk.PROGRESSION,
-                    )
                 }
             }
-        }
 
-        (state.volume as? Slice.Ready)?.value?.let { volume ->
-            val card = remember(volume) { volumeCardModel(volume.weeks) }
-            LogbookSection(title = "Weekly volume", sub = "kg") {
-                if (card.plot == null) {
-                    ChartEmpty("No data in range")
-                } else {
-                    LegendRow(card.legend, chart = ChartInk.VOLUME)
-                    PlotCanvas(
-                        model = card.plot,
-                        identity = listOf("volume", state.range, pinEpoch),
-                        chart = ChartInk.VOLUME,
-                    )
+            if (exercises != null && exercises.isNotEmpty()) {
+                val rows = remember(exercises) { prBoardRows(exercises) }
+                LogbookSection(title = "Records", sub = "best e1RM") {
+                    for (row in rows) PrRow(row)
                 }
             }
-        }
 
-        if (exercises != null && exercises.isNotEmpty()) {
-            val rows = remember(exercises) { prBoardRows(exercises) }
-            LogbookSection(title = "Records", sub = "best e1RM") {
-                for (row in rows) PrRow(row)
-            }
+            Box(modifier = Modifier.height(SCREEN_BOTTOM))
         }
-
-        Box(modifier = Modifier.height(SCREEN_BOTTOM))
     }
 }
 

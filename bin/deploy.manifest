@@ -32,6 +32,10 @@ ship-bin   pre-workout-hook.sh
 ship-bin   post-workout-hook.sh
 ship-bin   backup-databases.sh
 ship-bin   reverse_backfill_schedule_polarity.py
+# Also prod's CRON script: shipping it REPLACES prod's untracked equivalent
+# (no-args defaults reproduce the cron's 7/3 scope), and the garmin module runs
+# the same file on demand at 2/2.
+ship-bin   garmin-sync.sh
 
 # ---- Intentionally NOT shipped (dev/test/docs/config) ----
 # The native Android client (full app: Gradle tree, specs, golden fixtures).

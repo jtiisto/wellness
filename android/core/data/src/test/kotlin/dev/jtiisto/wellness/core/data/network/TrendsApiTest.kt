@@ -229,6 +229,45 @@ class TrendsApiTest {
         assertThrows<Exception> { api.overview() }
     }
 
+    // ---- the garmin commands -----------------------------------------------
+
+    @Test
+    @DisplayName("the two garmin calls land under /api/garmin, not under the trends prefix")
+    fun garminPaths() = runTest {
+        val api = api()
+        api.garminSyncTrigger()
+        api.garminSyncStatus()
+
+        assertEquals(
+            listOf("$BASE/api/garmin/sync", "$BASE/api/garmin/sync/status"),
+            requestedUrls,
+        )
+    }
+
+    @Test
+    @DisplayName("the trigger is a POST and the status a GET — one commands, one reads")
+    fun garminMethods() = runTest {
+        val api = api()
+        api.garminSyncTrigger()
+        api.garminSyncStatus()
+
+        assertEquals(listOf(HttpMethod.Post, HttpMethod.Get), requests.map { it.method })
+    }
+
+    @Test
+    @DisplayName("both garmin calls carry the no-cache headers; neither carries a query")
+    fun garminHeadersAndQuery() = runTest {
+        val api = api()
+        api.garminSyncTrigger()
+        api.garminSyncStatus()
+
+        assertTrue(requestedUrls.none { it.contains("?") }, requestedUrls.toString())
+        for (request in requests) {
+            assertEquals("no-store", request.headers[HttpHeaders.CacheControl])
+            assertEquals("no-cache", request.headers[HttpHeaders.Pragma])
+        }
+    }
+
     private companion object {
         const val BASE = "http://localhost:9001/wellness"
         const val START = "2026-05-16"

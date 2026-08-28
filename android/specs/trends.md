@@ -10,6 +10,15 @@ Status: **approved 2026-08-09** (v2 after Codex review — 5 blockers + 12 major
 
 > **v2.3 (sleep debt flipped to on-waking, 2026-08-26):** `days[].debt_min` now carries the debt **on waking** from that night — the night's own product — where v2.2 carried the debt *entering* it. The wire field keeps its name (the feature is hours old and this client is its only consumer). The need arithmetic is untouched: a night's need still spends the debt it *entered* on, which on consecutive rows is simply the **previous** row's `debt_min`. The flip buys one property the incoming side could not have: on the app's own `end=today` requests, **`tonight.debt_min` equals the last emitted row's `debt_min`** whenever that row is today's or yesterday's, so the headline card and the last point of the debt chart are the same number instead of two numbers a night apart (they diverge — card 0 — only past the server's carry window, when the last scored night is older than yesterday; a clipped `end` would hide newer rows from `days` while `tonight`, which ignores the range, still carries them — server-pinned as deliberate, and unreachable from this client). Consequences here: the scrub row reads **`woke with`** and the debt legend reads **`debt on waking`**; the gap rule is unchanged in behaviour but not in meaning — a `gap` row still breaks the line and takes the WARN ring, now because the night before it was never observed, **not** because its debt is zero (it usually is not). `debtLine` on the card is unchanged.
 
+> **v2.4 (pull to refresh + on-demand Garmin sync, 2026-08-27):** every sub-screen gains a pull
+> gesture that refetches the screen **and** asks the server to sync Garmin now, over a new headless
+> server module at `/api/garmin`. Three amendments to the text above: the module is no longer
+> **read-only** (`POST /api/garmin/sync` is a command, and the first write anything in Trends makes);
+> deviation 14's "every slice resets to Loading when its fetch starts" gains one stated exception, a
+> refresh, which keeps what is drawn; and the §API "Omitted keys" inventory stays a closed statement
+> about the twelve `/api/trends` endpoints because the garmin payloads carry their own note. Full
+> rules in §Pull to refresh.
+
 ## Goal
 
 Port the PWA Trends module at behavioral parity: 5 read-only chart screens (Overview / Strength / Cardio / Journal / Health) over 12 GET endpoints (11 ported; `/health/sleep` is native-first — see §Sleep need), network-first fetching with `payload_cache` fallback and a staleness badge, the full `chart-logic.js` pure-geometry port (13 functions, 21 transcribed test cases), and a persisted range selector (4w/12w/6m/All) — all rendered through the Phase 5.5 Graphite Signal chart foundation (`core/ui/chart/`), which means **every major chart ships with scrub/pin/tooltip interactivity the PWA does not have** (plan-mandated native addition; the PWA has zero chart interactivity — verified).
@@ -176,7 +185,7 @@ LabsDto(available: Boolean, panels: List<LabPanel>)
          @SerialName("ref_text") refText: String?)
 ```
 
-**`TrendsApi`** (JournalApi conventions): 12 suspend functions returning **raw body text** (`bodyAsText()`), nullable `start`/`end` appended only when non-null. `/overview` and `/journal/trackers` take no params; `/health/composition` + `/health/labs` take `end` only; `/health/sleep` takes `start?` + `end` like `/health/recovery`. Slug/id path segments URL-encoded. Pinned by `TrendsApiTest` (MockEngine): every path, query omission-vs-presence, URL encoding of a slug needing it.
+**`TrendsApi`** (JournalApi conventions): 12 suspend functions returning **raw body text** (`bodyAsText()`), nullable `start`/`end` appended only when non-null — plus, since v2.4, the two `/api/garmin` commands, which are neither aggregates nor reads (see §Pull to refresh). `/overview` and `/journal/trackers` take no params; `/health/composition` + `/health/labs` take `end` only; `/health/sleep` takes `start?` + `end` like `/health/recovery`. Slug/id path segments URL-encoded. Pinned by `TrendsApiTest` (MockEngine): every path, query omission-vs-presence, URL encoding of a slug needing it.
 
 **`TrendsRepository`** (Koin singleton):
 ```kotlin
@@ -304,6 +313,110 @@ round2(v): Double                                     // JS Math.round semantics
 
 **Contract guarantees relied on** (server-stated): `days` always present; `debt_min` never negative and measured on **waking** (v2.3); `strain_est` on every row; optional fields omitted, never null; debt independent of the requested `start`; on `end=today` requests (this client's only shape), `tonight.debt_min == days.last().debt_min` while the last row is today's or yesterday's. Rows are keyed by **wake** date, so they overlay `SleepCard` 1:1. Full server-side definition in `../../docs/ARCHITECTURE.md` (Phase 4 — sleep need / debt), which this section defers to.
 
+### Pull to refresh, and the on-demand Garmin sync behind it (added 2026-08-27)
+
+A pull on any of the five sub-screens refetches that screen **and** asks the server to sync Garmin
+now — the first thing in this module that writes anything anywhere. Fresh Garmin data otherwise
+arrives only on the 9am/2pm/10pm cron, so a user looking at a recovery chart had no way to ask for
+today's night.
+
+**Two phases, because they answer on different timescales.**
+
+- **Phase one** — `POST /api/garmin/sync` fired *alongside* a full refetch (an `async`, not a
+  sequential call: the POST is bounded only by the client's request timeout, and a slow server must
+  not hold a spinner over data that is already back). The spinner belongs to the **refetch**, with a
+  500 ms minimum visible time; holding it over a fifteen-second garmy run would be a lie about what
+  the user is waiting for.
+- **Phase two**, entered only on `status` `started` or `running` — poll `GET /api/garmin/sync/status`
+  every **3 s** to a **60 s** cap, say so in `syncBanner`, then one silent refetch so the new data
+  lands in place. `cooldown`, `unconfigured`, and an unreachable server all end the gesture at phase
+  one; the local refetch happened either way, because the pull was also a refresh. A poll request
+  that fails skips its cycle rather than ending the watch — one dropped request says nothing about
+  the sync — and a watch that hits the cap refetches anyway, because a long sync has probably still
+  written something.
+
+**Refresh keeps values.** `loadSlice` gains a `keepValues` mode that **skips the `Slice.Loading`
+assignment**, so a pull never blanks a chart (deviation 14 stands for every other load: a slice is
+still never rendered under a toolbar state it does not match). The flag is raised for one refetch and
+cleared by the refetch itself (in a `finally`) once the WHOLE cycle settles — **not** on a transient
+zero of the in-flight counter, which occurs in the gap before a dependent second wave and would blank
+it (Codex review). Left standing past the cycle, the next range change would skip its own blanking
+and show the old range's charts under the new range's toolbar — the `finally` keeps that invariant
+on every exit path.
+
+**Three internals are load-bearing, and each is a fixed bug rather than a preference.**
+
+1. **The spinner keys off a load counter, not off `collect()`.** `collect()` never settles — every
+   screen ends in an infinite `collectLatest` over the range. `loadSlice` maintains
+   `SliceLoads(started, inFlight)` instead: `started` is **monotonic**, and the refresh waits for
+   `started > (the count taken before the cycle) && inFlight == 0` — and then believes the zero only
+   after it survives a **200 ms quiet window** (re-checked, looping): Strength's detail fetch launches
+   only once its list has landed, across exactly such a zero, and the first-zero version ended the
+   spinner and blanked the second wave (Codex review). Waiting for the count to *rise*
+   and then fall is the version that does not work: a `StateFlow` conflates, so a fully cached
+   refetch that begins and ends between two turns of the main dispatcher shows the observer nothing
+   but the 0 it started from, and the spinner hangs until the cap on exactly the case that should be
+   fastest.
+2. **The internal refetch cycles the collect job directly** — never `onInactive(); onActive()`. The
+   phase-two watch runs in the ViewModel's scope, and `onInactive()` cancels it: a completion refetch
+   routed that way would cancel *itself* at the `onInactive()` line and never reach the relaunch,
+   leaving the collector dead and every later range change silently fetching nothing. `retry()` moved
+   off that pair for the same reason (a Retry tap on one failed card has no business ending a sync),
+   and the real `onInactive()` — screen dispose — remains the only thing that stops a watch.
+   Ordering inside the refetch is not interchangeable either: `cancelAndJoin()` **before** raising
+   `keepValues`, because cancellation is only *marked* synchronously and the cancelled `finally`
+   blocks would otherwise run afterwards, drain the counter to zero and clear the flag.
+3. **The completion refetch is a sibling `launch`, TRACKED as `completionJob`**, and the watch itself
+   is a sibling of the refresh job — so the refresh completes with its spinner and a second pull is
+   not refused for the length of a garmy run. `onInactive()` cancels the tracked sibling, and the
+   refetch's entry guard (`job` must be active) refuses to run on a disposed screen — an untracked
+   sibling could otherwise slip past dispose and relaunch the collector on a dead surface, leaving it
+   fetching and range-watching forever (Codex review HIGH).
+
+**Phase-two scope is PER SUB-SCREEN, and that is ACCEPTED.** The watch and the banner live in the
+ViewModel of the screen that was pulled, so switching sub-screens mid-sync abandons both. The data
+still lands on the server; the newly-viewed screen shows its cached slices until the user pulls
+there, and pulling again is the recovery. No cross-ViewModel shared state is introduced for it.
+
+**`syncBanner: StateFlow<String?>`** — `"syncing Garmin…"` while phase two runs, `"Garmin sync
+failed"` transiently (6 s) when the server reports `last_outcome: "failed"`, null otherwise.
+Rendered by `SyncBanner` directly under the `RangeToolbar` in the **`StaleCaption` idiom** — same
+mono eyebrow, same ink-soft, uppercased at render, absent rather than blank when there is nothing to
+say. Deliberately the same voice: both are footnotes about where the numbers came from, and a second
+visual language for "the data may be about to change" would be two ways of saying one thing.
+
+**Endpoints and DTOs** (`core/data/trends/GarminSyncDtos.kt`; the API methods sit on `TrendsApi` and
+the passthroughs on `TrendsRepository`, because Trends is their only consumer — a `GarminApi` split
+for two methods would cost a Koin registration to say the same thing, and is the right move the day a
+second consumer appears):
+
+```kotlin
+// POST /api/garmin/sync   → 200 even for "already running" (a pull treats it as success-shaped)
+GarminSyncTrigger(status: String,                                   // started|running|cooldown|unconfigured
+                  @SerialName("retry_in_sec") retryInSec: Double? = null)
+
+// GET /api/garmin/sync/status
+GarminSyncStatus(running: Boolean,
+                 @SerialName("last_finished_at") lastFinishedAt: Long? = null,   // epoch ms
+                 @SerialName("last_outcome") lastOutcome: String? = null,        // ok|failed
+                 @SerialName("last_synced_at") lastSyncedAt: Long? = null)       // epoch ms
+```
+
+**Omitted keys — the garmin module's own note.** All four optionals above are **omitted when absent,
+never null**, so each default is what the key's *absence* means. This is scoped here deliberately:
+the §API "Omitted keys" inventory is a closed statement about the **twelve `/api/trends` endpoints**,
+and it stays literally true because these two are not among them. `retryInSec` is a `Double` (a
+remainder off a clock, not a count — an `Int` would fail the whole payload the first time the server
+emitted `540.3`, taking the `status` the client actually acts on down with it); the two epoch-ms
+fields are `Long`, which the server confirms it emits as integers.
+
+**No caching, in either direction.** The two calls bypass `fetchCached` — not merely because there is
+nothing worth storing, but because a cached `"started"` is a lie the moment it is written and a cache
+*read* would answer a command with a stale success. An unreachable server means the sync did not
+start, which is exactly what the caller needs to hear, so the exception propagates and the ViewModel
+decides. They therefore have no row in the cache-key inventory above, which remains a complete list
+of what this module stores.
+
 ### fetchCached & staleness
 Per the repository contract above. Badge text: oldest `staleFetchedAt` among the screen's rendered stale slices; `max(1, round((now-oldest)/60000))` minutes; `<60` → `cached · {m}m ago`, else `cached · {round(m/60)}h ago`; tooltip/contentDescription "Offline — showing cached data". No HTTP-layer caching exists (no Ktor cache plugin) — keep it that way or the fallback semantics double up.
 
@@ -366,6 +479,10 @@ The scrub modifier must not steal vertical scroll (guaranteed by `chartScrub`'s 
 | `TrendsDtoTest` — golden fixtures decode; weekly_usage present/absent; completed 1/0/null; in_range null; hrv_band nesting; mixed numeric/note-string tracker values; every Double field decoded from integer AND decimal wire forms; available:false variants | :core:data | new (~16) |
 | `TrendsPrefsTest` — defaults, write-through, ui.-prefix isolation | :core:data | new (~6) |
 | Per-screen ViewModel tests — single initial fetch, no config-recreation refetch, rapid 4w→12w flip (late completion dropped), error-clear-at-start, supervisorScope isolation (Health 3-of-4 swallow, Overview weight-slice rule), retry, slice request-keying | :feature:trends | new (~24) |
+| Pull-to-refresh section of `TrendsViewModelTest` — refresh keeps Ready values (the blanking regression); keeps-values dies with the cycle so the next range change DOES blank; spinner lifecycle incl. the floor; re-entrancy; `started` → 3 s polls → completion refetch; **the completion refetch does not kill its own collector** (the self-cancellation regression, asserted by a range change fetching afterwards); **the spinner holds through a dependent second wave** (Strength's detail; the transient-zero regression); **a Garmin watch cannot revive a disposed screen** (tracked completion job + entry guard, probed by a post-return range change answered once); cooldown and unconfigured skip phase two; a failing trigger still refetches; the failed banner is transient; `onInactive` stops the watch; the 60 s cap still refetches; a failed poll skips its cycle | :feature:trends | new (12) |
+| `GarminSyncDtoTest` — four trigger statuses, `retry_in_sec` present/absent/fractional, a status with only `running` (all three optionals defaulting to null), a full status, a failed outcome, unknown key ignored. **Inline JSON, not goldens**: two payloads of four scalar keys each would need five fixture files to cover the omitted-key matrix, and `TrendsApiTest` in the same module already asserts against inline bodies | :core:data | new (7) |
+| `TrendsApiTest` — the two garmin paths under `/api/garmin`, POST vs GET, no-cache headers, no query | :core:data | +3 |
+| `TrendsRepositoryTest` — both passthroughs decode; neither reads nor writes `payload_cache`; an unreachable server fails the trigger rather than serving a cached one | :core:data | +3 |
 | Migrations 3→4 and 1→4 chain | instrumented | 2 (written now, executed next emulator session) |
 
 **Device acceptance matrix** (ship checklist for the APK; not JVM-claimable): scrub vs vertical scroll on every chart type; pin → open picker → pin cleared → back closes sheet once → chart still scrollable; pin → rotate → no stale tooltip; airplane-mode cache fallback + stale badge on each screen; range flip mid-flight shows Loading not stale-range data; MiniMetric/MiniLab scrub ergonomics (per gate decision); migration runs clean on a v3 install.

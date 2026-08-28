@@ -361,6 +361,28 @@ prod does not have one and never overwrites an existing prod copy — if dev and
 prod diverge, the deploy warns and leaves prod's copy alone, so a prod-only
 refit is safe from a routine deploy.
 
+### Garmin module (server)
+
+The Garmin module triggers the external garmy sync on demand (a Trends
+pull-to-refresh). It owns no database — it runs a script and reads
+`GARMIN_DB_PATH` above read-only to tell when the last sync finished.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GARMIN_SYNC_CMD` | `bin/garmin-sync.sh` if present, else unset | The sync script the module runs. When it resolves to nothing — or to a path that does not exist — `POST /api/garmin/sync` answers `{"status": "unconfigured"}` and the client simply skips the Garmin phase, so a dev clone without garmy degrades instead of failing. |
+| `GARMY_SRC` | `~/dev/garmy/src` | Where `bin/garmin-sync.sh` finds the garmy package (it is a source checkout, not a packaged dist). Read by the script, not by the server. |
+
+`bin/garmin-sync.sh` takes two positional arguments — `last-days` (default 7)
+and `resync-days` (default 3). **The defaults are the cron scope**, so the same
+script serves both callers: cron runs it with no arguments, and the server runs
+it as `garmin-sync.sh 2 2` for an on-demand top-up. Output is appended,
+timestamped, to `~/.garmy/sync-cron.log`; the server reads only the exit code.
+
+Because the script is tracked and listed in `bin/deploy.manifest`, deploying
+**replaces** prod's untracked copy (the deploy's only never-clobber pattern is
+`*-workout-hook.sh`). After the first deploy carrying it, check that cron's next
+scheduled run still lands in `sync-cron.log` as expected.
+
 ### Disabling modules (optional)
 
 All modules are enabled by default — a fresh checkout serves every tab.

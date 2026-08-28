@@ -146,6 +146,13 @@ def test_app(tmp_path, tmp_journal_db, tmp_coach_db, tmp_analysis_db, tmp_hr_db,
     monkeypatch.setenv("GARMIN_DB_PATH", str(tmp_path / "garmin_health.db"))
     monkeypatch.setenv("BODYSPEC_DB_PATH", str(tmp_path / "bodyspec.db"))
     monkeypatch.setenv("QUESTY_DB_PATH", str(tmp_path / "questy.db"))
+    # Same reasoning, one step further: bin/garmin-sync.sh is TRACKED, so the
+    # garmin module's default seam resolves in every clone — a test that POSTed
+    # /api/garmin/sync without this pin would run a REAL garmy sync (network
+    # calls, writes to the developer's real health.db). Pointing the variable at
+    # a nonexistent path makes "unconfigured" the default state under test;
+    # test/garmin/ opts in to a fake script per test.
+    monkeypatch.setenv("GARMIN_SYNC_CMD", str(tmp_path / "no-such-garmin-sync.sh"))
 
     # Patch PUBLIC_DIR before building the app (the static handlers read the
     # server module-global, which we patch below).

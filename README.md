@@ -31,6 +31,9 @@ LLM-powered async reports. Submits structured prompts to Claude Code CLI with MC
 ### HR (headless)
 Heart-rate ingestion from the native Android client: RR intervals off a Garmin chest strap, the set-completion toggles and cardio-guide actions that tie them to a coach workout, and the capture sessions grouping them. Four idempotent batch endpoints, so a retried upload can never double-count, and a whole-request `422` on any bad row — the client's cue to bisect the batch and quarantine the poison rows. Headless means API-only: no PWA tab, no client-side state, nothing synced back. Reading happens out of band, through a read-only CLI (`python -m hr_analysis` — DFA α1, RMSSD, duration-weighted HR and zones, work/rest bouts) and the HR MCP server. Both read **by session id only**, and a session the guide recorded a timeline for is analysed against that timeline — per-segment time in the band it asked for.
 
+### Garmin (headless)
+An on-demand trigger for the external Garmin sync, so a pull-to-refresh on Trends fetches *new* data instead of re-reading this morning's. One command endpoint and one status endpoint: single-flight (a second pull attaches to the run in flight rather than starting another), with a 10-minute cooldown measured from the last attempt so a failing sync can't become a thumb-driven retry loop. The cooldown survives a restart by consulting the sync database's own record of when it last completed. Owns no database and has no tab — it runs `bin/garmin-sync.sh`, which is also the machine's cron script, and degrades to `unconfigured` on a clone that has no sync tooling.
+
 ## Tech Stack
 
 | Layer | Technology |
@@ -61,7 +64,7 @@ wellness/
 ├── src/                    # FastAPI backend
 │   ├── server.py           # Main app, static file serving
 │   ├── config.py           # Module config, DB path resolution
-│   ├── modules/            # Journal, Coach, Trends, Analysis, HR routers + shared domain
+│   ├── modules/            # Journal, Coach, Trends, Analysis, HR, Garmin routers + shared domain
 │   └── hr_analysis/        # Heart-rate analysis CLI (python -m hr_analysis), not part of the app
 ├── public/                 # PWA frontend (no build step)
 │   ├── js/                 # Preact components per module
@@ -80,6 +83,7 @@ wellness/
 │   ├── analysis/           # Analysis module tests
 │   ├── trends/             # Trends module tests
 │   ├── hr/                 # HR endpoints, golden payloads, analysis CLI
+│   ├── garmin/             # Garmin sync trigger (fake scripts, fake garmy DB)
 │   ├── integration/        # Cross-module integration tests
 │   ├── e2e_browser/        # Playwright E2E browser tests (pages/ objects)
 │   └── js/                 # node:test suites for client sync logic

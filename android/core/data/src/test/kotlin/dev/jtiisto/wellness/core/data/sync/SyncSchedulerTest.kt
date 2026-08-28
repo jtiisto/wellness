@@ -1,5 +1,7 @@
 package dev.jtiisto.wellness.core.data.sync
 
+import io.mockk.every
+import io.mockk.mockk
 import java.io.IOException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -13,8 +15,12 @@ import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
@@ -481,6 +487,53 @@ class SyncSchedulerTest {
         assertEquals(2, robot.serverErrors.size)
     }
 
+    // --- The returned job, and what a pull can conclude from it ---
+
+    @Test
+    @DisplayName("the job requestSync returns spans the whole flight")
+    fun requestSyncJobSpansTheFlight() = schedulerTest { robot ->
+        robot.syncDurationMs = 5_000
+        val scheduler = robot.build()
+
+        val job = scheduler.requestSync()
+        advanceTimeBy(4_999)
+        assertFalse(job.isCompleted, "the sync is still running")
+
+        advanceTimeBy(2)
+        assertTrue(job.isCompleted)
+        assertEquals(listOf(0L), robot.syncStarts)
+    }
+
+    @Test
+    @DisplayName("the job completes AT ONCE when the flight is somebody else's — the pull's trap")
+    fun requestSyncJobCompletesInstantlyWhenBusy() = schedulerTest { robot ->
+        // A background flush or a force sync holds the store's own flag; this
+        // scheduler never enters syncFn, so its job has nothing to wait for.
+        robot.storeSyncing = true
+        val scheduler = robot.build()
+
+        val job = scheduler.requestSync()
+        runCurrent()
+
+        assertTrue(job.isCompleted)
+        assertEquals(emptyList<Long>(), robot.syncStarts)
+    }
+
+    @Test
+    @DisplayName("the trigger name travels into the debug log; the default is still 'request'")
+    fun triggerNameIsRecorded() = schedulerTest { robot ->
+        val scheduler = robot.build()
+
+        scheduler.requestSync(SyncScheduler.TRIGGER_PULL)
+        runCurrent()
+        scheduler.requestSync()
+        runCurrent()
+        scheduler.scheduleUpload()
+        advanceTimeBy(2_501)
+
+        assertEquals(listOf("pull", "request", "debounce"), robot.triggers)
+    }
+
     // --- Offline and teardown ---
 
     @Test
@@ -579,6 +632,18 @@ private class Robot(private val scope: TestScope) {
     val syncEnds = mutableListOf<Long>()
     val pollChecks = mutableListOf<Long>()
     val serverErrors = mutableListOf<Throwable>()
+
+    /** Every trigger name the scheduler recorded, in order — the log is where it says so. */
+    val triggers = mutableListOf<String>()
+
+    private val debugLog = mockk<DebugLog>(relaxed = true).also { log ->
+        every { log.log(any(), any(), any()) } answers {
+            if (secondArg<String>() == "sync triggered") {
+                val data = thirdArg<JsonElement?>() as JsonObject
+                triggers += data.getValue("trigger").jsonPrimitive.content
+            }
+        }
+    }
     var maxConcurrentSyncs = 0
         private set
     var maxConcurrentPollChecks = 0
@@ -606,6 +671,7 @@ private class Robot(private val scope: TestScope) {
         pollIntervalMs = pollIntervalMs,
         baseRetryMs = baseRetryMs,
         maxRetryMs = maxRetryMs,
+        debugLog = debugLog,
     )
 
     private suspend fun runSync(): SyncResult {

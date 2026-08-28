@@ -353,6 +353,43 @@ class TrendsRepositoryTest {
         assertEquals(2_000_000L, dao.rows.getValue(TrendsRepository.MODULE to "weight:12w").fetchedAt)
     }
 
+    // ---- the garmin commands, which are deliberately outside all of the above ----
+
+    @Test
+    @DisplayName("both garmin calls decode straight through, touching the cache in neither direction")
+    fun garminCallsBypassTheCache() = runTest {
+        val repository = repository { """{"status":"started"}""" }
+
+        assertEquals("started", repository.garminSyncTrigger().status)
+
+        // Not merely "nothing worth storing": a cached "started" is a lie the
+        // moment it is written, and a cache READ would answer a command with a
+        // stale success.
+        assertEquals(0, dao.writes)
+        assertEquals(0, dao.reads)
+        assertTrue(dao.rows.isEmpty())
+    }
+
+    @Test
+    @DisplayName("the status decodes with its optionals absent — a fresh server has no history to report")
+    fun garminStatusDecodesWithoutHistory() = runTest {
+        val status = repository { """{"running":true}""" }.garminSyncStatus()
+
+        assertTrue(status.running)
+        assertNull(status.lastOutcome)
+        assertEquals(0, dao.writes)
+    }
+
+    @Test
+    @DisplayName("an unreachable server fails the trigger rather than serving a cached one")
+    fun garminTriggerHasNoOfflineFallback() = runTest {
+        seedCache("garmin/sync", """{"status":"started"}""", fetchedAt = 1)
+        val repository = throwingRepository(IOException("no route to host"))
+
+        // The truth the caller needs: the sync did not start.
+        assertThrows<IOException> { repository.garminSyncTrigger() }
+    }
+
     // ---- cache-key inventory ---------------------------------------------------
 
     @Test
