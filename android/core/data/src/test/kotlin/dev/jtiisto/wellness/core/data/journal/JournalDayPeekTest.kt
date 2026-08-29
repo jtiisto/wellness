@@ -7,8 +7,12 @@ import dev.jtiisto.wellness.core.data.db.JournalEntryEntity
 import dev.jtiisto.wellness.core.data.db.JournalTrackerEntity
 import dev.jtiisto.wellness.core.data.network.DateString
 import io.mockk.coEvery
+import io.mockk.every
 import io.mockk.mockk
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonObject
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -166,6 +170,66 @@ class JournalDayPeekTest {
     }
 
     // ---- fixtures -----------------------------------------------------------
+
+    // ---- the live twin ------------------------------------------------------
+
+    @Test
+    @DisplayName("the flow judges exactly as the one-shot does, on the same rows")
+    fun flowMatchesOneShot() = runTest {
+        val alpha = tracker(id = "t-alpha", name = "Alpha", polarity = "positive")
+        val bravo = tracker(id = "t-bravo", name = "Bravo", polarity = "positive")
+        val rows = listOf(trackerRow(alpha), trackerRow(bravo))
+        val dayRows = listOf(entryRow("t-alpha", completed = true))
+        snapshot(trackers = listOf(alpha, bravo), entries = dayRows, trackerRows = rows)
+        observed(trackerRows = rows, entryRows = flowOf(dayRows))
+
+        assertEquals(peek.rollup(today), peek.rollupFlow(today).first())
+    }
+
+    @Test
+    @DisplayName("ticking a tracker re-emits the rollup — the widget follows the app live")
+    fun flowReEmitsOnNewEntry() = runTest {
+        // The reason the flow exists: a Glance session recomposes without
+        // re-running its setup, so only an emission can move the tally after
+        // the user logs something and backgrounds the app.
+        val alpha = tracker(id = "t-alpha", name = "Alpha", polarity = "positive")
+        val bravo = tracker(id = "t-bravo", name = "Bravo", polarity = "positive")
+        val entries = MutableStateFlow(listOf(entryRow("t-alpha", completed = true)))
+        observed(trackerRows = listOf(trackerRow(alpha), trackerRow(bravo)), entryRows = entries)
+
+        val flow = peek.rollupFlow(today)
+        assertEquals(CategoryRollup(habitsMet = 1, habitsNotYet = 1), flow.first())
+
+        entries.value = listOf(
+            entryRow("t-alpha", completed = true),
+            entryRow("t-bravo", completed = true),
+        )
+        assertEquals(CategoryRollup(habitsMet = 2), flow.first())
+    }
+
+    @Test
+    @DisplayName("a corrupt row errors the flow — the collector owns the pending floor")
+    fun flowPropagatesCorruption() = runTest {
+        // Same denominator argument as the one-shot: a flow that skipped the
+        // row would emit a confident wrong answer instead of failing the
+        // element. The widget's collection seam catches, logs, and omits.
+        observed(
+            trackerRows = listOf(rawTrackerRow("t-bad", dataJson = "not json at all")),
+            entryRows = flowOf(emptyList()),
+        )
+
+        assertThrows<Exception> { peek.rollupFlow(today).first() }
+    }
+
+    // ---- fixtures -----------------------------------------------------------
+
+    private fun observed(
+        trackerRows: List<JournalTrackerEntity>,
+        entryRows: kotlinx.coroutines.flow.Flow<List<JournalEntryEntity>>,
+    ) {
+        every { dao.observeTrackers() } returns flowOf(trackerRows)
+        every { dao.observeDay(today) } returns entryRows
+    }
 
     /**
      * Stub the snapshot from [trackers] (encoded as rows), unless [trackerRows]

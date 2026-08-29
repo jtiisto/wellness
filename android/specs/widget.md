@@ -162,12 +162,12 @@ What is widget-specific, and therefore lives here:
 
 Nothing on the render path touches the network, and nothing on it can throw a `requireConfig()`.
 
-**Sleep — `TrendsCachePeek.sleep(keys)`**, cache-only, first decodable copy under `keys` in order, from module `"trends"`:
+**Sleep — `TrendsCachePeek.sleepFlow(keys)`**, cache-only and **live**: a `combine` over one Room observation per key, emitting the **freshest decodable copy** among them, from module `"trends"`:
 
 1. `health/sleep:widget` — the worker's own key. `WIDGET_RANGE = "widget"`.
 2. `health/sleep:{userRange}` — whatever range the user last chose in Trends (`TrendsPrefs.range`, default `12w`).
 
-The order is the point. The widget fetches its own 7-day window hourly, so key 1 is normally there and is normally the freshest; key 2 covers the window between a widget being placed and the worker's first run, when the app may already have a perfectly good copy sitting in the cache. Serving key 2 is sound because **`tonight` is range-independent** — the server computes the ledger over its own history and clips only `days`, which this surface never draws — so a 12-week copy and a 7-day copy carry the identical `tonight`. (This is the same fact `specs/trends.md` §Sleep need states when it explains why the cache key carries a range at all: what varies with the range is the *response's* `days`, not the ledger.)
+**Freshest wins, not first** — the fourth device report's fix. The first cut preferred key 1 by order, which let the widget keep drawing its hourly copy for up to an hour after the app fetched a newer one under key 2: a home screen contradicting the app it belongs to. Comparing `fetchedAt` ends that; key 2 also covers the window between a widget being placed and the worker's first run. Watching key 2 at all is sound because **`tonight` is range-independent** — the server computes the ledger over its own history and clips only `days`, which this surface never draws — so a 12-week copy and a 7-day copy carry the identical `tonight`. (The same fact `specs/trends.md` §Sleep need states when it explains why the cache key carries a range at all.)
 
 **Freshness — `widgetStaleFetchedAt(fetchedAt, now)`, a 90-minute window.** Every widget render is by definition from cache, so passing the raw stamp through would brand *every* render `cached · Nm ago`, including one drawn ninety seconds after a successful fetch — the badge would stop meaning anything. The rule: within 90 minutes of `fetchedAt` the copy is treated as **fresh** (null passed to the model, SETTLED possible); past it the real stamp goes through and the model does its own arithmetic. 90 minutes is the hourly refresh period plus half of one, so a single missed worker run does not flip the badge but two consecutive ones do.
 
@@ -175,17 +175,19 @@ The order is the point. The widget fetches its own 7-day window hourly, so key 1
 
 The transaction is not decoration. Read as two separate queries, a sync commit landing between them yields a rollup assembled from two different generations of the same day — a tracker list from before an edit judged by an entry list from after it — and **nothing in the resulting tally would look wrong**. It is the only read in that DAO whose two halves are compared against each other rather than merely displayed side by side, and the only one that therefore needs one.
 
+**The live twin — `JournalDayPeek.rollupFlow(today)`**: the same decode and the same delegation over `combine(observeTrackers(), observeDay(today))`, collected inside the widget's composition so a tracker ticked in Journal redraws the home screen the moment the row lands in Room (§Refresh model). Room flows cannot share a transaction, so an emission *can* transiently pair rows from either side of a sync commit — accepted, because the next emission self-corrects in the same breath and the Journal screen itself lives on the identical combine. The transactional one-shot remains the primer for the session's first frame.
+
 **Why two standalone peek classes and not repository methods.** `TrendsRepository` is **unconstructible before the server has resolved**: Koin builds it with `api = get()`, `TrendsApi` takes a `ServerConfig`, and that single is `get<ServerBootstrap>().requireConfig()`, which **throws** by design — asking which server this process talks to before the boot decision has been made is a bug worth crashing on. `JournalSyncStore` is poisoned the same way through `JournalApi`. A widget, though, is rendered by the launcher in a process that may have been created *for the widget*, with no Activity and no boot behind it. So the render path resolves only singles whose whole dependency graph is pre-resolution-safe — a DAO and the shared `Json` — and both peeks are registered in `CoreDataModule` alongside `TrendsPrefs` with a comment saying so. Adding `sleep()` to `TrendsRepository` would have been fewer lines and a crash on a cold launcher.
 
 **Failure posture — null means absent, a throw means corrupt.** A launcher render has no error surface, so *unavailability* is never an exception: a thrown one is a blank box on someone's home screen, not a stack trace anyone reads. But silence is only the right answer when there is genuinely nothing to say, and the two peeks draw the line in the same place:
 
-| | `TrendsCachePeek.sleep(keys)` | `JournalDayPeek.rollup(today)` |
+| | `TrendsCachePeek.sleepFlow(keys)` | `JournalDayPeek.rollup(today)` / `rollupFlow(today)` |
 |---|---|---|
-| **DAO read throws** | null (peek ends at the first failed read — the failure is about the *database*, not the key) | null |
-| **Nothing stored** | null | null via `categoryRollup` — a day expecting nothing has no tally |
-| **Stored data will not decode** | falls through to the next key; the row **stays** | **throws** |
+| **DAO read throws** | errors the flow → caught at the widget's collection seam: logged (class name only) and rendered as the element's absence | one-shot: null · flow: errors, same seam |
+| **Nothing stored** | emits null | null via `categoryRollup` — a day expecting nothing has no tally |
+| **Stored data will not decode** | that copy is skipped and its row **stays**; an older decodable copy still serves | **throws**, through flow and one-shot alike |
 
-`CancellationException` is always rethrown untouched on both — a cancelled render is not a failed one.
+`CancellationException` always propagates untouched (`Flow.catch` rethrows it by contract) — a cancelled render is not a failed one.
 
 The one asymmetry in that table is deliberate. A sleep payload that will not decode has a *next key* to try and a defensible reason to keep the row (the `serveCached` philosophy: what this build cannot read, the next one may). A tracker row has neither, and skipping it would shrink the **denominator** — a corrupt row that was expected today silently turns "5 of 6 done" into "5 of 5 done", a confident wrong answer, which is the one thing a glanceable surface must never produce. Entry rows propagate for the same reason (a dropped entry mis-judges its tracker as not-yet). **Honest absence beats wrong presence**: the widget's own `runCatching` floor renders the throw as pending, which is exactly the honest thing to show.
 
@@ -193,12 +195,14 @@ The one asymmetry in that table is deliberate. A sleep payload that will not dec
 
 ## Refresh model
 
+**The session rule comes first, because everything else was misread without it (third device report): a Glance session recomposes `provideContent` without re-running `provideGlance`.** Values computed before `provideContent` are frozen for the session's whole life, so an `updateAll` landing on a live session redrew the same captured day — a tally that ignored the app until the session happened to die and reload. The data is therefore **collected as Flows inside the composition** (`collectAsState`): Room re-emits the moment a tracker is ticked or a fetch lands in the cache, and the widget follows the app in place. The session's first frame is primed with each flow's current value so a session start never flashes pending on the way to the truth. The triggers below matter for what they still own — fetching, and waking sessions the launcher has let die:
+
 | Trigger | What it does | Why |
 |---|---|---|
 | `TodayWidgetWorker`, hourly periodic, `CONNECTED`, unique **KEEP** | fetch `healthSleep(start, end, WIDGET_RANGE)` over a 7-day window ending today, then `TodayWidget().updateAll()` | the only thing that puts new sleep/strain data on the surface |
 | `TodayWidgetReceiver.onEnabled` / `onUpdate` | schedule the worker | `onEnabled` is the first placement; `onUpdate` heals the case where app data was cleared while a widget stayed on the home screen. KEEP makes re-asserting free |
 | `TodayWidgetReceiver.onDisabled` | cancel the worker | no widgets left; an hourly network job for nobody is a battery bug |
-| App backgrounded (`ProcessLifecycleOwner`, `ON_STOP`) | `updateAll()` in the app scope | the tally must be right the moment the user logs a tracker and leaves the app. Local data only — no fetch |
+| App backgrounded (`ProcessLifecycleOwner`, `ON_STOP`) | `updateAll()` in the app scope | wakes a session the launcher has let die; a live one already followed the Room emission. Local data only — no fetch |
 
 Rules the worker obeys:
 
@@ -208,7 +212,7 @@ Rules the worker obeys:
 - Failures go to `DebugLog` under the tag `"widget"`, **never payload bodies** — the standing rule for this log.
 - `updatePeriodMillis = "0"` in the widget info XML: the AppWidget framework's own update alarm is not used, because it cannot be made conditional on connectivity and would fight the worker.
 
-**The midnight problem is bounded by one period.** `today` is computed at render, so any re-render after midnight is correct — but nothing *forces* a re-render at midnight. The hourly worker means a stale-day render survives at most one hour, and the ON_STOP hook usually beats it. A midnight alarm was considered and rejected: an exact alarm for a cosmetic flip is not a fair use of the user's battery, and the failure mode is a tally that is one hour late on a day boundary.
+**The midnight problem is bounded by one period.** `today` is fixed per *session* (it keys the flows), and the hourly worker restarts dead sessions, so a stale calendar day survives at most one period past midnight; the ON_STOP hook usually beats it. `now` is read at every recomposition — the card's own clock rule. A midnight alarm was considered and rejected: an exact alarm for a cosmetic flip is not a fair use of the user's battery, and the failure mode is a tally that is one hour late on a day boundary.
 
 ## Interaction & accessibility
 
@@ -235,6 +239,7 @@ Platform facts that shaped code, found the hard way and load-bearing enough to n
 
 - **Ten children per container, silently enforced.** A Glance `Row`/`Column`/`Box` renders at most ten children; the eleventh onward is dropped at render with no error surfaced to the app. Discovered on-device as "only completed trackers show": five dots plus their five gap `Spacer`s consumed the whole budget and every later mark vanished. Two consequences in code: gaps are **padding on the views, never `Spacer` children** (a spacer is a child too — padding sits inside a view's bounds, so a padded 8 dp mark is sized 12×8 to keep its 8×8 canvas), and the child budget is a **term of the tally fit ladder** (§Tally semantics), so a row that cannot legally render its dots falls to the one-child sentence instead of being truncated. Audited ceilings: tally row ≤ 10 (8 dots + spacer + count, or 10 dots alone), sleep block 6, every other container ≤ 5.
 - **`SizeMode.Responsive` reports the matched bucket size, not the real one.** Any logic that consumes `LocalSize` arithmetically (the fit ladder, the bucket thresholds) needs `SizeMode.Exact`. §Size buckets carries the post-mortem.
+- **A session recomposes `provideContent` without re-running `provideGlance`.** Anything a widget must show *current* has to be a Flow collected inside the composition; values computed in `provideGlance` are frozen until the session dies. §Refresh model carries the post-mortem.
 - **Vector marks are authored fill-only** — §Mark vocabulary carries that history, including the misdiagnosis.
 
 ## Testing & Kover posture

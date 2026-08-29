@@ -1,6 +1,8 @@
 package dev.jtiisto.wellness.widget
 
 import android.content.Context
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.glance.GlanceId
 import androidx.glance.appwidget.GlanceAppWidget
 import androidx.glance.appwidget.SizeMode
@@ -9,14 +11,14 @@ import dev.jtiisto.wellness.core.data.journal.JournalDayPeek
 import dev.jtiisto.wellness.core.data.sync.DebugLog
 import dev.jtiisto.wellness.core.data.trends.TrendsCachePeek
 import dev.jtiisto.wellness.core.data.trends.TrendsPrefs
-import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.first
 import org.koin.core.component.KoinComponent
 import org.koin.core.component.get
 import java.time.LocalDate
 
 /**
- * The "Today" widget's session: read two local sources, hand the result to
+ * The "Today" widget's session: watch two local sources, hand each emission to
  * [TodayWidgetContent], and never touch a network.
  *
  * **Only pre-resolution-safe singles are resolved here, and that is a hard
@@ -25,21 +27,29 @@ import java.time.LocalDate
  * `JournalSyncStore` are built with APIs that resolve
  * `ServerBootstrap.requireConfig()`, which *throws* by design before the boot
  * decision has been made. So the render path sees `TrendsCachePeek` and
- * `JournalDayPeek` (a DAO and the shared `Json`, nothing else),
- * [TrendsPrefs] and [DebugLog]. Fetching is the worker's job, in a process that
- * has booted; see [TodayWidgetWorker].
+ * `JournalDayPeek` (DAOs and the shared `Json`, nothing else), [TrendsPrefs]
+ * and [DebugLog]. Fetching is the worker's job, in a process that has booted;
+ * see [TodayWidgetWorker].
  *
- * **`today` and `now` are computed here, at every render, and never
- * remembered** — the same clock rule `SleepTonightCard` follows. A widget that
- * has sat on a home screen since yesterday must not answer with yesterday's
- * `today`, and the hourly worker plus the background hook are what bound how
- * long a stale day can survive (spec §Refresh model).
+ * **The data is collected INSIDE the composition, and that is the load-bearing
+ * shape.** A Glance session recomposes `provideContent` without re-running
+ * `provideGlance`; the first cut computed both values up here, so every
+ * `updateAll` that landed on a live session redrew the same captured day — a
+ * tally that ignored the app until the session happened to die (third device
+ * report). As flows, Room re-emits the moment a tracker is ticked or a fetch
+ * lands in the cache, and the widget follows the app instead of trailing it.
+ * The first frame is primed with each flow's current value so a session start
+ * never flashes pending on the way to the truth.
  *
- * The two elements fail **independently**. A journal database that will not
- * decode must not blank tonight's number, and an undecodable sleep payload must
- * not cost the tally, so each peek gets its own `runCatching` and its own null.
- * A cancelled render is not a failure and is rethrown untouched; nothing but the
- * exception's class name reaches [DebugLog], which never carries payloads.
+ * `today` is fixed per session — the hourly worker restarts dead sessions, so a
+ * stale calendar day survives at most one period past midnight (spec §Refresh
+ * model). `now` is read at every recomposition, the card's own clock rule.
+ *
+ * The two elements fail **independently**: each flow's failures are caught at
+ * the collection seam, logged as nothing but the exception's class name (the
+ * [DebugLog] privacy rule), and rendered as that element's honest absence.
+ * `catch` rethrows cancellation on its own — a cancelled render is not a
+ * failure.
  *
  * See `specs/widget.md`.
  */
@@ -60,24 +70,30 @@ class TodayWidget : GlanceAppWidget(), KoinComponent {
         val debugLog: DebugLog = get()
 
         val today = LocalDate.now().toString()
-        val now = System.currentTimeMillis()
 
-        val rollup = runCatching { journalPeek.rollup(today) }
-            .onFailure { failure ->
-                if (failure is CancellationException) throw failure
+        val rollupFlow = journalPeek.rollupFlow(today)
+            .catch { failure ->
                 debugLog.log("widget", "journal peek failed (${failure.javaClass.simpleName})")
+                emit(null)
             }
-            .getOrNull()
-
-        val model = runCatching {
-            widgetModel(trendsPeek.sleep(widgetPeekKeys(prefs.range.first())), now, today)
-        }
-            .onFailure { failure ->
-                if (failure is CancellationException) throw failure
+        val sleepFlow = trendsPeek.sleepFlow(widgetPeekKeys(prefs.range.first()))
+            .catch { failure ->
                 debugLog.log("widget", "sleep peek failed (${failure.javaClass.simpleName})")
+                emit(null)
             }
-            .getOrNull()
 
-        provideContent { TodayWidgetContent(rollup, model) }
+        // Primed before composition: `catch` above has already turned a failed
+        // first read into a null, so these cannot throw past it.
+        val initialRollup = rollupFlow.first()
+        val initialSleep = sleepFlow.first()
+
+        provideContent {
+            val rollup by rollupFlow.collectAsState(initial = initialRollup)
+            val peeked by sleepFlow.collectAsState(initial = initialSleep)
+            TodayWidgetContent(
+                rollup = rollup,
+                model = widgetModel(peeked, now = System.currentTimeMillis(), today = today),
+            )
+        }
     }
 }

@@ -134,6 +134,11 @@ class ServerSwitchIntegrationTest {
 
         override suspend fun find(module: String, key: String): PayloadCacheEntity? = rows["$module|$key"]
 
+        // The widget's live peek is the only observe consumer; this suite never
+        // collects it, so a one-shot re-read is a faithful stand-in.
+        override fun observe(module: String, key: String) =
+            kotlinx.coroutines.flow.flow { emit(find(module, key)) }
+
         override suspend fun delete(module: String, key: String) {
             rows.remove("$module|$key")
         }

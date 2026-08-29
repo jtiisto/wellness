@@ -2,7 +2,9 @@ package dev.jtiisto.wellness.core.data.trends
 
 import dev.jtiisto.wellness.core.data.db.PayloadCacheDao
 import dev.jtiisto.wellness.core.data.db.PayloadCacheEntity
-import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.serialization.json.Json
 
 /**
@@ -22,9 +24,13 @@ import kotlinx.serialization.json.Json
  * draws whatever the last successful fetch left behind, says how old it is, and
  * lets its worker be the thing that talks to a server.
  *
- * Failure posture throughout: **a render on someone's home screen has no error
- * surface**, so nothing here throws for a reason the caller could not act on
- * anyway. A cancelled render is the one exception — that is not a failure.
+ * The read is a **Flow, collected inside the widget's composition**, because a
+ * Glance session recomposes `provideContent` without re-running `provideGlance`:
+ * a value captured before the composition would stay frozen for the session's
+ * whole life, which on a device read as a tally and a number that ignored the
+ * app until the session happened to die. Room re-emits when any watched row
+ * changes, so a fetch landing in the cache — the hourly worker's or the app's
+ * own — redraws the home screen in place.
  */
 class TrendsCachePeek(
     private val cacheDao: PayloadCacheDao,
@@ -42,42 +48,41 @@ class TrendsCachePeek(
     data class PeekedSleep(val dto: SleepDebtDto, val fetchedAt: Long)
 
     /**
-     * The first copy under [keys] — in order — that this build can decode.
+     * The freshest copy under [keys] this build can decode, live.
      *
-     * Order is the caller's preference, not a fallback ladder of decreasing
-     * correctness: the widget asks for its own key first because the worker
-     * keeps it freshest, and for the user's range second because a widget
-     * placed before that worker's first run can still be right.
+     * **Freshest wins, not first**: the widget watches its own worker's key and
+     * the key the app's Health tab fetches under, and whichever copy carries
+     * the newer [PayloadCacheEntity.fetchedAt] is the one drawn. Preferring a
+     * fixed key would let the widget keep showing its hourly copy for up to an
+     * hour after the app fetched a newer one — a home screen contradicting the
+     * app it belongs to.
      *
-     * A row that fails to decode **stays**, and the peek moves to the next key:
-     * a payload this build cannot read may be exactly what the next one can
-     * (the same reasoning `TrendsRepository.serveCached` records), and deleting
-     * it buys nothing today. Nothing on this path writes to the cache at all.
+     * A row that fails to decode is **kept and skipped**: a payload this build
+     * cannot read may be exactly what the next one can (the same reasoning
+     * `TrendsRepository.serveCached` records), and a fresher-but-unreadable
+     * copy must not shadow an older one that decodes. Nothing on this path
+     * writes to the cache at all.
+     *
+     * A database that cannot be read propagates through the flow — the
+     * collector owns the no-error-surface rule and renders pending; see the
+     * widget's collection site.
      */
-    suspend fun sleep(keys: List<String>): PeekedSleep? {
-        for (key in keys) {
-            val row: PayloadCacheEntity? = try {
-                cacheDao.find(TrendsRepository.MODULE, key)
-            } catch (cancellation: CancellationException) {
-                throw cancellation
-            } catch (readFailure: Throwable) {
-                // A read that throws is a fact about the *database* — unopenable,
-                // migrating, gone — never about the key, so the peek ends here
-                // rather than spending the same error again on the next one. The
-                // widget draws its pending state, which is what a home screen
-                // should show when there is nothing to say.
-                return null
+    fun sleepFlow(keys: List<String>): Flow<PeekedSleep?> =
+        if (keys.isEmpty()) {
+            // combine() over nothing never emits, and a flow that never emits
+            // hangs the first-frame priming. No keys means nothing to watch.
+            flowOf(null)
+        } else {
+            combine(keys.map { key -> cacheDao.observe(TrendsRepository.MODULE, key) }) { rows ->
+                rows.filterNotNull()
+                    .mapNotNull(::decodeOrNull)
+                    .maxByOrNull { it.fetchedAt }
             }
-            if (row == null) continue
-            val dto = try {
-                json.decodeFromString(SleepDebtDto.serializer(), row.payloadJson)
-            } catch (cancellation: CancellationException) {
-                throw cancellation
-            } catch (decodeFailure: Throwable) {
-                continue
-            }
-            return PeekedSleep(dto, row.fetchedAt)
         }
-        return null
+
+    private fun decodeOrNull(row: PayloadCacheEntity): PeekedSleep? = try {
+        PeekedSleep(json.decodeFromString(SleepDebtDto.serializer(), row.payloadJson), row.fetchedAt)
+    } catch (_: IllegalArgumentException) {
+        null
     }
 }

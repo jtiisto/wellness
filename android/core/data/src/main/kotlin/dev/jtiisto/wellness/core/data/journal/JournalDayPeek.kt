@@ -4,6 +4,8 @@ import dev.jtiisto.wellness.core.data.db.JournalDao
 import dev.jtiisto.wellness.core.data.db.JournalDaySnapshot
 import dev.jtiisto.wellness.core.data.network.DateString
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
 import kotlinx.serialization.json.Json
 
 /**
@@ -71,4 +73,33 @@ class JournalDayPeek(
         val dayLog = snapshot.entries.associate { it.trackerId to it.toDto(json) }
         return categoryRollup(trackers, today, dayLog)
     }
+
+    /**
+     * [rollup], observed — the widget collects this inside its Glance session,
+     * so ticking a tracker in Journal redraws the home screen the moment the
+     * row lands in Room instead of waiting for the session to die and reload
+     * (a Glance session recomposes `provideContent` without re-running
+     * `provideGlance`; anything captured outside the composition is frozen for
+     * the session's life, which on a device read as a tally that ignored the
+     * app).
+     *
+     * Two observables combined, not the transactional [JournalDao.daySnapshot]:
+     * Room's flows cannot share one transaction, so an emission *can* pair a
+     * tracker list and an entry list from either side of a sync commit — the
+     * very race the one-shot closes. Here it is accepted: the next emission
+     * self-corrects in the same breath, and the Journal screen itself lives on
+     * the identical combine. The one-shot stays the choice wherever a single
+     * read must stand alone.
+     *
+     * Failure contract matches [rollup] where a flow can express it: corrupt
+     * rows **throw through the flow** (same denominator argument), and a DAO
+     * that cannot be read errors the flow — the collector owns the
+     * no-error-surface rule.
+     */
+    fun rollupFlow(today: DateString): Flow<CategoryRollup?> =
+        combine(journalDao.observeTrackers(), journalDao.observeDay(today)) { trackerRows, entryRows ->
+            val trackers = trackerRows.map { decodeTracker(it, json) }
+            val dayLog = entryRows.associate { it.trackerId to it.toDto(json) }
+            categoryRollup(trackers, today, dayLog)
+        }
 }

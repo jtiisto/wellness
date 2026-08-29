@@ -3,7 +3,10 @@ package dev.jtiisto.wellness.core.data.trends
 import dev.jtiisto.wellness.core.data.WellnessJson
 import dev.jtiisto.wellness.core.data.db.PayloadCacheDao
 import dev.jtiisto.wellness.core.data.db.PayloadCacheEntity
-import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.test.runTest
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
@@ -14,15 +17,15 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 
 /**
- * The widget's cache-only read of the sleep ledger.
+ * The widget's cache-only, live read of the sleep ledger.
  *
- * Two properties carry the whole class. The first is **key order**: the widget
- * asks for its own hourly copy and then for whatever range the user last looked
- * at, and a peek that reached for the second while the first was sitting there
- * would quietly draw an older number. The second is that **nothing here may
- * fail loudly** — the caller is a launcher render with no error surface, so a
- * database that will not open and a payload this build cannot read must both
- * come back as "nothing to draw" rather than as an exception.
+ * Two properties carry the whole class. The first is **freshest-decodable
+ * wins**: the widget watches its own hourly key and the app's range key at
+ * once, and whichever copy carries the newer stamp is drawn — a fixed
+ * preference would let the home screen trail a copy the app just fetched. The
+ * second is that the read is a **flow**: a Glance session recomposes without
+ * re-running its setup, so only a live emission can keep the surface honest —
+ * and a new row landing in the cache must surface as a new value.
  *
  * All payloads are invented and dated on the far-future `2030-01-*` fixture
  * convention.
@@ -34,47 +37,58 @@ class TrendsCachePeekTest {
 
     private val widgetKey = TrendsRepository.sleepKey("widget")
     private val rangeKey = TrendsRepository.sleepKey("12w")
+    private val keys = listOf(widgetKey, rangeKey)
 
-    // ---- key order ----------------------------------------------------------
+    // ---- freshest wins ------------------------------------------------------
 
     @Test
-    @DisplayName("the first key wins, and the second is never even read")
-    fun firstKeyServed() = runTest {
-        store(widgetKey, sleepPayload(needMin = 505.0))
-        store(rangeKey, sleepPayload(needMin = 999.0))
+    @DisplayName("the freshest decodable copy wins, whichever key it sits under")
+    fun freshestWins() = runTest {
+        // The widget's own copy is an hour older than the one the app's Health
+        // tab just fetched. Serving the widget key by preference here is the
+        // bug the rule replaces: a home screen contradicting the app it
+        // belongs to for the rest of the hour.
+        store(widgetKey, sleepPayload(needMin = 505.0), fetchedAt = 1_893_456_000_000L)
+        store(rangeKey, sleepPayload(needMin = 999.0), fetchedAt = 1_893_459_600_000L)
 
-        val peeked = peek.sleep(listOf(widgetKey, rangeKey))
-
-        assertEquals(505.0, peeked?.dto?.tonight?.needMin)
-        assertEquals(listOf(widgetKey), dao.readKeys, "a hit on the first key must end the peek")
+        assertEquals(999.0, peek.sleepFlow(keys).first()?.dto?.tonight?.needMin)
     }
 
     @Test
-    @DisplayName("a missing first key falls through to the second, in order")
-    fun secondKeyServedOnMiss() = runTest {
-        // The widget placed before its worker's first run: only the app's own
-        // copy exists, and it carries the identical range-independent `tonight`.
+    @DisplayName("a widget placed before its worker's first run reads the app's copy")
+    fun rangeKeyAloneServes() = runTest {
+        // Only the app's own copy exists, and it carries the identical
+        // range-independent `tonight`.
         store(rangeKey, sleepPayload(needMin = 505.0))
 
-        val peeked = peek.sleep(listOf(widgetKey, rangeKey))
+        assertEquals(505.0, peek.sleepFlow(keys).first()?.dto?.tonight?.needMin)
+    }
 
-        assertEquals(505.0, peeked?.dto?.tonight?.needMin)
-        assertEquals(listOf(widgetKey, rangeKey), dao.readKeys)
+    @Test
+    @DisplayName("a new row landing in the cache surfaces as a new emission")
+    fun liveUpdateSurfaces() = runTest {
+        // The reason this is a flow at all: the Glance session collects it in
+        // composition, so the fetch the worker or the app lands mid-session
+        // must redraw the widget without the session restarting.
+        store(widgetKey, sleepPayload(needMin = 505.0), fetchedAt = 1_893_456_000_000L)
+        val flow = peek.sleepFlow(keys)
+        assertEquals(505.0, flow.first()?.dto?.tonight?.needMin)
+
+        store(rangeKey, sleepPayload(needMin = 999.0), fetchedAt = 1_893_459_600_000L)
+        assertEquals(999.0, flow.first()?.dto?.tonight?.needMin)
     }
 
     // ---- failure posture ----------------------------------------------------
 
     @Test
-    @DisplayName("an undecodable copy falls through, keeps its row, and never writes")
-    fun decodeFailureFallsThrough() = runTest {
+    @DisplayName("a fresher copy this build cannot decode must not shadow an older one that decodes")
+    fun decodeFailureSkipped() = runTest {
         // A payload from a build that spoke a different shape: valid JSON, no
-        // `days`, so the whole decode fails.
-        store(widgetKey, """{"available":true}""")
-        store(rangeKey, sleepPayload(needMin = 505.0))
+        // `days`, so the whole decode fails — and it is the NEWER row.
+        store(widgetKey, """{"available":true}""", fetchedAt = 1_893_459_600_000L)
+        store(rangeKey, sleepPayload(needMin = 505.0), fetchedAt = 1_893_456_000_000L)
 
-        val peeked = peek.sleep(listOf(widgetKey, rangeKey))
-
-        assertEquals(505.0, peeked?.dto?.tonight?.needMin)
+        assertEquals(505.0, peek.sleepFlow(keys).first()?.dto?.tonight?.needMin)
         assertNotNull(
             dao.rows[TrendsRepository.MODULE to widgetKey],
             "the row stays: what this build cannot read, the next one may",
@@ -86,34 +100,20 @@ class TrendsCachePeekTest {
     @Test
     @DisplayName("every key a miss — and no keys at all — is null, not an error")
     fun allMissIsNull() = runTest {
-        assertNull(peek.sleep(listOf(widgetKey, rangeKey)))
-        assertEquals(listOf(widgetKey, rangeKey), dao.readKeys, "both were tried")
-
-        assertNull(peek.sleep(emptyList()))
+        assertNull(peek.sleepFlow(keys).first())
+        assertNull(peek.sleepFlow(emptyList()).first(), "no keys must still emit, or priming hangs")
     }
 
     @Test
-    @DisplayName("a DAO that throws is null overall, and ends the peek then and there")
-    fun readFailureIsNull() = runTest {
-        // The good copy under the second key is deliberately present: a read
-        // failure is a fact about the database, not about the key, so spending
-        // the same error again would only be a second way to fail.
-        store(rangeKey, sleepPayload(needMin = 505.0))
+    @DisplayName("a database that cannot be read errors the flow — the collector owns the pending floor")
+    fun readFailurePropagates() = runTest {
+        // The no-error-surface rule lives at the widget's collection seam,
+        // which catches, logs the class name, and emits the element's absence.
+        // Flattening it HERE would also flatten cancellation, which must
+        // propagate untouched.
         dao.readFailure = RuntimeException("database is not openable")
 
-        assertNull(peek.sleep(listOf(widgetKey, rangeKey)))
-        assertEquals(1, dao.readKeys.size, "the peek stops at the first failed read")
-    }
-
-    @Test
-    @DisplayName("a cancelled render is not a failed one — CancellationException is rethrown")
-    fun cancellationIsRethrown() = runTest {
-        // The one throwable that must NOT be flattened into "nothing to draw":
-        // swallowing it would report an answer for work that was abandoned, and
-        // would break the structured-concurrency contract of whatever cancelled it.
-        dao.readFailure = CancellationException("render cancelled")
-
-        assertThrows<CancellationException> { peek.sleep(listOf(widgetKey)) }
+        assertThrows<RuntimeException> { peek.sleepFlow(keys).first() }
     }
 
     // ---- the stamp ----------------------------------------------------------
@@ -126,7 +126,7 @@ class TrendsCachePeekTest {
         // that decision away from the one place that can make it.
         store(widgetKey, sleepPayload(needMin = 505.0), fetchedAt = 1_893_500_000_000L)
 
-        assertEquals(1_893_500_000_000L, peek.sleep(listOf(widgetKey))?.fetchedAt)
+        assertEquals(1_893_500_000_000L, peek.sleepFlow(keys).first()?.fetchedAt)
     }
 
     @Test
@@ -134,7 +134,7 @@ class TrendsCachePeekTest {
     fun payloadDecodesWhole() = runTest {
         store(widgetKey, sleepPayload(needMin = 505.0))
 
-        val dto = peek.sleep(listOf(widgetKey))?.dto
+        val dto = peek.sleepFlow(keys).first()?.dto
 
         assertTrue(dto?.available == true)
         assertEquals("2030-01-06", dto?.asOf)
@@ -148,8 +148,7 @@ class TrendsCachePeekTest {
     // ---- fixtures -----------------------------------------------------------
 
     private fun store(key: String, payload: String, fetchedAt: Long = 1_893_456_000_000L) {
-        dao.rows[TrendsRepository.MODULE to key] =
-            PayloadCacheEntity(TrendsRepository.MODULE, key, payload, fetchedAt)
+        dao.put(PayloadCacheEntity(TrendsRepository.MODULE, key, payload, fetchedAt))
     }
 
     /** An invented ledger response; `needMin` is the marker of *which* copy. */
@@ -162,29 +161,45 @@ class TrendsCachePeekTest {
                   "debt_min":12.5,"strain_est":10.1}]}
         """.trimIndent()
 
+    /**
+     * Backed by one StateFlow per key, so a test can land a row mid-collection
+     * and watch the peek's combine re-emit — the shape Room's own flows have.
+     */
     private class FakeCacheDao : PayloadCacheDao {
         val rows = mutableMapOf<Pair<String, String>, PayloadCacheEntity>()
-
-        /** In order, so a test can assert what was asked for and what was not. */
-        val readKeys = mutableListOf<String>()
+        private val streams = mutableMapOf<Pair<String, String>, MutableStateFlow<Long>>()
         var readFailure: Throwable? = null
         var writes = 0
         var deletes = 0
 
+        fun put(entry: PayloadCacheEntity) {
+            rows[entry.module to entry.key] = entry
+            stream(entry.module to entry.key).value += 1
+        }
+
+        private fun stream(id: Pair<String, String>): MutableStateFlow<Long> =
+            streams.getOrPut(id) { MutableStateFlow(0L) }
+
         override suspend fun upsert(entry: PayloadCacheEntity) {
             writes += 1
-            rows[entry.module to entry.key] = entry
+            put(entry)
         }
 
         override suspend fun find(module: String, key: String): PayloadCacheEntity? {
-            readKeys += key
             readFailure?.let { throw it }
             return rows[module to key]
         }
 
+        override fun observe(module: String, key: String): Flow<PayloadCacheEntity?> =
+            stream(module to key).map {
+                readFailure?.let { failure -> throw failure }
+                rows[module to key]
+            }
+
         override suspend fun delete(module: String, key: String) {
             deletes += 1
             rows.remove(module to key)
+            stream(module to key).value += 1
         }
 
         override suspend fun clearModule(module: String) {
