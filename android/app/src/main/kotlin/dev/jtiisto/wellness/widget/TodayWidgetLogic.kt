@@ -145,7 +145,7 @@ val CARD = DpSize(180.dp, 110.dp)
 val PAGE = DpSize(180.dp, 170.dp)
 
 /** Which of the three compositions a given size gets. */
-enum class WidgetBucket { STRIP, CARD, PAGE }
+enum class WidgetBucket { STRIP, WIDE, CARD, PAGE }
 
 /**
  * The bucket for a size handed down by `SizeMode.Responsive`.
@@ -158,7 +158,34 @@ enum class WidgetBucket { STRIP, CARD, PAGE }
 fun widgetBucket(size: DpSize): WidgetBucket = when {
     size.height >= PAGE.height && size.width >= PAGE.width -> WidgetBucket.PAGE
     size.height >= CARD.height && size.width >= CARD.width -> WidgetBucket.CARD
+    size.width >= WIDE_MIN_WIDTH_DP.dp -> WidgetBucket.WIDE
     else -> WidgetBucket.STRIP
+}
+
+/**
+ * WIDE's entry width: a strip-height shape with room for two ideas side by
+ * side. Below it, one idea (STRIP); at CARD height the page stacks instead.
+ */
+const val WIDE_MIN_WIDTH_DP = 250
+
+/**
+ * The tally's share of a WIDE row — the rest is the vertical rule and the
+ * compact sleep line. Tally-first because that is the element priority; the
+ * split is fixed rather than measured so the two columns cannot fight over a
+ * boundary that moves with the day's counts.
+ */
+fun wideTallyWidthDp(bucketWidthDp: Float): Float =
+    (bucketWidthDp - 2 * WIDGET_PADDING_DP) * 0.55f
+
+/**
+ * The width [tallyLayout] is fitted against: the page for the stacked buckets,
+ * the tally's own column at WIDE. The `+ padding` term compensates the
+ * subtraction [tallyLayout] performs on what it assumes is a page width, so the
+ * ladder sees exactly the column the row will actually occupy.
+ */
+fun tallyFitWidthDp(bucket: WidgetBucket, bucketWidthDp: Float): Float = when (bucket) {
+    WidgetBucket.WIDE -> wideTallyWidthDp(bucketWidthDp) + 2 * WIDGET_PADDING_DP
+    else -> bucketWidthDp
 }
 
 /** The sleep block — glyph, eyebrow, headline, debt — from CARD up. */
@@ -191,8 +218,12 @@ fun showsHonestyLines(bucket: WidgetBucket): Boolean = bucket == WidgetBucket.PA
  * shrunk. The glyph is not decoration here — it is the sentence the label would
  * have carried.
  */
-fun showsCompactSleep(bucket: WidgetBucket, hasTally: Boolean): Boolean =
-    !showsSleep(bucket) && !hasTally
+fun showsCompactSleep(bucket: WidgetBucket, hasTally: Boolean): Boolean = when (bucket) {
+    // WIDE always pairs the two: the whole point of the shape is a second
+    // column, and the compact line is the only sleep form a strip height holds.
+    WidgetBucket.WIDE -> true
+    else -> !showsSleep(bucket) && !hasTally
+}
 
 // ---- The tracker tally ------------------------------------------------------
 

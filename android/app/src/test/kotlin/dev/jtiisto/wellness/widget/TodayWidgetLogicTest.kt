@@ -207,6 +207,37 @@ class TodayWidgetLogicTest {
     }
 
     @Test
+    @DisplayName("a strip with the width for two ideas is WIDE — and CARD height outranks it")
+    fun wideBucketBoundaries() {
+        assertEquals(WidgetBucket.WIDE, widgetBucket(DpSize(250.dp, 100.dp)))
+        assertEquals(WidgetBucket.STRIP, widgetBucket(DpSize(249.9.dp, 100.dp)))
+        assertEquals(WidgetBucket.WIDE, widgetBucket(DpSize(300.dp, 109.9.dp)))
+        // At CARD height the page stacks instead: WIDE is strictly the
+        // strip-height family using its width.
+        assertEquals(WidgetBucket.CARD, widgetBucket(DpSize(300.dp, 110.dp)))
+    }
+
+    @Test
+    @DisplayName("WIDE pairs the tally with the compact sleep line, and draws no block")
+    fun wideShowsBothColumns() {
+        assertFalse(showsSleep(WidgetBucket.WIDE))
+        assertFalse(showsStrain(WidgetBucket.WIDE))
+        assertFalse(showsHonestyLines(WidgetBucket.WIDE))
+        assertTrue(showsCompactSleep(WidgetBucket.WIDE, hasTally = true))
+        assertTrue(showsCompactSleep(WidgetBucket.WIDE, hasTally = false))
+    }
+
+    @Test
+    @DisplayName("the WIDE tally is fitted to its own column, not to the page")
+    fun wideTallyFitWidth() {
+        // 55% of the content width; the +24 in the fit form gives back the
+        // padding tallyLayout subtracts from what it assumes is a page width.
+        assertEquals(206.8f, wideTallyWidthDp(400f), 0.01f)
+        assertEquals(230.8f, tallyFitWidthDp(WidgetBucket.WIDE, 400f), 0.01f)
+        assertEquals(180f, tallyFitWidthDp(WidgetBucket.CARD, 180f))
+    }
+
+    @Test
     @DisplayName("anything larger than PAGE is still PAGE")
     fun oversizeIsPage() {
         assertEquals(WidgetBucket.PAGE, widgetBucket(DpSize(320.dp, 400.dp)))
@@ -217,18 +248,20 @@ class TodayWidgetLogicTest {
     @Test
     @DisplayName("elements are added in priority order and dropped in reverse")
     fun elementsPerBucket() {
+        // Entry order STRIP, WIDE, CARD, PAGE. WIDE carries sleep only in the
+        // compact form (its own pin below), so the full block starts at CARD.
         assertEquals(
-            listOf(false, true, true),
+            listOf(false, false, true, true),
             WidgetBucket.entries.map { showsSleep(it) },
         )
         assertEquals(
-            listOf(false, false, true),
+            listOf(false, false, false, true),
             WidgetBucket.entries.map { showsStrain(it) },
         )
         // The honesty words wait for PAGE: at the CARD floor the glyph is the
         // caveat, which is what PARTIAL is defined as.
         assertEquals(
-            listOf(false, false, true),
+            listOf(false, false, false, true),
             WidgetBucket.entries.map { showsHonestyLines(it) },
         )
     }

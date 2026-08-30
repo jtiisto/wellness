@@ -13,9 +13,11 @@ import androidx.glance.action.actionStartActivity
 import androidx.glance.action.clickable
 import androidx.glance.background
 import androidx.glance.layout.Alignment
+import androidx.glance.layout.Box
 import androidx.glance.layout.Column
 import androidx.glance.layout.Row
 import androidx.glance.layout.Spacer
+import androidx.glance.layout.fillMaxHeight
 import androidx.glance.layout.fillMaxSize
 import androidx.glance.layout.fillMaxWidth
 import androidx.glance.layout.height
@@ -69,8 +71,17 @@ private val WIDGET_HEADLINE = TextStyle(
     fontFamily = FontFamily.Monospace,
 )
 
+/**
+ * PAGE's headline: one step up. The tallest bucket was setting the card's own
+ * 24sp in a cell three sizes larger and reading as a note in a margin; the
+ * number is the widget's reason to exist, so at PAGE it takes the room it has.
+ */
+private val WIDGET_HEADLINE_PAGE = WIDGET_HEADLINE.copy(fontSize = 32.sp)
+
 /** The pending floor's `-:--`: the same headline, receded to ink-faint. */
 private val WIDGET_HEADLINE_PENDING = WIDGET_HEADLINE.copy(color = WIDGET_INK_FAINT)
+
+private val WIDGET_HEADLINE_PAGE_PENDING = WIDGET_HEADLINE_PAGE.copy(color = WIDGET_INK_FAINT)
 
 /** The debt line, the one meta line that is the answer rather than a caveat. */
 private val WIDGET_META_INK = TextStyle(
@@ -120,8 +131,12 @@ fun TodayWidgetContent(rollup: CategoryRollup?, model: SleepTonightModel?) {
     val size = LocalSize.current
     val bucket = widgetBucket(size)
     val fontScale = LocalContext.current.resources.configuration.fontScale
-    val tally = tallyLayout(rollup, bucket, size.width.value, fontScale)
+    val tally = tallyLayout(rollup, bucket, tallyFitWidthDp(bucket, size.width.value), fontScale)
     val sleep = showsSleep(bucket)
+    // A page's worth of air: the rule earns wider margins where there is height
+    // to spend, and the headline steps up with it (WIDGET_HEADLINE_PAGE).
+    val page = bucket == WidgetBucket.PAGE
+    val blockGap = if (page) 10.dp else 6.dp
 
     Column(
         modifier = GlanceModifier
@@ -129,35 +144,57 @@ fun TodayWidgetContent(rollup: CategoryRollup?, model: SleepTonightModel?) {
             .background(WIDGET_PAPER)
             .padding(12.dp)
             .clickable(actionStartActivity<MainActivity>()),
-        // The strip is one line in a box that is usually taller than the line:
-        // centre it. The taller buckets read top-down like the card and stay
-        // anchored to the top of the page.
-        verticalAlignment = if (bucket == WidgetBucket.STRIP) {
-            Alignment.CenterVertically
-        } else {
-            Alignment.Top
-        },
+        // Centred at every bucket. Launcher cells are taller than the bucket
+        // floors, and a column pinned to the top leaves all of the surplus as
+        // a void under the last line — the first thing the space round's
+        // report named.
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (tally != null && rollup != null) {
-            TallyRow(tally, tallyContentDescription(rollup))
-        }
-
-        // The rule exists to separate two things; with one of them absent it
-        // would be a line under a heading that isn't there.
-        if (tally != null && sleep) {
-            Spacer(GlanceModifier.height(6.dp))
-            Spacer(GlanceModifier.fillMaxWidth().height(1.dp).background(WIDGET_RULE))
-            Spacer(GlanceModifier.height(6.dp))
-        }
-
-        if (sleep) {
-            SleepBlock(
-                model = model,
-                showStrain = showsStrain(bucket),
-                showHonesty = showsHonestyLines(bucket),
-            )
-        } else if (showsCompactSleep(bucket, hasTally = tally != null)) {
+        if (bucket == WidgetBucket.WIDE && tally != null && rollup != null) {
+            // Two ideas side by side: the tally in its own column, a vertical
+            // rule, and the compact sleep line. The gutters are explicit
+            // spacers — five children, well inside the ten-child budget — so
+            // the rule's background cannot bleed into padding it would own.
+            Row(
+                modifier = GlanceModifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(GlanceModifier.width(wideTallyWidthDp(size.width.value).dp)) {
+                    TallyRow(tally, tallyContentDescription(rollup))
+                }
+                Spacer(GlanceModifier.width(8.dp))
+                Spacer(GlanceModifier.width(1.dp).fillMaxHeight().background(WIDGET_RULE))
+                Spacer(GlanceModifier.width(8.dp))
+                CompactSleepRow(model)
+            }
+        } else if (bucket == WidgetBucket.WIDE) {
+            // WIDE with no tally: the rule would separate a column from
+            // nothing, so the sleep line takes the row alone.
             CompactSleepRow(model)
+        } else {
+            if (tally != null && rollup != null) {
+                TallyRow(tally, tallyContentDescription(rollup))
+            }
+
+            // The rule exists to separate two things; with one of them absent
+            // it would be a line under a heading that isn't there.
+            if (tally != null && sleep) {
+                Spacer(GlanceModifier.height(blockGap))
+                Spacer(GlanceModifier.fillMaxWidth().height(1.dp).background(WIDGET_RULE))
+                Spacer(GlanceModifier.height(blockGap))
+            }
+
+            if (sleep) {
+                SleepBlock(
+                    model = model,
+                    showStrain = showsStrain(bucket),
+                    showHonesty = showsHonestyLines(bucket),
+                    headline = if (page) WIDGET_HEADLINE_PAGE else WIDGET_HEADLINE,
+                    headlinePending = if (page) WIDGET_HEADLINE_PAGE_PENDING else WIDGET_HEADLINE_PENDING,
+                )
+            } else if (showsCompactSleep(bucket, hasTally = tally != null)) {
+                CompactSleepRow(model)
+            }
         }
     }
 }
@@ -228,7 +265,13 @@ private fun TallyRow(layout: TallyLayout, spoken: String) {
  * whole, including the lines this bucket does not draw.
  */
 @Composable
-private fun SleepBlock(model: SleepTonightModel?, showStrain: Boolean, showHonesty: Boolean) {
+private fun SleepBlock(
+    model: SleepTonightModel?,
+    showStrain: Boolean,
+    showHonesty: Boolean,
+    headline: TextStyle,
+    headlinePending: TextStyle,
+) {
     Column(
         modifier = GlanceModifier
             .fillMaxWidth()
@@ -247,14 +290,14 @@ private fun SleepBlock(model: SleepTonightModel?, showStrain: Boolean, showHones
             if (model?.flagged == true) {
                 Text(
                     text = INK_BANG,
-                    style = WIDGET_HEADLINE,
+                    style = headline,
                     modifier = GlanceModifier.padding(end = 4.dp),
                 )
             }
             if (model == null) {
-                Text(text = PENDING_NEED, style = WIDGET_HEADLINE_PENDING)
+                Text(text = PENDING_NEED, style = headlinePending)
             } else {
-                Text(text = model.needText, style = WIDGET_HEADLINE)
+                Text(text = model.needText, style = headline)
                 Text(
                     text = "h:mm",
                     style = WIDGET_META_SOFT,

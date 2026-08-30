@@ -27,8 +27,11 @@ Naming and homes:
 | Bucket | DpSize (min) | Cells | Shows |
 |---|---|---|---|
 | STRIP | 110 × 40 | 2×1 | tally only — or, with no tally to draw, the compact sleep row (below) |
+| WIDE | 250 wide, under CARD height | 4×1-ish | tally in its own column · vertical rule · compact sleep row, side by side |
 | CARD | 180 × 110 | 3×2 (default placement) | tally · rule · eyebrow + judgment glyph · need headline · debt line |
-| PAGE | 180 × 170 | 3×3 and up | everything, card-faithful: + strain and the honesty lines |
+| PAGE | 180 × 170 | 3×3 and up | everything, card-faithful: + strain and the honesty lines, headline stepped up to 32 sp, block gaps widened to 10 dp |
+
+Space is spent, not left over (the sixth device report asked where it all went): content is **vertically centred at every bucket** — launcher cells run taller than the floors, and a column pinned to the top leaves the surplus as a void under the last line. WIDE is the strip-height family using its width: the tally takes a fixed 55 % column (`wideTallyWidthDp`; the fit ladder is fitted to that column via `tallyFitWidthDp`, not to the page), a vertical hairline divides, and the compact sleep line takes the rest. WIDE with no tally drops the rule and gives the row to the sleep line alone — a rule may not separate a column from nothing. CARD height outranks WIDE: given the height to stack, the page stacks.
 
 **Element priority.** Elements are added in this order as the bucket grows, and dropped in reverse as it shrinks. Nothing is ever shrunk to fit — a size that cannot hold an element omits it.
 
@@ -84,7 +87,7 @@ Type, faithful to `LogbookType` with the two Glance losses named in §Accepted d
 
 | Role | Face | Size / weight | Colour | Used for |
 |---|---|---|---|---|
-| headline | `FontFamily.Monospace` | 24 sp / Medium (26 sp line) | ink | `needText`, the `!` bang |
+| headline | `FontFamily.Monospace` | 24 sp / Medium (26 sp line) — **32 sp at PAGE**, where the card's size read as a note in a margin | ink | `needText`, the `!` bang |
 | meta-ink | Monospace | 11.5 sp / Normal | ink | `debtLine` |
 | meta-soft | Monospace | 11.5 sp / Normal | inkSoft | the `h:mm` unit, `strainLine`, `freshnessLine` |
 | eyebrow | Monospace | 10.5 sp / Normal, caps | inkSoft | `TONIGHT'S SLEEP NEED`, the tally count, `cachedLine` (uppercased) |
