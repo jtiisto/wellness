@@ -69,6 +69,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import dev.jtiisto.wellness.core.ble.device.KnownDevice
 import dev.jtiisto.wellness.core.ble.trace.TraceSample
 import dev.jtiisto.wellness.core.data.coach.HookAction
 import dev.jtiisto.wellness.core.data.coach.WorkoutStatus
@@ -104,7 +105,7 @@ class CoachActions(
     val onFeedback: (String, String) -> Unit,
     val onFireHook: (HookAction) -> Unit,
     val onUndoHook: (HookAction) -> Unit,
-    val onConnectStrap: () -> Unit,
+    val onConnectStrap: (KnownDevice) -> Unit,
     val onSkipStrap: () -> Unit,
     val onStopCapture: () -> Unit,
     val onSaveExtraSession: (ExtraSessionDraft) -> Unit,

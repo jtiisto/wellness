@@ -1,6 +1,7 @@
 package dev.jtiisto.wellness.feature.coach
 
 import dev.jtiisto.wellness.core.ble.capture.HrCaptureState
+import dev.jtiisto.wellness.core.ble.device.KnownDevice
 import dev.jtiisto.wellness.core.data.network.DateString
 
 /**
@@ -39,8 +40,17 @@ enum class CaptureLink {
     UNANCHORED,
 }
 
-/** The "Connect HRM?" sheet, and the strap it is offering. */
-data class StrapPrompt(val address: String, val name: String)
+/**
+ * The "Connect HRM?" sheet, and the straps it is offering.
+ *
+ * Every remembered strap, in the store's stable name order — which strap is
+ * being worn is known only at the tap, so none of them is the privileged one.
+ *
+ * [straps] is non-empty by construction: the sheet exists only on
+ * [StartCaptureAction.PROMPT], and that branch is taken only when a strap is
+ * known.
+ */
+data class StrapPrompt(val straps: List<KnownDevice>)
 
 /** What a Start Workout tap has to settle about heart rate before the hook fires. */
 enum class StartCaptureAction {

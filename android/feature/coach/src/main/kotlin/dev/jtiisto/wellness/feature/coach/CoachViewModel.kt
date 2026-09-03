@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.jtiisto.wellness.core.ble.capture.HrCaptureController
 import dev.jtiisto.wellness.core.ble.capture.HrCaptureState
+import dev.jtiisto.wellness.core.ble.device.KnownDevice
 import dev.jtiisto.wellness.core.ble.device.KnownDeviceStore
 import dev.jtiisto.wellness.core.ble.trace.HrTraceRing
 import dev.jtiisto.wellness.core.ble.trace.TraceSample
@@ -558,17 +559,19 @@ class CoachViewModel(
     // ---- heart-rate capture around a workout ------------------------------------
 
     private fun startWorkout() {
-        val strap = knownStraps.devices.value.firstOrNull()
+        // The sheet is the selector, so it is handed every remembered strap, in
+        // the order the store publishes them.
+        val straps = knownStraps.devices.value
         when (
             WorkoutCapturePolicy.startAction(
-                hasKnownStrap = strap != null,
+                hasKnownStrap = straps.isNotEmpty(),
                 captureRunning = captureState.value.isRunning,
                 connectPermitted = capture.canStart(),
             )
         ) {
             // The hook waits for the answer — see [connectStrap] / [skipStrap].
             StartCaptureAction.PROMPT -> {
-                _strapPrompt.value = StrapPrompt(requireNotNull(strap).address, strap.name)
+                _strapPrompt.value = StrapPrompt(straps)
                 return
             }
 
@@ -599,23 +602,38 @@ class CoachViewModel(
     }
 
     /**
-     * The sheet's [Connect]: record this workout, then start it.
+     * A tap on one of the sheet's straps: record this workout from [strap],
+     * then start it.
+     *
+     * The tap is answered against the **prompt**, never against the store. The
+     * prompt's list is the question the user was shown, so it is the only thing
+     * that can say whether [strap] is one of the answers — a store refreshed
+     * between render and tap would otherwise let this start a strap the sheet
+     * never offered, under a name it never displayed. A [strap] the prompt does
+     * not hold is therefore no answer at all: the question stays open, the hook
+     * waits, and nothing records.
      *
      * The anchor travels with the start intent and comes back on the published
-     * state once the session row exists; nothing is remembered here.
+     * state once the session row exists; nothing is remembered here — neither
+     * the anchor nor which strap was chosen.
      *
      * A refused start is **deliberately ignored**. The workout starts either way
      * — that is the sheet's whole contract, and the same reason Skip fires the
      * hook — and the refusal has already put its own message on the snackbar.
      * Abandoning the Start here would turn a strap problem into a lost workout.
      */
-    fun connectStrap() {
-        val prompt = _strapPrompt.value ?: return
+    fun connectStrap(strap: KnownDevice) {
+        // Also the idempotence guard: an answered sheet leaves no prompt, so a
+        // second tap resolves to nothing and cannot start the workout twice.
+        val chosen = _strapPrompt.value
+            ?.straps
+            ?.firstOrNull { it.address == strap.address }
+            ?: return
         _strapPrompt.value = null
         val anchor = currentAnchor()
         capture.start(
-            address = prompt.address,
-            name = prompt.name,
+            address = chosen.address,
+            name = chosen.name,
             workoutDate = anchor.date,
             workoutSessionId = anchor.sessionId,
         )
