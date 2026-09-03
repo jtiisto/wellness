@@ -151,6 +151,8 @@ class LastPerformanceTest {
 
         assertEquals("2026-06-05", result?.date)
         assertEquals(61.0, result?.sets?.first()?.number("weight"))
+        // Whatever the matched plan entry was planned at, named rather than assumed.
+        assertEquals("LIGHT", result?.exposure)
     }
 
     @Test
@@ -160,6 +162,7 @@ class LastPerformanceTest {
 
         assertEquals("2026-06-02", result?.date)
         assertEquals(92.5, result?.sets?.first()?.number("weight"))
+        assertEquals("HEAVY", result?.exposure)
     }
 
     @Test
@@ -196,6 +199,8 @@ class LastPerformanceTest {
 
         assertEquals("2026-06-05", result?.date)
         assertEquals(61.0, result?.sets?.first()?.number("weight"))
+        // The fallback reports the tier it came from, not the one that was asked for.
+        assertEquals("LIGHT", result?.exposure)
     }
 
     @Test
@@ -207,7 +212,11 @@ class LastPerformanceTest {
             "2026-06-05" to logWith("ex_1", listOf(loggedSet(setNum = 1, weight = 80.0, reps = 6))),
         )
 
-        assertEquals("2026-06-05", findLastPerformance("squat", "2026-06-09", plans, logs, "HEAVY")?.date)
+        val fallback = findLastPerformance("squat", "2026-06-09", plans, logs, "HEAVY")
+
+        assertEquals("2026-06-05", fallback?.date)
+        // Nothing to name: the entry it was matched through carried no exposure.
+        assertNull(fallback?.exposure)
 
         // With a real HEAVY session present, the fallback loses to it even when older.
         plans["2026-05-22"] = planWith("ex_0", "squat", "HEAVY")

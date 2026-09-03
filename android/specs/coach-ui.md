@@ -9,6 +9,18 @@ Status: **approved 2026-08-07** (v2 after Codex review; user-approved with bound
 > footer). Every behavioral clause here — ports, gates, hook machine, set-grid
 > write path, ghost lookup — stands unchanged.
 
+**Amended 2026-09-02** — **ghost provenance names its tier honestly.** Device report: an exercise planned at a
+tier for the first time showed its most recent session — a different tier — as its ghosts under a
+footer reading "last at this tier". The numbers were the lookup's documented *fallback* (no same-tier
+history yet → newest session of any tier, so a brand-new tier still shows something); the footer's
+claim was the defect — `LastPerformance` carried no record of which tier the session came from, and
+the label asserted a same-tier match unconditionally. The PWA's hint never claimed a tier. Rule now:
+the lookup result carries the matched plan entry's exposure, and where today's exercise has a tier the
+footer names the source whenever it is not that tier (a source with no exposure reads "untiered"); an
+exercise with no tier gets the bare `last · <date>` whatever the source carried, because there is no
+tier to compare against. See **Behavior → 5. Ghost values**. Android-only; the lookup rule, the wire, and
+the PWA are unchanged.
+
 ## Goal
 
 Replace the Phase 4 debug screen with the full Coach feature at PWA parity: calendar-driven day selection with status dots, the workout day view (blocks, supersets, exercise accordions with prescriptions and ghost values, four entry-widget shapes, session feedback, extra Zone-2 sessions), and the workout Start/End hook machinery with its four-escape entry gate. Pure logic ported and pinned; ~43 transcribed JS/e2e-embedded cases plus new tests for previously-unpinned helpers.
@@ -73,7 +85,13 @@ suspend fun undoWorkoutHook(sessionId: Long, action: HookAction)    // DELETE �
 2. **Gate composition**: `effectiveEditable` locks blocks AND session feedback; the raw `isEditable` governs banners, controls visibility, and the status fetch. `endState` never gates anything.
 3. Calendar: 42-cell month grid; status dots per `getWorkoutStatus`; trigger shows the selected date's dot; Today footer button; legend row; external date changes re-home the view month.
 4. Set grid column shapes from `hide_weight`/`show_time`; header row `#` + labels(+unit) + `✓`; done tick is a checkbox writing `{completed}` through the same pad-and-rewrite path.
-5. Ghost values: computed lazily on accordion expand (slug present only), per-cell placeholders matched by `set_num` (placeholder ONLY — untouched cells log nothing), plus the `Last · Jun 1` hint whenever a match exists; exposure passed from the plan exercise (`?: null`). No ghosts for cardio/checklist.
+5. Ghost values: computed lazily on accordion expand (slug present only), per-cell placeholders matched by `set_num` (placeholder ONLY — untouched cells log nothing), plus a provenance footer whenever a match exists; exposure passed from the plan exercise (`?: null`). No ghosts for cardio/checklist.
+   **Provenance footer (amended 2026-09-02).** `findLastPerformance` returns, beside the date and sets, the **exposure of the plan entry it matched** (`LastPerformance.exposure`, null when that historical plan entry carried none) — for a same-tier match and for the any-tier fallback alike. The footer says where the faint numbers came from, and never claims a tier it did not match. With `<date>` the short date, and the prefix `Ghost values · ` present exactly while at least one ghost is still on screen (otherwise the suffix is capitalised: `Last …`):
+   - exercise has a tier, source is that tier → `last at this tier · <date>`
+   - exercise has a tier, source is another tier → `last at HEAVY · <date>` (the source exposure verbatim, as the chip renders it)
+   - exercise has a tier, source plan entry carried none → `last, untiered · <date>`
+   - exercise has no tier → `last · <date>` (the PWA's own `Last · <date>`; "this tier" is never said where there is no tier)
+   Ghost cells render the same in every case (the honest label is the fix; a weaker cross-tier cell style was considered and not taken).
 6. Extra session renders on rest days only when `hasExtra || isEditable`; a tombstoned entry counts as absent (`isDeletedEntry`).
 7. Hook buttons: `Working…` while pending; `(locked)` suffix once fired+data-exists; `canFire` only in DEFAULT/FAILED; POST failure → FAILED but the gate is already open (escape 1 = any click).
 8. Accordion `completed` styling from `isExerciseCompleted`; progress pill from `getExerciseProgress` — including their documented divergence.

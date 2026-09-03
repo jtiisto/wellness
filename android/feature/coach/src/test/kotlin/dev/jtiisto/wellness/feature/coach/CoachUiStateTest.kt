@@ -902,7 +902,8 @@ class CoachUiStateTest {
         ).entry as EntryWidgetState.Sets
 
         val untouched = requireNotNull(entryWith(null).provenance)
-        assertEquals("Ghost values · last at this tier · Aug 1", untouched.label)
+        // Neither exercise carries an exposure, so the footer names no tier.
+        assertEquals("Ghost values · last · Aug 1", untouched.label)
 
         val partial = requireNotNull(
             entryWith(buildJsonObject { put("sets", sets(loggedSet(setNum = 1, weight = 62.5))) }).provenance,
@@ -913,7 +914,44 @@ class CoachUiStateTest {
             entryWith(buildJsonObject { put("sets", sets(loggedSet(setNum = 1, weight = 62.5, reps = 8))) })
                 .provenance,
         )
-        assertEquals("Last at this tier · Aug 1", covered.label)
+        assertEquals("Last · Aug 1", covered.label)
+    }
+
+    @Test
+    @DisplayName("a first-ever tier shows the fallback session, and the footer names the tier it came from")
+    fun ghostProvenanceNamesTheFallbackTier() {
+        val plan = plan(
+            blocks = listOf(
+                block(
+                    exercises = listOf(
+                        exercise(id = "ex_now", canonicalSlug = "squat", targetSets = 1, exposure = "MODERATE"),
+                    ),
+                ),
+            ),
+        )
+        // No MODERATE session has ever been logged, so the lookup's any-tier
+        // fallback serves the HEAVY one — and the footer must say HEAVY.
+        val history = plan(
+            blocks = listOf(
+                block(exercises = listOf(exercise(id = "ex_then", canonicalSlug = "squat", exposure = "HEAVY"))),
+            ),
+        )
+
+        val entry = firstRow(
+            state(
+                plans = mapOf(today.toString() to plan, "2026-08-01" to history),
+                logs = mapOf(
+                    "2026-08-01" to dayLog(
+                        "ex_then",
+                        buildJsonObject { put("sets", sets(loggedSet(setNum = 1, weight = 60.0, reps = 8))) },
+                    ),
+                ),
+                expanded = setOf("ex_now"),
+            ),
+        ).entry as EntryWidgetState.Sets
+
+        assertEquals("Ghost values · last at HEAVY · Aug 1", entry.provenance?.label)
+        assertEquals("60", entry.rows[0].cells[0].ghost, "the fallback's numbers are shown, as before")
     }
 
     @Test

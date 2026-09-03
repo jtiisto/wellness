@@ -550,17 +550,97 @@ class CoachNotationTest {
     // ---- the provenance footer --------------------------------------------------------
 
     @Test
-    @DisplayName("the footer names the faint values while any are still showing")
+    @DisplayName("the footer names the faint values while any are still showing, and the tier they came from")
     fun provenanceWording() {
-        assertEquals(
-            "Ghost values · last at this tier · Aug 1",
-            GhostProvenance(date = "Aug 1", ghostsShowing = true).label,
+        val cases = listOf(
+            // A same-tier chain existed, so the footer may say so.
+            ProvenanceCase(
+                tier = "HEAVY",
+                source = "HEAVY",
+                showing = "Ghost values · last at this tier · Aug 1",
+                logged = "Last at this tier · Aug 1",
+            ),
+            // First-ever MODERATE day: the fallback served HEAVY and is named.
+            ProvenanceCase(
+                tier = "MODERATE",
+                source = "HEAVY",
+                showing = "Ghost values · last at HEAVY · Aug 1",
+                logged = "Last at HEAVY · Aug 1",
+            ),
+            // The source is echoed exactly as stored, so a tier that is not
+            // already shouted stays as it was written.
+            ProvenanceCase(
+                tier = "HEAVY",
+                source = "Deload",
+                showing = "Ghost values · last at Deload · Aug 1",
+                logged = "Last at Deload · Aug 1",
+            ),
+            // Pre-epoch history, planned before exposures existed.
+            ProvenanceCase(
+                tier = "MODERATE",
+                source = null,
+                showing = "Ghost values · last, untiered · Aug 1",
+                logged = "Last, untiered · Aug 1",
+            ),
+            // No tier today, so no tier is spoken of — the PWA's own wording,
+            // and it holds whatever the served session happened to carry.
+            ProvenanceCase(
+                tier = null,
+                source = null,
+                showing = "Ghost values · last · Aug 1",
+                logged = "Last · Aug 1",
+            ),
+            ProvenanceCase(
+                tier = null,
+                source = "HEAVY",
+                showing = "Ghost values · last · Aug 1",
+                logged = "Last · Aug 1",
+            ),
         )
+
+        cases.forEach { case ->
+            assertEquals(
+                case.showing,
+                provenance(case.tier, case.source, ghostsShowing = true).label,
+                "$case, ghosts still showing",
+            )
+            assertEquals(
+                case.logged,
+                provenance(case.tier, case.source, ghostsShowing = false).label,
+                "$case, fully logged",
+            )
+        }
+    }
+
+    @Test
+    @DisplayName("a blank exposure is no exposure, on either side of the comparison")
+    fun provenanceBlankExposureIsAbsent() {
+        assertEquals("Ghost values · last · Aug 1", provenance(tier = " ", source = "HEAVY").label)
         assertEquals(
-            "Last at this tier · Aug 1",
-            GhostProvenance(date = "Aug 1", ghostsShowing = false).label,
+            "Last · Aug 1",
+            provenance(tier = " ", source = "HEAVY", ghostsShowing = false).label,
+        )
+
+        assertEquals("Ghost values · last, untiered · Aug 1", provenance(tier = "HEAVY", source = "  ").label)
+        assertEquals(
+            "Last, untiered · Aug 1",
+            provenance(tier = "HEAVY", source = "  ", ghostsShowing = false).label,
         )
     }
+
+    /** Today's tier, the tier the lookup served, and the footer both wordings spell out. */
+    private data class ProvenanceCase(
+        val tier: String?,
+        val source: String?,
+        val showing: String,
+        val logged: String,
+    )
+
+    private fun provenance(
+        tier: String?,
+        source: String?,
+        ghostsShowing: Boolean = true,
+    ) = GhostProvenance(date = "Aug 1", ghostsShowing = ghostsShowing, tier = tier, source = source)
 
     private fun segment(
         durationSec: Int,

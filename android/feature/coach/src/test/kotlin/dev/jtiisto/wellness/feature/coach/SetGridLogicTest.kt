@@ -158,6 +158,7 @@ class SetGridLogicTest {
                 loggedSet(setNum = 2, weight = 60.0, reps = 8),
                 loggedSet(setNum = 3, weight = 62.5, reps = 6),
             ),
+            exposure = null,
         )
 
         val rows = buildSetRows(weightRepsRpe, JsonArray(emptyList()), targetSets = 3, lastPerformance = last)
@@ -170,7 +171,11 @@ class SetGridLogicTest {
     @Test
     @DisplayName("a ghost is a placeholder only — it never becomes the cell's value")
     fun ghostsAreNotValues() {
-        val last = LastPerformance("2026-06-01", listOf(loggedSet(setNum = 1, weight = 60.0, reps = 8)))
+        val last = LastPerformance(
+            date = "2026-06-01",
+            sets = listOf(loggedSet(setNum = 1, weight = 60.0, reps = 8)),
+            exposure = null,
+        )
 
         val rows = buildSetRows(weightRepsRpe, JsonArray(emptyList()), targetSets = 1, lastPerformance = last)
 
@@ -182,7 +187,7 @@ class SetGridLogicTest {
     @DisplayName("ghostSetFor returns null when nothing matches")
     fun noGhost() {
         assertNull(ghostSetFor(null, 1))
-        assertNull(ghostSetFor(LastPerformance("2026-06-01", listOf(loggedSet(setNum = 2))), 1))
+        assertNull(ghostSetFor(LastPerformance("2026-06-01", listOf(loggedSet(setNum = 2)), exposure = null), 1))
     }
 
     @Test

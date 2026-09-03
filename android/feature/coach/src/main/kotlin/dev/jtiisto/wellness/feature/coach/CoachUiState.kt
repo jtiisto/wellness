@@ -718,6 +718,10 @@ private fun buildEntryWidget(
                     // own, so this is exactly "are any faint numbers on screen"
                     // — which is the question the footer's wording answers.
                     ghostsShowing = rows.any { row -> row.cells.any { cell -> cell.showsGhost } },
+                    tier = exercise.tier(),
+                    // The tier the lookup served, which is today's only when a
+                    // same-tier session existed to serve.
+                    source = it.exposure,
                 )
             },
         )

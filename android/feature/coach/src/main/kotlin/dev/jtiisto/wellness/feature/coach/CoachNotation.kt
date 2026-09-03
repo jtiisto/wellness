@@ -83,12 +83,17 @@ data class TierPlates(
 }
 
 /**
- * The tier this exercise is dotted for, or null when it carries none.
+ * An exposure read as a tier, or null when there is none.
  *
  * Blank is the same as absent — an empty `exposure` is a server field nobody
- * filled in, and it must not take a plate colour away from a real tier.
+ * filled in, and it must not take a plate colour away from a real tier, nor let
+ * the provenance footer name a tier that is not there. Every place that asks
+ * whether an exposure exists asks it here.
  */
-fun PlanExerciseDto.tier(): String? = exposure?.takeIf { it.isNotBlank() }
+internal fun tierOrNull(exposure: String?): String? = exposure?.takeIf { it.isNotBlank() }
+
+/** The tier this exercise is dotted for, or null when it carries none. */
+fun PlanExerciseDto.tier(): String? = tierOrNull(exposure)
 
 /**
  * Assign a plate to every distinct exposure in the day, in order of first
@@ -536,8 +541,13 @@ fun DayMark.a11yLabel(): String? = when (this) {
  * The set table's footer, naming where its faint values came from.
  *
  * Replaces the `Last · <date>` hint. Ghost values are never labelled "planned" or
- * "target" — they are what this exercise did last time at this tier, and the
- * footer says so.
+ * "target" — they are what this exercise did last time, and the footer says so.
+ * It also says at which tier: [tier] is what today's exercise is planned at and
+ * [source] the tier of the session the lookup actually served, which are the same
+ * thing only when a same-tier chain existed. Where they differ the source is
+ * named outright, because the lookup's any-tier fallback is a real answer to a
+ * different question and the reader has to be able to tell. A tier is claimed
+ * only where it was matched.
  *
  * [ghostsShowing] is what picks the wording, and it means literally what it says:
  * at least one cell on screen is still showing a ghost instead of a logged value.
@@ -548,7 +558,29 @@ fun DayMark.a11yLabel(): String? = when (this) {
  *
  * [label] renders **verbatim**, unlike the eyebrow.
  */
-data class GhostProvenance(val date: String, val ghostsShowing: Boolean) {
+data class GhostProvenance(
+    val date: String,
+    val ghostsShowing: Boolean,
+    val tier: String?,
+    val source: String?,
+) {
     val label: String
-        get() = if (ghostsShowing) "Ghost values · last at this tier · $date" else "Last at this tier · $date"
+        get() {
+            val planned = tierOrNull(tier)
+            val served = tierOrNull(source)
+            val provenance = when {
+                // An exercise with no tier has none to compare against, so it
+                // gets the PWA's own bare wording whatever the source carried.
+                planned == null -> "last · $date"
+                served == null -> "last, untiered · $date"
+                served == planned -> "last at this tier · $date"
+                // Verbatim, exactly as the exposure chip renders it.
+                else -> "last at $served · $date"
+            }
+            return if (ghostsShowing) {
+                "Ghost values · $provenance"
+            } else {
+                provenance.replaceFirstChar { it.uppercase() }
+            }
+        }
 }

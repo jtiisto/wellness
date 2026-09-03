@@ -323,7 +323,11 @@ exposure (progression chains run per exposure) and falls back to the newest
 any-exposure match so a brand-new key — and pre-epoch history, which carries
 none — still shows something, with the date hint for context. Matching walks the
 historical *plans* in the synced window (which carry the field), not the logs,
-which is what lets the lean log wire stay unchanged.
+which is what lets the lean log wire stay unchanged. The PWA's hint names only the
+date; the Android footer also names the **source tier** whenever the fallback served
+a session of another tier (`last at HEAVY · Jun 1`) — amended 2026-09-02 after a
+first-ever day at one tier showed another tier's session under "last at this tier"; see
+`android/specs/coach-ui.md`.
 
 **Ingest & transform pipeline:**
 

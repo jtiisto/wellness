@@ -24,8 +24,20 @@ import java.util.Locale
 /** The set fields that make a logged set count as performed. */
 private val SET_DATA_FIELDS = listOf("weight", "reps", "rpe", "duration_sec")
 
-/** A past session's contribution: the day it happened and the sets that carry data. */
-data class LastPerformance(val date: DateString, val sets: List<JsonObject>)
+/**
+ * A past session's contribution: the day it happened, the sets that carry data,
+ * and the exposure it was performed at.
+ *
+ * [exposure] is the one on the historical plan entry the lookup matched through,
+ * null where that entry carried none. It is what lets a consumer say whether the
+ * session is the requested exposure's own or the any-exposure fallback — the
+ * result names the tier it came from rather than leaving the caller to assume it.
+ */
+data class LastPerformance(
+    val date: DateString,
+    val sets: List<JsonObject>,
+    val exposure: String?,
+)
 
 /**
  * A set counts as performed once it carries any real metric.
@@ -62,8 +74,9 @@ private fun planExerciseForSlug(plan: PlanDto?, canonicalSlug: String): PlanExer
  * session of another exposure — progression chains run per exposure. The newest
  * any-exposure session is kept as a fallback so that a brand-new exposure key,
  * and pre-epoch history that carries none at all, still shows something; the
- * date hint beside the ghosts supplies the missing context. A plan entry with no
- * exposure therefore never *matches* a requested one, but is fallback-eligible.
+ * result carries the exposure it was found under, so the display can say which
+ * of the two happened. A plan entry with no exposure therefore never *matches* a
+ * requested one, but is fallback-eligible.
  *
  * Both sides are server-normalized, so exact string equality is the right test.
  */
@@ -88,9 +101,9 @@ fun findLastPerformance(
         // Returning on the first match is what makes "newest wins" hold: the
         // dates are walked newest-first.
         if (exposure.isNullOrEmpty() || planExercise.exposure == exposure) {
-            return LastPerformance(date, sets)
+            return LastPerformance(date, sets, planExercise.exposure)
         }
-        if (fallback == null) fallback = LastPerformance(date, sets)
+        if (fallback == null) fallback = LastPerformance(date, sets, planExercise.exposure)
     }
     return fallback
 }
