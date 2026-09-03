@@ -43,13 +43,25 @@ data class StrapUiState(
      */
     val scanState: ConnectionState = ConnectionState.DISCONNECTED,
     val candidates: List<DiscoveredDevice> = emptyList(),
-    val control: CaptureControl? = null,
+    /** The running capture the Stop button ends, or null while nothing runs. */
+    val stopControl: CaptureControl? = null,
+    /** Whether a tap on a known strap's row would start a capture on it. */
+    val canStart: Boolean = true,
     val capture: HrCaptureState = HrCaptureState(),
     val permission: BlePermissionStatus = BlePermissionStatus.UNKNOWN,
     /** The inline explanation under the section: a denial, or a failed scan. */
     val message: String? = null,
 ) {
     val isScanning: Boolean get() = scanState == ConnectionState.SCANNING
+
+    /**
+     * Whether the section says, under the rows, what tapping one does.
+     *
+     * It appears exactly where the tap it teaches would work: with a row to tap,
+     * and with nothing recording. A hint for an action the section is currently
+     * refusing would teach the wrong thing twice over.
+     */
+    val showCaptureHint: Boolean get() = canStart && known.isNotEmpty()
 }
 
 /**
@@ -80,6 +92,11 @@ sealed interface StrapEvent {
  * is built around: **a tap never fails silently.** Every path either does the
  * thing, asks for what it needs first, or says on screen why it cannot — see
  * [BlePermissions].
+ *
+ * The one deliberate exception is a tap on a row that is no longer current — the
+ * strap forgotten between the render and the tap, or a capture started elsewhere
+ * while the permission dialog was up. That tap does nothing and says nothing,
+ * because what it would do is no longer what the user saw.
  *
  * Nothing here saves a device. The service does that, on the first `CONNECTED`,
  * because a strap that never connects must not end up in the list of straps you
@@ -119,7 +136,8 @@ class StrapViewModel(
             known = known,
             scanState = scanning,
             candidates = StrapLogic.unpaired(found, known),
-            control = StrapLogic.captureControl(capture, known),
+            stopControl = StrapLogic.stopControl(capture),
+            canStart = StrapLogic.canStart(capture),
             capture = capture,
             permission = status,
             message = text,
@@ -212,8 +230,13 @@ class StrapViewModel(
      *
      * The name travels with the intent because the service is what saves it, and
      * by the time it has a proven link the advertisement it came from is gone.
+     *
+     * Refused while a capture runs, exactly as a known row's tap is: nothing in
+     * this section starts a second capture. Checked again when the action runs,
+     * because a Connect can be waiting on the permission dialog too.
      */
     fun connect(device: DiscoveredDevice) {
+        if (!canStartCapture()) return
         gate(PendingAction.Capture(device.address, StrapLogic.displayName(device)))
     }
 
@@ -225,15 +248,45 @@ class StrapViewModel(
     // ---- capture without a workout --------------------------------------------
 
     /**
-     * Derived from the source flows rather than from [uiState], which stops
+     * Record from the strap whose row was tapped.
+     *
+     * Asked here so a tap that cannot succeed never opens a permission dialog
+     * for a capture that will not happen, and asked again in [run] once the
+     * answer arrives: the store and the service are both free to move while the
+     * dialog is on screen.
+     */
+    fun startCapture(address: String) {
+        val device = startableKnownDevice(address) ?: return
+        gate(PendingAction.StartKnown(device.address))
+    }
+
+    /**
+     * Whether the section may start a capture at all.
+     *
+     * The service is single-source and refuses a second start, and
+     * `controller.start` reports only that the intent went out — so a start it
+     * quietly drops would still be followed by a notification-permission dialog
+     * for a capture nobody has. Every path into [beginCapture] asks this, at the
+     * tap and again when the action runs.
+     *
+     * Read from the capture flow rather than from [uiState], which stops
      * publishing five seconds after the last collector goes: a tap must mean the
      * same thing whether or not the state flow happens to be warm.
      */
-    fun startCapture() {
-        val control = StrapLogic.captureControl(captureState.value, knownDevices.devices.value)
-            ?.takeIf { !it.running }
-            ?: return
-        gate(PendingAction.Capture(control.address, control.name))
+    private fun canStartCapture(): Boolean = StrapLogic.canStart(captureState.value)
+
+    /**
+     * The remembered strap a row's tap may record from, or null.
+     *
+     * Null when no capture may start at all, and null when the store no longer
+     * holds the address — in which case starting it would put the strap back in
+     * the list on the first `CONNECTED`, because the service saves what it
+     * connects to. Read from the source flow for the same reason as
+     * [canStartCapture].
+     */
+    private fun startableKnownDevice(address: String): KnownDevice? {
+        if (!canStartCapture()) return null
+        return knownDevices.devices.value.firstOrNull { it.address == address }
     }
 
     fun stopCapture() {
@@ -260,9 +313,26 @@ class StrapViewModel(
         }
     }
 
-    private fun run(action: PendingAction) = when (action) {
-        PendingAction.Scan -> beginScan()
-        is PendingAction.Capture -> beginCapture(action.address, action.name)
+    /**
+     * A grant takes as long as the user takes to answer, so a capture start is
+     * re-decided here rather than replayed: the strap may have been forgotten,
+     * or a capture may have begun elsewhere, while the dialog stood.
+     */
+    private fun run(action: PendingAction) {
+        when (action) {
+            PendingAction.Scan -> beginScan()
+            // An unknown device is unknown by design on this path, so there is
+            // no membership to re-check — only whether a capture may start.
+            is PendingAction.Capture -> {
+                if (!canStartCapture()) return
+                beginCapture(action.address, action.name)
+            }
+
+            is PendingAction.StartKnown -> {
+                val device = startableKnownDevice(action.address) ?: return
+                beginCapture(device.address, device.name)
+            }
+        }
     }
 
     private fun beginScan() {
@@ -315,8 +385,22 @@ class StrapViewModel(
 
     /** The tap that was waiting on a permission answer. */
     private sealed interface PendingAction {
+
         data object Scan : PendingAction
+
+        /**
+         * A scan result. The name travels with the address because the store
+         * has none: this is the one path allowed to name a device it does not
+         * know, since connecting is what makes it known.
+         */
         data class Capture(val address: String, val name: String) : PendingAction
+
+        /**
+         * A known strap's row. Only the address travels — the name, and whether
+         * the strap is still known and still startable at all, are re-read at
+         * the moment the action runs.
+         */
+        data class StartKnown(val address: String) : PendingAction
     }
 
     private companion object {

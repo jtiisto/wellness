@@ -83,15 +83,4 @@ class KnownDeviceStore(
     fun nameOf(address: String): String? = storage.load()[address]
 
     fun isKnown(address: String): Boolean = nameOf(address) != null
-
-    /**
-     * The strap the Start Workout sheet offers.
-     *
-     * v1 remembers a map but uses one device: the sheet only appears when there
-     * is something to offer, and offering the first of a stable ordering is
-     * both deterministic and, with a single strap, exactly right.
-     */
-    fun preferred(): KnownDevice? = storage.load()
-        .map { (address, name) -> KnownDevice(address, name) }
-        .minWithOrNull(compareBy({ it.name.lowercase() }, { it.address }))
 }

@@ -27,6 +27,8 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.DisplayName
@@ -399,37 +401,61 @@ class StrapViewModelTest {
     }
 
     @Test
-    @DisplayName("Start capture uses the remembered strap the workout sheet would also offer")
-    fun startCaptureUsesThePreferredStrap() = runSectionTest { viewModel, _ ->
+    @DisplayName("tapping a row records from that strap, under the name it is remembered by")
+    fun startCaptureUsesTheTappedStrap() = runSectionTest { viewModel, _ ->
         strapMap["AA:02"] = "Beta"
         strapMap["AA:01"] = "Alpha"
         viewModel.onOpened(granted = true)
         runCurrent()
 
-        viewModel.startCapture()
+        // Deliberately not the first row: "Beta" sorts after "Alpha", and a
+        // selector that only ever reaches the first row is not a selector.
+        viewModel.startCapture("AA:02")
         runCurrent()
 
-        assertEquals(listOf("start:AA:01:Alpha:null:null"), controller.calls)
+        assertEquals(listOf("start:AA:02:Beta:null:null"), controller.calls)
     }
 
     @Test
-    @DisplayName("with nothing paired there is no control, and Start capture does nothing")
-    fun startCaptureNeedsAStrap() = runSectionTest { viewModel, _ ->
-        assertNull(viewModel.uiState.value.control)
+    @DisplayName("a strap forgotten between the render and the tap is not silently re-paired")
+    fun startCaptureIgnoresAForgottenStrap() = runSectionTest { viewModel, _ ->
+        strapMap["AA:01"] = "Alpha"
+        viewModel.onOpened(granted = true)
+        runCurrent()
 
-        viewModel.startCapture()
+        viewModel.forget("AA:01")
+        runCurrent()
+
+        // The row is gone but the tap was already in flight. Starting anyway
+        // would put the strap back in the list on the first CONNECTED.
+        viewModel.startCapture("AA:01")
         runCurrent()
 
         assertTrue(controller.calls.isEmpty())
     }
 
     @Test
-    @DisplayName("a running capture turns the control into a stop, whatever is paired")
+    @DisplayName("with nothing paired there is nothing to stop, and a tap on an unknown address does nothing")
+    fun startCaptureNeedsAStrap() = runSectionTest { viewModel, _ ->
+        val state = viewModel.uiState.value
+        assertNull(state.stopControl)
+        assertTrue(state.canStart)
+
+        viewModel.startCapture("AA:01")
+        runCurrent()
+
+        assertTrue(controller.calls.isEmpty())
+    }
+
+    @Test
+    @DisplayName("a running capture is stoppable and names its strap, whatever is paired")
     fun runningCaptureOffersStop() = runSectionTest { viewModel, _ ->
         captureState.value = HrCaptureState(isRunning = true, deviceAddress = "AA:09", deviceName = "Gone")
         runCurrent()
 
-        assertTrue(viewModel.uiState.value.control!!.running)
+        val stop = viewModel.uiState.value.stopControl
+        assertNotNull(stop)
+        assertEquals("Gone", stop!!.name)
 
         viewModel.stopCapture()
         runCurrent()
@@ -438,17 +464,126 @@ class StrapViewModelTest {
     }
 
     @Test
-    @DisplayName("Start capture is refused while one is already running")
+    @DisplayName("no row starts a second capture while one is already running")
     fun startCaptureIsRefusedWhileRunning() = runSectionTest { viewModel, _ ->
         strapMap["AA:01"] = "Alpha"
+        strapMap["AA:02"] = "Beta"
         viewModel.onOpened(granted = true)
         captureState.value = HrCaptureState(isRunning = true, deviceAddress = "AA:01")
         runCurrent()
 
-        viewModel.startCapture()
+        // The rows render inert, and the tap is refused behind them too: the
+        // service is single-source, and this is where that is mirrored.
+        assertFalse(viewModel.uiState.value.canStart)
+
+        viewModel.startCapture("AA:02")
         runCurrent()
 
         assertTrue(controller.calls.isEmpty())
+    }
+
+    @Test
+    @DisplayName("Connect is refused while a capture runs — connecting is a start too")
+    fun connectIsRefusedWhileRunning() = runSectionTest { viewModel, events ->
+        captureState.value = HrCaptureState(isRunning = true, deviceAddress = "AA:09", deviceName = "Gym")
+        runCurrent()
+
+        viewModel.connect(found("AA:01"))
+        runCurrent()
+
+        assertTrue(controller.calls.isEmpty())
+        assertFalse(StrapEvent.RequestNotifications in events)
+    }
+
+    @Test
+    @DisplayName("a capture started elsewhere while the dialog was up cancels a waiting Connect too")
+    fun grantDoesNotConnectDuringARunningCapture() = runSectionTest(granted = false) { viewModel, events ->
+        viewModel.connect(found("AA:01"))
+        runCurrent()
+        assertEquals(listOf(StrapEvent.RequestBluetooth), events)
+
+        captureState.value = HrCaptureState(isRunning = true, deviceAddress = "AA:09", deviceName = "Gym")
+        viewModel.onPermissionResult(granted(), canAskAgain = false)
+        runCurrent()
+
+        assertTrue(controller.calls.isEmpty())
+        assertFalse(StrapEvent.RequestNotifications in events)
+    }
+
+    @Test
+    @DisplayName("the tap that waited on the dialog records from the strap it was made on")
+    fun grantResumesTheTappedStrap() = runSectionTest(granted = false) { viewModel, events ->
+        strapMap["AA:01"] = "Alpha"
+        viewModel.onOpened(granted = false)
+        runCurrent()
+
+        viewModel.startCapture("AA:01")
+        runCurrent()
+        assertEquals(listOf(StrapEvent.RequestBluetooth), events)
+
+        viewModel.onPermissionResult(granted(), canAskAgain = false)
+        runCurrent()
+
+        assertEquals(listOf("start:AA:01:Alpha:null:null"), controller.calls)
+    }
+
+    @Test
+    @DisplayName("a strap forgotten while the dialog was up is not started by the grant that follows")
+    fun grantDoesNotResumeAForgottenStrap() = runSectionTest(granted = false) { viewModel, _ ->
+        strapMap["AA:01"] = "Alpha"
+        viewModel.onOpened(granted = false)
+        runCurrent()
+        viewModel.startCapture("AA:01")
+        runCurrent()
+
+        // The dialog stands for as long as the user takes to answer it, and the
+        // section behind it stays live.
+        viewModel.forget("AA:01")
+        runCurrent()
+        viewModel.onPermissionResult(granted(), canAskAgain = false)
+        runCurrent()
+
+        // Starting it anyway would put the strap back in the list on CONNECTED.
+        assertTrue(controller.calls.isEmpty())
+    }
+
+    @Test
+    @DisplayName("a capture started elsewhere while the dialog was up cancels the tap that was waiting")
+    fun grantDoesNotStartASecondCapture() = runSectionTest(granted = false) { viewModel, events ->
+        strapMap["AA:01"] = "Alpha"
+        viewModel.onOpened(granted = false)
+        runCurrent()
+        viewModel.startCapture("AA:01")
+        runCurrent()
+
+        // The coach tab's sheet got there first.
+        captureState.value = HrCaptureState(isRunning = true, deviceAddress = "AA:09", deviceName = "Gym")
+        viewModel.onPermissionResult(granted(), canAskAgain = false)
+        runCurrent()
+
+        // The service refuses a second start, but start() reports only that the
+        // intent went out — so without this check the ask that follows a start
+        // would be a notification dialog for a capture that never began.
+        assertTrue(controller.calls.isEmpty())
+        assertFalse(StrapEvent.RequestNotifications in events)
+    }
+
+    @Test
+    @DisplayName("the hint under the rows appears only where the tap it teaches would work")
+    fun captureHintFollowsTheTap() = runSectionTest { viewModel, _ ->
+        // Nothing paired: no row to tap, and the empty state says its own thing.
+        assertFalse(viewModel.uiState.value.showCaptureHint)
+
+        strapMap["AA:01"] = "Alpha"
+        viewModel.onOpened(granted = true)
+        runCurrent()
+
+        assertTrue(viewModel.uiState.value.showCaptureHint)
+
+        captureState.value = HrCaptureState(isRunning = true, deviceAddress = "AA:01")
+        runCurrent()
+
+        assertFalse(viewModel.uiState.value.showCaptureHint)
     }
 
     @Test

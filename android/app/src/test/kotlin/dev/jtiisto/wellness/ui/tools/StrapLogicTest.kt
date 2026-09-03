@@ -67,27 +67,32 @@ class StrapLogicTest {
         assertEquals(StrapCopy.UNNAMED, StrapLogic.displayName(found("AA:01", name = "  ")))
     }
 
-    // ---- the capture control ------------------------------------------------
+    // ---- starting from a row ------------------------------------------------
 
     @Test
-    @DisplayName("nothing paired and nothing running: no control at all")
-    fun noControlWithNothingToStart() {
-        assertNull(StrapLogic.captureControl(HrCaptureState(), emptyList()))
+    @DisplayName("with nothing running, every known strap's row can start a capture")
+    fun anyStrapStartsWhileIdle() {
+        // No strap is the privileged one — which one is being worn is known
+        // only at the tap — so the answer cannot depend on the list at all.
+        assertTrue(StrapLogic.canStart(HrCaptureState()))
     }
 
     @Test
-    @DisplayName("a paired strap offers a start, using the same device the workout sheet would")
-    fun offersStartForThePreferredStrap() {
-        // KnownDeviceStore publishes this ordering and `preferred()` picks from
-        // it, so the first entry here is the strap the Start Workout sheet
-        // offers — by construction, not by coincidence.
-        val known = listOf(KnownDevice("AA:01", "Alpha"), KnownDevice("AA:02", "Beta"))
+    @DisplayName("while a capture runs, no row starts another")
+    fun noRowStartsWhileRunning() {
+        // The service is single-source and refuses a second start; a row that
+        // still looked tappable would be a tap failing out of sight.
+        val capture = HrCaptureState(isRunning = true, deviceAddress = "AA:01", deviceName = "Alpha")
 
-        val control = StrapLogic.captureControl(HrCaptureState(), known)
+        assertFalse(StrapLogic.canStart(capture))
+    }
 
-        assertFalse(control!!.running)
-        assertEquals("AA:01", control.address)
-        assertEquals("Alpha", control.name)
+    // ---- the stop control -----------------------------------------------------
+
+    @Test
+    @DisplayName("nothing running: nothing to stop")
+    fun noStopControlWhileIdle() {
+        assertNull(StrapLogic.stopControl(HrCaptureState()))
     }
 
     @Test
@@ -95,10 +100,9 @@ class StrapLogicTest {
     fun runningCaptureIsAlwaysStoppable() {
         val capture = HrCaptureState(isRunning = true, deviceAddress = "AA:09", deviceName = "Gone")
 
-        val control = StrapLogic.captureControl(capture, known = emptyList())
+        val control = StrapLogic.stopControl(capture)
 
-        assertTrue(control!!.running)
-        assertEquals("AA:09", control.address)
+        assertEquals("AA:09", control!!.address)
         assertEquals("Gone", control.name)
     }
 
@@ -107,7 +111,7 @@ class StrapLogicTest {
     fun runningCaptureFallsBackToAddress() {
         val capture = HrCaptureState(isRunning = true, deviceAddress = "AA:09", deviceName = " ")
 
-        assertEquals("AA:09", StrapLogic.captureControl(capture, emptyList())?.name)
+        assertEquals("AA:09", StrapLogic.stopControl(capture)?.name)
     }
 
     // ---- forgetting ---------------------------------------------------------

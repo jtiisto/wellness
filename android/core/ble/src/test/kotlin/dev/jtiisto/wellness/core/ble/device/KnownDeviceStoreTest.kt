@@ -123,21 +123,13 @@ class KnownDeviceStoreTest {
     }
 
     @Test
-    @DisplayName("the preferred strap is the first of that same ordering")
-    fun preferredIsDeterministic() {
-        val (store, _) = store(
-            FakeKnownDeviceStorage(mapOf("CC:DD" to "Polar H10", "AA:BB" to "Garmin HRM")),
-        )
+    @DisplayName("nothing known means an empty list, not a stale one")
+    fun emptyStorePublishesNothing() {
+        val (store, state) = store()
 
-        assertEquals(KnownDevice("AA:BB", "Garmin HRM"), store.preferred())
-    }
+        store.refresh()
 
-    @Test
-    @DisplayName("nothing known means nothing to offer")
-    fun preferredIsNullWhenEmpty() {
-        val (store, _) = store()
-
-        assertNull(store.preferred())
+        assertTrue(state.value.isEmpty())
         assertTrue(store.devices.value.isEmpty())
     }
 }

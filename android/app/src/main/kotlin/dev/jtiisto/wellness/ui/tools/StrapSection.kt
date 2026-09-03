@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -25,7 +26,6 @@ import dev.jtiisto.wellness.core.ble.device.KnownDevice
 import dev.jtiisto.wellness.core.ble.scanner.DiscoveredDevice
 import dev.jtiisto.wellness.core.ui.hr.HrToneDot
 import dev.jtiisto.wellness.core.ui.hr.hrCaptureDisplay
-import dev.jtiisto.wellness.core.ui.theme.InkButton
 import dev.jtiisto.wellness.core.ui.theme.InkNotice
 import dev.jtiisto.wellness.core.ui.theme.InkOutlineButton
 import dev.jtiisto.wellness.core.ui.theme.LogbookSection
@@ -36,8 +36,8 @@ import dev.jtiisto.wellness.hr.BlePermissions
 import org.koin.androidx.compose.koinViewModel
 
 /**
- * The Tools tab's "Heart rate strap" section: pair a strap, forget one, and
- * record without a workout.
+ * The Tools tab's "Heart rate strap" section: pair a strap, forget one, and tap
+ * one to record without a workout.
  *
  * Pairing lives here rather than in the coach tab because it is configuration —
  * you do it once, at a table, not between sets. The coach tab's sheet only ever
@@ -103,7 +103,7 @@ private fun StrapContent(
     onScan: () -> Unit,
     onConnect: (DiscoveredDevice) -> Unit,
     onForget: (String) -> Unit,
-    onStartCapture: () -> Unit,
+    onStartCapture: (String) -> Unit,
     onStopCapture: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -120,15 +120,21 @@ private fun StrapContent(
             KnownStrapRow(
                 device = device,
                 isCapturing = state.capture.isRunning && state.capture.deviceAddress == device.address,
+                canStart = state.canStart,
+                onStart = { onStartCapture(device.address) },
                 onForget = { onForget(device.address) },
             )
         }
+        if (state.showCaptureHint) {
+            Text(
+                text = StrapCopy.CAPTURE_HINT,
+                style = LogbookTheme.type.body,
+                // A hint is read, not ghosted — prose floor (Round 4 device pass).
+                color = palette.inkSoft,
+            )
+        }
 
-        CaptureControls(
-            state = state,
-            onStartCapture = onStartCapture,
-            onStopCapture = onStopCapture,
-        )
+        CaptureControls(state = state, onStopCapture = onStopCapture)
 
         InkOutlineButton(
             label = if (state.isScanning) StrapCopy.SCAN_STOP else StrapCopy.SCAN,
@@ -144,7 +150,11 @@ private fun StrapContent(
             )
         }
         state.candidates.forEach { device ->
-            DiscoveredStrapRow(device = device, onConnect = { onConnect(device) })
+            DiscoveredStrapRow(
+                device = device,
+                canStart = state.canStart,
+                onConnect = { onConnect(device) },
+            )
         }
 
         // A denial or a failed scan: ink behind the mono bang, because the
@@ -155,15 +165,19 @@ private fun StrapContent(
 }
 
 /**
- * The live readout, and the button that ends or begins a capture.
+ * The live readout, and the button that ends the capture.
+ *
+ * Nothing here starts one — that is the rows' job, one strap each. Stopping is
+ * section-wide because it belongs to the *session*, not to a device: it outlives
+ * the row being forgotten mid-capture.
  *
  * The same [hrCaptureDisplay] mapping the coach chip uses, so a running capture
  * cannot describe itself one way here and another way there.
  */
 @Composable
-private fun CaptureControls(state: StrapUiState, onStartCapture: () -> Unit, onStopCapture: () -> Unit) {
+private fun CaptureControls(state: StrapUiState, onStopCapture: () -> Unit) {
     val palette = LogbookTheme.palette
-    val control = state.control ?: return
+    if (state.stopControl == null) return
     val display = hrCaptureDisplay(state.capture)
 
     if (display != null) {
@@ -189,35 +203,33 @@ private fun CaptureControls(state: StrapUiState, onStartCapture: () -> Unit, onS
         display.detail?.let { InkNotice(text = it) }
     }
 
-    if (control.running) {
-        InkOutlineButton(
-            label = StrapCopy.STOP_CAPTURE,
-            onClick = onStopCapture,
-            modifier = Modifier.fillMaxWidth(),
-        )
-    } else {
-        InkButton(
-            label = StrapCopy.START_CAPTURE,
-            onClick = onStartCapture,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Text(
-            text = StrapCopy.CAPTURE_HINT,
-            style = LogbookTheme.type.body,
-            // A hint is read, not ghosted — prose floor (Round 4 device pass).
-            color = palette.inkSoft,
-        )
-    }
+    InkOutlineButton(
+        label = StrapCopy.STOP_CAPTURE,
+        onClick = onStopCapture,
+        modifier = Modifier.fillMaxWidth(),
+    )
 }
 
 /**
- * A paired strap.
+ * A paired strap, and the thing you tap to record from it.
+ *
+ * The row is the selector — the address book's server rows work the same way,
+ * where the row is the thing you pick — because which strap is being worn is
+ * known only at the tap. [StrapCopy.START_CAPTURE] rides along as the click
+ * label so TalkBack announces the action rather than leaving the row silent.
  *
  * A running capture rules the row under in ink — the same "this one" the nav
- * bar and the server list draw — rather than washing it in an accent tint.
+ * bar and the server list draw — rather than washing it in an accent tint, and
+ * takes the tap away from every row for as long as it lasts.
  */
 @Composable
-private fun KnownStrapRow(device: KnownDevice, isCapturing: Boolean, onForget: () -> Unit) {
+private fun KnownStrapRow(
+    device: KnownDevice,
+    isCapturing: Boolean,
+    canStart: Boolean,
+    onStart: () -> Unit,
+    onForget: () -> Unit,
+) {
     val palette = LogbookTheme.palette
     Row(
         modifier = Modifier
@@ -227,6 +239,7 @@ private fun KnownStrapRow(device: KnownDevice, isCapturing: Boolean, onForget: (
                 color = if (isCapturing) palette.ink else palette.rule,
                 thickness = if (isCapturing) LogbookSpace.sectionUnderline else LogbookSpace.hairline,
             )
+            .clickable(enabled = canStart, onClickLabel = StrapCopy.START_CAPTURE) { onStart() }
             .padding(vertical = LogbookSpace.grid * 2),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -248,8 +261,15 @@ private fun KnownStrapRow(device: KnownDevice, isCapturing: Boolean, onForget: (
     }
 }
 
+/**
+ * A strap the scan found and the app does not know.
+ *
+ * Connecting is also what starts a capture on it, so Connect is disabled while
+ * one is already running — the same rule the known rows obey, and the reason
+ * scanning itself stays allowed: looking costs nothing, connecting is a start.
+ */
 @Composable
-private fun DiscoveredStrapRow(device: DiscoveredDevice, onConnect: () -> Unit) {
+private fun DiscoveredStrapRow(device: DiscoveredDevice, canStart: Boolean, onConnect: () -> Unit) {
     val palette = LogbookTheme.palette
     Row(
         modifier = Modifier
@@ -271,7 +291,7 @@ private fun DiscoveredStrapRow(device: DiscoveredDevice, onConnect: () -> Unit) 
                 color = palette.inkSoft,
             )
         }
-        InkOutlineButton(label = StrapCopy.CONNECT, onClick = onConnect)
+        InkOutlineButton(label = StrapCopy.CONNECT, onClick = onConnect, enabled = canStart)
     }
 }
 

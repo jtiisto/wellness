@@ -5,11 +5,12 @@ import dev.jtiisto.wellness.core.ble.device.KnownDevice
 import dev.jtiisto.wellness.core.ble.scanner.DiscoveredDevice
 
 /**
- * The one Start/Stop control the strap section shows, or null when there is
- * nothing to control yet.
+ * The capture the section's Stop button would end.
+ *
+ * Only ever describes a *running* capture. Starting one belongs to the rows, a
+ * strap each, so there is nothing section-wide to control while idle.
  */
 data class CaptureControl(
-    val running: Boolean,
     val address: String,
     val name: String,
 )
@@ -18,9 +19,9 @@ data class CaptureControl(
  * The strap section's decisions, as functions of state.
  *
  * Separated from the ViewModel for the same reason [ToolsLogic] is: these are
- * the parts with a wrong answer. Which strap the Start button would use decides
- * what gets recorded; whether a scan result is already paired decides whether
- * the list offers a Connect that would do nothing new.
+ * the parts with a wrong answer. Whether a row may start a capture decides what
+ * a tap does; whether a scan result is already paired decides whether the list
+ * offers a Connect that would do nothing new.
  */
 object StrapLogic {
 
@@ -51,29 +52,34 @@ object StrapLogic {
     }
 
     /**
-     * Which capture control to show.
+     * The stop control, or null while nothing is recording.
      *
      * A running capture is always stoppable, whatever the known list holds —
      * including a strap forgotten mid-session, which is exactly when a stop
-     * button that had vanished would be most missed. With nothing running the
-     * control appears only when there is a remembered strap to start: an unknown
-     * one is the pairing list's business, one row above.
-     *
-     * [known] arrives from `KnownDeviceStore.devices`, which publishes the same
-     * ordering `preferred()` picks from, so the first entry here and the strap
-     * the Start Workout sheet offers are the same device by construction.
+     * button that had vanished would be most missed. Which is also why the
+     * device is read from the capture state and not from the list, with the
+     * address as the name's fallback: the running strap has to be nameable even
+     * when the app no longer knows it.
      */
-    fun captureControl(capture: HrCaptureState, known: List<KnownDevice>): CaptureControl? {
-        if (capture.isRunning) {
-            val address = capture.deviceAddress.orEmpty()
-            return CaptureControl(
-                running = true,
-                address = address,
-                name = capture.deviceName?.takeIf { it.isNotBlank() } ?: address,
-            )
-        }
-        return known.firstOrNull()?.let { CaptureControl(running = false, address = it.address, name = it.name) }
+    fun stopControl(capture: HrCaptureState): CaptureControl? {
+        if (!capture.isRunning) return null
+        val address = capture.deviceAddress.orEmpty()
+        return CaptureControl(
+            address = address,
+            name = capture.deviceName?.takeIf { it.isNotBlank() } ?: address,
+        )
     }
+
+    /**
+     * Whether a known strap's row would start a capture on it.
+     *
+     * The same answer for every row: which strap is being worn is known only at
+     * the tap, so none of them is the privileged one. While a capture runs no
+     * row starts another — the service is single-source and refuses a second
+     * start anyway, and a row that still looked tappable would be a tap failing
+     * where the user cannot see it.
+     */
+    fun canStart(capture: HrCaptureState): Boolean = !capture.isRunning
 
     /**
      * Forgetting the strap a capture is running on stops that capture first.
@@ -115,17 +121,25 @@ object StrapCopy {
     const val CONNECT = "Connect"
     const val FORGET = "Forget"
 
+    /**
+     * The accessibility action label on a known strap's row: what TalkBack reads
+     * for the tap. A verb phrase, deliberately — "start capture", the action,
+     * not "Garmin HRM", the thing the row already says.
+     */
     const val START_CAPTURE = "Start capture"
+
     const val STOP_CAPTURE = "Stop capture"
 
     /**
-     * Says what a capture without a workout is *for*, because the alternative
-     * reading — that this is how you record a workout — would have the user
-     * starting captures here that the coach tab never anchors to anything.
+     * Teaches the tap — a row that starts something has to say so, because
+     * nothing about a name and a MAC address suggests it — and says what a
+     * capture without a workout is *for*, because the alternative reading, that
+     * this is how you record a workout, would have the user starting captures
+     * here that the coach tab never anchors to anything.
      */
     const val CAPTURE_HINT =
-        "Records heart rate on its own. During a workout, start it from the Coach tab instead " +
-            "so the recording is linked to that workout."
+        "Tap a strap to record heart rate on its own. During a workout, start it from the " +
+            "Coach tab instead so the recording is linked to that workout."
 
     const val SCAN_FAILED =
         "Could not scan. Check that Bluetooth is switched on, then try again."

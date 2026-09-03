@@ -17,6 +17,16 @@ no-keepScreenOn rationale under **Capture foreground service**. Both amendments 
 place. The capture stack itself is untouched: guidance is a consumer. Contract:
 `cardio-guidance.md`.
 
+**Amended 2026-09-02** — **strap selection.** v1 remembered a *map* of straps and used *one* of
+them: the first by name, on both surfaces, with no way to reach the second short of forgetting the
+first. A user with a home strap and a gym strap needs the choice at the point of use, not a default
+and not "last used" — which strap is being worn is known only at the tap. Both surfaces that start a
+capture now offer it: the strap section starts a capture **from the row**, and the Start Workout
+sheet **lists every known strap**. Nothing is remembered about the choice. `KnownDeviceStore.preferred()`
+retires with the one-device rule it encoded (it was already dead — both call sites read
+`devices.value.firstOrNull()`). Android-only, UI and ViewModel layers; the capture service, the
+wire, the widget and the cardio guidance overlay are untouched. Marked in place under **UX**.
+
 ## Goal
 
 Fold pulse-bridge's live heart-rate capture into the coach feature so a workout can optionally record strap HR, show a compact live BPM readout, and — via a new timestamped set-completion event log — correlate heart rate with specific sets. Consolidate the two backends: the wellness FastAPI server gains an `hr` module (own endpoints, own `hr.db`), and pulse-bridge's analysis module + MCP server migrate to it. The standalone pulse-bridge app is superseded once this ships.
@@ -110,8 +120,25 @@ Quarantine: on a 422 the batch is recursively bisected to isolate poison rows (o
 
 ### UX
 
-- **Configuration screen — "Heart rate strap" section**: initial pairing lives here. Scan → unknown devices listed (name + MAC) with Connect; a successful connect saves it as the known device (SharedPreferences-equivalent MAC→name map; no OS bonding). Known device row shows name + Forget.
-- **Start Workout**: when a known strap exists and capture isn't running, the Start tap first shows a small sheet — **"Connect HRM?" [Connect] [Skip]** — then proceeds with the hook either way. Asks every time (no sticky auto-connect in v1). Capture started here records `workoutDate` on the session.
+- **Configuration screen — "Heart rate strap" section**: initial pairing lives here. Scan → unknown
+  devices listed (name + MAC) with Connect; a successful connect **adds** it to the known straps
+  (SharedPreferences-equivalent MAC→name map; no OS bonding; several accumulate — one per gym bag).
+  Each known row shows name + MAC and Forget, and **tapping the row starts a capture on that strap**
+  *(amended 2026-09-02 — was one section-wide Start that took the first strap by name)*: the row is
+  the selector, the same idiom as the address book's server rows, where the row is the thing you
+  pick. The hint under the rows says so in words ("Tap a strap to record heart rate on its own…"),
+  and the row carries an `onClickLabel` so TalkBack reads the tap as "start capture". While a
+  capture runs **no row is tappable** — the service is single-source and refuses a second start
+  anyway — the scan list's Connect is disabled for the same reason, and the running row carries
+  the ink underline and the CAPTURING label instead; the section-wide **Stop** under the live
+  readout is the only control, and it survives the row being forgotten mid-session (a running
+  capture is always stoppable). The hint shows only while idle.
+- **Start Workout**: when at least one known strap exists and capture isn't running, the Start tap
+  first shows a small sheet — **"Connect HRM?"**, one **Connect button per known strap labelled with
+  the strap's name**, and **[Skip]** — then proceeds with the hook either way *(amended 2026-09-02 —
+  was a single [Connect] for the first strap by name)*. The list is the store's stable name order.
+  Asks every time: no sticky auto-connect and no remembered strap. Capture started here records
+  `workoutDate` on the session.
 - **Live BPM chip**: compact element in the coach top bar, visible only while a capture session is active — BPM number + connection-state color, nothing else. Tap opens a sheet: device, connection state, signal quality, Disconnect/Stop. When idle there is no chip; starting capture without a workout goes through the configuration screen's strap section.
 - **The cardio guidance overlay** (added 2026-08-21, the fourth HR surface): a full-canvas paper
   overlay opened by hand from a cardio exercise row's `GUIDE` affordance, drawing the live trace
@@ -164,8 +191,8 @@ repo (authoritative until the server work lands it in `docs/ARCHITECTURE.md`). S
   while the server is unresolved — the upload nudge would otherwise kill the service on its first
   flush while holding a wake lock. The strap is saved as known on first CONNECTED, not on attempt.
 - **Permission UX split**: all Bluetooth-permission UI lives in the strap section (blocking, with
-  distinct deny-once vs deny-permanently explanations); the coach sheet only ever offers a known
-  strap, so `feature/coach` never requests permissions. POST_NOTIFICATIONS is requested after
+  distinct deny-once vs deny-permanently explanations); the coach sheet only ever offers known
+  straps, so `feature/coach` never requests permissions. POST_NOTIFICATIONS is requested after
   `start()`, fire-and-forget — a denial provably cannot block capture.
 - **Capture errors** surface through `SyncErrorEvents.postMessage` (plain-message sibling of the
   sync-error channel, no "Sync Failed:" prefix), fed by a state-edge detector — fixing
