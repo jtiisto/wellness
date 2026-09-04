@@ -45,7 +45,7 @@ fun SleepTonightCard(model: SleepTonightModel, modifier: Modifier = Modifier) {
     // same for the same reason.
     val spoken = buildString {
         append("Tonight's sleep need ${model.needText.replace(':', 'h')}m")
-        append(". ${model.debtLine}")
+        append(". ${model.cardDebtLine}")
         append(". ${model.strainLine}")
         model.freshnessLine?.let { append(". $it") }
         model.cachedLine?.let { append(". $it") }
@@ -102,7 +102,9 @@ fun SleepTonightCard(model: SleepTonightModel, modifier: Modifier = Modifier) {
                 modifier = Modifier.padding(start = 3.dp, bottom = 3.dp),
             )
         }
-        Text(model.debtLine, style = LogbookTheme.type.meta, color = palette.ink)
+        // The card's own line, not the widget's: it has the width to name the
+        // nap credit that tonight's need was already reduced by.
+        Text(model.cardDebtLine, style = LogbookTheme.type.meta, color = palette.ink)
         Text(model.strainLine, style = LogbookTheme.type.meta, color = palette.inkSoft)
         model.freshnessLine?.let {
             Text(it, style = LogbookTheme.type.meta, color = palette.inkSoft)

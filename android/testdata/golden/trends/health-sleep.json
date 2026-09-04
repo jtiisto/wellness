@@ -6,7 +6,8 @@
     "need_min": 495,
     "debt_min": 41.5,
     "strain_est": 8,
-    "strain_partial": true
+    "strain_partial": true,
+    "nap_min": 30
   },
   "days": [
     {
@@ -33,10 +34,11 @@
     },
     {
       "date": "2030-01-24",
-      "need_min": 455.5,
+      "need_min": 410.5,
       "slept_min": 430,
-      "debt_min": 12.5,
-      "strain_est": 4
+      "debt_min": 8,
+      "strain_est": 4,
+      "nap_min": 45
     },
     {
       "date": "2030-01-25",

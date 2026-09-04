@@ -840,6 +840,125 @@ class CardModelsTest {
         assertTrue(model.anchors.all { it.x >= 0 })
     }
 
+    // ---- naps on the sleep card --------------------------------------------
+
+    @Test
+    @DisplayName("a nap stacks above its night in a lighter ink, on the same bar")
+    fun napStacksAboveTheNight() {
+        val model = requireNotNull(
+            sleepCardModel(
+                listOf(
+                    recoveryDay("2026-07-01", sleepHours = 7.0, napHours = 3.0),
+                    recoveryDay("2026-07-02", sleepHours = 6.0),
+                ),
+            ),
+        )
+
+        val napped = model.rects.filter { it.tone == PlotTone.ALT }
+        assertEquals(1, napped.size, "only the night that napped draws a second segment")
+        val night = model.rects.single { it.tone == PlotTone.PRIMARY && it.x == napped.single().x }
+
+        // Stacked, not merged: the nap sits ON the night, sharing its column,
+        // so the night itself stays readable at its own height.
+        val nap = napped.single()
+        assertEquals(night.x, nap.x)
+        assertEquals(night.w, nap.w)
+        // A hundredth of slack because every edge is rounded to two decimals on
+        // its own, so a seam the geometry computes exactly can still land a
+        // rounding step apart.
+        assertEquals(night.y, nap.y + nap.h, 0.02, "the nap's foot is the night's head")
+
+        // And the axis was fitted to the whole bar: ten stacked hours sit
+        // inside the plot, under a domain of 10 * 1.05. Fitted to the night
+        // alone the floor would have held the axis at nine, putting this
+        // segment's head at 1.4 — above the top margin and off the card.
+        assertEquals(17.05, nap.y, 0.01)
+        assertTrue(nap.y >= 10.0, "the stacked bar stays inside the plot's top margin")
+    }
+
+    @Test
+    @DisplayName("a napped night says both figures on one row, in h:mm")
+    fun napTooltipNamesBothFigures() {
+        val model = requireNotNull(
+            sleepCardModel(
+                listOf(
+                    recoveryDay("2026-07-01", sleepHours = 7.0, napHours = 0.75, sleepScore = 80.0),
+                    recoveryDay("2026-07-02", sleepHours = 6.5),
+                ),
+            ),
+        )
+
+        // One row, not two: the nap is the same quantity as the night beside
+        // it, and two decimal rows would invite adding them up by eye.
+        assertEquals(
+            listOf("sleep" to "7:00 · nap 0:45", "score" to "80"),
+            model.anchors.first().rows.map { it.label to it.value },
+        )
+        // The night without one is untouched — decimal hours, as always.
+        assertEquals(listOf("hours" to "6.5"), model.anchors.last().rows.map { it.label to it.value })
+    }
+
+    @Test
+    @DisplayName("a window with no naps draws exactly what it drew before naps existed")
+    fun napFreeSleepCardIsUnchanged() {
+        val nights = listOf(
+            recoveryDay("2026-07-01", sleepHours = 7.0, sleepScore = 80.0),
+            recoveryDay("2026-07-02", sleepHours = 6.0, sleepScore = 70.0),
+        )
+        val model = requireNotNull(sleepCardModel(nights))
+
+        assertEquals(2, model.rects.size, "one segment per night, as before")
+        assertTrue(model.rects.all { it.tone == PlotTone.PRIMARY })
+        assertEquals(listOf("hours", "score"), model.anchors.first().rows.map { it.label })
+        assertEquals(listOf("hours", "score"), model.anchors.last().rows.map { it.label })
+
+        // An explicit zero says the same thing an omitted key does, down to the
+        // geometry: `nap_hours` is omitted when zero, so the two forms of "no
+        // nap" must not draw two different cards.
+        assertEquals(
+            model,
+            sleepCardModel(nights.map { it.copy(napHours = 0.0) }),
+        )
+    }
+
+    @Test
+    @DisplayName("the legend keys the nap only on a window that drew one")
+    fun napLegendAppearsOnlyWhenDrawn() {
+        val nights = listOf(recoveryDay("2026-07-01", sleepHours = 7.0))
+        val plain = requireNotNull(sleepCardModel(nights))
+
+        assertEquals(listOf("hours", "score", "8h guide"), sleepLegend(plain).map { it.label })
+        // A swatch is a promise about a mark above it, so the key arrives with
+        // the segment and not before.
+        val napped = requireNotNull(sleepCardModel(nights.map { it.copy(napHours = 0.5) }))
+        assertEquals(listOf("hours", "nap", "score", "8h guide"), sleepLegend(napped).map { it.label })
+        assertEquals(PlotTone.ALT, sleepLegend(napped)[1].tone)
+    }
+
+    @Test
+    @DisplayName("a nap on a night Garmin never scored draws nothing, and keys nothing")
+    fun napOnlyRowIsNotANight() {
+        // This is a chart of nights: a day with no main sleep is a gap on it,
+        // and a nap rides a night or is not drawn. The legend reads the
+        // segments rather than the rows precisely so it cannot promise a mark
+        // this row never put on the page.
+        val model = requireNotNull(
+            sleepCardModel(
+                listOf(
+                    recoveryDay("2026-07-01", sleepHours = 7.0, sleepScore = 80.0),
+                    recoveryDay("2026-07-02", sleepHours = null, napHours = 1.5, sleepScore = 60.0),
+                    recoveryDay("2026-07-03", sleepHours = 6.5, sleepScore = 70.0),
+                ),
+            ),
+        )
+
+        assertEquals(2, model.rects.size, "two nights, two bars — the nap-only day has none")
+        assertFalse(model.rects.any { it.tone == PlotTone.ALT })
+        assertEquals(listOf("hours", "score", "8h guide"), sleepLegend(model).map { it.label })
+        // Its own scrub row says only what it has: a score, and no nap.
+        assertEquals(listOf("score"), model.anchors[1].rows.map { it.label })
+    }
+
     @Test
     @DisplayName("the eight-hour guide is drawn, dashed, across the plot")
     fun sleepGuide() {

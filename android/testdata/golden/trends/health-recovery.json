@@ -2,7 +2,7 @@
   "available": true,
   "days": [
     {
-      "date": "2026-07-20",
+      "date": "2030-01-20",
       "rhr": 48,
       "hrv": 34.5,
       "hrv_band": {
@@ -14,7 +14,7 @@
       "sleep_score": 81
     },
     {
-      "date": "2026-07-21",
+      "date": "2030-01-21",
       "rhr": 49.5,
       "hrv": 25,
       "hrv_band": {
@@ -23,10 +23,11 @@
         "low_floor": 26
       },
       "sleep_hours": 6,
-      "sleep_score": 64.5
+      "sleep_score": 64.5,
+      "nap_hours": 0.75
     },
     {
-      "date": "2026-07-22",
+      "date": "2030-01-22",
       "rhr": null,
       "hrv": null,
       "hrv_band": null,
@@ -34,7 +35,7 @@
       "sleep_score": null
     },
     {
-      "date": "2026-07-23",
+      "date": "2030-01-23",
       "rhr": 47,
       "hrv": 38,
       "hrv_band": {

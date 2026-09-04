@@ -95,7 +95,12 @@ class SleepDebtLogicTest {
         val model = requireNotNull(sleepTonightModel(dto(), null, NOW, TODAY))
 
         assertEquals("8:15", model.needText)
+        assertEquals("debt 1:11", model.debtText)
         assertEquals("debt 1:11", model.debtLine)
+        // With nothing to qualify it, the two surfaces say the same sentence.
+        assertEquals("debt 1:11", model.cardDebtLine)
+        assertNull(model.napText)
+        assertNull(model.resetText)
         assertEquals("strain 4.6 · so far", model.strainLine)
         assertNull(model.freshnessLine)
         assertNull(model.cachedLine)
@@ -109,6 +114,56 @@ class SleepDebtLogicTest {
         val model = requireNotNull(sleepTonightModel(dto(debt = 0.0), null, NOW, TODAY))
 
         assertEquals("no sleep debt", model.debtLine)
+    }
+
+    // ---- naps ---------------------------------------------------------------
+
+    @Test
+    @DisplayName("a nap is named as a credit, and only on the card — the widget's line is untouched")
+    fun napIsNamedOnTheCardOnly() {
+        val model = requireNotNull(sleepTonightModel(dto(nap = 45.0), null, NOW, TODAY))
+
+        // U+2212 MINUS SIGN, not a hyphen: the need above it has already had
+        // this taken off, and nothing here subtracts it a second time.
+        assertEquals("nap −0:45", model.napText)
+        assertEquals("debt 1:11 · nap −0:45", model.cardDebtLine)
+        assertEquals(
+            "debt 1:11",
+            model.debtLine,
+            "the widget's cell keeps the line it had; the nap is already inside its headline",
+        )
+        assertEquals(TonightJudgment.SETTLED, model.judgment, "a nap is not a caveat")
+    }
+
+    @Test
+    @DisplayName("the card's line reads figure, then nap, then reset — in that order")
+    fun napPrecedesTheReset() {
+        val model = requireNotNull(
+            sleepTonightModel(
+                dto(debt = 0.0, nap = 30.0, days = listOf(day("2030-01-25", gap = true))),
+                null,
+                NOW,
+                TODAY,
+            ),
+        )
+
+        // The nap qualifies the figure beside it; the reset qualifies the whole
+        // ledger and reads last. The widget's line carries only the second.
+        assertEquals("no sleep debt · nap −0:30 · reset — missing night", model.cardDebtLine)
+        assertEquals("no sleep debt · reset — missing night", model.debtLine)
+        assertEquals(TonightJudgment.ATTENTION, model.judgment)
+    }
+
+    @Test
+    @DisplayName("a zero nap is no nap: the key is omitted, and nothing is said")
+    fun zeroNapSaysNothing() {
+        // `nap_min` is omitted when zero, so the DTO default IS the common
+        // case — a card that printed `nap −0:00` would be reporting the absence
+        // of a nap as an event.
+        val model = requireNotNull(sleepTonightModel(dto(nap = 0.0), null, NOW, TODAY))
+
+        assertNull(model.napText)
+        assertEquals(model.debtLine, model.cardDebtLine)
     }
 
     @Test
@@ -227,12 +282,15 @@ class SleepDebtLogicTest {
             gap = gap,
         )
 
+        // The card takes the nap from `tonight` alone, so the ledger rows here
+        // never need one.
         fun dto(
             tonightDate: String = TODAY,
             need: Double = 495.0,
             debt: Double = 71.0,
             strain: Double = 4.6,
             strainPartial: Boolean = true,
+            nap: Double = 0.0,
             asOf: String? = "2030-01-26",
             days: List<SleepDebtDay> = listOf(day("2030-01-25")),
         ) = SleepDebtDto(
@@ -244,6 +302,7 @@ class SleepDebtLogicTest {
                 debtMin = debt,
                 strainEst = strain,
                 strainPartial = strainPartial,
+                napMin = nap,
             ),
             days = days,
         )

@@ -35,7 +35,7 @@ from datetime import date, datetime, time, timedelta
 from pathlib import Path
 
 from modules.coach_logs import AD_HOC_LOG_SLUGS
-from modules.db import read_transaction
+from modules.db import column_exists, read_transaction
 from modules.journal_adherence import (
     entry_present,
     compute_adherence,
@@ -787,22 +787,30 @@ def weight_series(garmin_db, *, start=None, end):
 def recovery_series(garmin_db, *, start=None, end):
     """Daily recovery signals for the Health tab: resting HR, last-night HRV
     with GARMIN'S OWN baseline band (no invented thresholds — balanced range
-    plus the low-zone ceiling), sleep hours and score. Reads
-    daily_health_metrics via the same external-source contract as
-    weight_series: absent DB / missing table / schema drift degrade to
-    {"available": False} — never a 500. Per-field nulls pass through (the
-    charts skip them); no imputation."""
+    plus the low-zone ceiling), sleep hours and score, and the day's naps as
+    `nap_hours` — the same figure sleep_series credits to the following night,
+    omitted unless it survives its own rounding (a day with no naps, or too
+    few seconds of them to show, carries no key at all rather than a zero one).
+    Reads daily_health_metrics via the same external-source contract as
+    weight_series: absent DB / missing table /
+    schema drift degrade to {"available": False} — never a 500. The nap column
+    is PROBED rather than assumed, so a Garmin DB predating garmy's nap support
+    serves every other signal exactly as before. Per-field nulls pass through
+    (the charts skip them); no imputation."""
     if not Path(garmin_db.path).exists():
         return {"available": False, "days": []}
     try:
         with garmin_db.get_db() as conn:
+            has_naps = column_exists(
+                conn.cursor(), "daily_health_metrics", "nap_duration_hours")
             params = [end]
             sql = (
                 "SELECT metric_date AS date, resting_heart_rate, "
                 "hrv_last_night_avg, hrv_baseline_balanced_low, "
                 "hrv_baseline_balanced_upper, hrv_baseline_low_upper, "
-                "sleep_duration_hours, sleep_score "
-                "FROM daily_health_metrics WHERE metric_date <= ?"
+                "sleep_duration_hours, sleep_score"
+                + (", nap_duration_hours" if has_naps else "")
+                + " FROM daily_health_metrics WHERE metric_date <= ?"
             )
             if start:
                 sql += " AND metric_date >= ?"
@@ -820,7 +828,7 @@ def recovery_series(garmin_db, *, start=None, end):
             band = {"low": r["hrv_baseline_balanced_low"],
                     "high": r["hrv_baseline_balanced_upper"],
                     "low_floor": r["hrv_baseline_low_upper"]}
-        days.append({
+        day = {
             "date": str(r["date"]),
             "rhr": r["resting_heart_rate"],
             "hrv": r["hrv_last_night_avg"],
@@ -828,7 +836,16 @@ def recovery_series(garmin_db, *, start=None, end):
             "sleep_hours": (round(r["sleep_duration_hours"], 2)
                             if r["sleep_duration_hours"] is not None else None),
             "sleep_score": r["sleep_score"],
-        })
+        }
+        nap = r["nap_duration_hours"] if has_naps else None
+        # Optional key: a day with no naps (or one not yet resynced) carries no
+        # `nap_hours` at all rather than a zero the chart would have to filter.
+        # The test is on the ROUNDED figure, so a duration too small to survive
+        # 2 dp is absent rather than present as a zero.
+        nap_hours = round(nap, 2) if nap is not None else 0.0
+        if nap_hours > 0:
+            day["nap_hours"] = nap_hours
+        days.append(day)
     return {"available": True, "days": days}
 
 
@@ -1081,13 +1098,14 @@ def sleep_series(garmin_db, params, *, start=None, end, today):
 
     A row's `debt_min` is the debt ON WAKING from that night — the night's own
     product, what the sleeper got up owing — NOT the debt it was carrying when
-    it started. The need arithmetic is unchanged and still consumes the debt
-    ENTERING the night, which on consecutive rows is simply the PREVIOUS row's
-    emitted `debt_min`: `need = baseline + previous row's debt + f(strain)`.
-    Emitting the outgoing side buys one property the incoming side could not:
-    `tonight.debt_min` EQUALS the last emitted row's `debt_min` whenever that
-    row is today's or yesterday's, so the card and the chart's last point agree
-    by construction and diverge (card 0) only past that carry window.
+    it started. The need arithmetic consumes the debt ENTERING the night, which
+    on consecutive rows is simply the PREVIOUS row's emitted `debt_min`:
+    `need = baseline + previous row's debt + f(strain) − the previous day's
+    naps`. Emitting the outgoing side buys one property the incoming side
+    could not: `tonight.debt_min` EQUALS the last emitted row's `debt_min`
+    whenever that row is today's or yesterday's, so the card and the chart's
+    last point agree by construction and diverge (card 0) only past that carry
+    window.
 
     The ledger is CAUSAL — a night's need was fixed the previous evening — so
     it replays from the start of history on every request: `start`/`end` clip
@@ -1095,23 +1113,38 @@ def sleep_series(garmin_db, params, *, start=None, end, today):
     with an all-history one on every shared row. Rows are keyed by WAKE date,
     matching Garmin's own metric_date.
 
+    Naps are credited to the night that ENDS the following morning: garmy
+    files everything between one morning's wake and the next under the EARLIER
+    day, which is exactly the sleep the night keyed X+1 is paid out of. The
+    credit is full weight — no device bias, no cap and no floor, so a day of
+    fragmented sleep can pull a need below baseline — and the minutes ship as
+    `nap_min` on the row that spent them (and on `tonight`), omitted whenever
+    the rounded figure is zero even though the need spent the unrounded one.
+    A day Garmin has not resynced since nap support reads NULL, which is zero
+    credit, so the ledger simply stands where it did until the backfill lands.
+
     Same external-source contract as recovery_series: absent DB / missing
     table / schema drift on `daily_health_metrics` → {"available": False,
-    "days": []}, never a 500. The strain estimator's richer sources
-    (`timeseries`, `activities`) degrade one tier further down instead: they
-    are absent from older Garmin DBs and their absence must never take the
-    ledger with them.
+    "days": []}, never a 500. Two sources sit OUTSIDE that contract and
+    degrade on their own instead, because older Garmin DBs lack them and their
+    absence must never take the ledger down: the strain estimator's richer
+    tables (`timeseries`, `activities`) drop a tier, and the nap column is
+    probed per call — without it every day is zero credit and the ledger reads
+    exactly as it does for a history that contains no naps.
     """
     if not Path(garmin_db.path).exists():
         return {"available": False, "days": []}
     try:
         with garmin_db.get_db() as conn:
+            has_naps = column_exists(
+                conn.cursor(), "daily_health_metrics", "nap_duration_hours")
             # user_id is half this table's primary key; pinning it keeps one
             # row per calendar date, which the previous-day lookups assume.
             rows = conn.execute(
                 "SELECT metric_date AS date, sleep_duration_hours, "
-                "active_calories, total_steps, max_heart_rate "
-                "FROM daily_health_metrics WHERE user_id = 1 "
+                "active_calories, total_steps, max_heart_rate"
+                + (", nap_duration_hours" if has_naps else "")
+                + " FROM daily_health_metrics WHERE user_id = 1 "
                 "ORDER BY metric_date"
             ).fetchall()
             # One pass for the whole history (memoized past the recent window),
@@ -1121,7 +1154,7 @@ def sleep_series(garmin_db, params, *, start=None, end, today):
     except sqlite3.Error:
         return {"available": False, "days": []}
 
-    strain_by_date, slept_by_date = {}, {}
+    strain_by_date, slept_by_date, nap_by_date = {}, {}, {}
     for r in rows:
         ds = str(r["date"])
         strain_by_date[ds] = _strain_estimate(
@@ -1129,6 +1162,10 @@ def sleep_series(garmin_db, params, *, start=None, end, today):
             trimp=trimp_by_date.get(ds))
         if r["sleep_duration_hours"] is not None:
             slept_by_date[ds] = r["sleep_duration_hours"] * 60
+        # A day with no nap value at all — NULL, or a DB without the column —
+        # is left out of the map, and every lookup below defaults to zero.
+        if has_naps and r["nap_duration_hours"] is not None:
+            nap_by_date[ds] = r["nap_duration_hours"] * 60
 
     today_iso = today.isoformat()
     yesterday_iso = (today - timedelta(days=1)).isoformat()
@@ -1144,7 +1181,10 @@ def sleep_series(garmin_db, params, *, start=None, end, today):
         if gap:
             entering = 0.0
         strain_prev = strain_by_date.get(prev, 0.0)
-        need = params.baseline_min + entering + _strain_need_term(params, strain_prev)
+        # The previous day's naps are sleep already taken against this night.
+        nap = nap_by_date.get(prev, 0.0)
+        need = (params.baseline_min + entering
+                + _strain_need_term(params, strain_prev) - nap)
         slept = slept_by_date[ds]
         # What the night left behind: the debt on WAKING, and the row's
         # `debt_min`. slept_min ships RAW for display; only this arithmetic
@@ -1159,6 +1199,12 @@ def sleep_series(garmin_db, params, *, start=None, end, today):
                    "strain_est": round(strain_prev, 1)}
             if gap and i > 0:
                 row["gap"] = True
+            # Emitted on the ROUNDED figure: a credit too small to survive
+            # 1 dp is omitted rather than shipped as a zero. The need above
+            # still spent the unrounded value, however small.
+            nap_min = round(nap, 1)
+            if nap_min > 0:
+                row["nap_min"] = nap_min
             days.append(row)
 
         # Tomorrow's need is bought by tonight's shortfall. Rounding is
@@ -1179,6 +1225,7 @@ def sleep_series(garmin_db, params, *, start=None, end, today):
             tonight_debt = outgoing
 
     tonight_strain = strain_by_date.get(today_iso, 0.0)
+    tonight_nap = nap_by_date.get(today_iso, 0.0)
     out = {"available": True}
     if slept_by_date:
         # Freshness is the whole history's last scored night — never clipped
@@ -1186,12 +1233,18 @@ def sleep_series(garmin_db, params, *, start=None, end, today):
         out["as_of"] = max(slept_by_date)
     out["tonight"] = {
         "date": today_iso,
+        # Today's naps are already spent against tonight, exactly as a row's
+        # are against the night after it.
         "need_min": round(params.baseline_min + tonight_debt
-                          + _strain_need_term(params, tonight_strain), 1),
+                          + _strain_need_term(params, tonight_strain)
+                          - tonight_nap, 1),
         "debt_min": round(tonight_debt, 1),
         "strain_est": round(tonight_strain, 1),
         "strain_partial": True,   # today's activity is still accumulating
     }
+    tonight_nap_min = round(tonight_nap, 1)
+    if tonight_nap_min > 0:
+        out["tonight"]["nap_min"] = tonight_nap_min
     out["days"] = days
     return out
 

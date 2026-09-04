@@ -14,8 +14,9 @@ def _iso(d):
 def tmp_recovery_db(tmp_path, monkeypatch):
     """A minimal Garmin health DB with only the daily_health_metrics columns
     recovery_series reads, covering: full rows, per-field nulls, a band-less
-    day, and an out-of-range old row. Values are INVENTED — never paste rows
-    from the real ~/.garmy DB here; this repo is public."""
+    day, a napped day beside a nap-less and a not-yet-resynced one, and an
+    out-of-range old row. Values are INVENTED — never paste rows from the real
+    ~/.garmy DB here; this repo is public."""
     db_path = tmp_path / "garmin_recovery.db"
     today = date.today()
     conn = sqlite3.connect(db_path)
@@ -28,22 +29,26 @@ def tmp_recovery_db(tmp_path, monkeypatch):
             hrv_baseline_balanced_low FLOAT,
             hrv_baseline_balanced_upper FLOAT,
             sleep_duration_hours FLOAT,
-            sleep_score INTEGER
+            sleep_score INTEGER,
+            nap_duration_hours FLOAT
         )
     """)
     rows = [
-        # Full row.
+        # Full row, with a nap.
         (_iso(today - timedelta(days=2)), 60, 30.0, 23.0, 25.0, 31.0,
-         7.616666667, 82),
-        # HRV null (watch not worn), sleep present.
-        (_iso(today - timedelta(days=1)), 61, None, 23.0, 25.0, 31.0, 5.75, 67),
-        # Band columns null → hrv_band omitted, hrv value still emitted.
-        (_iso(today), 59, 28.0, None, None, None, None, None),
+         7.616666667, 82, 0.758333333),
+        # HRV null (watch not worn), sleep present; resynced with NO naps.
+        (_iso(today - timedelta(days=1)), 61, None, 23.0, 25.0, 31.0, 5.75, 67,
+         0.0),
+        # Band columns null → hrv_band omitted, hrv value still emitted; the
+        # nap column is NULL here (a day not resynced since nap support).
+        (_iso(today), 59, 28.0, None, None, None, None, None, None),
         # Old row for range clipping.
-        (_iso(today - timedelta(days=40)), 65, 40.0, 23.0, 25.0, 31.0, 7.0, 75),
+        (_iso(today - timedelta(days=40)), 65, 40.0, 23.0, 25.0, 31.0, 7.0, 75,
+         None),
     ]
     conn.executemany(
-        "INSERT INTO daily_health_metrics VALUES (?,?,?,?,?,?,?,?)", rows)
+        "INSERT INTO daily_health_metrics VALUES (?,?,?,?,?,?,?,?,?)", rows)
     conn.commit()
     conn.close()
     return {"today": today, "path": db_path}
@@ -102,6 +107,92 @@ class TestRecoveryEndpoint:
         assert bandless["hrv"] == 28.0
         assert bandless["hrv_band"] is None
         assert bandless["sleep_hours"] is None
+
+    def test_nap_hours_present_only_when_the_day_had_naps(
+            self, tmp_recovery_db, client, monkeypatch):
+        today = tmp_recovery_db["today"]
+        with _fresh_client(tmp_recovery_db["path"], monkeypatch) as c:
+            days = {d["date"]: d for d in
+                    c.get("/wellness/api/trends/health/recovery").json()["days"]}
+
+        # The same figure the sleep ledger credits to the FOLLOWING night,
+        # rounded to 2 dp like sleep_hours beside it.
+        assert days[_iso(today - timedelta(days=2))]["nap_hours"] == 0.76
+        # Optional key: omitted, never null and never zero — a resynced day
+        # with no naps (0.0) and one not resynced at all (NULL) look the same
+        # from the outside, because both are zero.
+        assert "nap_hours" not in days[_iso(today - timedelta(days=1))]
+        assert "nap_hours" not in days[_iso(today)]
+
+    def test_sub_resolution_nap_emits_no_key(
+            self, tmp_path, client, monkeypatch):
+        """A duration too small to survive 2 dp rounds to 0.0, and a zero is
+        exactly what the optional key must never be — so the day carries no
+        `nap_hours` at all. Values are INVENTED — never paste rows from the
+        real ~/.garmy DB here; this repo is public."""
+        db_path = tmp_path / "garmin_tiny_nap.db"
+        today = date.today()
+        conn = sqlite3.connect(db_path)
+        conn.execute("""
+            CREATE TABLE daily_health_metrics (
+                metric_date DATE PRIMARY KEY,
+                resting_heart_rate INTEGER,
+                hrv_last_night_avg FLOAT,
+                hrv_baseline_low_upper FLOAT,
+                hrv_baseline_balanced_low FLOAT,
+                hrv_baseline_balanced_upper FLOAT,
+                sleep_duration_hours FLOAT,
+                sleep_score INTEGER,
+                nap_duration_hours FLOAT
+            )
+        """)
+        conn.execute(
+            "INSERT INTO daily_health_metrics VALUES (?,?,?,?,?,?,?,?,?)",
+            (_iso(today), 60, 30.0, 23.0, 25.0, 31.0, 7.5, 82, 0.0005))
+        conn.commit()
+        conn.close()
+
+        with _fresh_client(db_path, monkeypatch) as c:
+            days = c.get("/wellness/api/trends/health/recovery").json()["days"]
+
+        assert "nap_hours" not in days[0]
+
+    def test_nap_column_absent_serves_every_other_signal(
+            self, tmp_path, client, monkeypatch):
+        """A Garmin DB predating garmy's nap support: the column is probed, so
+        its absence costs the row nothing but the nap key. Values are INVENTED
+        — never paste rows from the real ~/.garmy DB here; this repo is
+        public."""
+        db_path = tmp_path / "garmin_no_nap_col.db"
+        today = date.today()
+        conn = sqlite3.connect(db_path)
+        conn.execute("""
+            CREATE TABLE daily_health_metrics (
+                metric_date DATE PRIMARY KEY,
+                resting_heart_rate INTEGER,
+                hrv_last_night_avg FLOAT,
+                hrv_baseline_low_upper FLOAT,
+                hrv_baseline_balanced_low FLOAT,
+                hrv_baseline_balanced_upper FLOAT,
+                sleep_duration_hours FLOAT,
+                sleep_score INTEGER
+            )
+        """)
+        conn.execute(
+            "INSERT INTO daily_health_metrics VALUES (?,?,?,?,?,?,?,?)",
+            (_iso(today), 60, 30.0, 23.0, 25.0, 31.0, 7.5, 82))
+        conn.commit()
+        conn.close()
+
+        with _fresh_client(db_path, monkeypatch) as c:
+            data = c.get("/wellness/api/trends/health/recovery").json()
+
+        assert data["available"] is True
+        assert data["days"] == [{
+            "date": _iso(today), "rhr": 60, "hrv": 30.0,
+            "hrv_band": {"low": 25.0, "high": 31.0, "low_floor": 23.0},
+            "sleep_hours": 7.5, "sleep_score": 82,
+        }]
 
     def test_dates_ascending(self, tmp_recovery_db, client, monkeypatch):
         with _fresh_client(tmp_recovery_db["path"], monkeypatch) as c:

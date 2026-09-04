@@ -41,17 +41,54 @@ enum class TonightJudgment { SETTLED, PARTIAL, ATTENTION }
  * "8.7 hours" is not how anyone sets an alarm. [freshnessLine] and [cachedLine]
  * are separate because they answer different questions: one is about the *data*
  * the server had, the other about the *copy* this device is holding.
+ *
+ * The debt line arrives in **parts** rather than finished, because its two
+ * surfaces spend different amounts of room on it: the app card names the nap,
+ * the widget does not (see [debtLine]). Each part is still a decided string —
+ * the wording is settled here, and only the assembly is left to the reader.
  */
 data class SleepTonightModel(
     val needText: String,
-    val debtLine: String,
+    /** The figure alone: `no sleep debt`, or `debt H:MM`. */
+    val debtText: String,
+    /**
+     * `nap −H:MM` — the credit the server has **already** taken off tonight's
+     * need — or null on a day with no naps behind it.
+     */
+    val napText: String?,
+    /** `reset — missing night`, or null while the ledger runs unbroken. */
+    val resetText: String?,
     val strainLine: String,
     val freshnessLine: String?,
     val cachedLine: String?,
     val judgment: TonightJudgment,
     /** Draw the system's mono `!` beside the number. Never a colour. */
     val flagged: Boolean,
-)
+) {
+    /**
+     * The debt line for a launcher cell: the figure, plus the reset when there
+     * was one — and deliberately **not** the nap.
+     *
+     * The widget's sleep block is a few lines in a cell whose width belongs to
+     * the launcher, and this line already spends two of them carrying the
+     * reset. Tonight's need is the widget's headline and the nap is inside that
+     * number already, so the credit is the thing the small surface can leave
+     * unnamed; the card, which has the width, names it in [cardDebtLine].
+     */
+    val debtLine: String get() = joinParts(debtText, resetText)
+
+    /**
+     * The debt line in full: the figure, then the nap, then the reset.
+     *
+     * That order is the sentence's own: the nap adjusts the number beside it,
+     * while the reset is a caveat about the whole ledger and reads last.
+     */
+    val cardDebtLine: String get() = joinParts(debtText, napText, resetText)
+}
+
+/** Clauses sharing one line, in the separator every line in this app uses. */
+private fun joinParts(vararg parts: String?): String =
+    parts.filterNotNull().joinToString(" · ")
 
 /**
  * Reduce a sleep payload to tonight's card, or null when there is no card to
@@ -82,10 +119,15 @@ fun sleepTonightModel(
     // ledger, so the figure below stands on a record with a hole in it.
     val resetLastNight = dto.days.lastOrNull()?.gap == true
 
-    val debtLine = buildString {
-        append(if (tonight.debtMin == 0.0) "no sleep debt" else "debt ${hoursMinutes(tonight.debtMin)}")
-        if (resetLastNight) append(" · reset — missing night")
-    }
+    val debtText =
+        if (tonight.debtMin == 0.0) "no sleep debt" else "debt ${hoursMinutes(tonight.debtMin)}"
+
+    // Named, never recomputed: `need_min` already has the nap taken out of it,
+    // and a surface that subtracted it a second time would be reporting a night
+    // the server never claimed.
+    val napText = if (tonight.napMin > 0) "nap $MINUS_SIGN${hoursMinutes(tonight.napMin)}" else null
+
+    val resetText = if (resetLastNight) "reset — missing night" else null
 
     val strainLine = buildString {
         append("strain ${strainText(tonight.strainEst)}")
@@ -112,7 +154,9 @@ fun sleepTonightModel(
 
     return SleepTonightModel(
         needText = hoursMinutes(tonight.needMin),
-        debtLine = debtLine,
+        debtText = debtText,
+        napText = napText,
+        resetText = resetText,
         strainLine = strainLine,
         freshnessLine = freshnessLine,
         cachedLine = cachedLine,
@@ -172,3 +216,13 @@ private fun cachedText(staleFetchedAt: Long, now: Long): String {
  * would leave a headline need standing over no history at all, looking settled.
  */
 const val NO_SCORED_NIGHTS_TEXT = "no scored nights yet"
+
+/**
+ * U+2212 MINUS SIGN, and not the hyphen it looks like.
+ *
+ * The nap is a subtraction from the need above it, and in the mono face this
+ * app sets numbers in, the true minus sits on the digits' own axis where a
+ * hyphen rides high and short. Written as an escape and named, because the two
+ * characters are indistinguishable in a diff.
+ */
+private const val MINUS_SIGN = "\u2212"

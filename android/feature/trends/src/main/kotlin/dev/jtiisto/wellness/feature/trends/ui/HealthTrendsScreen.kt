@@ -55,6 +55,7 @@ import dev.jtiisto.wellness.feature.trends.chart.latestIsFlagged
 import dev.jtiisto.wellness.feature.trends.chart.rhrCardModel
 import dev.jtiisto.wellness.feature.trends.chart.sleepCardModel
 import dev.jtiisto.wellness.feature.trends.chart.sleepDebtSection
+import dev.jtiisto.wellness.feature.trends.chart.sleepLegend
 import dev.jtiisto.wellness.feature.trends.staleFetchedAt
 import dev.jtiisto.wellness.feature.trends.staleStamps
 import dev.jtiisto.wellness.feature.trends.valueOrNull
@@ -75,12 +76,6 @@ private val MEANS_LEGEND = listOf(
     LegendEntry("daily", PlotTone.VALUE),
     LegendEntry("7d mean", PlotTone.PRIMARY),
     LegendEntry("28d mean", PlotTone.ALT),
-)
-
-private val SLEEP_LEGEND = listOf(
-    LegendEntry("hours", PlotTone.PRIMARY),
-    LegendEntry("score", PlotTone.SECONDARY),
-    LegendEntry("8h guide", PlotTone.MUTED),
 )
 
 /**
@@ -281,7 +276,7 @@ private fun RecoveryCards(days: List<RecoveryDay>, range: String, pinEpoch: Int)
             if (model == null) {
                 ChartEmpty(NO_SLEEP_TEXT)
             } else {
-                LegendRow(SLEEP_LEGEND, chart = ChartInk.SLEEP)
+                LegendRow(remember(model) { sleepLegend(model) }, chart = ChartInk.SLEEP)
                 PlotCanvas(
                     model = model,
                     identity = listOf("sleep", range, pinEpoch),

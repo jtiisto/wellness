@@ -151,7 +151,7 @@ fun sleepDebtSection(days: List<SleepDebtDay>, tonight: SleepTonight?): SleepDeb
 }
 
 /**
- * One anchor per wake date, carrying the three durations in `h:mm`.
+ * One anchor per wake date, carrying that night's durations in `h:mm`.
  *
  * `h:mm` and not decimal hours: the tooltip's job is to answer "how much
  * short?", and 0.18 h is not an answer anyone acts on. [hoursMinutes] comes
@@ -174,6 +174,13 @@ private fun sleepDebtAnchors(
                 // "woke with", not "debt": the row is what this night LEFT,
                 // and a bare label would be read as what it was carrying.
                 add(TooltipRow("woke with", hoursMinutes(day.debtMin)))
+                // The need plotted above is the one the nap already paid down
+                // — the server subtracted it before shipping the row — so
+                // without the credit named, the dip in the line has no visible
+                // cause. Named before the reset for the reason the tonight card
+                // orders them that way: this qualifies the numbers above it,
+                // the reset qualifies the whole ledger.
+                if (day.napMin > 0) add(TooltipRow("nap", "$MINUS_SIGN${hoursMinutes(day.napMin)}"))
                 // Why the need beside it carries no debt: the ledger had
                 // nothing to carry INTO this night. Without the row a reset
                 // reads as an unexplained easy target.
@@ -270,6 +277,12 @@ private val DEBT_LEGEND = listOf(
 )
 
 private const val MINUTES_PER_HOUR = 60.0
+
+/**
+ * U+2212 MINUS SIGN, as the tonight card spells it — a hyphen would read as a
+ * range dash beside a duration, and the two are indistinguishable in a diff.
+ */
+private const val MINUS_SIGN = "\u2212"
 
 /** The 5% the tallest bar is kept clear of the top gridline by. */
 private const val Y_HEADROOM = 1.05

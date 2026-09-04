@@ -127,6 +127,7 @@ fun recoveryDay(
     band: HrvBand? = null,
     sleepHours: Double? = null,
     sleepScore: Double? = null,
+    napHours: Double? = null,
 ) = RecoveryDay(
     date = date,
     rhr = rhr,
@@ -134,6 +135,7 @@ fun recoveryDay(
     hrvBand = band,
     sleepHours = sleepHours,
     sleepScore = sleepScore,
+    napHours = napHours,
 )
 
 fun band(low: Double, high: Double, floor: Double? = null) =

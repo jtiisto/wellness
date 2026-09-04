@@ -141,10 +141,16 @@ enum class ChartInk(val series: Map<PlotTone, SeriesStyle>) {
      * stay ink-soft — a night's sleep drawn in full ink would be the heaviest
      * thing on the screen — and the score is this chart's first extra series, so
      * it takes plate 1 rather than the plate 2 the global default would give it.
+     *
+     * The nap segment stacked above a night takes no plate at all. A plate
+     * identifies a *series*, and a nap is not one: it is the same quantity as
+     * the bar beneath it, so it steps one shade lighter in the bars' own ink and
+     * the legend names it. A hue there would say the two are different things.
      */
     SLEEP(
         mapOf(
             PlotTone.PRIMARY to SeriesStyle(SeriesInk.INK_SOFT, SeriesMark.BAR),
+            PlotTone.ALT to SeriesStyle(SeriesInk.INK_FAINT, SeriesMark.BAR),
             PlotTone.SECONDARY to SeriesStyle(SeriesInk.PLATE_1, SeriesMark.DOT),
         ),
     ),

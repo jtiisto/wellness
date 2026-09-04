@@ -131,7 +131,8 @@ def _iso(d):
     return d.isoformat()
 
 
-def _write_db(path, rows, decoys=(), *, rest_hr=None,
+def _write_db(path, rows, decoys=(), *, rest_hr=None, naps=None,
+              nap_column=True,
               timeseries=None, ts_decoys=(), activities=None, act_decoys=()):
     """rows: (metric_date, sleep_duration_hours, active_calories, total_steps,
     max_heart_rate), inserted as user_id 1; `decoys` are the same shape under
@@ -141,6 +142,12 @@ def _write_db(path, rows, decoys=(), *, rest_hr=None,
     `rest_hr` is {metric_date: bpm} for the daily table's resting_heart_rate
     (the hybrid strain tier's per-day HR reserve floor); rows left out keep the
     column NULL, which is what the estimator's own fallback is for.
+
+    `naps` is {metric_date: nap_duration_hours} the same way; a date left out
+    keeps the column NULL, which is a day Garmin has not resynced since nap
+    support — zero credit, and the shape most days arrive in. `nap_column=False`
+    omits the column from the schema entirely: that is every Garmin DB older
+    than nap support, and the reader must probe rather than assume it.
 
     `timeseries` and `activities` feed the hybrid tier and default to NONE —
     meaning the TABLE IS NOT CREATED. That is the shape of every Garmin DB
@@ -153,6 +160,7 @@ def _write_db(path, rows, decoys=(), *, rest_hr=None,
     `ts_decoys`/`act_decoys` are the same shapes under user_id 2 — both readers
     pin user_id = 1, and these are what make that filter load-bearing.
     """
+    assert nap_column or not naps, "naps need the column they live in"
     conn = sqlite3.connect(path)
     conn.execute("""
         CREATE TABLE daily_health_metrics (
@@ -163,9 +171,10 @@ def _write_db(path, rows, decoys=(), *, rest_hr=None,
             total_steps INTEGER,
             max_heart_rate INTEGER,
             resting_heart_rate INTEGER,
+            %s
             PRIMARY KEY (user_id, metric_date)
         )
-    """)
+    """ % ("nap_duration_hours FLOAT," if nap_column else ""))
     insert = ("INSERT INTO daily_health_metrics "
               "(user_id, metric_date, sleep_duration_hours, active_calories, "
               "total_steps, max_heart_rate) VALUES (%d,?,?,?,?,?)")
@@ -177,6 +186,10 @@ def _write_db(path, rows, decoys=(), *, rest_hr=None,
         conn.execute(
             "UPDATE daily_health_metrics SET resting_heart_rate = ? "
             "WHERE user_id = 1 AND metric_date = ?", (bpm, metric_date))
+    for metric_date, hours in (naps or {}).items():
+        conn.execute(
+            "UPDATE daily_health_metrics SET nap_duration_hours = ? "
+            "WHERE user_id = 1 AND metric_date = ?", (hours, metric_date))
 
     if timeseries is not None:
         conn.execute("""
@@ -604,6 +617,253 @@ class TestSleepEndpoint:
             assert c.get(
                 "/wellness/api/trends/health/sleep?start=2026-02-30"
             ).status_code == 422
+
+
+@pytest.fixture
+def tmp_nap_db(tmp_path):
+    """Four consecutive nights over the three shapes the nap column arrives in:
+    a real nap, a NULL (a day Garmin has not resynced since nap support) and a
+    0.0 (resynced, no naps) — plus a nap on TODAY, which belongs to tonight.
+    Every row takes the calorie fallback estimator (max_heart_rate NULL, zero
+    active calories → strain 1.0, f(1.0) = -1.5) so the nap term is the only
+    moving part between one need and the next.
+
+    Values are INVENTED — never paste rows from the real ~/.garmy DB here;
+    this repo is public."""
+    today = date.today()
+
+    def d(n):
+        return _iso(today - timedelta(days=n))
+
+    rows = [
+        (d(3), 6.0, 0, 0, None),
+        (d(2), 5.5, 0, 0, None),
+        (d(1), 6.5, 0, 0, None),
+        (d(0), 7.0, 0, 0, None),
+    ]
+    _write_db(tmp_path / "garmin_naps.db", rows,
+              naps={d(3): 0.75,        # 45 min, credited to the d(2) night
+                    d(1): 0.0,         # resynced, no naps
+                    d(0): 0.5})        # 30 min, today's — credited to tonight
+    #    d(2) is left NULL on purpose: not resynced, and zero credit.
+    return {"today": today, "path": tmp_path / "garmin_naps.db"}
+
+
+@pytest.mark.integration
+class TestSleepNaps:
+    """The nap term: a day's naps are sleep already taken against the night
+    that ENDS the next morning, so nap(X) is subtracted from the need of the
+    row keyed X+1 — at full weight, with no bias, cap or floor."""
+
+    def test_exact_json_ledger_with_naps(self, tmp_nap_db, client, monkeypatch):
+        today = tmp_nap_db["today"]
+
+        def d(n):
+            return _iso(today - timedelta(days=n))
+
+        with _fresh_client(tmp_nap_db["path"], monkeypatch) as c:
+            data = c.get("/wellness/api/trends/health/sleep").json()
+
+        assert data == {
+            "available": True,
+            "as_of": d(0),
+            # Today's 30 min are spent against TONIGHT:
+            # need = 400 + 1.784 + f(1.0) - 30 = 370.284.
+            "tonight": {"date": d(0), "need_min": 370.3, "debt_min": 1.8,
+                        "strain_est": 1.0, "strain_partial": True,
+                        "nap_min": 30.0},
+            "days": [
+                # Epoch. The day before it has no row at all, so neither a
+                # strain term nor a nap: need 400.0, weq 350 -> 0.4*50 = 20.0.
+                {"date": d(3), "need_min": 400.0, "slept_min": 360.0,
+                 "debt_min": 20.0, "strain_est": 0.0},
+                # The napped night: 400 + 20.0 + f(1.0) would be 418.5, and the
+                # 45 min napped the previous day come straight off it -> 373.5.
+                # The debt chain sees the REDUCED need: weq 320 -> 0.4*53.5 =
+                # 21.4, where the un-napped need would have left 39.4 behind.
+                {"date": d(2), "need_min": 373.5, "slept_min": 330.0,
+                 "debt_min": 21.4, "strain_est": 1.0, "nap_min": 45.0},
+                # Previous day's nap column is NULL: zero credit, no key.
+                # 400 + 21.4 - 1.5 = 419.9; weq 380 -> 0.4*39.9 = 15.96.
+                {"date": d(1), "need_min": 419.9, "slept_min": 390.0,
+                 "debt_min": 16.0, "strain_est": 1.0},
+                # Previous day was resynced with NO naps (0.0): same zero
+                # credit, same absent key. Chains on the unrounded 15.96:
+                # 400 + 15.96 - 1.5 = 414.46; weq 410 -> 0.4*4.46 = 1.784.
+                {"date": d(0), "need_min": 414.5, "slept_min": 420.0,
+                 "debt_min": 1.8, "strain_est": 1.0},
+            ],
+        }
+
+    def test_nap_key_is_omitted_never_zero(self, tmp_nap_db, client, monkeypatch):
+        today = tmp_nap_db["today"]
+
+        def d(n):
+            return _iso(today - timedelta(days=n))
+
+        with _fresh_client(tmp_nap_db["path"], monkeypatch) as c:
+            data = c.get("/wellness/api/trends/health/sleep").json()
+        days = {r["date"]: r for r in data["days"]}
+
+        # Optional fields are OMITTED, never null/zero — the clients decode
+        # `nap_min` with a default. Only the night that was actually credited
+        # carries it, and the NULL day and the 0.0 day are indistinguishable
+        # from the outside, which is the point: both are zero credit.
+        assert days[d(2)]["nap_min"] == 45.0
+        for n in (3, 1, 0):
+            assert "nap_min" not in days[d(n)], f"day -{n} was credited nothing"
+        # Neither zero-credit night lost a minute of need to a nap: each is
+        # exactly 400 + the previous row's debt + f(1.0).
+        assert days[d(1)]["need_min"] == 419.9
+        assert days[d(0)]["need_min"] == 414.5
+
+    def test_todays_nap_lands_on_tonight_not_on_todays_row(
+            self, tmp_path, client, monkeypatch):
+        """A nap taken today pays for tonight, so it moves `tonight` and leaves
+        today's ROW — the night that ended this morning — untouched. Values are
+        INVENTED — never paste rows from the real ~/.garmy DB here; this repo
+        is public."""
+        today = date.today()
+
+        def d(n):
+            return _iso(today - timedelta(days=n))
+
+        path = _write_db(tmp_path / "garmin_nap_tonight.db", [
+            (d(1), 6.0, 0, 0, None),      # epoch: need 400, weq 350 -> out 20.0
+            (d(0), 7.0, 0, 0, None),      # need 418.5, weq 410 -> out 3.4
+        ], naps={d(0): 0.5})              # 30 min, today's
+        with _fresh_client(path, monkeypatch) as c:
+            data = c.get("/wellness/api/trends/health/sleep").json()
+
+        assert data["days"][-1] == {"date": d(0), "need_min": 418.5,
+                                    "slept_min": 420.0, "debt_min": 3.4,
+                                    "strain_est": 1.0}
+        # 400 + 3.4 + f(1.0) - 30 = 371.9.
+        assert data["tonight"] == {"date": d(0), "need_min": 371.9,
+                                   "debt_min": 3.4, "strain_est": 1.0,
+                                   "strain_partial": True, "nap_min": 30.0}
+
+    def test_nap_has_no_floor_and_no_cap(self, tmp_path, client, monkeypatch):
+        """A fragmented day can file hours of "naps" and pull the next night's
+        need well below baseline — WHOOP's own behaviour, and the reason the
+        term carries no clamp. Values are INVENTED — never paste rows from the
+        real ~/.garmy DB here; this repo is public."""
+        today = date.today()
+
+        def d(n):
+            return _iso(today - timedelta(days=n))
+
+        path = _write_db(tmp_path / "garmin_nap_big.db", [
+            (d(2), 6.0, 0, 0, None),      # epoch: need 400, weq 350 -> out 20.0
+            (d(1), 7.0, 0, 0, None),
+        ], naps={d(2): 3.0})              # 180 min against the next night
+        with _fresh_client(path, monkeypatch) as c:
+            days = c.get("/wellness/api/trends/health/sleep").json()["days"]
+
+        # 400 + 20.0 + f(1.0) - 180 = 238.5 — under the 400 baseline, uncapped.
+        assert days[-1] == {"date": d(1), "need_min": 238.5, "slept_min": 420.0,
+                            "debt_min": 0.0, "strain_est": 1.0,
+                            "nap_min": 180.0}
+
+    def test_ledger_chains_on_the_unrounded_nap(self, tmp_path, client, monkeypatch):
+        """`nap_min` is presentational (1 dp); the need it buys is not. The
+        credited 45.75 min takes the need to 372.75 -> 372.8, where subtracting
+        the ROUNDED 45.8 would have emitted 372.7 — this pin fails if rounding
+        creeps into the arithmetic. Values are INVENTED — never paste rows from
+        the real ~/.garmy DB here; this repo is public."""
+        today = date.today()
+
+        def d(n):
+            return _iso(today - timedelta(days=n))
+
+        path = _write_db(tmp_path / "garmin_nap_rounding.db", [
+            (d(2), 6.0, 0, 0, None),      # epoch: need 400, weq 350 -> out 20.0
+            (d(1), 5.0, 0, 0, None),      # weq 290 -> 0.4 * 82.75 = 33.1
+        ], naps={d(2): 0.7625})           # 45.75 min exactly
+        with _fresh_client(path, monkeypatch) as c:
+            days = c.get("/wellness/api/trends/health/sleep").json()["days"]
+
+        assert days[-1] == {"date": d(1), "need_min": 372.8, "slept_min": 300.0,
+                            "debt_min": 33.1, "strain_est": 1.0,
+                            "nap_min": 45.8}
+
+    def test_sub_resolution_nap_credits_the_need_but_emits_no_key(
+            self, tmp_path, client, monkeypatch):
+        """A nap too short to survive 1 dp — 0.0008 h, under three seconds —
+        is spent by the need in full and emits NO key: the contract's optional
+        fields are omitted, and a rounded-to-0.0 `nap_min` would be a zero on
+        the wire. The need is the proof it was credited: 442.26 without it,
+        442.212 with. Values are INVENTED — never paste rows from the real
+        ~/.garmy DB here; this repo is public."""
+        today = date.today()
+
+        def d(n):
+            return _iso(today - timedelta(days=n))
+
+        path = _write_db(tmp_path / "garmin_nap_tiny.db", [
+            (d(2), 5.01, 0, 0, None),     # epoch: need 400, weq 290.6 -> 43.76
+            (d(1), 7.0, 0, 0, None),      # weq 410 -> 0.4 * 32.212 = 12.8848
+        ], naps={d(2): 0.0008})           # 0.048 min, credited to the d(1) night
+        with _fresh_client(path, monkeypatch) as c:
+            days = c.get("/wellness/api/trends/health/sleep").json()["days"]
+
+        # 400 + 43.76 + f(1.0) - 0.048 = 442.212; the un-credited need would
+        # have emitted 442.3, so the row is a pin on both halves of the rule.
+        assert days[-1] == {"date": d(1), "need_min": 442.2, "slept_min": 420.0,
+                            "debt_min": 12.9, "strain_est": 1.0}
+
+    def test_sub_resolution_nap_today_credits_tonight_but_emits_no_key(
+            self, tmp_path, client, monkeypatch):
+        """The same rule on `tonight`: today's 0.048 min move the need and
+        leave no `nap_min` behind. Values are INVENTED — never paste rows from
+        the real ~/.garmy DB here; this repo is public."""
+        today = date.today()
+
+        def d(n):
+            return _iso(today - timedelta(days=n))
+
+        path = _write_db(tmp_path / "garmin_nap_tiny_tonight.db", [
+            (d(1), 7.0, 0, 0, None),      # epoch: need 400, weq 410 -> out 0.0
+            (d(0), 5.01, 0, 0, None),     # need 398.5, weq 290.6 -> out 43.16
+        ], naps={d(0): 0.0008})
+        with _fresh_client(path, monkeypatch) as c:
+            data = c.get("/wellness/api/trends/health/sleep").json()
+
+        # 400 + 43.16 + f(1.0) - 0.048 = 441.612; without the credit, 441.7.
+        assert data["tonight"] == {"date": d(0), "need_min": 441.6,
+                                   "debt_min": 43.2, "strain_est": 1.0,
+                                   "strain_partial": True}
+
+    def test_db_without_the_nap_column_serves_the_same_ledger(
+            self, tmp_path, client, monkeypatch):
+        """Every Garmin DB older than nap support: the column is probed, not
+        assumed, so its absence costs the ledger nothing — the response is the
+        one the same rows produce WITH the column and no nap values in it.
+        Values are INVENTED — never paste rows from the real ~/.garmy DB here;
+        this repo is public."""
+        today = date.today()
+
+        def d(n):
+            return _iso(today - timedelta(days=n))
+
+        rows = [
+            (d(2), 6.0, 0, 0, None),
+            (d(1), 5.5, 0, 0, None),
+            (d(0), 7.0, 0, 0, None),
+        ]
+        old = _write_db(tmp_path / "garmin_no_nap_col.db", rows,
+                        nap_column=False)
+        new = _write_db(tmp_path / "garmin_nap_col.db", rows)
+        with _fresh_client(old, monkeypatch) as c:
+            without = c.get("/wellness/api/trends/health/sleep").json()
+        with _fresh_client(new, monkeypatch) as c:
+            with_col = c.get("/wellness/api/trends/health/sleep").json()
+
+        assert without["available"] is True
+        assert without == with_col
+        assert [r["date"] for r in without["days"]] == [d(2), d(1), d(0)]
+        assert "nap_min" not in without["tonight"]
+        assert all("nap_min" not in r for r in without["days"])
 
 
 @pytest.fixture

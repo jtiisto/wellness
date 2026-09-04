@@ -10,6 +10,8 @@ Status: **approved 2026-08-09** (v2 after Codex review — 5 blockers + 12 major
 
 > **v2.3 (sleep debt flipped to on-waking, 2026-08-26):** `days[].debt_min` now carries the debt **on waking** from that night — the night's own product — where v2.2 carried the debt *entering* it. The wire field keeps its name (the feature is hours old and this client is its only consumer). The need arithmetic is untouched: a night's need still spends the debt it *entered* on, which on consecutive rows is simply the **previous** row's `debt_min`. The flip buys one property the incoming side could not have: on the app's own `end=today` requests, **`tonight.debt_min` equals the last emitted row's `debt_min`** whenever that row is today's or yesterday's, so the headline card and the last point of the debt chart are the same number instead of two numbers a night apart (they diverge — card 0 — only past the server's carry window, when the last scored night is older than yesterday; a clipped `end` would hide newer rows from `days` while `tonight`, which ignores the range, still carries them — server-pinned as deliberate, and unreachable from this client). Consequences here: the scrub row reads **`woke with`** and the debt legend reads **`debt on waking`**; the gap rule is unchanged in behaviour but not in meaning — a `gap` row still breaks the line and takes the WARN ring, now because the night before it was never observed, **not** because its debt is zero (it usually is not). `debtLine` on the card is unchanged.
 
+> **v2.4 (naps, 2026-09-03):** the sleep ledger's fitted nap term goes live now that garmy carries Garmin's daily nap total. The wire gains three optional keys — `nap_min` on `/health/sleep` `days[]` (the nap credited to that night: the previous day's naps, full weight, no bias, no cap) and on `tonight` (today's naps so far), and `nap_hours` on `/health/recovery` `days[]` — all **omitted when zero**, so every DTO field carries a default. Surfaces: the tonight card's debt line (`cardDebtLine`; the widget's `debtLine` is untouched) gains ` · nap −H:MM`, the need-vs-slept scrub names the nap, and the Sleep chart draws a stacked nap segment with its own tooltip. The widget is unchanged (its headline need already reflects the nap). Strain untouched. PWA deferred with the rest of the sleep panel. Server contract: ARCHITECTURE.md "Naps (added 2026-09-03)".
+
 > **v2.4 (pull to refresh + on-demand Garmin sync, 2026-08-27):** every sub-screen gains a pull
 > gesture that refetches the screen **and** asks the server to sync Garmin now, over a new headless
 > server module at `/api/garmin`. Three amendments to the text above: the module is no longer
@@ -74,7 +76,7 @@ Slug/id appear **raw** in cache keys, URL-encoded in request paths (PWA parity).
 
 **DTOs** (`TrendsDtos.kt`, kotlinx.serialization, shared `WellnessJson` — which has **no naming strategy**, so every multi-word field carries `@SerialName` with the exact wire name shown below; golden-fixture decode tests enforce completeness). Typing rules: **every physiological/measurement field is `Double`** (`avg_hr`, `rhr`, `sleep_score` included — the wire flips int/float freely); `Int` only for true counts/ordinals (`reps`, `set_count`, `session_count`, `count_30d`, `hard_sets`, `interval_sessions`, `scheduled_days`, `met`, `partial_days`, `missed`, `count`, streaks). Nullability mirrors the wire exactly.
 
-**Omitted keys** (every one carries a default here; everything else arrives as a value, an explicit null, or an empty list): `weekly_usage` on `/journal/tracker/{id}`, and — added with the sleep ledger — `as_of`, `tonight`, `gap` and `strain_partial` on `/health/sleep`. *(Before the ledger this section read "the API's single omitted key is `weekly_usage`"; that claim is superseded, and `weekly_usage` remains the only omitted key on the eleven original endpoints.)*
+**Omitted keys** (every one carries a default here; everything else arrives as a value, an explicit null, or an empty list): `weekly_usage` on `/journal/tracker/{id}`, and — added with the sleep ledger — `as_of`, `tonight`, `gap` and `strain_partial` on `/health/sleep`; and — v2.4 — `nap_min` on `/health/sleep` `days[]` and `tonight`, `nap_hours` on `/health/recovery` `days[]` (omitted when zero). *(Before the ledger this section read "the API's single omitted key is `weekly_usage`"; that claim is superseded, and `weekly_usage` remains the only omitted key on the eleven original endpoints.)*
 
 ```kotlin
 // GET /overview
@@ -156,7 +158,8 @@ TrackerDetailDto(tracker: TrackerSummary, values: List<TrackerValue>,
 // GET /health/recovery
 RecoveryDto(available: Boolean, days: List<RecoveryDay>)
   RecoveryDay(date: DateString, rhr: Double?, hrv: Double?, @SerialName("hrv_band") hrvBand: HrvBand?,
-              @SerialName("sleep_hours") sleepHours: Double?, @SerialName("sleep_score") sleepScore: Double?)
+              @SerialName("sleep_hours") sleepHours: Double?, @SerialName("sleep_score") sleepScore: Double?,
+              @SerialName("nap_hours") napHours: Double? = null)   // v2.4: omitted when zero
   HrvBand(low: Double, high: Double, @SerialName("low_floor") lowFloor: Double?)
 
 // GET /health/sleep
@@ -164,10 +167,12 @@ SleepDebtDto(available: Boolean, @SerialName("as_of") asOf: DateString? = null,
              tonight: SleepTonight? = null, days: List<SleepDebtDay>)
   SleepTonight(date: DateString, @SerialName("need_min") needMin: Double,
                @SerialName("debt_min") debtMin: Double, @SerialName("strain_est") strainEst: Double,
-               @SerialName("strain_partial") strainPartial: Boolean = false)   // always true on the wire
+               @SerialName("strain_partial") strainPartial: Boolean = false,   // always true on the wire
+               @SerialName("nap_min") napMin: Double = 0.0)                     // v2.4: omitted when zero
   SleepDebtDay(date: DateString, @SerialName("need_min") needMin: Double,
                @SerialName("slept_min") sleptMin: Double, @SerialName("debt_min") debtMin: Double,
-               @SerialName("strain_est") strainEst: Double, gap: Boolean = false)  // omitted when false
+               @SerialName("strain_est") strainEst: Double, gap: Boolean = false,  // omitted when false
+               @SerialName("nap_min") napMin: Double = 0.0)                       // v2.4: omitted when zero
 
 // GET /health/composition
 CompositionDto(available: Boolean, scans: List<Scan>)
@@ -289,12 +294,15 @@ round2(v): Double                                     // JS Math.round semantics
 
 **Where the logic lives.** `sleepTonightModel` / `hoursMinutes` / `TonightJudgment` / `SleepTonightModel` sit in **`:core:data`** (`trends/SleepDebtLogic.kt`), not beside the chart builders, and the card composable sits in **`:core:ui`** (`SleepTonightCard.kt`). The card is planned to move to a start screen and to a Glance widget rendered by a `CoroutineWorker` with no `:feature:trends` on its classpath; everything it needs is therefore already on a module a widget can reach. `JournalUiLogic` is the precedent for pure display rules living in `:core:data`.
 
+**Naps (v2.4, 2026-09-03).** A nap is credit, never a night: the server has already subtracted it from the need it ships, so no surface re-does the arithmetic. Three places name it. (1) The tonight card's debt line — `cardDebtLine`, rule below; the widget keeps the shorter `debtLine`. (2) The need-vs-slept panel's scrub line appends `nap −H:MM` for a row whose `nap_min > 0` — the need plotted for that night is the reduced one, and the reader has to be able to see why it dipped. (3) The Sleep chart (recovery series) stacks `nap_hours` above the night's `sleep_hours` in a lighter ink and names it in the tooltip (`sleep 6:45 · nap 0:45`); a day without naps draws exactly as before. The widget is unchanged. `hoursMinutes` formats every nap figure.
+
 **Tonight card** — directly under `RangeToolbar`, above the recovery sections. Absent (not an error, not a placeholder) when the slice is unavailable, `available: false`, or carries no `tonight`. Model rules, each pinned verbatim by `SleepDebtLogicTest`:
 
 | Field | Rule |
 |---|---|
 | `needText` | `hoursMinutes(tonight.need_min)` — `H:MM`, one `roundToInt` on the **total** minutes (so 59.6 → `1:00`, never `0:60`), negatives clamped to zero |
-| `debtLine` | `no sleep debt` when `debt_min == 0`, else `debt H:MM`; ` · reset — missing night` appended when `days.last().gap` |
+| `debtLine` | `no sleep debt` when `debt_min == 0`, else `debt H:MM`; ` · reset — missing night` appended when `days.last().gap`. Shared with the Today widget, so it never carries the nap |
+| `cardDebtLine` (v2.4) | the card's own line: the `debtLine` figure → ` · nap −H:MM` when `tonight.nap_min > 0` → the reset suffix, in that order. The model stores the three parts (`debtText`, `napText`, `resetText`) and composes BOTH lines in `:core:data`, so neither composable decides wording |
 | `strainLine` | `strain N.N` — fixed one decimal (an instrument reading on a 0–21 scale, deliberately **not** the integer-collapsing `jsNumberString` rule), plus ` · so far` when `strain_partial` |
 | `freshnessLine` | precedence, not concatenation: `tonight.date != today` → `for <date>`; else `as_of` absent → `no scored nights yet`; else `as_of != today` → `data through <as_of>`; else null |
 | `cachedLine` | `cached · Nm/Nh ago` — the **same wording rule** as `TrendsScreenLogic.staleBadgeText`, deliberately duplicated in `:core:data` because a widget cannot depend on a feature module. Comments on both sides say so |

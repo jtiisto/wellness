@@ -16,9 +16,10 @@ import org.junit.jupiter.api.Test
  * The Trends wire contract, against the fixtures in `testdata/golden/trends/`.
  *
  * Three things are worth more than the rest here, and each has burned a phase
- * somewhere: omitted keys carry defaults (`weekly_usage`, and the sleep
- * ledger's `as_of`/`tonight`/`gap`/`strain_partial` — the spec's Omitted-keys
- * table is the inventory), `completed` is an integer and not a boolean, and a
+ * somewhere: omitted keys carry defaults (`weekly_usage`, the sleep ledger's
+ * `as_of`/`tonight`/`gap`/`strain_partial`, and the nap keys `nap_min`/
+ * `nap_hours` — the spec's Omitted-keys table is the inventory), `completed`
+ * is an integer and not a boolean, and a
  * tracker value can be a *string* left over from the tracker's note era —
  * which a `Double?` property would turn into a failure of the entire payload,
  * not of the one row.
@@ -265,6 +266,18 @@ class TrendsDtoTest {
     }
 
     @Test
+    @DisplayName("nap_hours decodes where it is sent, and stays null on every day that omits it")
+    fun recoveryNapHoursDefaultsNull() {
+        // Omitted when absent or zero, which is most days — a non-default
+        // property would fail the whole payload on the first one of them.
+        val fixture = fixture("health-recovery.json")
+        assertEquals(1, Regex("\"nap_hours\"").findAll(fixture).count())
+
+        val days = decode("health-recovery.json", RecoveryDto.serializer()).days
+        assertEquals(listOf(null, 0.75, null, null), days.map { it.napHours })
+    }
+
+    @Test
     @DisplayName("the sleep ledger decodes: as_of, tonight, and a gap night among four without one")
     fun sleepDecodes() {
         val sleep = decode("health-sleep.json", SleepDebtDto.serializer())
@@ -319,10 +332,38 @@ class TrendsDtoTest {
     fun sleepNumbersArriveBothWays() {
         val days = decode("health-sleep.json", SleepDebtDto.serializer()).days
 
-        assertEquals(listOf(480.0, 510.5, 468.0, 455.5, 472.0), days.map { it.needMin })
+        assertEquals(listOf(480.0, 510.5, 468.0, 410.5, 472.0), days.map { it.needMin })
         assertEquals(listOf(400.5, 465.0, 412.5, 430.0, 388.5), days.map { it.sleptMin })
-        assertEquals(listOf(40.0, 22.5, 27.5, 12.5, 41.5), days.map { it.debtMin })
+        assertEquals(listOf(40.0, 22.5, 27.5, 8.0, 41.5), days.map { it.debtMin })
         assertEquals(listOf(9.4, 12.0, 6.5, 4.0, 7.5), days.map { it.strainEst })
+    }
+
+    @Test
+    @DisplayName("nap_min decodes on the napped night and on tonight, and is zero everywhere else")
+    fun sleepNapMinDefaultsZero() {
+        // Two keys in the whole payload: one night that napped, and today. The
+        // other four nights omit it, exactly as the server does.
+        val fixture = fixture("health-sleep.json")
+        assertEquals(2, Regex("\"nap_min\"").findAll(fixture).count())
+
+        val sleep = decode("health-sleep.json", SleepDebtDto.serializer())
+        assertEquals(listOf(0.0, 0.0, 0.0, 45.0, 0.0), sleep.days.map { it.napMin })
+        assertEquals(30.0, requireNotNull(sleep.tonight).napMin)
+
+        // No golden carries a napless `tonight` — every fixture day so far has
+        // one — so the omitted key is pinned inline for that side too. Dropping
+        // the property default would fail THIS decode outright, which is the
+        // shape a day before the first nap actually sends.
+        val napless = json.decodeFromString(
+            SleepTonight.serializer(),
+            """{"date":"2030-01-26","need_min":495,"debt_min":41.5,"strain_est":8,"strain_partial":true}""",
+        )
+        assertEquals(0.0, napless.napMin)
+
+        // The credit is already INSIDE the need: the napped night asks for less
+        // than any night around it, and no client subtracts the nap again.
+        assertEquals(410.5, sleep.days[3].needMin)
+        assertTrue(sleep.days.filter { it.napMin == 0.0 }.all { it.needMin > 410.5 })
     }
 
     @Test

@@ -6,6 +6,7 @@ import dev.jtiisto.wellness.core.data.trends.LabPanel
 import dev.jtiisto.wellness.core.data.trends.RecoveryDay
 import dev.jtiisto.wellness.core.data.trends.Scan
 import dev.jtiisto.wellness.core.data.trends.WeightPoint
+import dev.jtiisto.wellness.core.data.trends.hoursMinutes
 import kotlin.math.max
 import kotlin.math.min
 
@@ -249,11 +250,25 @@ private const val SLEEP_GUIDE_HOURS = 8.0
  * Both fixed choices carry meaning: a y axis floored at nine hours keeps a
  * five-hour night looking short instead of filling the card, and a score axis
  * that never rescales keeps 70 in the same place every week.
+ *
+ * A day's naps ride the same bar as a second segment above the night. They are
+ * sleep, not a second series — which is why they take a lighter step of the
+ * bars' own ink rather than a plate — and they are stacked rather than merged
+ * so that the night itself stays readable at its own height.
+ *
+ * This is a chart of **nights**, and that governs the nap: a day Garmin scored
+ * no main sleep on is a gap here, so a nap is drawn only as a rider on a night
+ * that was. A nap-only row therefore draws nothing, says nothing in the scrub,
+ * and keys nothing in the legend — which is why [sleepLegend] reads the
+ * segments this builder emitted rather than the rows it was handed.
  */
 fun sleepCardModel(days: List<RecoveryDay>): PlotModel? {
     val frame = dayChart(days, { it.date }, { it.sleepHours }) ?: return null
 
-    val hours = frame.present.mapNotNull { it.sleepHours }
+    // The axis is fitted to the whole bar, naps included: a night plus its nap
+    // is what gets drawn, and an axis that ignored the top segment would let it
+    // run out through the gridlines.
+    val hours = frame.present.map { (it.sleepHours ?: 0.0) + napHoursOf(it) }
     val yMax = max(hours.max(), SLEEP_Y_FLOOR)
 
     val xScale = linearScale(
@@ -280,8 +295,13 @@ fun sleepCardModel(days: List<RecoveryDay>): PlotModel? {
     // The index-based xScale contract earns its keep here: bars are daily, not
     // weekly, so the closure maps slot number to day offset to x.
     val layout = stackedBarLayout(
-        frame.present.map { StackedWeek(it.date, mapOf(SLEEP_KEY to (it.sleepHours ?: 0.0))) },
-        listOf(SLEEP_KEY),
+        frame.present.map {
+            StackedWeek(
+                it.date,
+                mapOf(SLEEP_KEY to (it.sleepHours ?: 0.0), NAP_KEY to napHoursOf(it)),
+            )
+        },
+        listOf(SLEEP_KEY, NAP_KEY),
         { index -> xScale(dayIndex(frame.present[index].date, frame.origin).toDouble()) },
         yScale,
         barWidth,
@@ -319,6 +339,7 @@ fun sleepCardModel(days: List<RecoveryDay>): PlotModel? {
     val ticks = dateTicks(frame.present, { it.date }, frame.origin)
 
     val hoursByDate = days.associate { it.date to it.sleepHours }
+    val napByDate = days.associate { it.date to napHoursOf(it) }
     val scoreByDate = days.associate { it.date to it.sleepScore }
     val anchors = mergeScrubAnchors(
         inDomain.filter { it.sleepHours != null || it.sleepScore != null }.map { day ->
@@ -327,7 +348,7 @@ fun sleepCardModel(days: List<RecoveryDay>): PlotModel? {
                 x = xScale(dayIndex(day.date, frame.origin).toDouble()),
                 label = monthDay(day.date),
                 rows = buildList {
-                    hoursByDate[day.date]?.let { add(TooltipRow("hours", fixed1(it))) }
+                    hoursByDate[day.date]?.let { add(sleptRow(it, napByDate[day.date] ?: 0.0)) }
                     scoreByDate[day.date]?.let { add(TooltipRow("score", jsNumberString(it))) }
                 },
             )
@@ -337,7 +358,10 @@ fun sleepCardModel(days: List<RecoveryDay>): PlotModel? {
     return PlotModel(
         height = SLEEP_HEIGHT,
         rects = layout.flatMap { column ->
-            column.segs.map { PlotRect(it.x, it.y, it.w, it.h, PlotTone.PRIMARY, radius = 1.dp) }
+            column.segs.map {
+                val tone = if (it.key == NAP_KEY) PlotTone.ALT else PlotTone.PRIMARY
+                PlotRect(it.x, it.y, it.w, it.h, tone, radius = 1.dp)
+            }
         },
         gridlines = gridlines,
         guides = listOf(
@@ -354,7 +378,52 @@ fun sleepCardModel(days: List<RecoveryDay>): PlotModel? {
     )
 }
 
+/**
+ * The legend for a card [sleepCardModel] already built.
+ *
+ * It takes the **model**, not the days behind it, and that is the whole point:
+ * a legend is a promise about a mark the reader will find above it, so the only
+ * sound source for `nap` is whether a nap segment was actually emitted. Asking
+ * the rows instead would key a nap on a day the chart refused to draw — a row
+ * with naps but no scored night — leaving a swatch pointing at nothing.
+ */
+fun sleepLegend(model: PlotModel): List<LegendEntry> = buildList {
+    add(LegendEntry("hours", PlotTone.PRIMARY))
+    if (model.rects.any { it.tone == PlotTone.ALT }) add(LegendEntry("nap", PlotTone.ALT))
+    add(LegendEntry("score", PlotTone.SECONDARY))
+    add(LegendEntry("8h guide", PlotTone.MUTED))
+}
+
+/**
+ * The night's line in the tooltip, and the nap that was added to it.
+ *
+ * A night with no nap keeps the decimal hours this card has always shown. A
+ * night with one switches both figures to `h:mm` and says them on the same row:
+ * the two are the same quantity, and `hours 6.8 / nap 0.8` on separate lines
+ * would invite adding them up in decimal. [hoursMinutes] is the tonight card's
+ * own formatter, so this chart and that card cannot round differently.
+ */
+private fun sleptRow(sleepHours: Double, napHours: Double): TooltipRow =
+    if (napHours > 0) {
+        TooltipRow(
+            "sleep",
+            "${hoursMinutes(sleepHours * MINUTES_PER_HOUR)} · " +
+                "nap ${hoursMinutes(napHours * MINUTES_PER_HOUR)}",
+        )
+    } else {
+        TooltipRow("hours", fixed1(sleepHours))
+    }
+
+/** A day's naps in hours; an absent key and a zero mean the same thing here. */
+private fun napHoursOf(day: RecoveryDay): Double = day.napHours ?: 0.0
+
 private const val SLEEP_KEY = "h"
+
+/** The nap segment's key — stacked above [SLEEP_KEY], never beside it. */
+private const val NAP_KEY = "nap"
+
+/** Sleep arrives in hours here and `hoursMinutes` takes minutes. */
+private const val MINUTES_PER_HOUR = 60.0
 
 // ---- Body weight + DEXA ----------------------------------------------------
 

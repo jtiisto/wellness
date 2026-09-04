@@ -53,7 +53,9 @@ class TodayWidgetLogicTest {
 
     private fun model(judgment: TonightJudgment) = SleepTonightModel(
         needText = "8:20",
-        debtLine = "debt 0:30",
+        debtText = "debt 0:30",
+        napText = null,
+        resetText = null,
         strainLine = "strain 9.9 · so far",
         freshnessLine = null,
         cachedLine = null,
@@ -543,7 +545,13 @@ class TodayWidgetLogicTest {
         // never how much is true.
         val card = SleepTonightModel(
             needText = "8:20",
-            debtLine = "debt 0:30",
+            debtText = "debt 0:30",
+            // A napped day, to pin what the widget does NOT say: the nap is
+            // already inside the headline need, and the cell has no room to
+            // name it, so the sentence read aloud is the one drawn — the app
+            // card's `cardDebtLine` is the surface that names it.
+            napText = "nap −0:45",
+            resetText = null,
             strainLine = "strain 9.9 · so far",
             freshnessLine = "data through 2030-01-14",
             cachedLine = "cached · 3h ago",

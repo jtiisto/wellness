@@ -68,6 +68,16 @@ class ChartInkTest {
             seriesStyle(PlotTone.SECONDARY, ChartInk.SLEEP),
         )
         assertEquals(SeriesInk.PLATE_2, seriesStyle(PlotTone.SECONDARY).ink)
+
+        // The nap stacked on a night takes NO plate: a plate identifies a
+        // series, and a nap is the same quantity as the bar under it. One step
+        // lighter in the bars' own ink, keyed by the legend — a hue would say
+        // the two are different things.
+        assertEquals(
+            SeriesStyle(SeriesInk.INK_FAINT, SeriesMark.BAR),
+            seriesStyle(PlotTone.ALT, ChartInk.SLEEP),
+        )
+        assertEquals(LegendSwatch.SQUARE, legendSwatch(PlotTone.ALT, ChartInk.SLEEP))
     }
 
     @Test

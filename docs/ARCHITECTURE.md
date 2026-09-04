@@ -656,10 +656,11 @@ same `daily_health_metrics` rows — plus, for the strain term only, the Garmin
 DB's `timeseries` heart-rate stream and `activities` windows — into a nightly
 ledger:
 `{available, as_of, tonight: {date, need_min, debt_min, strain_est,
-strain_partial}, days: [{date, need_min, slept_min, debt_min, strain_est,
-gap}]}`. Each night is keyed by its **WAKE date** (Garmin's own `metric_date`),
+strain_partial, nap_min?}, days: [{date, need_min, slept_min, debt_min, strain_est,
+gap?, nap_min?}]}`. Each night is keyed by its **WAKE date** (Garmin's own `metric_date`),
 and carries the need that was already determined the evening before —
-`need = baseline + the debt it ENTERED on + f(previous day's strain)`, where the
+`need = baseline + the debt it ENTERED on + f(previous day's strain) − the
+previous day's naps`, where the
 strain estimate
 comes from that day's activity (see the tiered estimator below; clamped to
 0..21 — missing inputs count as zero, so strain is always present)
@@ -690,6 +691,23 @@ and a 4-week request agrees with an all-history one on every shared row; `as_of`
 entirely. Contract for the clients: `days` always present, `debt_min` never
 negative, `strain_est` on every row, optional keys (`gap`, `as_of`, `tonight`,
 and tonight's `strain_partial`) **omitted, never null**.
+
+**Naps (added 2026-09-03).** The fitted model's nap term is live: garmy's
+`daily_health_metrics.nap_duration_hours` (with `nap_count`) is the sleep Garmin
+filed under day X — everything between that morning's wake and the next
+morning's, late-night fragments included, which is exactly the sleep WHOOP
+credits to the night ending on X+1 (verified against every nap in the live
+history). So the night keyed X+1 subtracts nap(X) from its need at full weight,
+no device bias and no cap (a fragmented night can file two hours of "naps" and
+pull that need well below baseline — as WHOOP does); `tonight` subtracts today's
+naps so far. The value ships as `nap_min` on the row it was credited to and on
+`tonight`, **omitted when zero**. garmy's NULL (a day not resynced since nap
+support) reads as zero credit, so nothing shifts until the backfill lands; the
+ledger replays all history, so rows move as it does. The column is probed, not
+assumed — an older Garmin DB without it serves the ledger unchanged. The
+recovery series row carries the same figure as `nap_hours` (omitted when absent
+or zero) for the Sleep chart. Strain is untouched: naps are not exertion, and
+the wrist TRIMP over a nap is negligible.
 
 **The strain estimator is tiered**, best evidence first, decided **per calendar
 day** rather than per response:
@@ -735,9 +753,9 @@ argument and the router resolves them through a seam, so the repo carries the
 parameterization and never a value. Two degradation states share one shape —
 absent Garmin DB **or** absent params module → `{"available": false,
 "days": []}` at HTTP 200 (no `as_of`, no `tonight`); the example values are
-never substituted as a fallback. Accepted edges: Garmin captures no naps, so
-the nap term of the original model is simply absent (~6% of nights read a
-little high); tonight's `strain_est` is partial by definition (`strain_partial`
+never substituted as a fallback. Accepted edges: before 2026-09-03 the Garmin
+bridge carried no naps, so the nap term was absent (~6% of nights read a little
+high) — days not yet resynced still read that way; tonight's `strain_est` is partial by definition (`strain_partial`
 says so — the day is still accumulating); and a request made after midnight but
 before sleep still reports the previous ledger position — tonight inherits the
 last scored night's outgoing debt while that night is no older than yesterday

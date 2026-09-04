@@ -17,9 +17,11 @@ import kotlinx.serialization.json.JsonElement
  *   heart rate arrives as `52.0`. `Int` is reserved for things that count:
  *   reps, sessions, scheduled days, streaks.
  * - **Nullability mirrors the wire exactly.** Omitted keys are the exception
- *   and each one carries a default here: `weekly_usage` on a tracker detail,
- *   and — since the sleep ledger arrived — `as_of`, `tonight`, `gap` and
- *   `strain_partial` on `/health/sleep`. Everything else arrives as a value, an
+ *   and each one carries a default here: `weekly_usage` on a tracker detail;
+ *   since the sleep ledger arrived, `as_of`, `tonight`, `gap` and
+ *   `strain_partial` on `/health/sleep`; and with the naps, `nap_min` on that
+ *   endpoint's `days[]` **and** its `tonight`, and `nap_hours` on
+ *   `/health/recovery`'s `days[]`. Everything else arrives as a value, an
  *   explicit null, or an empty list.
  *
  * The shared `WellnessJson` has no naming strategy, so every multi-word field
@@ -275,7 +277,7 @@ data class TrackerDetailDto(
     @SerialName("target_segments") val targetSegments: List<TargetSegment>,
     @SerialName("weekly_adherence") val weeklyAdherence: List<AdherenceWeek>,
     val streaks: Streaks,
-    /** The API's one omitted key: present only for neutral (non-actionable) trackers. */
+    /** This endpoint's one omitted key: present only for neutral (non-actionable) trackers. */
     @SerialName("weekly_usage") val weeklyUsage: List<UsageWeek>? = null,
 )
 
@@ -347,6 +349,12 @@ data class RecoveryDay(
     @SerialName("hrv_band") val hrvBand: HrvBand?,
     @SerialName("sleep_hours") val sleepHours: Double?,
     @SerialName("sleep_score") val sleepScore: Double?,
+    /**
+     * The naps Garmin filed under this day, for the Sleep chart to stack above
+     * the night. **Omitted when absent or zero** — the default is what no nap
+     * means, and a day whose source predates nap support says the same thing.
+     */
+    @SerialName("nap_hours") val napHours: Double? = null,
 )
 
 /** Garmin's own baseline, never recomputed here. */
@@ -394,6 +402,12 @@ data class SleepTonight(
     @SerialName("debt_min") val debtMin: Double,
     @SerialName("strain_est") val strainEst: Double,
     @SerialName("strain_partial") val strainPartial: Boolean = false,
+    /**
+     * Today's naps so far, **already subtracted** from [needMin] by the server.
+     * A nap is credit to be named, never a night to add: nothing here re-does
+     * the arithmetic. **Omitted when zero.**
+     */
+    @SerialName("nap_min") val napMin: Double = 0.0,
 )
 
 /**
@@ -419,6 +433,12 @@ data class SleepDebtDay(
     @SerialName("debt_min") val debtMin: Double,
     @SerialName("strain_est") val strainEst: Double,
     val gap: Boolean = false,
+    /**
+     * The nap credited to this night — the previous day's naps, at full weight
+     * — **already subtracted** from [needMin]. It is why a night's plotted need
+     * can dip below its neighbours. **Omitted when zero.**
+     */
+    @SerialName("nap_min") val napMin: Double = 0.0,
 )
 
 // ---- GET /health/composition -----------------------------------------------

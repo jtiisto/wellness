@@ -230,6 +230,53 @@ class SleepDebtModelsTest {
     }
 
     @Test
+    @DisplayName("a napped night names the credit that pulled its need down")
+    fun napAnchorNamesTheCredit() {
+        val section = requireNotNull(
+            sleepDebtSection(
+                listOf(
+                    // The need here is the REDUCED one the server shipped: the
+                    // nap has already come off it, and the tooltip's job is to
+                    // say why the line dipped, never to do the arithmetic.
+                    night("2030-01-21", need = 414.0, slept = 437.5, debt = 0.0, nap = 45.0),
+                    night("2030-01-22"),
+                ),
+                null,
+            ),
+        )
+
+        assertEquals(
+            listOf("slept" to "7:18", "need" to "6:54", "woke with" to "0:00", "nap" to "−0:45"),
+            section.needPlot.anchors.first().rows.map { it.label to it.value },
+        )
+        // The night beside it napped nothing, so it says nothing: a zero nap is
+        // an omitted key, not an event.
+        assertEquals(
+            listOf("slept", "need", "woke with"),
+            section.needPlot.anchors[1].rows.map { it.label },
+        )
+    }
+
+    @Test
+    @DisplayName("the nap reads before the reset: one qualifies the numbers, the other the ledger")
+    fun napPrecedesTheResetRow() {
+        val section = requireNotNull(
+            sleepDebtSection(
+                listOf(
+                    night("2030-01-21"),
+                    night("2030-01-22", gap = true, nap = 30.0),
+                ),
+                null,
+            ),
+        )
+
+        assertEquals(
+            listOf("slept", "need", "woke with", "nap", "reset"),
+            section.needPlot.anchors[1].rows.map { it.label },
+        )
+    }
+
+    @Test
     @DisplayName("both charts carry a legend — a plate with no key identifies nothing")
     fun bothChartsAreKeyed() {
         val section = requireNotNull(sleepDebtSection(fiveNights(), null))
@@ -266,6 +313,7 @@ class SleepDebtModelsTest {
         debt: Double = 0.0,
         strain: Double = 6.5,
         gap: Boolean = false,
+        nap: Double = 0.0,
     ) = SleepDebtDay(
         date = date,
         needMin = need,
@@ -273,6 +321,7 @@ class SleepDebtModelsTest {
         debtMin = debt,
         strainEst = strain,
         gap = gap,
+        napMin = nap,
     )
 
     private fun tonight() = SleepTonight(
