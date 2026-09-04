@@ -84,8 +84,16 @@ def tmp_hr_db(tmp_path):
 
 
 @pytest.fixture(scope="function")
+def tmp_garmin_module_db(tmp_path):
+    """Temporary database file for the garmin module's OWN storage (the
+    device-clock `client_zones` table). Not garmy's health DB — that one is
+    GARMIN_DB_PATH, pinned separately at a nonexistent path below."""
+    return tmp_path / "garmin_module_test.db"
+
+
+@pytest.fixture(scope="function")
 def test_app(tmp_path, tmp_journal_db, tmp_coach_db, tmp_analysis_db, tmp_hr_db,
-             monkeypatch):
+             tmp_garmin_module_db, monkeypatch):
     """
     Create a test FastAPI app with isolated databases for all modules.
 
@@ -139,6 +147,7 @@ def test_app(tmp_path, tmp_journal_db, tmp_coach_db, tmp_analysis_db, tmp_hr_db,
     monkeypatch.setenv("COACH_DB_PATH", str(tmp_coach_db))
     monkeypatch.setenv("ANALYSIS_DB_PATH", str(tmp_analysis_db))
     monkeypatch.setenv("HR_DB_PATH", str(tmp_hr_db))
+    monkeypatch.setenv("GARMIN_MODULE_DB_PATH", str(tmp_garmin_module_db))
     # Point trends' external sources at NONEXISTENT tmp paths so no test can
     # ever read the developer's real ~/.garmy/health.db or
     # ~/.bodyspecy/bodyspec.db; the endpoints' available:false paths are the
@@ -170,6 +179,7 @@ def test_app(tmp_path, tmp_journal_db, tmp_coach_db, tmp_analysis_db, tmp_hr_db,
         "coach": tmp_coach_db,
         "analysis": tmp_analysis_db,
         "hr": tmp_hr_db,
+        "garmin": tmp_garmin_module_db,
     })
 
     yield app

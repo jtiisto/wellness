@@ -7,15 +7,21 @@ src/modules/sleep_params.py exists on the machine running the suite.
 """
 
 import importlib
+import json
 import math
 import shutil
 import sqlite3
 import sys
 from dataclasses import dataclass, fields, replace
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 import pytest
+
+from modules.device_clock import ZoneTimeline
+
+from .conftest import zone_on_another_date as _zone_on_another_date
 
 
 # Structural twin of src/modules/sleep_params.example.py (that file's name is
@@ -1348,3 +1354,499 @@ class TestHybridStrainTier:
                     c.get("/wellness/api/trends/health/sleep").json()["days"]}
         for n in (19, 7, 6, 0):
             assert cold[d(n)]["strain_est"] == 5.8
+
+
+# ==================== The device clock ====================
+#
+# Everything above runs on an EMPTY timeline — the server's own zone from
+# -infinity, which is the behaviour that predates the device clock and is what
+# a headerless deployment still gets. What follows is the other half: the same
+# estimator and the same ledger with the watch somewhere else. Server zones are
+# INJECTED here rather than inherited from the host, so these tests read the
+# same on a laptop in Helsinki and on a CI runner in UTC.
+
+
+def _utc_ms(y, mo, d, hh, mm):
+    """Epoch milliseconds at a UTC wall clock. The wrist stream is true-UTC
+    epochs (unlike `_ms` above, which speaks the host's local time), and a
+    device-clock fixture has to say which instant it means."""
+    return int(datetime(y, mo, d, hh, mm, tzinfo=timezone.utc).timestamp() * 1000)
+
+
+def _tokyo_timeline(server_zone=timezone.utc, switch=None):
+    """A timeline that is Tokyo (+9, no DST) over the whole fixture window.
+
+    `switch` places the change point; the default sits far enough back that
+    every sample below lands in the Tokyo segment.
+    """
+    switch = switch or datetime(2030, 1, 1, tzinfo=timezone.utc)
+    return ZoneTimeline(server_zone, [(switch, "Asia/Tokyo", 540)])
+
+
+def _conn(path):
+    conn = sqlite3.connect(path)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+@pytest.mark.unit
+class TestHybridTrimpOnTheDeviceClock:
+    """The estimator buckets by the DEVICE's day, not the server's.
+
+    Nine hours east, a third of a "day" of wrist samples belongs to the day
+    before and the activity window lands nine hours off the workout it exists
+    to exclude — which is exactly what double-counts that workout's exertion.
+    Garmin's own daily rows have always been keyed by the device's day; these
+    pins are what make the heart-rate evidence agree with them.
+    """
+
+    def _trimp(self, path, timeline, today=date(2030, 4, 1)):
+        from modules.trends_queries import _hybrid_trimp
+        conn = _conn(path)
+        try:
+            return _hybrid_trimp(conn, str(path), _PARAMS, today, timeline)
+        finally:
+            conn.close()
+
+    def test_samples_straddling_device_midnight_split_into_two_days(
+            self, tmp_path):
+        """One UTC evening, two Tokyo days. Under the server's zone all eight
+        samples are one bucket; under the watch's they are two."""
+        path = _write_db(
+            tmp_path / "garmin_tokyo_split.db",
+            [(d, 7.0, 0, 0, None)
+             for d in ("2030-03-05", "2030-03-06", "2030-03-07")],
+            rest_hr={"2030-03-05": 50, "2030-03-06": 50},
+            timeseries=(
+                # Tokyo 2030-03-05 20:00-20:06 — still the 5th on the watch.
+                [("heart_rate", _utc_ms(2030, 3, 5, 11, m), 110.0)
+                 for m in (0, 2, 4, 6)]
+                # Tokyo 2030-03-06 01:00-01:06 — the 6th, same UTC evening.
+                + [("heart_rate", _utc_ms(2030, 3, 5, 16, m), 110.0)
+                   for m in (0, 2, 4, 6)]),
+            activities=[])
+
+        server = self._trimp(path, ZoneTimeline(timezone.utc, []))
+        assert sorted(server) == ["2030-03-05"]
+
+        device = self._trimp(path, _tokyo_timeline())
+        assert sorted(device) == ["2030-03-05", "2030-03-06"]
+        # Four samples each, two minutes apart, all at 110 against a rest of 50.
+        each = (4 * _banister(110, 50, 2.0), 0.0)
+        assert device["2030-03-05"] == pytest.approx(each)
+        assert device["2030-03-06"] == pytest.approx(each)
+
+    def test_an_activity_window_lands_on_the_device_clock(self, tmp_path):
+        """`activities.start_time` is a DEVICE-local wall clock. Read as
+        server-local it excludes the wrong nine hours — here, nothing at all,
+        so the workout's two loud samples are counted a second time on top of
+        the strap average that already represents them."""
+        path = _write_db(
+            tmp_path / "garmin_tokyo_window.db",
+            [("2030-03-06", 7.0, 0, 0, None)],
+            rest_hr={"2030-03-06": 50},
+            # Tokyo 08:57 .. 09:05 on 2030-03-06, two minutes apart. The two at
+            # 09:01 and 09:03 sit strictly inside the activity below and are
+            # loud (180) precisely so double-counting them is unmissable.
+            timeseries=[
+                ("heart_rate", _utc_ms(2030, 3, 5, 23, 57), 110.0),
+                ("heart_rate", _utc_ms(2030, 3, 5, 23, 59), 110.0),
+                ("heart_rate", _utc_ms(2030, 3, 6, 0, 1), 180.0),
+                ("heart_rate", _utc_ms(2030, 3, 6, 0, 3), 180.0),
+                ("heart_rate", _utc_ms(2030, 3, 6, 0, 5), 110.0),
+            ],
+            # 09:00 device-local + 240 s = the window [09:00, 09:04).
+            activities=[("act-1", "2030-03-06", "2030-03-06T09:00:00",
+                         240, 140)])
+
+        device = self._trimp(path, _tokyo_timeline())
+        out, act = device["2030-03-06"]
+        assert out == pytest.approx(3 * _banister(110, 50, 2.0))
+        assert act == pytest.approx(_banister(140, 50, 4.0))
+
+        # The bug this replaces, in both of its halves at once. Under the
+        # server's zone the day breaks at the WRONG midnight — the 08:57 and
+        # 08:59 samples fall off the far side into a bucket too thin to score
+        # — and the window is placed nine hours away, so it excludes nothing
+        # and the strap's own minutes are counted twice: once at 180 on the
+        # wrist, once at 140 on the strap.
+        server = self._trimp(path, ZoneTimeline(timezone.utc, []))
+        assert "2030-03-05" not in server
+        server_out = server["2030-03-06"][0]
+        assert server_out > out
+        assert server_out == pytest.approx(
+            2 * _banister(180, 50, 2.0) + _banister(110, 50, 2.0))
+
+    def test_a_window_straddling_a_westward_change_still_excludes(
+            self, tmp_path):
+        """The exclusion is keyed by INSTANTS, not by a calendar day.
+
+        Fly west mid-workout and the device clock rewinds across a midnight:
+        the ride's later samples bucket to the day BEFORE the one the activity
+        is filed under. The retired rule looked at this day's windows plus the
+        previous day's, on the reasoning that a workout can only spill FORWARD
+        past local midnight — which is true of a fixed zone and false of a
+        travelling one. Those post-change samples are the strap's own minutes;
+        counting them again on the wrist is the double-count this tier exists
+        to avoid.
+        """
+        path = _write_db(
+            tmp_path / "garmin_westward.db",
+            [(d, 7.0, 0, 0, None) for d in ("2030-03-05", "2030-03-06")],
+            rest_hr={"2030-03-05": 50, "2030-03-06": 50},
+            timeseries=[
+                # Tokyo 2030-03-06 05:02 .. 05:06 — inside the ride, before
+                # the change, and filed under the 6th like the activity.
+                ("heart_rate", _utc_ms(2030, 3, 5, 20, 2), 180.0),
+                ("heart_rate", _utc_ms(2030, 3, 5, 20, 4), 180.0),
+                ("heart_rate", _utc_ms(2030, 3, 5, 20, 6), 180.0),
+                # Still inside the ride, but now on UTC, where the clock reads
+                # 2030-03-05 20:4x — the day BEFORE the activity's own date.
+                ("heart_rate", _utc_ms(2030, 3, 5, 20, 40), 180.0),
+                ("heart_rate", _utc_ms(2030, 3, 5, 20, 42), 180.0),
+                ("heart_rate", _utc_ms(2030, 3, 5, 20, 44), 180.0),
+                # After the ride, same UTC day: the only wrist work that
+                # should survive on 2030-03-05.
+                ("heart_rate", _utc_ms(2030, 3, 5, 22, 10), 110.0),
+                ("heart_rate", _utc_ms(2030, 3, 5, 22, 12), 110.0),
+                ("heart_rate", _utc_ms(2030, 3, 5, 22, 14), 110.0),
+            ],
+            # Tokyo 2030-03-06 05:00 = 20:00Z, running two hours: the window
+            # [20:00Z, 22:00Z) spans the change point at 20:30Z.
+            activities=[("act-1", "2030-03-06", "2030-03-06T05:00:00",
+                         7200, 140)])
+
+        timeline = ZoneTimeline(
+            ZoneInfo("Asia/Tokyo"),
+            [(datetime(2030, 3, 5, 20, 30, tzinfo=timezone.utc), "UTC", 0)])
+        result = self._trimp(path, timeline)
+
+        # The activity's own date: every sample it holds is inside the window.
+        assert result["2030-03-06"][0] == 0.0
+        assert result["2030-03-06"][1] == pytest.approx(
+            _banister(140, 50, 120.0))
+        # The day the westward jump moved the rest of the ride onto: only the
+        # three post-ride samples count.
+        assert result["2030-03-05"][0] == pytest.approx(
+            3 * _banister(110, 50, 2.0))
+
+    def test_overlapping_windows_all_exclude(self, tmp_path):
+        """A ride logged inside a longer hike: the window that STARTED last is
+        not always the one still running, so the covering test cannot just
+        look at the nearest start."""
+        path = _write_db(
+            tmp_path / "garmin_overlap.db",
+            [("2030-03-06", 7.0, 0, 0, None)],
+            rest_hr={"2030-03-06": 50},
+            timeseries=[
+                ("heart_rate", _utc_ms(2030, 3, 6, 0, 2), 180.0),   # in both
+                ("heart_rate", _utc_ms(2030, 3, 6, 0, 4), 180.0),   # in outer
+                ("heart_rate", _utc_ms(2030, 3, 6, 0, 6), 180.0),   # in outer
+                ("heart_rate", _utc_ms(2030, 3, 6, 0, 20), 110.0),  # outside
+                ("heart_rate", _utc_ms(2030, 3, 6, 0, 22), 110.0),
+                ("heart_rate", _utc_ms(2030, 3, 6, 0, 24), 110.0),
+            ],
+            activities=[
+                # 09:00 +9h = 00:00Z, ten minutes -> [00:00Z, 00:10Z)
+                ("outer", "2030-03-06", "2030-03-06T09:00:00", 600, 130),
+                # 09:01 +9h = 00:01Z, two minutes -> [00:01Z, 00:03Z)
+                ("inner", "2030-03-06", "2030-03-06T09:01:00", 120, 150),
+            ])
+
+        out, _ = self._trimp(path, _tokyo_timeline())["2030-03-06"]
+        assert out == pytest.approx(3 * _banister(110, 50, 2.0))
+
+    def test_a_mid_day_change_point_buckets_each_half_by_its_own_zone(
+            self, tmp_path):
+        """The travel day itself: the morning is scored on the zone the watch
+        left, the evening on the one it arrived in, and the day is simply a
+        shorter interval rather than a broken one."""
+        path = _write_db(
+            tmp_path / "garmin_change_point.db",
+            [(d, 7.0, 0, 0, None) for d in ("2030-03-05", "2030-03-06")],
+            rest_hr={"2030-03-05": 50, "2030-03-06": 50},
+            timeseries=(
+                # Before noon UTC: still the server's zone -> the 5th.
+                [("heart_rate", _utc_ms(2030, 3, 5, 9, m), 110.0)
+                 for m in (0, 2, 4, 6)]
+                # After it: Tokyo, where 15:00Z is already 00:00 on the 6th.
+                + [("heart_rate", _utc_ms(2030, 3, 5, 15, m), 110.0)
+                   for m in (0, 2, 4, 6)]),
+            activities=[])
+
+        timeline = _tokyo_timeline(
+            switch=datetime(2030, 3, 5, 12, tzinfo=timezone.utc))
+        assert sorted(self._trimp(path, timeline)) == [
+            "2030-03-05", "2030-03-06"]
+
+    def test_an_unplaceable_activity_is_dropped_whole(self, tmp_path):
+        """A start_time inside the hours a zone jump skipped was never on the
+        watch's face. Unplaceable is unusable — the row goes, TRIMP and window
+        together, exactly as an unparseable one does, because keeping the strap
+        term without its exclusion would count the workout twice."""
+        path = _write_db(
+            tmp_path / "garmin_unplaceable.db",
+            [("2030-03-05", 7.0, 0, 0, None)],
+            rest_hr={"2030-03-05": 50},
+            timeseries=[("heart_rate", _utc_ms(2030, 3, 5, 9, m), 110.0)
+                        for m in (0, 2, 4, 6)],
+            # 15:00 device-local on the travel day: the clock jumped from
+            # 12:00 straight to 21:00, so this hour never existed.
+            activities=[("act-1", "2030-03-05", "2030-03-05T15:00:00",
+                         600, 140)])
+
+        timeline = _tokyo_timeline(
+            switch=datetime(2030, 3, 5, 12, tzinfo=timezone.utc))
+        out, act = self._trimp(path, timeline)["2030-03-05"]
+        assert act == 0.0
+        assert out == pytest.approx(4 * _banister(110, 50, 2.0))
+
+    def test_a_new_change_point_invalidates_the_memo(self, tmp_path):
+        """Every memoized bucket was computed under one timeline, so a change
+        point re-dates days on both sides of it. The marker carries the
+        timeline's fingerprint for exactly this: a settled day the memo would
+        otherwise own is rescanned rather than served under the old zone."""
+        path = _write_db(
+            tmp_path / "garmin_memo_zone.db",
+            [(d, 7.0, 0, 0, None)
+             for d in ("2030-03-05", "2030-03-06", "2030-03-07")],
+            rest_hr={"2030-03-05": 50, "2030-03-06": 50},
+            timeseries=[("heart_rate", _utc_ms(2030, 3, 5, 16, m), 110.0)
+                        for m in (0, 2, 4, 6)],
+            activities=[])
+        # today is far past the 7-day window, so these days are settled and
+        # the first pass memoizes them.
+        server_only = ZoneTimeline(timezone.utc, [])
+
+        assert sorted(self._trimp(path, server_only)) == ["2030-03-05"]
+
+        # Control: the same fingerprint DOES hold the memo. Edit the stream to
+        # a value that would score differently and watch nothing move.
+        edit = sqlite3.connect(path)
+        edit.execute("UPDATE timeseries SET value = 170.0")
+        edit.commit()
+        edit.close()
+        held = self._trimp(path, server_only)
+        assert held["2030-03-05"][0] == pytest.approx(
+            4 * _banister(110, 50, 2.0))
+
+        # A change point moves the fingerprint: full rescan, so the day is
+        # re-dated to the watch's AND picks up the edit the memo was hiding.
+        moved = self._trimp(path, _tokyo_timeline())
+        assert sorted(moved) == ["2030-03-06"]
+        assert moved["2030-03-06"][0] == pytest.approx(
+            4 * _banister(170, 50, 2.0))
+
+        # And back: the fingerprint differs again, so the memo does not serve
+        # the Tokyo buckets to a server-zone reader either.
+        assert sorted(self._trimp(path, server_only)) == ["2030-03-05"]
+
+
+
+
+@pytest.mark.integration
+class TestLedgerTodayFromTheHeader:
+    """`today` is the REQUEST's calendar date. On a phone a day ahead of the
+    server, the night the watch just scored must not read as a future row."""
+
+    @pytest.fixture
+    def spread(self, tmp_path):
+        """Nights across whatever pair of dates the host and the far zone
+        disagree about, with sleep varying so every row's debt is distinct —
+        which is what makes "tonight carried THIS row" a sharp claim."""
+        zone_name, there, offset_min = _zone_on_another_date()
+        here = date.today()
+        first = min(here, there) - timedelta(days=3)
+        span = (max(here, there) - first).days
+        rows = [((first + timedelta(days=i)).isoformat(),
+                 7.0 - 0.25 * i, 0, 0, None)
+                for i in range(span + 1)]
+        _write_db(tmp_path / "garmin_zone_today.db", rows)
+        return {"path": tmp_path / "garmin_zone_today.db",
+                "zone": zone_name, "offset": offset_min,
+                "here": here, "there": there,
+                "start": first.isoformat(),
+                "end": max(here, there).isoformat()}
+
+    def _fetch(self, spread, client, monkeypatch, headers=None):
+        with _fresh_client(spread["path"], monkeypatch) as c:
+            return c.get("/wellness/api/trends/health/sleep",
+                         params={"start": spread["start"],
+                                 "end": spread["end"]},
+                         headers=headers or {}).json()
+
+    def test_tonight_is_the_devices_date(self, spread, client, monkeypatch):
+        data = self._fetch(spread, client, monkeypatch, headers={
+            "X-Client-Zone": spread["zone"],
+            "X-Client-Offset-Min": str(spread["offset"])})
+        by_date = {r["date"]: r for r in data["days"]}
+        there = spread["there"].isoformat()
+
+        assert data["tonight"]["date"] == there
+        assert there != spread["here"].isoformat()
+        # The night keyed by the device's today is the ledger position tonight
+        # carries — the card and the chart's last point are one statement.
+        assert data["tonight"]["debt_min"] == by_date[there]["debt_min"]
+
+    def test_without_headers_the_server_clock_still_rules(
+            self, spread, client, monkeypatch):
+        data = self._fetch(spread, client, monkeypatch)
+        by_date = {r["date"]: r for r in data["days"]}
+        here = spread["here"].isoformat()
+
+        assert data["tonight"]["date"] == here
+        assert data["tonight"]["debt_min"] == by_date[here]["debt_min"]
+
+    def test_the_two_answers_actually_differ(self, spread, client,
+                                             monkeypatch):
+        """Guard against a fixture that accidentally makes both readings the
+        same number — then neither test above would be saying anything."""
+        with_headers = self._fetch(spread, client, monkeypatch, headers={
+            "X-Client-Zone": spread["zone"],
+            "X-Client-Offset-Min": str(spread["offset"])})
+        without = self._fetch(spread, client, monkeypatch)
+        assert with_headers["tonight"] != without["tonight"]
+
+    def test_an_unresolvable_zone_falls_back_to_the_server_date(
+            self, spread, client, monkeypatch):
+        """Both headers present, but this host's tz database has never heard of
+        the id. The ledger uses the date it has always used rather than
+        inventing one from the offset."""
+        data = self._fetch(spread, client, monkeypatch, headers={
+            "X-Client-Zone": "Mars/Olympus", "X-Client-Offset-Min": "90"})
+        assert data["tonight"]["date"] == spread["here"].isoformat()
+
+
+@pytest.mark.integration
+class TestHeaderlessBytesAreUnchanged:
+    """The compatibility claim, at the byte level, on a fixture with BOTH
+    hybrid tables populated — the shape where the device clock does the most
+    work and therefore has the most to break.
+
+    A deployment with no Android client, and every day of history recorded
+    before the first header arrived, must serve exactly what it served before
+    this feature existed. `TestTheRetiredSqlGrouping` in test_device_clock.py
+    pins the bucketing rule against sqlite itself; this pins the wire.
+    """
+
+    def test_the_response_bytes_are_exactly_the_derived_ledger(
+            self, tmp_hybrid_db, client, monkeypatch):
+        today = tmp_hybrid_db["today"]
+
+        def d(n):
+            return _iso(today - timedelta(days=n))
+
+        # Hand-derived in TestHybridStrainTier.test_hybrid_math_pin, from the
+        # invented params at the top of this file. Repeated as a literal on
+        # purpose: a byte pin that computed its own expectation from the code
+        # under test would pin nothing.
+        expected = {
+            "available": True,
+            "as_of": d(0),
+            "tonight": {"date": d(0), "need_min": 400.2, "debt_min": 1.7,
+                        "strain_est": 1.0, "strain_partial": True},
+            "days": [
+                {"date": d(2), "need_min": 400.0, "slept_min": 420.0,
+                 "debt_min": 0.0, "strain_est": 0.0},
+                {"date": d(1), "need_min": 398.7, "slept_min": 420.0,
+                 "debt_min": 0.0, "strain_est": 3.2},
+                {"date": d(0), "need_min": 414.2, "slept_min": 420.0,
+                 "debt_min": 1.7, "strain_est": 7.7},
+            ],
+        }
+
+        with _fresh_client(tmp_hybrid_db["path"], monkeypatch) as c:
+            resp = c.get("/wellness/api/trends/health/sleep")
+
+        # Key ORDER is part of the claim, not just the values — which is why
+        # this compares bytes rather than parsed JSON.
+        assert resp.content == json.dumps(
+            expected, ensure_ascii=False, separators=(",", ":")).encode()
+
+    def test_a_timeline_stating_the_server_zone_changes_no_bytes(
+            self, tmp_hybrid_db):
+        """A change point that does not actually change the zone must be
+        invisible. The segment machinery — bucketer windows, memo
+        invalidation, window placement — has to introduce no artifacts of its
+        own, or the empty-timeline compatibility claim is luck rather than
+        design.
+
+        The zone here is Tokyo for both runs, injected rather than inherited
+        from the host, and the change point sits in the MIDDLE of the data so
+        samples and activity windows straddle it.
+        """
+        from modules import trends_queries
+        from modules.db import DbAccessor
+
+        today = tmp_hybrid_db["today"]
+        accessor = DbAccessor(tmp_hybrid_db["path"], read_only=True)
+        tokyo = ZoneInfo("Asia/Tokyo")
+        midpoint = datetime.combine(
+            today - timedelta(days=1), time(12, 0), tzinfo=timezone.utc)
+
+        def run(timeline):
+            return trends_queries.sleep_series(
+                accessor, _PARAMS, end=_iso(today), today=today,
+                timeline=timeline)
+
+        one_segment = run(ZoneTimeline(tokyo, []))
+        two_segments = run(ZoneTimeline(tokyo, [(midpoint, "Asia/Tokyo", 540)]))
+
+        assert json.dumps(two_segments) == json.dumps(one_segment)
+        assert one_segment["available"] is True
+        assert len(one_segment["days"]) == 3   # the fixture really was scored
+
+
+@pytest.mark.integration
+class TestDefaultEndFollowsTheDevice:
+    """`end` defaults to a date the client never sent, so it has to be the
+    client's own. On a phone a day ahead of the server, a server-dated default
+    would clip the very day the phone is asking about — the row it opened the
+    app to see.
+
+    Deterministic in both directions: whichever way the far zone differs, the
+    emitted range must end on the DEVICE's date with headers and on the
+    SERVER's without them, so this says something real at any hour.
+    """
+
+    @pytest.fixture
+    def spread(self, tmp_path):
+        zone_name, there, offset_min = _zone_on_another_date()
+        here = date.today()
+        first = min(here, there) - timedelta(days=3)
+        span = (max(here, there) - first).days
+        rows = [((first + timedelta(days=i)).isoformat(),
+                 7.0 - 0.25 * i, 0, 0, None)
+                for i in range(span + 1)]
+        _write_db(tmp_path / "garmin_default_end.db", rows)
+        return {"path": tmp_path / "garmin_default_end.db",
+                "zone": zone_name, "offset": offset_min,
+                "here": here, "there": there}
+
+    def test_the_range_ends_on_the_devices_date(self, spread, client,
+                                                monkeypatch):
+        with _fresh_client(spread["path"], monkeypatch) as c:
+            # No `start`, no `end` — everything is a default.
+            with_headers = c.get(
+                "/wellness/api/trends/health/sleep",
+                headers={"X-Client-Zone": spread["zone"],
+                         "X-Client-Offset-Min": str(spread["offset"])}).json()
+            without = c.get("/wellness/api/trends/health/sleep").json()
+
+        assert (max(r["date"] for r in with_headers["days"])
+                == spread["there"].isoformat())
+        assert (max(r["date"] for r in without["days"])
+                == spread["here"].isoformat())
+        assert spread["there"] != spread["here"]
+
+    def test_an_explicit_end_still_wins(self, spread, client, monkeypatch):
+        """The default is a fallback, never an override — a client that names
+        its range gets exactly that range."""
+        asked = (min(spread["here"], spread["there"]) - timedelta(days=1))
+        with _fresh_client(spread["path"], monkeypatch) as c:
+            data = c.get("/wellness/api/trends/health/sleep",
+                         params={"end": asked.isoformat()},
+                         headers={"X-Client-Zone": spread["zone"],
+                                  "X-Client-Offset-Min": str(spread["offset"])}
+                         ).json()
+        assert max(r["date"] for r in data["days"]) == asked.isoformat()

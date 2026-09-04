@@ -33,6 +33,7 @@ def _run_import_snippet(snippet: str, db_dir: Path):
         "COACH_DB_PATH": str(db_dir / "coach.db"),
         "ANALYSIS_DB_PATH": str(db_dir / "analysis.db"),
         "HR_DB_PATH": str(db_dir / "hr.db"),
+        "GARMIN_MODULE_DB_PATH": str(db_dir / "garmin.db"),
     }
     return subprocess.run(
         [sys.executable, "-c", snippet],

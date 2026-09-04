@@ -1,8 +1,10 @@
 """Garmin module registration and the config seam (mirrors trends' Phase 0).
 
-The garmin module is BOTH headless and DB-less: no tab, no database, and
-create_app calls its factory with no argument. Its one piece of configuration
-is the sync-script seam, which resolves exactly like get_hook_path.
+The garmin module is headless (no tab) and owns ONE small table of its own —
+`client_zones`, the device-clock timeline — so create_app calls its factory
+with a db_path like every other DB-owning module. Its other two seams are
+external: the sync script (resolving exactly like get_hook_path) and garmy's
+health DB, whose env var must stay distinct from the module's own.
 """
 
 from datetime import datetime, timezone
@@ -10,7 +12,8 @@ from pathlib import Path
 
 import pytest
 
-from config import MODULES, get_garmin_sync_cmd
+from config import (MODULES, get_garmin_sync_cmd, get_module_db_path,
+                    get_garmin_db_path)
 from modules.garmin import _parse_naive_utc
 
 
@@ -19,11 +22,21 @@ class TestRegistrySeam:
     def _garmin(self):
         return next(m for m in MODULES if m["id"] == "garmin")
 
-    def test_garmin_entry_is_db_less(self):
+    def test_garmin_entry_owns_its_own_database(self):
         garmin = self._garmin()
-        assert "db_env" not in garmin
-        assert "db_default" not in garmin
+        assert garmin["db_env"] == "GARMIN_MODULE_DB_PATH"
+        assert garmin["db_default"].name == "garmin.db"
         assert garmin["api_prefix"] == "/api/garmin"
+
+    def test_module_db_and_garmy_db_are_different_seams(self, monkeypatch,
+                                                        tmp_path):
+        """The module's own storage and garmy's health database are two files
+        behind two env vars. Collapsing them would point the device-clock
+        writer at a database this repo must never write to."""
+        monkeypatch.setenv("GARMIN_MODULE_DB_PATH", str(tmp_path / "mine.db"))
+        monkeypatch.setenv("GARMIN_DB_PATH", str(tmp_path / "garmy.db"))
+        assert get_module_db_path("garmin") == tmp_path / "mine.db"
+        assert get_garmin_db_path() == tmp_path / "garmy.db"
 
     def test_garmin_entry_is_headless(self):
         """Headless entries carry no presentation fields — the /api/modules

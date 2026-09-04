@@ -1,12 +1,26 @@
 """
-Garmin API Router — an on-demand trigger for the external garmy sync.
+Garmin API Router — an on-demand trigger for the external garmy sync, plus the
+device-clock timeline the rest of the server buckets Garmin data by.
 
-A headless AND DB-less module: it owns no storage and mounts no PWA tab. It is a
-*command* surface, not a data one — the Garmin data itself keeps arriving in
-`~/.garmy/health.db` (written by `bin/garmin-sync.sh`, from cron or from here)
-and keeps being read by trends. All this module does is let a client say "sync
-now" and ask "are you done yet", which is what turns a Trends pull-to-refresh
-into fresh data instead of a re-read of yesterday's.
+A headless module: it mounts no PWA tab. It is mostly a *command* surface, not
+a data one — the Garmin data itself keeps arriving in `~/.garmy/health.db`
+(written by `bin/garmin-sync.sh`, from cron or from here) and keeps being read
+by trends. What the endpoints do is let a client say "sync now" and ask "are
+you done yet", which is what turns a Trends pull-to-refresh into fresh data
+instead of a re-read of yesterday's.
+
+It does own ONE small table, in a database of its own (`data/garmin.db`,
+`GARMIN_MODULE_DB_PATH` — NOT garmy's `GARMIN_DB_PATH`, which this module only
+ever reads): `client_zones`, the device-clock change-point timeline documented
+in docs/ARCHITECTURE.md "Device clock". Every request from the Android client
+carries the phone's zone id and UTC offset; a middleware in the app hands the
+valid ones to `record_client_zone`, which appends a row only when the pair
+differs from the in-process tail, so the steady state costs no I/O at all.
+`load_zone_timeline` reads the points back for `modules.device_clock`, which
+turns them into the "which zone was the watch in at instant t" function that
+the strain estimator and the sleep ledger bucket by. The table lives HERE
+rather than in trends because trends owns no database by design — and the zone
+is Garmin-shaped data: it exists only to place Garmin's rows on the right day.
 
 Wire contract (documented in docs/ARCHITECTURE.md "Garmin", its home):
 
@@ -33,15 +47,17 @@ import math
 import os
 import signal
 import sqlite3
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter
 
 from config import get_garmin_db_path, get_garmin_sync_cmd
 from modules.background import spawn
-from modules.db import get_db
+from modules.db import DbAccessor, enable_wal, get_db, run_migrations
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +73,223 @@ COOLDOWN_SECONDS = 600
 
 # --last-days 2 --resync-days 2: an on-demand top-up, not the cron's 7/3 sweep.
 SYNC_ARGS = ("2", "2")
+
+
+# ==================== Device-clock timeline (client_zones) ====================
+
+# ±14 h covers every real UTC offset (Kiritimati +14, Baker Island −12), and a
+# quarter-hour step covers every one that exists (Kathmandu +05:45, Chatham
+# +12:45). Anything else is a client bug or a forged header — ignored, never a
+# 4xx: a request must not fail over a field it does not depend on.
+MAX_OFFSET_MIN = 840
+OFFSET_STEP_MIN = 15
+
+
+def _migration_1_client_zones(cursor):
+    """Baseline: the device-clock CHANGE-POINT timeline.
+
+    One row per observed change, not per request — see `record_client_zone`.
+    `observed_at` is a UTC 'YYYY-MM-DDTHH:MM:SS' string, compared lexically
+    like every other server stamp (root CLAUDE.md), and indexed because it is
+    the only ordering the readers ever ask for. `zone_id` is stored exactly as
+    the phone spelled it, and `parse_client_clock` has already resolved it, so
+    a row written by this server always carries an id `zoneinfo` knew at the
+    time. `offset_min` is stored anyway: it is the reader's fallback for a row
+    this server did not write (a hand-edited or corrupt one) and for the day a
+    tz-database update retires an id the row still names.
+
+    A plain CREATE, not CREATE IF NOT EXISTS: this database is greenfield (the
+    module owned no storage before), so there is no unversioned predecessor to
+    adopt. Same reasoning as the hr module's baseline.
+    """
+    cursor.execute("""
+        CREATE TABLE client_zones (
+            id          INTEGER PRIMARY KEY,
+            observed_at TEXT    NOT NULL,
+            zone_id     TEXT    NOT NULL,
+            offset_min  INTEGER NOT NULL
+        )
+    """)
+    cursor.execute(
+        "CREATE INDEX idx_client_zones_observed_at "
+        "ON client_zones(observed_at)")
+
+
+# Ordered (target_version, migration_fn) pairs — see db.run_migrations for the
+# transactional contract. Migration fns are DDL-only and must not manage their
+# own transactions.
+MIGRATIONS = [
+    (1, _migration_1_client_zones),
+]
+
+# Last (zone_id, offset_min) written or read per database path — the tail the
+# change-point rule compares against, so a steady phone costs one dict lookup
+# per request instead of a write. Keyed by path for the same reason the strain
+# memo is: two databases in one process (the test suite) must not see each
+# other's tail. Touched only under the lock, `_trimp_lock`'s idiom.
+_zone_tail = {}
+_zone_tail_lock = threading.Lock()
+_UNSET = object()
+
+
+def init_database(accessor):
+    """Initialize the garmin module database via the shared migration registry.
+
+    Enables WAL once (outside any transaction) then applies pending migrations
+    transactionally. See db.run_migrations for the BEGIN IMMEDIATE / in-lock
+    re-check contract.
+    """
+    with accessor.get_db() as conn:
+        enable_wal(conn)
+        run_migrations(conn, MIGRATIONS, label="Garmin module DB")
+
+
+def _observed_at(now_utc: datetime) -> str:
+    """Stamp a change point: UTC, ISO, second resolution. A naive input is
+    read as UTC (the repo's rule for naive instants)."""
+    if now_utc.tzinfo is not None:
+        now_utc = now_utc.astimezone(timezone.utc)
+    return now_utc.strftime("%Y-%m-%dT%H:%M:%S")
+
+
+def parse_client_clock(zone_id, offset_min):
+    """A reported clock as a `ZoneInfo`, or None when the PAIR is not one we
+    accept. The single authority on that question.
+
+    Both the app's clock middleware and `record_client_zone` go through here,
+    which is the point: a pair good enough to move a handler's calendar date
+    must be exactly the pair good enough to store. Split validation would let
+    `Pacific/Kiritimati` with a nonsense offset shift the sleep ledger's
+    `today` while writing no row to explain it.
+
+    Three independent checks, all cheap: the id must be one `zoneinfo`
+    resolves (ZoneInfo caches, so a repeat costs a dict lookup), the offset
+    must be a real one, and it must fall on a quarter hour. A pair failing any
+    of them is dropped silently — the header is advisory, and a bad one must
+    never become an error the client has to handle.
+    """
+    if not isinstance(zone_id, str) or not zone_id:
+        return None
+    if isinstance(offset_min, bool) or not isinstance(offset_min, int):
+        return None
+    if not -MAX_OFFSET_MIN <= offset_min <= MAX_OFFSET_MIN:
+        return None
+    if offset_min % OFFSET_STEP_MIN != 0:
+        return None
+    try:
+        return ZoneInfo(zone_id)
+    except (ZoneInfoNotFoundError, ValueError, TypeError):
+        return None
+
+
+def _read_zone_tail(db_path):
+    """The newest stored (zone_id, offset_min), or None when there is none.
+
+    Read-only, so a missing file is an error rather than a newly created empty
+    database — exactly what "no observations yet" should look like.
+    """
+    if not Path(db_path).exists():
+        return None
+    try:
+        with get_db(db_path, read_only=True) as conn:
+            row = conn.execute(
+                "SELECT zone_id, offset_min FROM client_zones "
+                "ORDER BY observed_at DESC, id DESC LIMIT 1").fetchone()
+    except sqlite3.Error:
+        return None
+    return (str(row["zone_id"]), int(row["offset_min"])) if row else None
+
+
+def record_client_zone(db_path, zone_id, offset_min, now_utc=None) -> bool:
+    """Record a client clock, writing only when it CHANGED. Returns whether a
+    row was written.
+
+    BLOCKING sqlite3 work — the caller (the app's middleware) runs it through
+    `asyncio.to_thread`, per modules/db.py's standing contract.
+
+    The timeline is change points, not a request log: the tail is held in
+    process, so the overwhelmingly common case (the same phone, same zone, all
+    day) reads a dict and returns. The first call for a path loads the tail
+    from the database so a restart does not re-record the zone it already has.
+
+    This function NEVER raises. A header is advisory data on a request that
+    is about something else entirely; a locked database or a schema that is
+    not there must cost a log line, not the client's request.
+    """
+    if parse_client_clock(zone_id, offset_min) is None:
+        return False
+    now_utc = now_utc or datetime.now(timezone.utc)
+    key = str(db_path)
+    pair = (zone_id, offset_min)
+    try:
+        with _zone_tail_lock:
+            tail = _zone_tail.get(key, _UNSET)
+            if tail is _UNSET:
+                tail = _read_zone_tail(db_path)
+            if tail == pair:
+                _zone_tail[key] = tail
+                return False
+            if not Path(db_path).exists():
+                # The module owns this file's creation (create_router migrates
+                # it). Writing here would make an empty, table-less database
+                # that every later read has to survive.
+                logger.warning(
+                    "Client zone not recorded: %s does not exist", db_path)
+                return False
+            with get_db(db_path) as conn:
+                conn.execute(
+                    "INSERT INTO client_zones (observed_at, zone_id, offset_min) "
+                    "VALUES (?, ?, ?)",
+                    (_observed_at(now_utc), zone_id, offset_min))
+                conn.commit()
+            _zone_tail[key] = pair
+            return True
+    except sqlite3.Error:
+        # The zone id never reaches the log: it is where the user physically
+        # is, and a log line is a wider audience than the database row.
+        logger.warning("Could not record the client clock", exc_info=True)
+        return False
+    except Exception:
+        logger.exception("Unexpected failure recording the client clock")
+        return False
+
+
+def load_zone_timeline(db_path):
+    """The recorded change points as [(observed_at_utc, zone_id, offset_min)],
+    oldest first.
+
+    Every "we cannot tell" case collapses to the empty list, which the reader
+    reads as "no observations, use the server's zone" — the behaviour that
+    predates the device clock. That covers a missing file (the module
+    disabled, or a fresh clone), a database without the table, and a read
+    error; and per row, an `observed_at` or `offset_min` that will not parse.
+    """
+    if db_path is None or not Path(db_path).exists():
+        return []
+    try:
+        with get_db(db_path, read_only=True) as conn:
+            rows = conn.execute(
+                "SELECT observed_at, zone_id, offset_min FROM client_zones "
+                "ORDER BY observed_at, id").fetchall()
+    except sqlite3.Error:
+        return []
+
+    points = []
+    for row in rows:
+        try:
+            observed = datetime.fromisoformat(str(row["observed_at"]))
+            offset = int(row["offset_min"])
+        except (TypeError, ValueError):
+            continue
+        if observed.tzinfo is None:
+            observed = observed.replace(tzinfo=timezone.utc)
+        points.append(
+            (observed.astimezone(timezone.utc), str(row["zone_id"]), offset))
+    points.sort(key=lambda p: p[0])
+    return points
+
+
+# ==================== Sync trigger ====================
 
 
 def _now_mono() -> float:
@@ -186,19 +419,24 @@ async def _run_sync(state, lock, cmd: Path):
         state["last_outcome"] = outcome
 
 
-def create_router() -> APIRouter:
-    """Factory for a DB-less module: no argument, no storage, no migration.
+def create_router(db_path: Path) -> APIRouter:
+    """Factory: migrate the module's own database, then build the router.
+
+    `db_path` is the module's `client_zones` storage (GARMIN_MODULE_DB_PATH).
+    Migrating it here — at app construction, like every other DB-owning module
+    — is what lets `record_client_zone` refuse to create the file itself.
 
     Single-flight state lives in this closure — one dict per router, so two
     routers in one process (tests) cannot see each other's runs, and the app's
     single uvicorn process gives it exactly the scope it claims.
 
-    Both seams (the script path and the Garmin DB path) resolve **per request**
-    rather than here. Unlike trends — which builds five accessors used by dozens
-    of handlers and logs a one-time absence — this module makes one occasional
-    single-row read, so there is nothing to amortize, and one rule ("resolve at
-    use") covers both seams instead of two.
+    The two EXTERNAL seams (the sync script path and garmy's health DB path)
+    still resolve **per request** rather than here. Unlike trends — which
+    builds five accessors used by dozens of handlers and logs a one-time
+    absence — this module makes one occasional single-row read against them, so
+    there is nothing to amortize, and one rule ("resolve at use") covers both.
     """
+    init_database(DbAccessor(db_path))
     state = {
         "running": False,
         "last_attempt_mono": None,

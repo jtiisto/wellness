@@ -36,6 +36,7 @@ from pathlib import Path
 
 from modules.coach_logs import AD_HOC_LOG_SLUGS
 from modules.db import column_exists, read_transaction
+from modules.device_clock import ZoneTimeline
 from modules.journal_adherence import (
     entry_present,
     compute_adherence,
@@ -872,15 +873,19 @@ _TRIMP_RECENT_DAYS = 7
 # keeps the test suite honest — every test points GARMIN_DB_PATH at its own
 # fresh tmp file, so no test can read another's memo (and re-pointing the env
 # var in production starts cold too). `_trimp_scanned` records, per path, the
-# settled-history marker of the one full pass: (floor_ms, row_count) — the
-# count of wrist rows OLDER than the floor at scan time. A warm request
-# re-counts at that stored floor and a mismatch forces a full rescan: that is
-# what catches a backfill deeper than the recent window, or a database file
-# swapped in place, which the recompute window alone would never see. After a
-# clean check the SQL window shrinks to the recent days. The memo is NOT keyed
-# by the fitted params (a module-level import, constant per process), and all
-# shared state is touched only under `_trimp_lock` — FastAPI serves sync
-# routes from a threadpool, so two requests can race this module.
+# settled-history marker of the one full pass: (floor_ms, row_count,
+# timeline_fingerprint) — the count of wrist rows OLDER than the floor at scan
+# time, plus the device clock those rows were bucketed under, because every
+# bucket in the memo was computed on that timeline and a new change point
+# re-dates the days on both sides of it. A
+# warm request re-counts at that stored floor and a mismatch (in either field)
+# forces a full rescan: that is what catches a backfill deeper than the recent
+# window, a database file swapped in place, or the watch having moved zones —
+# none of which the recompute window alone would ever see. After a clean check
+# the SQL window shrinks to the recent days. The memo is NOT keyed by the
+# fitted params (a module-level import, constant per process), and all shared
+# state is touched only under `_trimp_lock` — FastAPI serves sync routes from
+# a threadpool, so two requests can race this module.
 _trimp_cache = {}
 _trimp_scanned = {}
 _trimp_lock = threading.Lock()
@@ -902,12 +907,34 @@ def _banister(hr, rest, hr_max, minutes) -> float:
 
 
 def _local_midnight_ms(d: date) -> int:
-    """Epoch milliseconds at local midnight starting `d` — the same local
-    calendar boundary sqlite's `date(..., 'localtime')` grouping uses."""
+    """Epoch milliseconds at SERVER-local midnight starting `d`.
+
+    Only the warm window's floor uses this now — a coarse "read back at least
+    this far" bound, deliberately generous rather than exact, because the day
+    a sample belongs to is the DEVICE's (see `_hybrid_trimp`) and the device
+    can be up to fourteen hours either side of the server.
+    """
     return int(datetime.combine(d, time.min).timestamp() * 1000)
 
 
-def _hybrid_trimp(conn, db_path, params, today):
+def _covered(starts, max_ends, ts) -> bool:
+    """Whether an instant falls inside ANY activity window, in O(log n).
+
+    A window is a span of real time, and that is the only thing it is keyed
+    by. The former per-date lookup — this day's windows plus the previous
+    day's, on the reasoning that a workout can only spill FORWARD past local
+    midnight — stops being true on the device clock: fly west mid-ride and the
+    ride's later samples bucket to the day BEFORE the one it is filed under.
+    Comparing timestamps to timestamps has no such blind spot.
+
+    Half-open [start, end), so two back-to-back activities cannot both claim
+    the single instant where one ends and the next begins.
+    """
+    index = bisect.bisect_right(starts, ts) - 1
+    return index >= 0 and max_ends[index] > ts
+
+
+def _hybrid_trimp(conn, db_path, params, today, timeline):
     """{date: (trimp_out, trimp_act)} for every day the hybrid tier can score.
 
     Two heart-rate sources, kept SEPARATE because their quality differs: the
@@ -923,6 +950,17 @@ def _hybrid_trimp(conn, db_path, params, today):
     per-day/per-table degradation: the caller drops that day to the next
     estimator tier. Neither ever reaches the endpoint's `available` flag —
     every Garmin DB predating these tables still serves a full ledger.
+
+    Every day here is the DEVICE's, never the server's (`timeline`, see
+    modules/device_clock and ARCHITECTURE.md "Device clock"): wrist samples are
+    true-UTC epochs bucketed by the device-local date of each sample, and an
+    activity's device-local `start_time` is placed by the zone in force at that
+    instant. Garmin's own daily rows are already keyed the same way, which is
+    the whole point — nine hours east, a server-local bucketing puts a third of
+    the day's samples on the wrong row and the exclusion window nine hours off
+    the workout it is supposed to exclude. An EMPTY timeline is the server's
+    own zone from -infinity, which reproduces the former `localtime` grouping
+    exactly, so a deployment with no Android client reads as it always did.
     """
     hybrid = getattr(params, "hybrid", None)
     if hybrid is None:
@@ -932,19 +970,22 @@ def _hybrid_trimp(conn, db_path, params, today):
 
     cutoff_date = today - timedelta(days=_TRIMP_RECENT_DAYS)
     cutoff = cutoff_date.isoformat()
-    floor_ms = _local_midnight_ms(cutoff_date - timedelta(days=1))
+    floor_ms = _local_midnight_ms(cutoff_date - timedelta(days=2))
+    fingerprint = timeline.fingerprint
     with _trimp_lock:
         marker = _trimp_scanned.get(db_path)
     try:
         warm = False
-        if marker is not None:
+        if marker is not None and marker[2] == fingerprint:
             # Verify the settled history is still the one we scanned: count
             # the wrist rows older than THAT pass's floor and compare. A
             # mismatch means a backfill deeper than the recent window or a
             # database file swapped in place — either way the memo is a lie
             # and the pass falls back to a full rescan. The COUNT rides the
             # same PK index as the reads (~10 ms), cheap insurance per request.
-            old_floor, old_count = marker
+            # A changed fingerprint (above) skips the check entirely: the
+            # timeline itself moved, so every memoized bucket is suspect.
+            old_floor, old_count = marker[0], marker[1]
             cur_count = conn.execute(
                 "SELECT COUNT(*) FROM timeseries WHERE user_id = 1 "
                 "AND metric_type = 'heart_rate' AND timestamp < ?",
@@ -954,43 +995,71 @@ def _hybrid_trimp(conn, db_path, params, today):
         # SEARCH rather than a scan of every metric in the table — and the warm
         # window's `timestamp >=` rides the same index (verified with EXPLAIN
         # QUERY PLAN). Pinning user_id also matches every other reader here.
-        sql = ("SELECT date(timestamp/1000,'unixepoch','localtime') d, "
-               "timestamp, value FROM timeseries "
+        sql = ("SELECT timestamp, value FROM timeseries "
                "WHERE user_id = 1 AND metric_type = 'heart_rate'")
+        order = " ORDER BY timestamp"
         args = []
         if warm:
             # The whole point of the memo: after the first pass only the
-            # mutable tail is read back. The floor is one day LOOSE because a
-            # local midnight is not always a real instant (a DST jump can skip
-            # it), and an instant an hour either side of the intended boundary
-            # would silently truncate the cutoff day's own samples. Reading a
-            # day too many costs one day of rows; the `ds < cutoff` skip below
-            # is what discards the spill, and it is a settled day's memo that
-            # would otherwise be overwritten with a partial recomputation.
+            # mutable tail is read back. The floor is TWO days loose, and both
+            # days are earned: a server-local midnight is not always a real
+            # instant (a DST jump can skip it), and the day a sample belongs to
+            # is the DEVICE's, which can sit up to fourteen hours either side
+            # of the server's. Anything tighter would silently truncate the
+            # cutoff day's own samples. Reading two days too many costs two
+            # days of rows; the `ds < cutoff` skip below is what discards the
+            # spill, and it is a settled day's memo that would otherwise be
+            # overwritten with a partial recomputation.
             sql += " AND timestamp >= ?"
             args.append(floor_ms)
+        # One bucketer for the whole scan: it caches the epoch window of the
+        # local day it last answered, so a run of samples inside one day costs
+        # integer comparisons rather than a timezone conversion apiece. That
+        # cache is why the ORDER BY is spelled out rather than assumed — the
+        # composite index already yields this order, so it is free, and the
+        # bucketer's speed stops depending on a query plan nobody pinned.
+        bucket = timeline.bucketer()
         samples = defaultdict(list)
-        for r in conn.execute(sql, args):
-            samples[str(r["d"])].append((r["timestamp"], r["value"]))
+        for r in conn.execute(sql + order, args):
+            ds = bucket(r["timestamp"])
+            if ds is None:
+                continue          # an instant no calendar on this host has
+            samples[ds].append((r["timestamp"], r["value"]))
 
         # Activities are a few hundred rows all told — read whole, no window.
-        windows, acts = defaultdict(list), defaultdict(list)
+        # The exclusion windows are kept in ONE list keyed by nothing but the
+        # instants they cover; only the strap TRIMP stays keyed by the
+        # activity's own date. A window is a span of real time, and after a
+        # westward zone change mid-workout its later samples bucket to the day
+        # BEFORE the one the activity is filed under — so any per-date lookup,
+        # however many neighbours it consults, is guessing at a relationship
+        # the timestamps already state exactly.
+        windows, acts = [], defaultdict(list)
         for r in conn.execute(
                 "SELECT activity_date, start_time, duration_seconds, "
                 "avg_heart_rate FROM activities "
                 "WHERE user_id = 1 AND avg_heart_rate IS NOT NULL"):
-            try:
-                start = datetime.fromisoformat(
-                    str(r["start_time"])).timestamp() * 1000
-            except (TypeError, ValueError):
-                # start_time is a local ISO string on every row the sync tool
-                # writes. A row that won't parse is dropped WHOLE — its TRIMP
-                # with its window — because keeping the strap term without the
-                # exclusion it justifies would count that workout twice.
-                continue
-            seconds = r["duration_seconds"] or 0
             ds = str(r["activity_date"])
-            windows[ds].append((start, start + seconds * 1000))
+            try:
+                started = datetime.fromisoformat(str(r["start_time"]))
+                hint = date.fromisoformat(ds)
+            except (TypeError, ValueError):
+                # start_time is a DEVICE-local ISO string on every row the sync
+                # tool writes. A row that won't parse is dropped WHOLE — its
+                # TRIMP with its window — because keeping the strap term
+                # without the exclusion it justifies would count that workout
+                # twice. (An unparseable activity_date takes the row with it:
+                # every map below is keyed by that date.)
+                continue
+            start_utc = timeline.utc_of_local(started, hint=hint)
+            if start_utc is None:
+                # A wall clock the device never displayed — stranded by a zone
+                # jump, or inside the hour a spring-forward skips. Unplaceable
+                # is unusable: same whole-row drop, for the same reason.
+                continue
+            start = start_utc.timestamp() * 1000
+            seconds = r["duration_seconds"] or 0
+            windows.append((start, start + seconds * 1000))
             acts[ds].append((r["avg_heart_rate"], seconds / 60.0))
 
         rest_by_date = {
@@ -1005,6 +1074,19 @@ def _hybrid_trimp(conn, db_path, params, today):
             (floor_ms,)).fetchone()[0]
     except sqlite3.Error:
         return {}
+
+    # The exclusion windows as two parallel arrays: the starts, sorted, and
+    # the running maximum of every end seen up to each index. Activities
+    # overlap freely — a ride logged inside a longer hike — so the last window
+    # to START is not necessarily the one still running, and the prefix
+    # maximum is what makes one bisect answer "is anything still open here".
+    windows.sort()
+    window_starts = [lo for lo, _ in windows]
+    window_max_ends = []
+    running = None
+    for _, hi in windows:
+        running = hi if running is None else max(running, hi)
+        window_max_ends.append(running)
 
     # Everything below touches the shared memo: one lock for the whole
     # read-purge-recompute-publish sequence, so a concurrent request sees
@@ -1032,23 +1114,16 @@ def _hybrid_trimp(conn, db_path, params, today):
             rest = rest_by_date.get(ds)
             rest = hybrid.rest_hr_fallback if rest is None else float(rest)
 
-            # A workout can cross local midnight: its window starts on its
-            # activity_date, so the samples it must exclude may bucket to the
-            # NEXT calendar date. Windows only ever spill forward, so checking
-            # the previous day's windows too closes the double-count.
-            prev_ds = (date.fromisoformat(ds) - timedelta(days=1)).isoformat()
-            day_windows = (list(windows.get(ds, ()))
-                           + list(windows.get(prev_ds, ())))
             trimp_out = sum(
                 _banister(hr, rest, hybrid.hr_max, dt_min)
                 for ts, hr in points
-                if not any(lo <= ts <= hi for lo, hi in day_windows)
+                if not _covered(window_starts, window_max_ends, ts)
             )
             trimp_act = sum(_banister(hr, rest, hybrid.hr_max, minutes)
                             for hr, minutes in acts.get(ds, ()))
             _trimp_cache[(db_path, ds)] = out[ds] = (trimp_out, trimp_act)
 
-        _trimp_scanned[db_path] = (floor_ms, settled_count)
+        _trimp_scanned[db_path] = (floor_ms, settled_count, fingerprint)
     return out
 
 
@@ -1086,7 +1161,7 @@ def _strain_need_term(params, strain) -> float:
     return params.strain_quad_a * strain * strain + params.strain_quad_b * strain
 
 
-def sleep_series(garmin_db, params, *, start=None, end, today):
+def sleep_series(garmin_db, params, *, start=None, end, today, timeline=None):
     """Nightly sleep need vs. slept, plus the debt ledger behind them, from
     the Garmin daily metrics — with the day-strain input upgraded, where the
     data allows, by the hybrid TRIMP tier over the wrist stream and activity
@@ -1131,7 +1206,16 @@ def sleep_series(garmin_db, params, *, start=None, end, today):
     tables (`timeseries`, `activities`) drop a tier, and the nap column is
     probed per call — without it every day is zero credit and the ledger reads
     exactly as it does for a history that contains no naps.
+
+    `today` is the caller's calendar "now" — the DEVICE's date when the request
+    reported a zone, so a night scored on a phone a day ahead of the server is
+    never a "future" row, and the server's date otherwise. `timeline` places
+    the strain estimator's heart-rate evidence on that same device clock;
+    omitting it means the server's own zone from -infinity, which is the
+    behaviour that predates the device clock.
     """
+    if timeline is None:
+        timeline = ZoneTimeline.empty()
     if not Path(garmin_db.path).exists():
         return {"available": False, "days": []}
     try:
@@ -1150,7 +1234,7 @@ def sleep_series(garmin_db, params, *, start=None, end, today):
             # One pass for the whole history (memoized past the recent window),
             # not one per emitted day.
             trimp_by_date = _hybrid_trimp(
-                conn, str(garmin_db.path), params, today)
+                conn, str(garmin_db.path), params, today, timeline)
     except sqlite3.Error:
         return {"available": False, "days": []}
 

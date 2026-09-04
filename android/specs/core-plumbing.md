@@ -32,6 +32,16 @@ val WellnessJson: Json = Json {
 ```
 
 ### Network (`network/`)
+
+> **Amended 2026-09-03 — device-clock headers.** Every request the client sends carries
+> `X-Client-Zone` (the IANA id of `ZoneId.systemDefault()`) and `X-Client-Offset-Min` (that zone's
+> UTC offset in minutes at send time, DST included, e.g. `-420`). They are attached in
+> `applyWellnessDefaults`' `defaultRequest` and **evaluated per request** — never captured at
+> client construction — so a DST change or a flight is reported by the next call, including the
+> widget worker's hourly refresh, which uses the same client. The server keeps a change-point
+> timeline of them and buckets the watch's data by the device's day (`docs/ARCHITECTURE.md`
+> "Device clock"). Nothing is logged: the HTTP logger stays at INFO (method, URL, status). The PWA
+> deliberately sends neither header — a laptop at home is not where the watch is.
 ```kotlin
 data class ServerConfig(val baseUrl: String)
 // baseUrl includes the /wellness path prefix; trailing slash normalized away.

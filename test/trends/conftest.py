@@ -7,9 +7,38 @@ the schema.
 """
 
 import sqlite3
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import pytest
+
+
+def zone_on_another_date():
+    """A real IANA zone whose calendar date, right now, differs from this
+    host's — plus that zone's date and its current offset in minutes.
+
+    Searched rather than hard-coded: UTC-12 to UTC+14 spans twenty-six hours,
+    so such a zone always exists, but WHICH one depends on the hour the suite
+    runs at, and a fixed choice would pass all day and fail at 3 a.m. Shared
+    by every device-clock test that needs a client whose "today" is not the
+    server's.
+    """
+    now = datetime.now(timezone.utc)
+    here = date.today()
+    for name in ("Pacific/Kiritimati", "Asia/Tokyo", "Europe/Helsinki", "UTC",
+                 "America/New_York", "Pacific/Honolulu", "Etc/GMT+12"):
+        zone = ZoneInfo(name)
+        local = now.astimezone(zone)
+        if local.date() != here:
+            return name, local.date(), int(
+                local.utcoffset().total_seconds() // 60)
+    raise AssertionError("no zone disagrees with this host's date")
+
+
+def client_clock_headers(zone_name, offset_min):
+    """The two headers the Android client sends on every request."""
+    return {"X-Client-Zone": zone_name,
+            "X-Client-Offset-Min": str(offset_min)}
 
 NOW = "2026-01-01T00:00:00Z"  # server stamps are irrelevant to trends reads
 

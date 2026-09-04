@@ -2,6 +2,7 @@
 Wellness - Unified FastAPI server
 Mounts module API routers and serves the single-page PWA.
 """
+import asyncio
 import hashlib
 import importlib
 import ipaddress
@@ -10,6 +11,7 @@ import logging
 import os
 import uuid
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, FastAPI, HTTPException
@@ -17,6 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 
 from config import get_enabled_modules, get_db_path, PUBLIC_DIR
+from modules.garmin import parse_client_clock, record_client_zone
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +109,102 @@ class ClientGuardMiddleware:
                     })
                     return
         await self.app(scope, receive, send)
+
+
+CLIENT_ZONE_HEADER = b"x-client-zone"
+CLIENT_OFFSET_HEADER = b"x-client-offset-min"
+
+
+def _read_client_clock(scope):
+    """The (zone_id, offset_min) a request reports, or None.
+
+    BOTH headers or neither: an id without an offset cannot be cross-checked
+    and an offset without an id carries no DST rules, so a half-reported clock
+    is treated as no clock at all. Nothing beyond "the offset is an integer" is
+    checked here — the storage rules live in `modules.garmin`, one authority.
+    """
+    zone_id = offset = None
+    for name, value in scope.get("headers", ()):
+        if name == CLIENT_ZONE_HEADER:
+            zone_id = value
+        elif name == CLIENT_OFFSET_HEADER:
+            offset = value
+    if zone_id is None or offset is None:
+        return None
+    try:
+        return zone_id.decode("latin-1"), int(offset.decode("latin-1"))
+    except (UnicodeDecodeError, ValueError):
+        return None
+
+
+class ClientClockMiddleware:
+    """Read the phone's clock off every request; keep the timeline current.
+
+    The Android client sends `X-Client-Zone` (an IANA zone id) and
+    `X-Client-Offset-Min` on every request; the PWA deliberately sends
+    neither, because a laptop at home is not where the watch is. See
+    docs/ARCHITECTURE.md "Device clock".
+
+    The COMPLETE pair is validated first, through `parse_client_clock` — the
+    one authority, shared with the recorder. That sharing is the point: a
+    clock good enough to move a handler's calendar date is exactly the clock
+    good enough to store, so a real zone id carrying a nonsense offset cannot
+    shift the sleep ledger's `today` while leaving no row to explain it.
+
+    Two effects follow, both of which must be invisible when they fail:
+
+    1. `request.state.client_zone` is set BEFORE the handler runs, so a
+       handler that needs the device's calendar date (the sleep ledger's
+       `today`) can have it. A request that reported no clock, or an
+       unacceptable one, leaves the key ABSENT — a handler reads "no device
+       zone" and falls back to the server's own date.
+    2. After the response, the pair is handed to `record_client_zone` in a
+       worker thread. That call is a dict lookup unless the zone actually
+       changed, and it never raises; doing it after the response means even
+       the write on a travel day costs the client nothing.
+
+    A plain ASGI middleware rather than `BaseHTTPMiddleware`, matching the two
+    that already wrap this app: it needs the raw scope and nothing else, and
+    the file's static handlers stream files that BaseHTTPMiddleware would
+    needlessly wrap. Every exception is swallowed — a request must never fail
+    over a header it does not depend on.
+    """
+
+    def __init__(self, app, zone_db_path):
+        self.app = app
+        # None when the garmin module is disabled: state is still published,
+        # nothing is recorded (there is no table to record into).
+        self.zone_db_path = zone_db_path
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        clock, zone = None, None
+        try:
+            reported = _read_client_clock(scope)
+            if reported is not None:
+                zone = parse_client_clock(*reported)
+                if zone is not None:
+                    clock = reported
+        except Exception:
+            logger.debug("Unreadable client clock headers", exc_info=True)
+        if zone is not None:
+            # Starlette's `request.state` is a view over scope["state"], so a
+            # key set here is what the handler reads. Only an ACCEPTED clock
+            # gets one, so publication and persistence can never disagree.
+            scope.setdefault("state", {})["client_zone"] = zone
+
+        await self.app(scope, receive, send)
+
+        if clock is not None and self.zone_db_path is not None:
+            try:
+                await asyncio.to_thread(
+                    record_client_zone, self.zone_db_path,
+                    clock[0], clock[1], datetime.now(timezone.utc))
+            except Exception:
+                logger.warning("Client clock recording failed", exc_info=True)
 
 
 class StripPrefixMiddleware:
@@ -319,7 +418,8 @@ def create_app(db_path_overrides=None):
     called with no argument and resolves its own read-only sources via config
     helpers. Adding a module is a config-only change.
 
-    ``db_path_overrides`` maps a module id ("journal"/"coach"/"analysis"/"hr")
+    ``db_path_overrides`` maps a module id
+("journal"/"coach"/"analysis"/"hr"/"garmin")
     to a DB path that supersedes the configured one. Production calls
     ``create_app()`` with no overrides; tests pass per-test temp paths so each
     test gets a fully isolated app+DB without poking module globals. (DB-less
@@ -345,11 +445,14 @@ def create_app(db_path_overrides=None):
 
     overrides = db_path_overrides or {}
     enabled_modules = get_enabled_modules()
+    resolved_db_paths = {}
     for module in enabled_modules:
         module_path, factory_name = module["router_factory"].split(":")
         create_router = getattr(importlib.import_module(module_path), factory_name)
         if "db_env" in module:
-            router = create_router(overrides.get(module["id"], get_db_path(module)))
+            db_path = overrides.get(module["id"], get_db_path(module))
+            resolved_db_paths[module["id"]] = db_path
+            router = create_router(db_path)
         else:
             router = create_router()  # DB-less module resolves its own sources
         inner_app.include_router(router, prefix=module["api_prefix"])
@@ -369,8 +472,16 @@ def create_app(db_path_overrides=None):
 
     inner_app.include_router(static_router)
 
+    # Outermost first: reject untrusted peers, THEN read their clock (an
+    # address the app refuses must not get to write a timeline row), then
+    # strip the Tailscale path prefix, then route. The clock middleware takes
+    # the very path the garmin module was built with, overrides included, so
+    # the writer and the module can never resolve different files.
     return ClientGuardMiddleware(
-        StripPrefixMiddleware(inner_app, BASE_PATH), _trusted_networks())
+        ClientClockMiddleware(
+            StripPrefixMiddleware(inner_app, BASE_PATH),
+            resolved_db_paths.get("garmin")),
+        _trusted_networks())
 
 
 if __name__ == "__main__":

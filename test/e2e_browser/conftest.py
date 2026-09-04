@@ -76,6 +76,9 @@ def app_server(tmp_path_factory):
         "COACH_DB_PATH": str(db_dir / "coach.db"),
         "ANALYSIS_DB_PATH": str(db_dir / "analysis.db"),
         "HR_DB_PATH": str(db_dir / "hr.db"),
+        # The garmin module's OWN storage (device-clock timeline). Not
+        # garmy's health DB — that is GARMIN_DB_PATH just below.
+        "GARMIN_MODULE_DB_PATH": str(db_dir / "garmin.db"),
         # Nonexistent by default: trends' external-source cards exercise
         # their available:false paths and no e2e run touches the real
         # ~/.garmy or ~/.bodyspecy DBs.
@@ -109,6 +112,7 @@ def app_server(tmp_path_factory):
         "coach": Path(env_vars["COACH_DB_PATH"]),
         "analysis": Path(env_vars["ANALYSIS_DB_PATH"]),
         "hr": Path(env_vars["HR_DB_PATH"]),
+        "garmin": Path(env_vars["GARMIN_MODULE_DB_PATH"]),
     })
 
     port = _find_free_port()

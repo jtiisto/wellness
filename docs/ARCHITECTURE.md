@@ -709,13 +709,54 @@ recovery series row carries the same figure as `nap_hours` (omitted when absent
 or zero) for the Sleep chart. Strain is untouched: naps are not exertion, and
 the wrist TRIMP over a nap is negligible.
 
+**Device clock (added 2026-09-03).** The server never assumes its own timezone
+is the watch's. Garmin's daily rows are already keyed by the DEVICE's local
+day, and the wrist stream is true-UTC epochs, so the one thing the server has
+to know is which zone the watch was in at any instant — and the phone, which
+travels with the watch, tells it. Every request from the Android client carries
+two headers: `X-Client-Zone` (an IANA zone id, e.g. `Europe/Helsinki`) and
+`X-Client-Offset-Min` (that zone's UTC offset in minutes at send time, DST
+included). The PWA sends neither: a laptop at home is not where the watch is,
+and a second reporter would make the timeline flap. A middleware in the app
+hands valid headers (a zone id `zoneinfo` knows, an offset in ±14 h on a
+quarter-hour) to the `garmin` module, which owns a small DB of its own
+(`data/garmin.db`, `GARMIN_MODULE_DB_PATH`) with one table, `client_zones`
+(`observed_at` UTC, `zone_id`, `offset_min`): a **change-point timeline**,
+written only when the zone or offset differs from the in-process tail, so the
+steady state costs no I/O. Malformed headers are ignored, never a 4xx.
+
+Readers see the timeline as a total function of time: before the first
+observation the segment is the **server's own zone** (exactly the behaviour
+that predates this section, so history and a headerless deployment read as
+before), and each change point opens a new segment at its `observed_at`. Two
+derived rules do all the work. **Device-local date of an instant**: the date
+of that instant under the segment's zone (`zoneinfo`, so DST is exact and the
+offset header is only a cross-check and fallback for an unknown id). **UTC of a
+device-local wall time**: the instant whose device-local wall clock equals it
+under the zone in force *at that instant*; when a change point within the day
+makes two instants qualify, the earlier one wins. A zone change is placed at
+the first request after it — the widget's hourly refresh bounds the error to
+about an hour of samples, once per trip. The hybrid strain tier buckets wrist
+samples by the device-local date of each sample (replacing the former
+`localtime` grouping) and places activity windows by the second rule from
+Garmin's device-local `start_time`, so a day that straddles a flight is simply
+a shorter or longer interval and the strap term and wrist term still
+partition it. The estimator's memo carries the timeline's fingerprint (its
+length and last `observed_at`) in its marker, so a new change point forces a
+rescan rather than serving days bucketed under the old zone. The sleep
+ledger's **`today`** is the request's device-local date when the headers are
+present (the night the watch just scored is never a "future" row on a phone a
+day ahead of the server) and the server's date otherwise; `tonight.date`
+echoes whichever was used.
+
 **The strain estimator is tiered**, best evidence first, decided **per calendar
 day** rather than per response:
 
 1. **Hybrid (primary)** — Banister TRIMP over the day's actual heart rate. Two
    sources are kept separate because their fidelity differs: the all-day wrist
    stream (`timeseries.heart_rate`, optical, sampled) and the day's activity
-   windows (`activities.avg_heart_rate`, usually a chest strap). Wrist samples
+   windows (`activities.avg_heart_rate`, usually a chest strap) — both placed on
+   the DEVICE's clock, see *Device clock* above. Wrist samples
    falling inside an activity window are dropped — that time is already counted,
    better, by the strap — so the two TRIMP totals partition the day and carry
    their own fitted weights. Each wrist sample is worth the day's **measured**

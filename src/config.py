@@ -61,15 +61,23 @@ MODULES = [
         "db_default": DATA_DIR / "hr.db",
     },
     {
-        # Headless AND DB-less: a command surface (trigger the external garmy
-        # sync, report whether one is in flight) with no PWA tab and no storage
-        # of its own — create_app calls its factory with no argument, like
-        # trends. It reads the Garmin health DB read-only for a cross-restart
-        # cooldown backstop; see ARCHITECTURE.md "Garmin".
+        # Headless: a command surface (trigger the external garmy sync, report
+        # whether one is in flight) with no PWA tab. It owns ONE small table of
+        # its own — `client_zones`, the device-clock change-point timeline (see
+        # ARCHITECTURE.md "Device clock") — so it takes a db_path like every
+        # other DB-owning module. It ALSO reads the external Garmin health DB
+        # read-only for a cross-restart cooldown backstop; see "Garmin".
+        #
+        # GARMIN_MODULE_DB_PATH is this module's OWN storage under data/.
+        # GARMIN_DB_PATH (get_garmin_db_path below) is a different thing
+        # entirely: garmy's health database, written outside this repo and
+        # never written here. Keep the two names apart.
         "id": "garmin",
         "headless": True,
         "api_prefix": "/api/garmin",
         "router_factory": "modules.garmin:create_router",
+        "db_env": "GARMIN_MODULE_DB_PATH",
+        "db_default": DATA_DIR / "garmin.db",
     },
 ]
 
@@ -101,6 +109,8 @@ def get_module_db_path(module_id):
 # The Garmin health DB is written by the user's own sync job (outside this
 # repo); trends reads it read-only for the body-weight series. The weight
 # chart hides gracefully when the file is absent (dev machines without sync).
+# NOT the garmin module's own database — that one is GARMIN_MODULE_DB_PATH in
+# the MODULES entry above and holds only the device-clock timeline.
 GARMIN_DB_DEFAULT = Path.home() / ".garmy" / "health.db"
 BODYSPEC_DB_DEFAULT = Path.home() / ".bodyspecy" / "bodyspec.db"
 QUESTY_DB_DEFAULT = Path.home() / ".questy" / "questy.db"
