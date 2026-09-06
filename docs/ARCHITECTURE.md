@@ -764,6 +764,23 @@ day** rather than per response:
    export re-weights itself instead of silently rescaling every day. A day's
    heart-rate reserve floor is its own `resting_heart_rate`, with a
    parameterized fallback; the reserve ceiling is a personal HR max.
+   **Eligibility is a wear fraction, not a count (amended 2026-09-05).** A day
+   is scored by this tier only when its wrist stream is dense enough to be
+   trusted: a settled day needs `min_samples` samples (about 70 % of a
+   two-minute day — a watch that was off the wrist drops a tier). The CURRENT
+   device day scales that requirement by how much of the day has elapsed on the
+   device's clock (against the day's actual length, so a 23- or 25-hour DST day
+   is judged fairly, and never persisted in the estimator's memo — a partial day
+   is recomputed on every request until it is settled) — `max(one hour of samples at the measured cadence,
+   min_samples × elapsed fraction)`, never more than `min_samples` itself, so
+   the current day is never held to a stricter bar than a settled one — so the
+   tier takes over within about an
+   hour of wear and the partial-day estimate then grows smoothly, instead of
+   stepping from the daily-feature regression to TRIMP in the late afternoon
+   when the last required sample happens to land. Settled days are unchanged, so
+   history is byte-identical; "now" for the fraction is the device-local time
+   from the device clock, so a watch nine hours east is judged against its own
+   afternoon.
 2. **Daily-feature regression** — the older form, on days with a
    `max_heart_rate` on the daily row.
 3. **Calorie-only fallback** — days without one.

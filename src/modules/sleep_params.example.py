@@ -43,7 +43,10 @@ class HybridStrainCoeffs:
     intercept: float
     hr_max: float            # personal HR max, the Banister exponent's ceiling
     rest_hr_fallback: float  # used on a day with no resting_heart_rate
-    min_samples: int         # wrist samples/day below which the day drops a tier
+    min_samples: int         # wrist samples a SETTLED day needs (~70 % wear); the CURRENT
+                             # day needs min(min_samples, max(ceil(60/cadence),
+                             # round(min_samples × fraction))) — cadence = that day's
+                             # median sample gap clamped to [0.5, 5] min, two minimum
 
 
 @dataclass(frozen=True)

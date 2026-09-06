@@ -31,7 +31,7 @@ import sqlite3
 import statistics
 import threading
 from collections import Counter, defaultdict
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 
 from modules.coach_logs import AD_HOC_LOG_SLUGS
@@ -872,12 +872,18 @@ _TRIMP_RECENT_DAYS = 7
 # a settled day can never change. Keying by DB PATH as well as date is what
 # keeps the test suite honest — every test points GARMIN_DB_PATH at its own
 # fresh tmp file, so no test can read another's memo (and re-pointing the env
-# var in production starts cold too). `_trimp_scanned` records, per path, the
-# settled-history marker of the one full pass: (floor_ms, row_count,
-# timeline_fingerprint) — the count of wrist rows OLDER than the floor at scan
+# var in production starts cold too). The CURRENT day is deliberately never
+# memoized: its eligibility was judged on a partial day's evidence (see
+# `_hybrid_trimp`), and an entry would outlive that judgement — a request gap
+# longer than the recompute window would leave a morning's TRIMP standing as
+# the settled day's. `_trimp_scanned` records, per path, the settled-history
+# marker of the one full pass: (floor_ms, row_count, timeline_fingerprint,
+# last_current_day) — the count of wrist rows OLDER than the floor at scan
 # time, plus the device clock those rows were bucketed under, because every
 # bucket in the memo was computed on that timeline and a new change point
-# re-dates the days on both sides of it. A
+# re-dates the days on both sides of it, plus the day that was current then,
+# which the memo therefore does NOT own and the next pass owes a settled
+# reading. A
 # warm request re-counts at that stored floor and a mismatch (in either field)
 # forces a full rescan: that is what catches a backfill deeper than the recent
 # window, a database file swapped in place, or the watch having moved zones —
@@ -934,7 +940,7 @@ def _covered(starts, max_ends, ts) -> bool:
     return index >= 0 and max_ends[index] > ts
 
 
-def _hybrid_trimp(conn, db_path, params, today, timeline):
+def _hybrid_trimp(conn, db_path, params, today, timeline, now_utc=None):
     """{date: (trimp_out, trimp_act)} for every day the hybrid tier can score.
 
     Two heart-rate sources, kept SEPARATE because their quality differs: the
@@ -944,12 +950,28 @@ def _hybrid_trimp(conn, db_path, params, today, timeline):
     — the strap already accounts for that time, at better fidelity — so the two
     terms partition the day and can carry their own weights.
 
-    A day is ABSENT from the result when it can't be scored (fewer than
-    `min_samples` wrist samples, i.e. a watch off the wrist), and the whole
-    result is empty when either source table is missing or errors. Both are
-    per-day/per-table degradation: the caller drops that day to the next
-    estimator tier. Neither ever reaches the endpoint's `available` flag —
-    every Garmin DB predating these tables still serves a full ledger.
+    A day is ABSENT from the result when its wrist stream is too thin to
+    trust, and eligibility is a WEAR FRACTION rather than a flat count. A
+    SETTLED day needs `min_samples` samples — a watch off the wrist drops a
+    tier. The CURRENT device day needs that scaled by how much of it has
+    elapsed on the DEVICE's clock, floored at an hour of samples at the day's
+    own measured cadence and capped at the settled requirement itself:
+    `min(min_samples, max(ceil(60 / cadence), min_samples x fraction))` — the
+    current day is a relaxation of the flat count, never a stricter test.
+    So the tier takes over within about an hour of wear and the partial day's
+    estimate grows smoothly, instead of stepping from the caller's next tier
+    to TRIMP in the late afternoon when the `min_samples`-th sample lands.
+    Fewer than two samples is never scorable either way: a cadence needs two.
+    `now_utc` is the instant that fraction is measured at (the real clock by
+    default, injectable for tests), and the fraction is of the day's OWN
+    length — 23 or 25 hours across a DST shift — not of a nominal 24. A
+    `today` the device has not reached, or has already passed, clamps the
+    fraction to zero or to one.
+
+    The whole result is empty when either source table is missing or errors.
+    All of this is per-day/per-table degradation: the caller drops that day to
+    the next estimator tier. Neither ever reaches the endpoint's `available`
+    flag — every Garmin DB predating these tables still serves a full ledger.
 
     Every day here is the DEVICE's, never the server's (`timeline`, see
     modules/device_clock and ARCHITECTURE.md "Device clock"): wrist samples are
@@ -970,10 +992,21 @@ def _hybrid_trimp(conn, db_path, params, today, timeline):
 
     cutoff_date = today - timedelta(days=_TRIMP_RECENT_DAYS)
     cutoff = cutoff_date.isoformat()
-    floor_ms = _local_midnight_ms(cutoff_date - timedelta(days=2))
     fingerprint = timeline.fingerprint
     with _trimp_lock:
         marker = _trimp_scanned.get(db_path)
+    # The day that was CURRENT at the last pass is the one day the memo does
+    # not own, so this pass owes it a fresh reading as the settled day it has
+    # since become. Usually it is inside the recompute window anyway; it is
+    # not when no request arrived for longer than that window, which is
+    # exactly when reading it back matters — hence the floor stretches to
+    # reach it, and the warm skip below exempts it.
+    stale_partial = marker[3] if marker is not None else None
+    floor_date = cutoff_date - timedelta(days=2)
+    if stale_partial is not None:
+        floor_date = min(floor_date,
+                         date.fromisoformat(stale_partial) - timedelta(days=2))
+    floor_ms = _local_midnight_ms(floor_date)
     try:
         warm = False
         if marker is not None and marker[2] == fingerprint:
@@ -1088,6 +1121,37 @@ def _hybrid_trimp(conn, db_path, params, today, timeline):
         running = hi if running is None else max(running, hi)
         window_max_ends.append(running)
 
+    # How much of the current DEVICE day has happened — the fraction that
+    # day's sample requirement is scaled by. Both edges are real INSTANTS on
+    # the device's clock, so the denominator is the day's own length: the day
+    # a zone change or a DST shift makes 23 or 25 hours long never reads as
+    # further through itself than it is. A midnight the device never displayed
+    # — a zone jump straight across it — leaves no interval to measure, so the
+    # fraction falls back to the wall clock over a nominal day, which is the
+    # same answer everywhere a day is 24 hours long. The clamp is what makes a
+    # `today` the device has not reached yet (sync-job clock skew) a zero
+    # fraction rather than a negative requirement, and one it has already
+    # passed a full day rather than more than one.
+    today_iso = today.isoformat()
+    if now_utc is None:
+        now_utc = datetime.now(timezone.utc)
+    elif now_utc.tzinfo is None:
+        now_utc = now_utc.replace(tzinfo=timezone.utc)
+    tomorrow = today + timedelta(days=1)
+    day_open = timeline.utc_of_local(
+        datetime.combine(today, time.min), hint=today)
+    day_close = timeline.utc_of_local(
+        datetime.combine(tomorrow, time.min), hint=tomorrow)
+    if day_open is None or day_close is None or day_close <= day_open:
+        device_now = now_utc.astimezone(timeline.zone_at(now_utc))
+        elapsed = (device_now.replace(tzinfo=None)
+                   - datetime.combine(today, time.min)).total_seconds()
+        day_length = 86400.0
+    else:
+        elapsed = (now_utc - day_open).total_seconds()
+        day_length = (day_close - day_open).total_seconds()
+    elapsed_frac = min(1.0, max(0.0, elapsed / day_length))
+
     # Everything below touches the shared memo: one lock for the whole
     # read-purge-recompute-publish sequence, so a concurrent request sees
     # either the state before this pass or after it, never a torn middle.
@@ -1101,16 +1165,29 @@ def _hybrid_trimp(conn, db_path, params, today, timeline):
         out = {d: v for (p, d), v in _trimp_cache.items() if p == db_path}
 
         for ds, points in samples.items():
-            if warm and ds < cutoff:
+            if warm and ds < cutoff and ds != stale_partial:
                 continue                  # already settled; the memo owns it
             points.sort()
-            # Two samples are the minimum that can establish a cadence at all.
-            if len(points) < max(2, hybrid.min_samples):
+            # Two samples are the minimum that can establish a cadence at all,
+            # and the cadence is what the current day's requirement is spelled
+            # in — so it is measured BEFORE the day is judged dense enough.
+            if len(points) < 2:
                 continue
             gaps = [(points[i][0] - points[i - 1][0]) / 60000.0
                     for i in range(1, len(points))]
             dt_min = min(_TRIMP_DT_MAX,
                          max(_TRIMP_DT_MIN, statistics.median(gaps)))
+            # A settled day is judged on the flat count; the current one on
+            # its elapsed fraction, never below an hour of wear and never
+            # above what the settled day itself would ask — the current day is
+            # a RELAXATION, so the floor may not outrun `min_samples` on a
+            # params file whose minimum is smaller than an hour of samples.
+            required = (min(hybrid.min_samples,
+                            max(math.ceil(60.0 / dt_min),
+                                round(hybrid.min_samples * elapsed_frac)))
+                        if ds == today_iso else hybrid.min_samples)
+            if len(points) < required:
+                continue
             rest = rest_by_date.get(ds)
             rest = hybrid.rest_hr_fallback if rest is None else float(rest)
 
@@ -1121,9 +1198,15 @@ def _hybrid_trimp(conn, db_path, params, today, timeline):
             )
             trimp_act = sum(_banister(hr, rest, hybrid.hr_max, minutes)
                             for hr, minutes in acts.get(ds, ()))
-            _trimp_cache[(db_path, ds)] = out[ds] = (trimp_out, trimp_act)
+            out[ds] = (trimp_out, trimp_act)
+            # Serve the current day, remember every other one. A partial day
+            # was admitted on a partial day's bar, and that reading is true
+            # only for as long as the day is still current.
+            if ds != today_iso:
+                _trimp_cache[(db_path, ds)] = out[ds]
 
-        _trimp_scanned[db_path] = (floor_ms, settled_count, fingerprint)
+        _trimp_scanned[db_path] = (floor_ms, settled_count, fingerprint,
+                                   today_iso)
     return out
 
 
@@ -1161,7 +1244,8 @@ def _strain_need_term(params, strain) -> float:
     return params.strain_quad_a * strain * strain + params.strain_quad_b * strain
 
 
-def sleep_series(garmin_db, params, *, start=None, end, today, timeline=None):
+def sleep_series(garmin_db, params, *, start=None, end, today,
+                 timeline=None, now_utc=None):
     """Nightly sleep need vs. slept, plus the debt ledger behind them, from
     the Garmin daily metrics — with the day-strain input upgraded, where the
     data allows, by the hybrid TRIMP tier over the wrist stream and activity
@@ -1212,7 +1296,11 @@ def sleep_series(garmin_db, params, *, start=None, end, today, timeline=None):
     never a "future" row, and the server's date otherwise. `timeline` places
     the strain estimator's heart-rate evidence on that same device clock;
     omitting it means the server's own zone from -infinity, which is the
-    behaviour that predates the device clock.
+    behaviour that predates the device clock. `now_utc` is the instant the
+    request is served at, and only the strain tier reads it: it is what the
+    current day's elapsed wear fraction is measured against (see
+    `_hybrid_trimp`). Omitting it means the real clock — the ledger arithmetic
+    itself stays a function of the rows, `today` and the params.
     """
     if timeline is None:
         timeline = ZoneTimeline.empty()
@@ -1234,7 +1322,7 @@ def sleep_series(garmin_db, params, *, start=None, end, today, timeline=None):
             # One pass for the whole history (memoized past the recent window),
             # not one per emitted day.
             trimp_by_date = _hybrid_trimp(
-                conn, str(garmin_db.path), params, today, timeline)
+                conn, str(garmin_db.path), params, today, timeline, now_utc)
     except sqlite3.Error:
         return {"available": False, "days": []}
 
