@@ -74,6 +74,7 @@ wellness/
 │   ├── sw.js               # Service worker for offline
 │   └── manifest.json       # PWA manifest
 ├── mcp_servers/            # MCP servers for AI data access
+│   ├── pyproject.toml      # Editable-install packaging (console scripts for another venv)
 │   ├── journal_mcp/        # Read-only journal queries
 │   ├── coach_mcp/          # Read/write workout data
 │   └── hr_mcp/             # Read-only heart-rate sessions + analysis

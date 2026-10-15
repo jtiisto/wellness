@@ -182,6 +182,14 @@ The application includes three MCP servers that provide AI tools with structured
 
 All three use the FastMCP framework and communicate over stdio transport.
 
+`mcp_servers/pyproject.toml` packages the three as `wellness-mcp-servers` so another venv can install them and get real `coach-mcp`, `journal-mcp` and `hr-mcp` console scripts:
+
+```bash
+pip install -e /absolute/path/to/wellness/mcp_servers
+```
+
+Editable installs only: each package's `__init__` puts this clone's `src/` on `sys.path` relative to its own file, so a regular (non-editable) install loses `src/` and fails to import. The first consumer is the mcp-daemon (`~/dev/mcp-daemon`), which hosts every health MCP server in one process; the stdio setup below is unchanged and remains the fallback.
+
 ### Claude Code
 
 Add the MCP servers to your Claude Code settings file at `.claude/settings.local.json` in the directory where Claude Code will run:

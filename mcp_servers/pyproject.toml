@@ -1,0 +1,33 @@
+# Packaging for the three MCP servers (coach, journal, hr) so another venv can
+# `pip install -e <clone>/mcp_servers` and get real console scripts. The first
+# consumer is the mcp-daemon (~/dev/mcp-daemon), which hosts all health MCP
+# servers in one process. Tool code is untouched; this file only declares what
+# the launchers in ~/.local/bin used to assume.
+#
+# Editable installs only. Each package's __init__ puts the repo's src/ on
+# sys.path relative to its own file, so the packages must stay inside this
+# clone. A regular (non-editable) install would lose src/ and fail to import.
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "wellness-mcp-servers"
+version = "0.1.0"
+description = "MCP servers for the wellness coach, journal, and HR data (editable install only)"
+requires-python = ">=3.10"
+dependencies = [
+    "fastmcp>=2.0.0,<4.0.0",   # same range as the root requirements.txt
+    "fastapi>=0.104.0",        # modules.coach_* / modules.journal raise fastapi.HTTPException
+    "pydantic>=2.0.0",
+    "numpy>=1.26.0",           # hr_mcp imports src/hr_analysis
+]
+
+[project.scripts]
+coach-mcp = "coach_mcp.server:main"
+journal-mcp = "journal_mcp.server:main"
+hr-mcp = "hr_mcp.server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["coach_mcp", "journal_mcp", "hr_mcp"]
