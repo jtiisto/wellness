@@ -27,6 +27,17 @@ retires with the one-device rule it encoded (it was already dead — both call s
 `devices.value.firstOrNull()`). Android-only, UI and ViewModel layers; the capture service, the
 wire, the widget and the cardio guidance overlay are untouched. Marked in place under **UX**.
 
+**Amended 2026-10-17** — **link ownership, drop notices, diagnostics.** A workout on 2026-10-16
+produced five real link drops in its first minute, each recovered in 2.1–2.8 s with no recordable
+gap, and each announced as "Connect attempt 1 failed — retrying". The server's copy of the stream
+proved the capture flawless; the device log that would have named the disconnect reason had expired
+under the one-hour retention. Two independent reviews of `GarminHrmConnection` then found the same
+three defects in the connection's two-thread design (probe started after `connectGatt`, missing
+handle-identity checks on three callbacks, a cross-thread `gatt` field). This amendment serializes
+the connection onto one owner, keeps sub-threshold drops silent, corrects the diagnostic wording,
+and lengthens the debug log so the next incident keeps its evidence. Android-only; no server, PWA
+or wire change. Marked in place under **Behavior details**.
+
 ## Goal
 
 Fold pulse-bridge's live heart-rate capture into the coach feature so a workout can optionally record strap HR, show a compact live BPM readout, and — via a new timestamped set-completion event log — correlate heart rate with specific sets. Consolidate the two backends: the wellness FastAPI server gains an `hr` module (own endpoints, own `hr.db`), and pulse-bridge's analysis module + MCP server migrate to it. The standalone pulse-bridge app is superseded once this ships.
@@ -298,6 +309,88 @@ This section is the rule that closes it.
    - The clock is elapsed-realtime, not wall time (as the signal tracker's already is): a
      wall-clock jump must never be readable as a dead strap. Exactly at the threshold counts as
      stale, so the countdown cannot resolve to a zero-length wait and spin.
+
+### Link ownership, drop notices and diagnostics (amended 2026-10-17)
+
+**One thread owns the connection.** As ported, `GarminHrmConnection` ran `connect()`, the
+watchdogs and the backoff on the service scope (`Dispatchers.Main.immediate`) while every
+`BluetoothGattCallback` body ran on a Binder thread. Three defects fall out of that split, all
+confirmed by two independent reviews:
+
+- `connect()` calls `connectGatt()` first and starts the advertisement probe and the connect
+  watchdog afterwards. A `STATE_CONNECTED` that lands in between runs `stopAdvertisementProbe()`
+  against nothing, and the probe then starts **on an already-connected link**. Nothing stops it:
+  the connect watchdog returns early because the state is CONNECTED, `handleLinkLost` never
+  cancels the probe, and `first()` only completes when an advertisement is heard — which a
+  connected strap does not send. A `SCAN_MODE_LOW_LATENCY` scan then runs beside the live link for
+  as long as the link lives. (Whether this caused the 2026-10-16 drops is unproven; that it can
+  happen is not.)
+- `STATE_CONNECTED`, `onServicesDiscovered` and `onDescriptorWrite` carry no handle-identity
+  check, unlike `handleLinkLost` and `onCharacteristicChanged`. A late callback from an abandoned
+  handle can publish CONNECTED, restart the sample watchdog and run discovery on a dead handle.
+- `gatt` is written on Main and read on Binder threads without `@Volatile`.
+
+The fix is structural, not three patches: **every GATT callback posts its body to the connection's
+scope and runs on Main.** `connect()` has no suspension point between `connectGatt()` returning and
+`gatt = newGatt; startAdvertisementProbe(); startConnectWatchdog()`, so by the time any callback
+body runs, the attempt it belongs to is fully set up — the probe race cannot occur. Compound
+transitions (cancel watchdogs, publish state, close handle, schedule backoff) become atomic with
+respect to each other, and the field needs no `@Volatile`. Two rules keep this honest:
+
+1. **The sample timestamp is taken on the Binder thread, before the post.** `receivedAtMs`
+   and the elapsed-clock liveness mark are the one piece of data that must not wait for the main
+   thread's queue; the parse and the emit may. A janky frame therefore delays a sample's
+   *processing*, never its *time*, and the gap and liveness arithmetic stay exact.
+2. **Every callback checks handle identity on arrival**, including the three that did not:
+   a callback whose `gatt` is not the connection's current handle closes that handle (idempotent)
+   and does nothing else. `handleLinkLost`'s existing rule is the model.
+
+Also: the probe is cancelled on **every** terminal path (link lost, connect watchdog, give-up,
+deliberate disconnect), not only on CONNECTED and the next `connect()`.
+
+**A drop that heals inside the gap threshold is not news.** `GAP_THRESHOLD_MS` (3 s) already
+defines a discontinuity in the data; it now defines one for the user too. On a link loss the
+connection publishes RECONNECTING at once (the state is the truth and the display rules above
+depend on it) but **publishes no detail text** until one of two things happens: the outage
+reaches `GAP_THRESHOLD_MS` without a sample (inclusive, ≥ 3000 ms — the
+`StreamLivenessPolicy` convention — whereas the data's gap marker is strict, > 3000 ms; they
+differ only at exactly the threshold), or a connect attempt actually fails (the connect
+watchdog fires). The five drops of 2026-10-16 would have produced no notice; the FGS notification
+would have read "Reconnecting…" for about two seconds, silently (`setOnlyAlertOnce`). The decision
+is a pure function in `core/ble` (`ReconnectNotice`: elapsed-since-loss, attempt, verdict →
+text or null) so the rule is unit-tested rather than device-tested.
+
+**Wording says what is known.** `ConnectDiagnostics`:
+- a loss that has outlasted the threshold: *"Strap link dropped — reconnecting"*;
+- a connect attempt that timed out: *"Connect attempt N failed (<verdict>) — retrying"*, but
+  only after an attempt has in fact failed, and **N counts connect attempts within the current
+  outage**, not backoff steps — the ported text consumed backoff step 1 on the drop itself and so
+  reported the first failed reconnect as "attempt 2" (review finding, same day);
+- the LISTENING verdict drops its ANT+ claim. ANT+ reception does not occupy a Bluetooth slot and
+  a silent probe cannot see who holds the strap: *"strap not advertising — asleep, out of range,
+  or connected elsewhere"*. The HEARD verdict is unchanged.
+- the first sample still clears the detail and resets the attempt budget, so a healthy link
+  never shows a stale sentence.
+
+**Diagnostics that survive the workout.** The debug log's retention moves from 1 h / 500 entries
+to **24 h / 2000 entries** (`DebugLogLogic.TTL_MS`, `MAX_ENTRIES`; their tests move with them).
+The PWA's `debug-log.js` keeps its own values — parity of the *mechanism* was the point, not of the
+numbers. New lines, all authored text and never an exception message (the permitted-field policy
+holds): `BleScanner` logs scan start, stop and failure code for both the pairing scan and the
+probe, through an injected `BleLog` (it had none); the connection logs every deliberate
+`disconnect()`/`close()` with its reason, and the GATT status on a disconnect in decimal **and**
+hex with the common names (8 timeout, 19 remote terminated, 22 local host terminated, 34 LMP
+response timeout, 133 stack error), which is the one number that decides between a radio problem,
+the strap ending it, and the phone.
+
+**Out of scope, recorded:** the Analysis module's foreground pending-report probe returns 404 on
+a deployment with Analysis disabled and logs a failure each time — harmless, tracked separately.
+
+**Verification.** `ReconnectNotice`, `ConnectDiagnostics` and `DebugLogLogic` changes are
+unit-tested; `GarminHrmConnection` and `BleScanner` stay on the coverage exclusion list as device
+glue. **Device acceptance by the user with the strap**: one workout with Garmin Connect left
+running (the suspected competing client), confirming the capture records, no notice appears for
+a sub-3-second drop, and the shared log afterwards carries the disconnect status lines.
 
 Server-side: **nothing.** No wire field, no endpoint and no stored value changes — the samples a
 stale link fails to produce are simply samples that were never captured, which the protocol

@@ -23,7 +23,14 @@ class DebugLogLogicTest {
     private fun entry(id: Long, ts: Long) = DebugLogEntity(id = id, ts = ts, tag = "t", message = "m")
 
     @Test
-    @DisplayName("TTL boundary: an entry exactly one hour old is already expired")
+    @DisplayName("retention is 24 h / 2000 entries (Android's own values, not debug-log.js's)")
+    fun retentionValues() {
+        assertEquals(24L * 60L * 60L * 1000L, DebugLogLogic.TTL_MS)
+        assertEquals(2000, DebugLogLogic.MAX_ENTRIES)
+    }
+
+    @Test
+    @DisplayName("TTL boundary: an entry exactly one TTL (24 h) old is already expired")
     fun ttlBoundary() {
         assertFalse(DebugLogLogic.isExpired(now - DebugLogLogic.TTL_MS + 1, now))
         assertTrue(DebugLogLogic.isExpired(now - DebugLogLogic.TTL_MS, now))
@@ -57,26 +64,26 @@ class DebugLogLogicTest {
     }
 
     @Test
-    @DisplayName("cap boundary: 500 rows survive untouched, 501 drops the oldest")
+    @DisplayName("cap boundary: 2000 rows survive untouched, 2001 drops the oldest")
     fun capBoundary() {
-        val atCap = (1L..500L).map { entry(it, now) }
-        assertEquals(500, DebugLogLogic.prune(atCap, now).size)
+        val atCap = (1L..2000L).map { entry(it, now) }
+        assertEquals(2000, DebugLogLogic.prune(atCap, now).size)
         assertEquals(1L, DebugLogLogic.prune(atCap, now).first().id)
 
-        val overCap = (1L..501L).map { entry(it, now) }
+        val overCap = (1L..2001L).map { entry(it, now) }
         val pruned = DebugLogLogic.prune(overCap, now)
-        assertEquals(500, pruned.size)
+        assertEquals(2000, pruned.size)
         assertEquals(2L, pruned.first().id)
-        assertEquals(501L, pruned.last().id)
+        assertEquals(2001L, pruned.last().id)
     }
 
     @Test
     @DisplayName("the cap is applied after the TTL filter, never to expired rows")
     fun capAppliedAfterTtl() {
         val expired = (1L..400L).map { entry(it, now - DebugLogLogic.TTL_MS - 1) }
-        val live = (401L..900L).map { entry(it, now) }
+        val live = (401L..2400L).map { entry(it, now) }
         val pruned = DebugLogLogic.prune(expired + live, now)
-        assertEquals(500, pruned.size)
+        assertEquals(2000, pruned.size)
         assertEquals(401L, pruned.first().id)
     }
 

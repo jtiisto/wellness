@@ -8,14 +8,20 @@ import kotlinx.serialization.json.JsonElement
  * The pure retention and formatting rules behind [DebugLog], ported from
  * `debug-log.js`. `DebugLogDao` implements the same predicates in SQL; these
  * are what the tests pin, so the two must be changed together.
+ *
+ * The mechanism (strict TTL boundary, cap applied after the TTL filter, newest
+ * kept by insertion order) is the JS one; the numbers are not. Since
+ * 2026-10-17 (`specs/coach-heart-rate.md`, "Diagnostics that survive the
+ * workout") Android keeps 24 h / 2000 entries so a strap drop is still in the
+ * log after the workout ends; `debug-log.js` keeps its own 1 h / 500.
  */
 object DebugLogLogic {
 
-    /** Ring-buffer cap, `debug-log.js` MAX_ENTRIES. */
-    const val MAX_ENTRIES = 500
+    /** Ring-buffer cap: 2000 rows (Android's own value, not `debug-log.js`'s). */
+    const val MAX_ENTRIES = 2000
 
-    /** Retention window, `debug-log.js` TTL_MS. */
-    const val TTL_MS = 60L * 60L * 1000L
+    /** Retention window: 24 h (Android's own value, not `debug-log.js`'s). */
+    const val TTL_MS = 24L * 60L * 60L * 1000L
 
     /**
      * How often the live view re-applies the TTL filter. Without this an entry
@@ -34,8 +40,8 @@ object DebugLogLogic {
     fun isRetained(ts: Long, cutoff: Long): Boolean = ts > cutoff
 
     /**
-     * `debug-log.js` keeps entries while `(now - ts) < TTL_MS`, so an entry
-     * exactly one TTL old is already gone.
+     * Same boundary as `debug-log.js` (kept while `(now - ts) < TTL_MS`), so an
+     * entry exactly one TTL old is already gone.
      */
     fun isExpired(ts: Long, now: Long): Boolean = !isRetained(ts, ttlCutoff(now))
 

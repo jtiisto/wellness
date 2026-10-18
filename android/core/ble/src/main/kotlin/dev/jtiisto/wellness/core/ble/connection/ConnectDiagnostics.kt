@@ -41,12 +41,25 @@ object ConnectDiagnostics {
      * Null is not a fallback: silence is the only honest answer when nothing was
      * heard *and* nothing was listening. Only [ProbeState.LISTENING] — a probe
      * that ran, scanned, and heard nothing — earns the "not advertising" claim.
+     *
+     * That claim names the possible causes and picks none of them. A silent
+     * probe cannot see *who* holds the strap, and ANT+ reception does not
+     * occupy a Bluetooth slot, so the ported "held by a watch over ANT+"
+     * reading asserted something the probe never observed (amended 2026-10-17).
      */
     fun verdict(probe: ProbeState, rssi: Int?): String? = when (probe) {
         ProbeState.HEARD -> "strap is advertising, rssi=$rssi — connection failed or rejected"
-        ProbeState.LISTENING -> "strap not advertising — likely held by another device (watch/ANT+) or asleep"
+        ProbeState.LISTENING -> "strap not advertising — asleep, out of range, or connected elsewhere"
         ProbeState.INACTIVE, ProbeState.UNAVAILABLE -> null
     }
+
+    /**
+     * Text for a link loss that has outlasted [GAP_THRESHOLD_MS] without a
+     * sample. Says only what is known: the link went and recovery is running.
+     * No attempt has failed yet, so nothing here may claim one did — that is
+     * [retryDetail]'s job, and only once a connect attempt has in fact failed.
+     */
+    fun dropDetail(): String = "Strap link dropped — reconnecting"
 
     /** Progress text while the backoff is still running. */
     fun retryDetail(attempt: Int, verdict: String?): String =

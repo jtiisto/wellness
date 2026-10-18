@@ -25,6 +25,10 @@ import kotlinx.coroutines.flow.callbackFlow
  * Callers must hold `BLUETOOTH_SCAN`; `@SuppressLint("MissingPermission")` is
  * the acknowledgement, and the flow closes with the `SecurityException` if the
  * grant is missing or revoked rather than crashing whatever collected it.
+ *
+ * Both scans log their start, stop and failure code through [log] — the probe's
+ * lines are prefixed `probe` so a reader can tell the two apart. Authored text
+ * only, never an exception message: the debug log is shareable (see [BleLog]).
  */
 class BleScanner(
     private val context: Context,
@@ -76,13 +80,16 @@ class BleScanner(
             }
         }
 
-        log.log("scan started")
         try {
             scanner.startScan(null, LOW_LATENCY, callback)
         } catch (e: SecurityException) {
+            log.log("scan start refused: ${e.javaClass.simpleName}")
             close(e)
             return@callbackFlow
         }
+        // After startScan, not before: a refused start must not read as a scan
+        // that ran.
+        log.log("scan started")
 
         awaitClose {
             log.log("scan stopped")
@@ -99,8 +106,8 @@ class BleScanner(
      *
      * This is the advertising probe: it runs alongside a connect attempt so a
      * watchdog abort can say *which* failure happened — a strap that is silent
-     * (asleep, or held by a watch over ANT+) versus one that is advertising
-     * happily and refusing or failing the GATT connection. Without it every
+     * (asleep, out of range, or connected elsewhere) versus one that is
+     * advertising happily and refusing or failing the GATT connection. Without it every
      * failure reads the same and the user has nothing to act on.
      *
      * Address-filtered here, unlike [scan], because the probe already knows
@@ -115,6 +122,7 @@ class BleScanner(
     fun advertisements(address: String): Flow<Int> = callbackFlow {
         val scanner = leScanner()
         if (scanner == null) {
+            log.log("probe scan unavailable — no BLE adapter or it is switched off")
             close(IllegalStateException("Bluetooth LE scanner not available"))
             return@callbackFlow
         }
@@ -126,6 +134,7 @@ class BleScanner(
             }
 
             override fun onScanFailed(errorCode: Int) {
+                log.log("probe scan FAILED errorCode=$errorCode")
                 close(IllegalStateException("probe scan failed with error code: $errorCode"))
             }
         }
@@ -133,11 +142,16 @@ class BleScanner(
         try {
             scanner.startScan(listOf(filter), LOW_LATENCY, callback)
         } catch (e: SecurityException) {
+            log.log("probe scan start refused: ${e.javaClass.simpleName}")
             close(e)
             return@callbackFlow
         }
+        // The target address is deliberately not repeated here: the connection
+        // has already logged which strap it is connecting to.
+        log.log("probe scan started")
 
         awaitClose {
+            log.log("probe scan stopped")
             try {
                 scanner.stopScan(callback)
             } catch (_: SecurityException) {

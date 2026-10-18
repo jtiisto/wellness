@@ -523,7 +523,7 @@ private fun LazyListScope.debugLogItems(entries: List<DebugLogEntity>) {
     if (entries.isEmpty()) {
         item {
             Text(
-                text = "No entries in the last hour.",
+                text = "No entries in the last 24 hours.",
                 style = LogbookTheme.type.body.copy(fontStyle = FontStyle.Italic),
                 color = LogbookTheme.palette.inkSoft,
             )

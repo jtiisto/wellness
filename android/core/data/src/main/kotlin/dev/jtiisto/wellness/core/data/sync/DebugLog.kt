@@ -17,8 +17,9 @@ import kotlinx.serialization.json.JsonElement
 
 /**
  * Ring-buffer diagnostics for sync issues — a Room-backed port of
- * `debug-log.js`. Capped at [DebugLogLogic.MAX_ENTRIES] rows with a
- * [DebugLogLogic.TTL_MS] retention window.
+ * `debug-log.js`'s mechanism. Capped at [DebugLogLogic.MAX_ENTRIES] rows with a
+ * [DebugLogLogic.TTL_MS] retention window (Android's own values, larger than
+ * the PWA's; see [DebugLogLogic]).
  *
  * **Privacy**: never log request or response bodies, headers, or any journal or
  * coach content. HTTP logging is pinned at method + URL + status for exactly

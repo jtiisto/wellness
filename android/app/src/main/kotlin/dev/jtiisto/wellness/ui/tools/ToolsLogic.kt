@@ -126,12 +126,12 @@ object ToolsCopy {
     const val LOG_SHARE_FAILED = "Could not share the log"
 
     /**
-     * Shown under the log. The 1 h retention window can straddle a switch, so a
+     * Shown under the log. The 24 h retention window can straddle a switch, so a
      * dump shared afterwards may contain traffic from two different servers —
      * which is confusing rather than harmful, and only if nobody says so.
      */
     const val LOG_SPANS_SERVERS =
-        "Entries may span more than one server if you switched within the last hour."
+        "Entries may span more than one server if you switched within the last 24 hours."
 
     fun deleteBody(nickname: String): String = "Remove \"$nickname\" from the list?"
 

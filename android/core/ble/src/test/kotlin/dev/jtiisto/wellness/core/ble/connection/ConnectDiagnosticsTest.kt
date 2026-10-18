@@ -1,6 +1,7 @@
 package dev.jtiisto.wellness.core.ble.connection
 
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.DisplayName
@@ -10,8 +11,8 @@ import org.junit.jupiter.api.Test
  * What a failed connect tells the user.
  *
  * The distinction being defended is the one the advertising probe exists for:
- * a strap that is silent (asleep, or held by a watch over ANT+) needs a
- * different action from one that is advertising and refusing the connection.
+ * a strap that is silent (asleep, out of range, or connected elsewhere) needs
+ * a different action from one that is advertising and refusing the connection.
  * Claiming either without having listened would send someone hunting a fault
  * that is not there, which is why the agnostic cases return null rather than
  * guessing.
@@ -32,7 +33,35 @@ class ConnectDiagnosticsTest {
     fun listeningVerdict() {
         val verdict = ConnectDiagnostics.verdict(ProbeState.LISTENING, rssi = null)
 
-        assertTrue(verdict!!.contains("not advertising"))
+        assertEquals("strap not advertising — asleep, out of range, or connected elsewhere", verdict)
+    }
+
+    @Test
+    @DisplayName("the silent verdict names no cause the probe cannot see")
+    fun listeningVerdictMakesNoAntPlusClaim() {
+        // A silent probe cannot tell who holds the strap, and ANT+ reception
+        // does not occupy a Bluetooth slot — the ported wording claimed both.
+        val verdict = ConnectDiagnostics.verdict(ProbeState.LISTENING, rssi = null)!!
+
+        assertFalse(verdict.contains("ANT", ignoreCase = true))
+        assertFalse(verdict.contains("watch", ignoreCase = true))
+        assertFalse(verdict.contains("likely", ignoreCase = true))
+    }
+
+    @Test
+    @DisplayName("the heard verdict is unchanged by the 2026-10-17 amendment")
+    fun heardVerdictPinned() {
+        assertEquals(
+            "strap is advertising, rssi=-62 — connection failed or rejected",
+            ConnectDiagnostics.verdict(ProbeState.HEARD, rssi = -62),
+        )
+    }
+
+    @Test
+    @DisplayName("a drop past the gap threshold says the link dropped, and claims no failed attempt")
+    fun dropDetail() {
+        assertEquals("Strap link dropped — reconnecting", ConnectDiagnostics.dropDetail())
+        assertFalse(ConnectDiagnostics.dropDetail().contains("failed"))
     }
 
     @Test
