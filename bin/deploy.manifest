@@ -65,3 +65,4 @@ exclude-bin  weight_trend_chart.py
 # for it, and its allowlist is repo metadata, not runtime config.
 exclude-bin  scan_personal_data.py
 exclude-bin  scan_personal_data.allow
+exclude-bin  check_constraints.py

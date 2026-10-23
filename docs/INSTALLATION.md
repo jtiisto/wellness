@@ -34,7 +34,7 @@ pip install matplotlib
 `requirements.txt` states what the app needs; `constraints.txt` pins every package, transitive ones included, to the versions the full suite last passed with, so a fresh clone gets the same stack as the last green run. To upgrade, install without `-c`, run the full suite, and regenerate the pins from that venv:
 
 ```bash
-pip freeze --exclude-editable | grep -v -e '^py-spy==' -e '^pytest-timeout==' > constraints.txt
+pip freeze --exclude-editable > constraints.txt
 ```
 
 ### 2. Install Playwright browsers (for E2E tests)

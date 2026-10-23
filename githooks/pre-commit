@@ -24,6 +24,10 @@ echo "Running personal-data scan..."
 # like everything else: the scan is path-agnostic by design.
 python3 bin/scan_personal_data.py --staged
 
+# Venv drift (~0.1s, warn-only): name packages that differ from constraints.txt
+# before a suite fails or hangs for reasons unrelated to this commit.
+python3 bin/check_constraints.py
+
 staged="$(git diff --cached --name-only --diff-filter=ACMR)"
 
 # --- Android: mirror of the retired android/githooks/pre-commit rule -------

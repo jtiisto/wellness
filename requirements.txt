@@ -17,3 +17,4 @@ pytest-cov>=4.1.0
 pytest-sugar>=1.0.0
 pytest-playwright>=0.6.2
 requests>=2.31.0  # test/e2e_browser/conftest.py polls the live server
+pytest-timeout>=2.3.0  # pytest.ini: per-test timeout, so a hang fails instead of stalling

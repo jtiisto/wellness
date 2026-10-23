@@ -51,9 +51,13 @@ def _raw_get(app, path):
         except BaseException as exc:  # surface the failure in the calling thread
             error["exc"] = exc
 
-    thread = threading.Thread(target=_runner)
+    # Daemon + bounded join: an app that never finishes the response fails this
+    # test instead of hanging the session and blocking interpreter exit.
+    thread = threading.Thread(target=_runner, daemon=True)
     thread.start()
-    thread.join()
+    thread.join(timeout=30)
+    if thread.is_alive():
+        raise AssertionError(f"ASGI app did not finish GET {path} within 30 s")
     if "exc" in error:
         raise error["exc"]
     return status["code"], bytes(body)
