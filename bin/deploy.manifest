@@ -53,12 +53,12 @@ exclude    package.json
 exclude    plans
 exclude    .claude
 exclude    CLAUDE.md
+exclude    AGENTS.md
 
 # ---- bin/ entries that are dev-only ----
 exclude-bin  deploy-prod.sh
 exclude-bin  deploy.manifest
 exclude-bin  quick-deploy.sh
-exclude-bin  git-commit-push.sh
 exclude-bin  backup-gitignored.sh
 exclude-bin  weight_trend_chart.py
 # Personal-data guard: a dev/commit-time check. Prod has no git and no need

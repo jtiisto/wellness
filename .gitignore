@@ -40,8 +40,7 @@ src/modules/sleep_params.py
 # Planning docs
 /plans/
 
-# Claude Code (root file only — android/CLAUDE.md is tracked)
-/CLAUDE.md
+# Claude Code local state (worktrees, settings); CLAUDE.md files are tracked
 .claude/
 # Agent skills mirror (machine-specific: carries emulator host addresses)
 .agents/
@@ -52,4 +51,3 @@ bin/backup-databases.sh
 bin/backup-gitignored.sh
 bin/quick-deploy.sh
 bin/weight_trend_chart.py
-bin/git-commit-push.sh
