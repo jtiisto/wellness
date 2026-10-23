@@ -10,6 +10,8 @@
 #                                         artifact can differ; docs/android-only
 #                                         commits keep the previous stamp and so
 #                                         stay out of the pre-push server gate)
+#   * docs/conventions/** or the       -> conventions mirror guard
+#     LogbookPalette.kt it pins           (test/test_conventions_mirror.py)
 #   * docs-only commit                 -> doc-lint only
 #   * EVERY commit                     -> personal-data scan (repo is PUBLIC),
 #                                         doc-lint
@@ -47,6 +49,18 @@ if [[ -n "$server_changed" ]]; then
 
     echo "Running JS unit tests (node:test)..."
     node --test test/js/*.test.js
+fi
+
+# --- Conventions mirror: docs/conventions/** or the palette it pins ---------
+# The server slice above skips markdown, so a mirror edit would otherwise go
+# unchecked. ~0.1s: hash vs MANIFEST, freshness vs the sibling conventions repo
+# (skipped when absent), and LogbookPalette.kt vs the mirrored token table.
+if printf '%s\n' "$staged" | grep -qE '^docs/conventions/|^android/core/ui/src/main/kotlin/dev/jtiisto/wellness/core/ui/theme/LogbookPalette\.kt$'; then
+    echo "Conventions mirror or palette staged — running the mirror guard..."
+    python3 -m pytest test/test_conventions_mirror.py -q 2>&1 || {
+        echo "pre-commit: CONVENTIONS MIRROR GUARD FAILED — commit aborted." >&2
+        exit 1
+    }
 fi
 
 echo "Running doc-lint..."

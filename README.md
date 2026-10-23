@@ -10,7 +10,7 @@ A personal health and fitness dashboard that unifies daily habit tracking, worko
 | Works offline | Yes (service worker + IndexedDB) | Yes (Room, same sync semantics) |
 | Tabs | Journal · Coach · Trends · Analysis, plus a Tools menu (force sync, data export, debug log) | The same four, plus a **Tools** tab: the menu's functions plus a server address book and HR-strap pairing |
 | Heart-rate capture | — | Yes: Garmin chest strap over BLE, uploaded to the headless HR module |
-| Visual design | Dark-theme CSS | The **Logbook** design language — paper and ink, color reserved for meaning (`android/specs/logbook-design-system.md`) |
+| Visual design | Dark-theme CSS | The **Logbook** design language — paper and ink, color reserved for meaning (authority: `docs/conventions/logbook-design.md`, mirrored from the shared conventions; implementation: `android/specs/logbook-design-system.md`) |
 
 Sync behavior is identical by construction: the pure logic is ported function-for-function with mirrored test suites, and shared wire contracts are pinned by golden fixtures both test suites read. `docs/ARCHITECTURE.md` is the authority for every protocol; `android/CLAUDE.md` covers the Android build and workflow.
 
@@ -93,6 +93,7 @@ wellness/
 ├── bin/                    # Server control, deployment, and hook scripts
 │   ├── deploy.manifest     # Single source of truth for what ships to prod
 │   └── scan_personal_data.py  # Personal-data guard (this repo is public)
+├── docs/                   # ARCHITECTURE.md, INSTALLATION.md; conventions/ = generated mirror of shared conventions modules (never edit)
 ├── githooks/               # Shared git hooks, path-scoped per toolchain (enable: git config core.hooksPath githooks)
 ├── android/                # Native Android client — Kotlin/Compose, own Gradle tree, specs/, testdata/golden/
 ├── data/                   # SQLite databases (runtime)
@@ -103,6 +104,7 @@ wellness/
 
 - [Installation Guide](docs/INSTALLATION.md) - Setup, deployment, and MCP configuration
 - [Architecture](docs/ARCHITECTURE.md) - Design decisions, sync protocols, and technical details
+- [Logbook design](docs/conventions/logbook-design.md) - The shared visual-design language, mirrored from the private conventions repo (see [docs/conventions/README.md](docs/conventions/README.md))
 
 ## Server Control
 

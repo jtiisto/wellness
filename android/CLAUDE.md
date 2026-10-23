@@ -59,3 +59,4 @@ A spec includes:
 - `../test/js/` — behavioral spec for all ported pure logic
 - `docs/dev-environment-setup.md` — Linux build machine + Windows emulator setup
 - `specs/` — Living spec documents (spec-driven development)
+- `../docs/conventions/logbook-design.md` — the Logbook design language's authority (generated mirror of the private conventions repo; never edit it here); `specs/logbook-design-system.md` is this app's implementation of it

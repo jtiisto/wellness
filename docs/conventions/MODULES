@@ -1,0 +1,3 @@
+# Conventions modules this public repo mirrors (one path per line, relative to the
+# conventions repo root). Read by ../../conventions/bin/sync-conventions.sh.
+logbook-design.md

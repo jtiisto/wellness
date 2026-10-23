@@ -41,7 +41,7 @@ Wellness is a modular, self-hosted health application: four user-facing modules 
 | Tabs | Journal · Coach · Trends · Analysis, plus a Tools menu (force sync, data export, debug log) | The same four, plus a **Tools** tab: the menu's functions plus a **server address book** (multi-server switching) and **HR-strap pairing** — the two genuinely client-exclusive pieces |
 | HR capture | — | The only capture client: Garmin chest strap over BLE → the `/api/hr` batch endpoints |
 | Report status markers | Wire tokens render as emoji | The same tokens render as monochrome ink marks + mono words |
-| Visual design | Dark-theme CSS | The Logbook design language (paper/ink; `android/specs/logbook-design-system.md`) |
+| Visual design | Dark-theme CSS | The Logbook design language (paper/ink). Authority: `docs/conventions/logbook-design.md`, a generated mirror of the shared conventions module; implementation: `android/specs/logbook-design-system.md` |
 
 Everything protocol-level is **identical by construction**, not by coincidence: sync logic is ported as pure functions with mirrored test suites (the `test/js` suites and their Kotlin unit-test twins pin the same cases), shared judgment rules get exactly one predicate per stack (see the emptiness rule below), and the HR wire contract is pinned by one golden-fixture directory both test suites read (`test/hr/golden/`). The server is the single arbiter for both clients, and a protocol change lands as **one atomic commit** across server, PWA, and Android — the repo's git hooks are path-scoped so such a commit runs both toolchains' gates. The Android tree is self-contained for build and workflow concerns (`android/CLAUDE.md`, `android/specs/`) and defers to this document for every wire contract.
 

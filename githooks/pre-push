@@ -9,7 +9,7 @@
 #                                never run from hooks — /adb-* sessions only)
 #   * both touched            -> both suites, by design (protocol commits)
 #   * docs-only push          -> run ONLY the fast structural guard
-#     (every changed file       (test/test_deploy_manifest.py); nothing in the
+#     (every changed file       (test/test_deploy_manifest.py + the conventions mirror guard); nothing in the
 #      is *.md, docs/**,         heavy suites depends on doc contents, and the
 #      or android specs/docs)    guard still catches a stray new top-level file
 #   * no-op push              -> skip everything (empty net diff vs the remote)
@@ -113,8 +113,8 @@ case "$decision" in
         ;;
     docs)
         echo "Docs-only push — running the fast structural guard (skipping full suites/coverage/e2e/JS)..."
-        python3 -m pytest test/test_deploy_manifest.py -q 2>&1 || exit $?
-        echo "Structural guard passed. Pushing."
+        python3 -m pytest test/test_deploy_manifest.py test/test_conventions_mirror.py -q 2>&1 || exit $?
+        echo "Structural guards passed. Pushing."
         ;;
     full)
         if [[ "$run_server" == "1" ]]; then
@@ -129,6 +129,9 @@ case "$decision" in
             node --test test/js/*.test.js || exit $?
         fi
         if [[ "$run_android" == "1" ]]; then
+            # The conventions mirror guard ties LogbookPalette.kt to the mirrored
+            # token table, so an android-only push must run it too.
+            python3 -m pytest test/test_conventions_mirror.py -q 2>&1 || exit $?
             echo "Running full Android unit suite with coverage gate..."
             (cd android && ./gradlew testDebugUnitTest koverVerifyAggregated) || exit $?
         fi

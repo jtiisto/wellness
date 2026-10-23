@@ -17,6 +17,13 @@ vocabulary. Both are sections at the end, added rather than woven in — the
 Round 4 resolutions' precedent, so a completed round stays readable as what it
 was.
 
+**Amended 2026-10-23** — the shared design language (principles, tokens,
+type ramp, space/shape/interaction, shell, motion, launcher icon) now lives in
+the conventions repo and is mirrored at [`docs/conventions/logbook-design.md`](../../docs/conventions/logbook-design.md);
+this spec keeps the wellness-specific half and no longer restates the shared
+one. Where an older passage below still describes shared rules, the mirror
+wins.
+
 ## Goal
 
 Replace Graphite Signal as the app's design language with **Logbook** — a
@@ -40,27 +47,24 @@ marks) to the tested state layer and restructures composables above it.
 
 ## Core principles
 
-1. **One surface, no nested cards.** The screen background is the only surface.
-   Grouping is whitespace and hairline rules — never card-in-card containers,
-   tinted panels, or colored left rails.
-2. **Color means tier, nothing else.** The only chromatic UI elements are
-   plate-color dots encoding an exercise's tier. **Tier = `exposure`** (the
-   free-string identity key on `PlanExerciseDto`). Colors are assigned
-   **positionally**: each distinct exposure string in a workout takes the next
-   color from the fixed palette (red → blue → yellow → green) in order of first
-   appearance; a 5th+ distinct exposure renders a solid ink dot (colors never
-   repeat). A legend under the header maps each dot to its string and is
-   **load-bearing** — required on any screen showing tier dots.
-3. **Numbers are mono, words are sans.** Every numeral (weights, reps, RPE,
-   times, schemes like `3×6–9`) sets in IBM Plex Mono (tabular by default).
-   Prose and names use Inter; display headings use Barlow Condensed caps.
-4. **Grouping is drawn, not named.** Superset membership is a thin ink square
-   bracket in the left gutter spanning the grouped rows. Straight sets leave the
-   gutter empty. No "Superset A" labels, no A1/A2 letters.
-5. **Completion is a tally, not a badge.** Small filled ink marks, one per
-   completed set; outlined when incomplete. No `2/3` pills.
-6. **At most one metadata cluster per row.** Collapsed row = dot · name ·
-   scheme · tally. Everything else lives in the expanded state.
+The six principles are the shared language's: see the mirror's Principles in
+[`docs/conventions/logbook-design.md`](../../docs/conventions/logbook-design.md). A
+"principle 2" or "principle 3" below uses its numbering. Wellness binds them to:
+
+- **Colour means exercise tier.** **Tier = `exposure`** (the free-string
+  identity key on `PlanExerciseDto`). Colours are assigned **positionally**:
+  each distinct exposure string in a workout takes the next color from the fixed
+  palette (red → blue → yellow → green) in order of first appearance; a 5th+
+  distinct exposure renders a solid ink dot (colors never repeat). A legend
+  under the header maps each dot to its string and is **load-bearing** —
+  required on any screen showing tier dots.
+- **Grouping is the superset bracket.** Superset membership is a thin ink square
+  bracket in the left gutter spanning the grouped rows. Straight sets leave the
+  gutter empty. No "Superset A" labels, no A1/A2 letters.
+- **Completion is a tally.** Small filled ink marks, one per completed set;
+  outlined when incomplete. No `2/3` pills.
+- **The collapsed row is dot · name · scheme · tally.** Everything else lives in
+  the expanded state.
 
 ## Migration state (dual themes)
 
@@ -94,18 +98,11 @@ every destination being paper now makes that agreement automatic.
 
 ### Color
 
-| Token | Light | Dark | Use |
-|---|---|---|---|
-| `paper` | `#FBFAF7` | `#141517` | screen background — the only surface |
-| `ink` | `#17191B` | `#EDECE7` | primary text, tally marks, strong rules |
-| `inkSoft` | `#6A6D73` | `#7D8288` | secondary text, schemes, meta labels |
-| `inkFaint` | `#A6A9AD` | `#55585D` | ghost values, empty states, table headers, unfilled marks |
-| `rule` | `#E7E5DE` | `#2A2C2F` | hairline dividers between rows |
-| `ruleStrong` | `#C7C5BB` | `#3A3C40` | group boundaries, marginalia rails, popup border |
-| `plateRed` | `#B92D3A` | `#B92D3A` | tier dot, 1st distinct exposure |
-| `plateBlue` | `#2A5FA8` | `#2F6BBC` | tier dot, 2nd |
-| `plateYellow` | `#A87C1F` | `#C99A2A` | tier dot, 3rd |
-| `plateGreen` | `#2E7D4F` | `#2E7D4F` | tier dot, 4th |
+The ten tokens and their light and dark values are the mirror's Tokens table in
+[`docs/conventions/logbook-design.md`](../../docs/conventions/logbook-design.md);
+`LogbookPalette.kt` implements it, and `test/test_conventions_mirror.py` fails
+when the two disagree in either mode. Wellness spends the plates on tier dots
+and also draws marginalia rails in `ruleStrong`.
 
 Contrast resolutions (dots are non-text UI: 3:1 floor on their paper). All
 values below are measured in Phase 1 and pinned by `LogbookPaletteTest`:
@@ -132,11 +129,10 @@ values below are measured in Phase 1 and pinned by `LogbookPaletteTest`:
   recede). The palette test asserts a ≥2:1 floor with the rationale in KDoc,
   not the 3:1 text floor.
 
-**No semantic success/warning/error tokens exist in Logbook.** Coach's current
-semantic-color usages are re-expressed in ink (see Components). Two documented
-exceptions carry color for live signal, not decoration: the **HR tone dot**
-(instrument reading) and the sync status indicator's states (transient device
-truth); both are quiet dots, never fills or text colors.
+Coach's former semantic-color usages are re-expressed in ink (see Components).
+The mirror's live-signal exception has exactly two consumers here: the **HR
+tone dot** (instrument reading) and the sync status indicator's states
+(transient device truth); both are quiet dots, never fills or text colors.
 
 Both exceptions borrow Graphite's semantic tokens, and both are rendered inside
 a Logbook subtree — where `LocalWellnessPalette` is **not provided** and answers
@@ -151,58 +147,38 @@ palette the moment its host destination flips.
 
 ### Type
 
-Bundled fonts (first font resources in the repo, `core/ui/src/main/res/font/`,
-all SIL OFL — license files ship alongside; ≈1–1.5 MB APK cost):
-Barlow Condensed (SemiBold), Inter (Regular/Medium/SemiBold + Italic),
-IBM Plex Mono (Regular/Medium + Italic).
-
-| Role | Face | Spec | Use |
-|---|---|---|---|
-| `display` | Barlow Condensed 600 caps | 34sp, tight leading | workout titles |
-| `section` | Barlow Condensed 600 caps | 17sp, +6% tracking | section labels |
-| `name` | Inter 500 | 14.5sp | exercise names |
-| `body` | Inter 400 | 12.5–13sp | prose, user notes; italic variant = marginalia + empty states |
-| `data` | IBM Plex Mono 400 | 12.5sp | set-table cells, schemes |
-| `meta` | IBM Plex Mono 400/500 | 11.5sp | meta lines (values 500-weight ink, labels 400 ink-soft) |
-| `eyebrow` | IBM Plex Mono 400 caps | 10.5sp, +12–14% tracking | eyebrows, legend, user-note labels, hints |
-| `tableHeader` | IBM Plex Mono 500 caps | 10sp, +12% tracking | set-table column heads |
-
-Plex Mono is tabular-figured natively — no `tnum` gymnastics needed. The M3
-`Typography` and `ColorScheme` adapters fill **every** slot (incl. the `*Fixed`
-roles) from Logbook tokens, same discipline as Graphite's adapter — baseline
-purple must be unreachable.
+The bundled faces, the eight-role ramp and the M3 adapter rule are the mirror's
+Type section in [`docs/conventions/logbook-design.md`](../../docs/conventions/logbook-design.md).
+The fonts are the repo's first font resources, in `core/ui/src/main/res/font/`,
+with their OFL licence texts in `core/ui/font-licenses/`; together they cost
+≈1–1.5 MB of APK. Plex Mono is tabular-figured natively — no `tnum` gymnastics
+needed.
 
 ### Spacing, rules, shape, interaction
 
-- Base grid 4dp. Row padding 14dp vertical; 18dp around group boundaries.
-- Hairlines 1dp `rule`; group boundaries 1dp `ruleStrong`; section underline
-  1.5dp ink.
-- Corner radius ≤2dp (marks only). The design is flat by intent: no drop
-  shadows inside the screen, no tonal elevation.
-- Touch targets ≥48dp everywhere (Android law beats paper flatness; the
-  density-pass visual-vs-interactive split carries over unchanged).
-- **Indication**: `LogbookTheme` replaces the M3 ripple with a quiet ink press
-  overlay (low-alpha ink wash, no bounded ripple animation) via
-  `LocalIndication` inside Logbook subtrees.
-- Icons: trimmed set. Decorative glyphs are removed (prescription dumbbell,
-  meta-row location/phase icons → text labels). Survivors (nav glyphs,
-  chevrons, lock, calendar) render as outlined glyphs in ink. Eyebrow state
-  glyphs are icon glyphs tinted ink — **never colored emoji**.
+Grid, rules, radius, flatness, touch targets, press indication and the icon rule
+are the mirror's "Space, shape, interaction" in
+[`docs/conventions/logbook-design.md`](../../docs/conventions/logbook-design.md); touch targets keep
+the [density pass](density-pass.md)'s visual-vs-interactive split unchanged.
+`LogbookTheme` implements the press wash by replacing the M3 ripple via
+`LocalIndication` inside Logbook subtrees (no bounded ripple animation). The
+icon trim removed the prescription dumbbell and the meta-row location/phase
+icons (now text labels); the survivors — nav glyphs, chevrons, lock, calendar —
+render as outlined glyphs in ink, and eyebrow state glyphs are icon glyphs
+tinted ink.
 
 ## Components — shell
+
+Bottom nav, snackbar and the empty/error-state treatment are the mirror's Shell
+section in [`docs/conventions/logbook-design.md`](../../docs/conventions/logbook-design.md).
+Wellness adds:
 
 - **Theme wiring**: `LogbookTheme {}` wraps the Scaffold + nav bar + coach
   destination; other destinations stay under `WellnessTheme` (each destination
   wrapped at the nav-graph dispatch). Scaffold container follows the active
   destination's canvas so tab switches never flash the wrong paper.
-- **Bottom nav**: paper surface, 1dp `rule` top hairline, outlined ink glyphs;
-  selected item = full-ink glyph + label with the existing underline bar drawn
-  in ink (module accents leave the nav). Stock `NavigationBar` retained
-  (accessibility surface stays stock), colors overridden.
-- **Snackbar**: inverted paper/ink (dark ink surface, paper text in light mode
-  and vice versa), radius ≤2dp.
-- **`ServerRecoveryScreen`**: same treatment as coach empty states — display
-  heading, body prose, ink outline button.
+- **`ServerRecoveryScreen`** is the shell's empty/error state, drawn like the
+  coach empty states.
 
 ## Components — Coach
 
@@ -893,25 +869,24 @@ something *while it happens*. Nothing in Rounds 1–4 moved on its own: every
 animation in the tree is a transition between two states a user asked for
 (the accordion's expand, the sheet's slide), and the one component that ever
 ran a continuous clock — `SyncStatusDot` — carries a comment recording what
-that cost. The rule below is what makes a live instrument legal without
+that cost. The motion rule is what makes a live instrument legal without
 reopening that.
 
-1. **A paper instrument ticks; it does not glide.** A live display advances in
-   **discrete one-second steps**, driven by one clock for the whole surface, so
-   every number on it changes on the same step. No interpolation, no easing, no
-   per-value animation — a value that slid between two readings would be
-   drawing a measurement nobody took.
-2. **Nothing animates while it is not composed.** The clock is a
-   `LaunchedEffect` keyed on the composition and nothing else, so it exists
-   exactly as long as the thing it drives is on screen. This is not an
-   optimisation: a permanent frame clock standing beside a `KEEP_SCREEN_ON`
-   flag is a battery contract, and the composition is the only lifetime that
-   cannot outlive what the user is looking at.
-3. **A live chart's axis never moves.** Its domain is fixed once, for the whole
-   session, from the plan rather than from the data. Scrolling is the only
-   motion permitted inside the plot: an axis that re-fitted itself would be a
-   ruler moving under a reading, and the trace's own shape would stop meaning
-   anything between two ticks.
+The rules themselves — only user-asked transitions animate, a live display
+ticks in discrete one-second steps from one clock per surface that lives only
+while composed, and a live chart's axis never re-fits — are the mirror's Motion
+section in [`docs/conventions/logbook-design.md`](../../docs/conventions/logbook-design.md).
+What wellness binds them to:
+
+1. **The cardio guide is the live surface.** One clock drives the whole overlay,
+   so every number on it changes on the same step; a value that slid between two
+   readings would be drawing a measurement nobody took.
+2. **The clock is a `LaunchedEffect` keyed on the composition and nothing
+   else.** This is not an optimisation: a permanent frame clock standing beside a
+   `KEEP_SCREEN_ON` flag is a battery contract, and the composition is the only
+   lifetime that cannot outlive what the user is looking at.
+3. **The guide's domain is fixed once per session from the plan**, not from the
+   data. Scrolling is the only motion permitted inside the plot.
 4. **Geometry stays pure, ink stays in the painter.** The motion is a new
    `nowMs` handed to the same pure model function (the `PlotModel` → `drawPlot`
    seam), never state accumulated in a composable. Nothing about *what moves* is
