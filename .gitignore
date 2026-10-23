@@ -47,7 +47,6 @@ src/modules/sleep_params.py
 
 # OS
 .DS_Store
-bin/backup-databases.sh
 bin/backup-gitignored.sh
 bin/quick-deploy.sh
 bin/weight_trend_chart.py
