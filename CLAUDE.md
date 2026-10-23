@@ -20,6 +20,7 @@ shared ground.
 | Android client | `android/` — own CLAUDE.md, Gradle tree, `specs/`, `testdata/golden/` |
 | Sync protocols & data models | `docs/ARCHITECTURE.md` — authoritative for BOTH clients ("the porting bible"); `android/specs/*` defer to it |
 | Shared wire-contract fixtures | `test/hr/golden/` — ONE directory read by pytest AND the Android golden tests (staged onto the Gradle test classpath); never duplicate it |
+| Visual design authority | `docs/conventions/logbook-design.md` — a generated mirror of the private conventions repo's Logbook module (`../conventions/bin/sync-conventions.sh`); never edit it here. The wellness-specific implementation spec is `android/specs/logbook-design-system.md` |
 | Plan docs | `plans/` — gitignored, local-only, never committed (the repo is public). The Android plan lives at `plans/android-plan.md` |
 
 ## Shared ground (both clients — non-negotiable)
@@ -57,3 +58,5 @@ This project has four documents that must stay in sync with the code:
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Sync protocols, data models, design decisions, MCP behavior, testing patterns | Changing sync logic, adding/removing database tables, modifying MCP tools, or altering the analysis pipeline |
 | [docs/INSTALLATION.md](docs/INSTALLATION.md) | Setup, deployment, Tailscale config, MCP server configuration | Changing dependencies, environment variables, or deployment steps |
 | [android/CLAUDE.md](android/CLAUDE.md) | Android module structure, Kover gate, emulator/ADB workflow | Changing the Android build, test harness, or dev-environment workflow |
+
+`docs/conventions/` is not one of the four: its files are generated mirrors of the private conventions repo. A shared-rule change is a commit there plus a sync here (see `docs/conventions/README.md`), and `test/test_conventions_mirror.py` enforces it.
