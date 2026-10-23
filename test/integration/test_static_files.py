@@ -25,8 +25,17 @@ def _raw_get(app, path):
     body = bytearray()
     status = {}
 
+    delivered = False
+
     async def receive():
-        return {"type": "http.request", "body": b"", "more_body": False}
+        # Like a real server: the request body once, then nothing until the
+        # client goes away. Answering http.request forever makes Starlette's
+        # disconnect listener (FileResponse, ASGI < 2.4) spin without yielding.
+        nonlocal delivered
+        if not delivered:
+            delivered = True
+            return {"type": "http.request", "body": b"", "more_body": False}
+        await asyncio.Event().wait()
 
     async def send(ev):
         if ev["type"] == "http.response.start":

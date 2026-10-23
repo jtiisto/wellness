@@ -2,10 +2,10 @@
 
 ## Prerequisites
 
-- Python 3.11+
-- pip
+- Python 3.11+ with `venv` and pip (on Ubuntu/Debian: `sudo apt install python3-venv`)
+- Node.js 18+ — the git hooks run the PWA's JS unit tests (`node --test test/js/*.test.js`); no npm packages are needed
 - Claude Code CLI (for the Analysis module)
-- FastMCP (`pip install fastmcp`) for MCP servers
+- FastMCP 2.x (in `requirements.txt`) for MCP servers
 - NumPy (in `requirements.txt`) for the HR analysis CLI
 - matplotlib — **optional**, charts only (see below)
 
@@ -17,7 +17,7 @@
 cd wellness
 python3 -m venv venv
 source venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements.txt -c constraints.txt
 
 # Enable the shared git hooks (pre-commit tests, tiered pre-push gate, post-commit dispatcher)
 git config core.hooksPath githooks
@@ -31,11 +31,19 @@ The hooks live in `githooks/` (tracked). `core.hooksPath` is per-clone local con
 pip install matplotlib
 ```
 
+`requirements.txt` states what the app needs; `constraints.txt` pins every package, transitive ones included, to the versions the full suite last passed with, so a fresh clone gets the same stack as the last green run. To upgrade, install without `-c`, run the full suite, and regenerate the pins from that venv:
+
+```bash
+pip freeze --exclude-editable | grep -v -e '^py-spy==' -e '^pytest-timeout==' > constraints.txt
+```
+
 ### 2. Install Playwright browsers (for E2E tests)
 
 ```bash
 playwright install chromium
 ```
+
+The browser needs system libraries a server install may lack; `sudo venv/bin/playwright install-deps chromium` installs them.
 
 ### 3. Start the server
 
@@ -74,7 +82,7 @@ What gets deployed is driven entirely by **`bin/deploy.manifest`** (the single s
 cd /path/to/production
 python3 -m venv venv
 source venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements.txt -c constraints.txt
 ./bin/server.sh start
 ```
 
@@ -431,7 +439,7 @@ Chrome on Android identifies PWAs by scope on the same origin. If Wellness and S
 
 ### MCP server errors
 
-- Ensure `fastmcp` is installed: `pip install fastmcp`
+- Ensure FastMCP 2.x is installed: `pip install -r requirements.txt -c constraints.txt`
 - Verify the database files exist in `data/` (they are created on first server start — except `hr.db`, which appears with the first captured heart-rate batch; the HR tools say so rather than failing)
 - Check that `cwd` in MCP config points to the `mcp_servers/` directory, not the individual server directory
 - Test a server directly: `cd mcp_servers && python3 -m journal_mcp`

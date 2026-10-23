@@ -22,6 +22,7 @@ ship-dir   src
 ship-dir   public
 ship-dir   mcp_servers
 ship-file  requirements.txt
+ship-file  constraints.txt
 # data/ deliberately does NOT ship: nothing tracked lives there, the server
 # creates its databases on first start (deploy-prod.sh mkdir -p's the dir),
 # and rsync --delete near live prod databases/WAL sidecars is exactly the

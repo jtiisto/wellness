@@ -51,9 +51,11 @@ An on-demand trigger for the external Garmin sync, so a pull-to-refresh on Trend
 cd wellness
 python3 -m venv venv
 source venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements.txt -c constraints.txt
 ./bin/server.sh start
 ```
+
+Needs Python 3.11+ with `venv` (on Ubuntu: `sudo apt install python3-venv`); the git hooks also need Node.js.
 
 The app runs at `http://localhost:9000/wellness/` and works as a PWA on mobile devices. See [Installation Guide](docs/INSTALLATION.md) for Tailscale and production setup.
 

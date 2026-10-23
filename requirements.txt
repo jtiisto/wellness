@@ -2,7 +2,7 @@ fastapi>=0.104.0
 uvicorn[standard]>=0.24.0
 pydantic>=2.0.0
 httpx>=0.27.0
-fastmcp>=2.0.0,<4.0.0
+fastmcp>=2.0.0,<3.0.0  # the MCP tests read FastMCP 2.x internals (_tool_manager), gone in 3.x
 
 # HR analysis CLI (src/hr_analysis) — not imported by the server
 numpy>=1.26.0
@@ -16,3 +16,4 @@ pytest-asyncio>=0.23.0
 pytest-cov>=4.1.0
 pytest-sugar>=1.0.0
 pytest-playwright>=0.6.2
+requests>=2.31.0  # test/e2e_browser/conftest.py polls the live server
