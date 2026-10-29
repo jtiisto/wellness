@@ -657,6 +657,16 @@ class JournalUiStateTest {
     }
 
     @Test
+    @DisplayName("a row leaving composition commits only text the user actually typed")
+    fun disposalCommit() {
+        assertEquals("125", pendingNumericInput("125", "7"), "typed over a stored value")
+        assertEquals("125", pendingNumericInput("125", ""), "typed into an empty field")
+        assertEquals("", pendingNumericInput("", "7"), "an emptied field is a pending clear and must land")
+        assertNull(pendingNumericInput("7", "7"), "untouched, or already committed and re-seeded on blur")
+        assertNull(pendingNumericInput("", ""), "an untouched empty field")
+    }
+
+    @Test
     @DisplayName("the accumulator adds to what is displayed, allows negatives, ignores zero and junk")
     fun accumulator() {
         assertEquals(EntryPatch.numeric(32.0), accumulatorPatch(7.0, "25"))

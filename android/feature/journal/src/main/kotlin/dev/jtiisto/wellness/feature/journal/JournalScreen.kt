@@ -720,6 +720,20 @@ private fun NumericField(
         text = row.valueText
     }
 
+    // The row can leave composition with the keyboard still up — the category
+    // header collapses it, the list scrolls it off, the tab changes — and a
+    // detached node never gets the focus-loss event the commit above hangs on,
+    // so the typed number was silently dropped (device-found, 2026-10-29).
+    // Disposal commits too; see [CommitOnDispose] for the mechanism. The
+    // lambda is rebuilt each recomposition so it carries the row as it stands,
+    // and the write lands in the ViewModel's scope, which outlives this row.
+    CommitOnDispose(
+        key = row.id,
+        text = text,
+        seededText = row.valueText,
+        commit = { pending -> onCommit(row.id, row.displayedNumber, pending) },
+    )
+
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(LogbookSpace.grid),

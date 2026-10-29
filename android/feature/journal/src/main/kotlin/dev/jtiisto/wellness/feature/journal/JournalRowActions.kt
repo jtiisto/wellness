@@ -96,6 +96,22 @@ fun accumulatorPatch(displayedNumber: Double?, input: String): EntryPatch? {
     return EntryPatch.numeric((displayedNumber ?: 0.0) + increment)
 }
 
+/**
+ * What a numeric field hands to the commit when its row leaves composition.
+ *
+ * The field keeps the typed text locally and writes on focus loss or IME Done —
+ * but a row can be disposed with the keyboard still up (the category header
+ * collapses it, the list scrolls it off, the tab changes), and a detached node
+ * never receives the focus-loss event. The typed number was simply dropped
+ * (device-found, 2026-10-29). Disposal therefore commits too, and this is its
+ * gate: null when the text is exactly what the row seeded, because that is
+ * either an untouched field or one the blur already committed (the commit
+ * re-seeds the text), and committing it again would be a second write of the
+ * same number — a no-op by the parse rules, but a write the field has no
+ * business issuing. An emptied field is a pending clear and must land.
+ */
+fun pendingNumericInput(text: String, seededText: String): String? = text.takeIf { it != seededText }
+
 /** The evaluation slider. Writes the value only — never the checkbox. */
 fun sliderPatch(value: Float): EntryPatch = EntryPatch.numeric(value.toDouble())
 
