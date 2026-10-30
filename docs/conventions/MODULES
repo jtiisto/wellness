@@ -1,3 +1,6 @@
 # Conventions modules this public repo mirrors (one path per line, relative to the
 # conventions repo root). Read by ../../conventions/bin/sync-conventions.sh.
+universal.md
+web-service.md
+android.md
 logbook-design.md

@@ -1,10 +1,11 @@
 # Wellness
 
-@../conventions/universal.md
-@../conventions/web-service.md
+@docs/conventions/universal.md
+@docs/conventions/web-service.md
 
 Codex and other tools that don't follow `@` imports: read the two files above first;
-they are the rules this file builds on.
+they are the rules this file builds on. They are generated mirrors of the private
+conventions repo (`docs/conventions/README.md`); never edit them here.
 
 Monorepo: the FastAPI server + PWA live at the repo root; the native Android
 client lives in `android/` (grafted 2026-08 with its full history — a former

@@ -139,7 +139,7 @@ case "$decision" in
             # build cache on every later run, after clean included (2026-10-29:
             # 83.19 % three times in about a second, 127 tasks FROM-CACHE; the
             # same tree passed uncached in 37 s). The verdict must be computed
-            # in the run that reports it. See ../conventions/android.md, Coverage.
+            # in the run that reports it. See docs/conventions/android.md, Coverage.
             (cd android && ./gradlew testDebugUnitTest koverVerifyAggregated --no-build-cache) || exit $?
         fi
         echo "All tests passed with sufficient coverage. Pushing..."
