@@ -138,29 +138,52 @@ fun shouldFetch(resolved: Boolean, gateOpen: Boolean): Boolean = resolved && gat
 /** Tally only: the 2×1 strip. */
 val STRIP = DpSize(110.dp, 40.dp)
 
-/** Tally · rule · the sleep block. The default 3×2 placement. */
-val CARD = DpSize(180.dp, 110.dp)
+/**
+ * Tally · rule · the sleep block, with the compact headline: the floor at font
+ * scale 1.0, which a 4×1 on the reference launcher (110.5dp tall) clears.
+ * Agrees with [widgetBucket] at 1.0 by construction.
+ */
+val CARD = DpSize(STACKED_MIN_WIDTH_DP.dp, stackHeightDp(WidgetStack.CARD_COMPACT, 1f).dp)
 
-/** Everything, card-faithful: strain and the honesty lines join. */
-val PAGE = DpSize(180.dp, 170.dp)
+/**
+ * Everything, card-faithful: strain and the honesty lines join. 207.5dp at font
+ * scale 1.0 — the measured gap-night worst case, where until 2026-11-10 this was
+ * a guessed 170 that could not hold the page it promised.
+ */
+val PAGE = DpSize(STACKED_MIN_WIDTH_DP.dp, stackHeightDp(WidgetStack.PAGE, 1f).dp)
 
 /** Which of the three compositions a given size gets. */
 enum class WidgetBucket { STRIP, WIDE, CARD, PAGE }
 
 /**
- * The bucket for a size handed down by `SizeMode.Responsive`.
+ * The bucket for the widget's real size (`SizeMode.Exact`) at the reader's
+ * system font scale.
  *
- * Both dimensions have to clear the floor: the sleep block's headline needs the
- * 180dp width whatever the height is, so a tall narrow widget stays a STRIP
- * rather than rendering a truncated number. Nothing is ever shrunk to fit — a
- * size that cannot hold an element omits it.
+ * Both dimensions have to clear a stacked floor: the sleep block's headline
+ * needs the 180dp width whatever the height is, so a tall narrow widget stays a
+ * STRIP rather than rendering a truncated number. The height floors are the
+ * measured stacks of `specs/widget.md` §Vertical budgets at [fontScale] — a
+ * widget too short for a stack at the reader's text size falls to the next
+ * bucket down instead of clipping its last line. CARD height outranks WIDE:
+ * given the height to stack, the page stacks.
+ *
+ * Nothing is shrunk to fit, with the one dated exception the spec records
+ * (owner, 2026-11-10): at CARD the need headline drops to a compact size when
+ * the widget is too short for 24sp — see [headlineStep].
  */
-fun widgetBucket(size: DpSize): WidgetBucket = when {
-    size.height >= PAGE.height && size.width >= PAGE.width -> WidgetBucket.PAGE
-    size.height >= CARD.height && size.width >= CARD.width -> WidgetBucket.CARD
-    size.width >= WIDE_MIN_WIDTH_DP.dp -> WidgetBucket.WIDE
-    else -> WidgetBucket.STRIP
+fun widgetBucket(size: DpSize, fontScale: Float): WidgetBucket {
+    val stacks = size.width.value >= STACKED_MIN_WIDTH_DP
+    val height = size.height.value
+    return when {
+        stacks && height >= stackHeightDp(WidgetStack.PAGE, fontScale) -> WidgetBucket.PAGE
+        stacks && height >= stackHeightDp(WidgetStack.CARD_COMPACT, fontScale) -> WidgetBucket.CARD
+        size.width.value >= WIDE_MIN_WIDTH_DP -> WidgetBucket.WIDE
+        else -> WidgetBucket.STRIP
+    }
 }
+
+/** The width both stacked buckets need: the sleep block's widest headline. */
+const val STACKED_MIN_WIDTH_DP = 180f
 
 /**
  * WIDE's entry width: a strip-height shape with room for two ideas side by
@@ -224,6 +247,152 @@ fun showsCompactSleep(bucket: WidgetBucket, hasTally: Boolean): Boolean = when (
     WidgetBucket.WIDE -> true
     else -> !showsSleep(bucket) && !hasTally
 }
+
+// ---- Vertical budgets ------------------------------------------------------
+
+/**
+ * The three stacked pages the floors are budgeted for (`specs/widget.md`
+ * §Vertical budgets): CARD with the compact 16sp headline, CARD with the 24sp
+ * one, and PAGE's gap-night worst case.
+ */
+enum class WidgetStack { CARD_COMPACT, CARD_24SP, PAGE }
+
+/**
+ * How tall [stack] draws at [fontScale], with 2dp to spare: its fixed dp
+ * (padding, rule, gaps) plus its lines of text, and only the text grows with
+ * the scale.
+ *
+ * The scale is applied linearly, which is an **upper bound**: Android scales
+ * large text by less than the nominal factor (the 32sp headline does not grow
+ * at all at 1.3), so the estimate can send a widget one bucket down that would
+ * have fitted and can never draw one whose counted lines clip. A line that
+ * wraps on a narrow widget is not counted (`specs/widget.md` §Vertical budgets,
+ * *Width*): a gap-night debt line on a CARD, or a long freshness line on a
+ * PAGE, narrower than the reference cells. A scale below 1.0 does not
+ * lower a floor — the line constants were measured at 1.0 and are the floor of
+ * what a line costs.
+ */
+fun stackHeightDp(stack: WidgetStack, fontScale: Float): Float {
+    val (fixed, text) = when (stack) {
+        WidgetStack.CARD_COMPACT -> CARD_FIXED_DP to CARD_COMPACT_TEXT_DP
+        WidgetStack.CARD_24SP -> CARD_FIXED_DP to CARD_24SP_TEXT_DP
+        WidgetStack.PAGE -> PAGE_FIXED_DP to PAGE_TEXT_DP
+    }
+    return fixed + text * maxOf(fontScale, 1f) + STACK_SPARE_DP
+}
+
+/** The sizes the need headline is drawn at; [headlineSp] maps each to its sp. */
+enum class HeadlineStep {
+    /** 16sp: a CARD too short for 24sp — the owner's one exception to never shrinking. */
+    COMPACT,
+
+    /** 24sp: StatTile's own size, at a CARD with the height for it. */
+    CARD,
+
+    /** 32sp: the page's number takes the room it has. */
+    PAGE,
+}
+
+/**
+ * The headline's size at [bucket], for a widget [heightDp] tall at [fontScale].
+ *
+ * PAGE draws 32sp. CARD draws 24sp once the real height reaches the 24sp
+ * stack, and the compact 16sp below it — the largest whole size that holds the
+ * 110dp floor with 2dp to spare. STRIP and WIDE draw no headline (their sleep
+ * line is the meta-size compact row); they answer [HeadlineStep.COMPACT] so the
+ * function is total, and nothing reads it there.
+ */
+fun headlineStep(bucket: WidgetBucket, heightDp: Float, fontScale: Float): HeadlineStep = when (bucket) {
+    WidgetBucket.PAGE -> HeadlineStep.PAGE
+    WidgetBucket.CARD ->
+        if (heightDp >= stackHeightDp(WidgetStack.CARD_24SP, fontScale)) HeadlineStep.CARD else HeadlineStep.COMPACT
+    WidgetBucket.STRIP, WidgetBucket.WIDE -> HeadlineStep.COMPACT
+}
+
+/** The headline's font size in sp; the composable builds its style from this number. */
+fun headlineSp(step: HeadlineStep): Float = when (step) {
+    HeadlineStep.COMPACT -> 16f
+    HeadlineStep.CARD -> 24f
+    HeadlineStep.PAGE -> 32f
+}
+
+/**
+ * The air on each side of the tally/sleep rule: a page's worth at PAGE, where
+ * there is height to spend, and 6dp everywhere else.
+ */
+fun blockGapDp(bucket: WidgetBucket): Float =
+    if (bucket == WidgetBucket.PAGE) PAGE_BLOCK_GAP_DP else BLOCK_GAP_DP
+
+/**
+ * Whether a configuration's font scale differs from the one the widget last
+ * laid out for — the whole decision behind the font-scale redraw, so a rotation
+ * or a dark-mode switch schedules nothing.
+ *
+ * A [new] scale that is not finite and positive is never a change, so it is
+ * never adopted: `Configuration.fontScale` reads 0 when the field is undefined,
+ * and a NaN would compare unequal to everything and report a change on every
+ * configuration callback.
+ */
+fun fontScaleChanged(current: Float, new: Float): Boolean =
+    isUsableFontScale(new) && current != new
+
+/**
+ * Whether [fontScale] is one the widget can lay out for: finite and positive.
+ * The one rule both [fontScaleChanged] and the holder's initial value
+ * ([WidgetFontScale]) go by, so the holder can never expose a scale an offer
+ * would refuse.
+ */
+fun isUsableFontScale(fontScale: Float): Boolean = fontScale.isFinite() && fontScale > 0f
+
+/** 12dp of padding on each side; the content is what is left between them. */
+private const val WIDGET_PADDING_DP = 12f
+
+// Measured line heights at font scale 1.0 (API 35 emulator, 420dpi, system
+// mono), each rounded up to the next half dp — §Vertical budgets has the px.
+/** 10.5sp: the eyebrow, the tally count, the cached badge. */
+private const val EYEBROW_LINE_DP = 14.5f
+
+/** 11.5sp: debt, `h:mm`, strain, freshness. */
+private const val META_LINE_DP = 16f
+
+/** 16sp, computed from the font's vertical metrics. */
+private const val HEADLINE_COMPACT_LINE_DP = 22f
+private const val HEADLINE_CARD_LINE_DP = 32.5f
+private const val HEADLINE_PAGE_LINE_DP = 43f
+
+private const val BLOCK_GAP_DP = 6f
+private const val PAGE_BLOCK_GAP_DP = 10f
+private const val RULE_DP = 1f
+
+/** The top padding each line under the eyebrow carries inside the sleep block. */
+private const val LINE_GAP_DP = 2f
+
+/** Covers the pixel rounding of four to eight lines on an unmeasured density. */
+private const val STACK_SPARE_DP = 2f
+
+/** Padding, gap · rule · gap, the headline's and the debt line's top padding, padding: 41dp. */
+private const val CARD_FIXED_DP =
+    WIDGET_PADDING_DP + (BLOCK_GAP_DP + RULE_DP + BLOCK_GAP_DP) + 2 * LINE_GAP_DP + WIDGET_PADDING_DP
+
+/** Padding, the wider gap · rule · gap, five lines' top padding, padding: 55dp. */
+private const val PAGE_FIXED_DP =
+    WIDGET_PADDING_DP + (PAGE_BLOCK_GAP_DP + RULE_DP + PAGE_BLOCK_GAP_DP) + 5 * LINE_GAP_DP + WIDGET_PADDING_DP
+
+/** Tally row, eyebrow, the 16sp headline, one debt line: 67dp. */
+private const val CARD_COMPACT_TEXT_DP =
+    EYEBROW_LINE_DP + EYEBROW_LINE_DP + HEADLINE_COMPACT_LINE_DP + META_LINE_DP
+
+/** Tally row, eyebrow, the 24sp headline, one debt line: 77.5dp. */
+private const val CARD_24SP_TEXT_DP =
+    EYEBROW_LINE_DP + EYEBROW_LINE_DP + HEADLINE_CARD_LINE_DP + META_LINE_DP
+
+/**
+ * Tally row, eyebrow, the 32sp headline, the debt line wrapped to two, strain,
+ * freshness, and the cached badge: 150.5dp — a gap night through a stale cache.
+ */
+private const val PAGE_TEXT_DP =
+    EYEBROW_LINE_DP + EYEBROW_LINE_DP + HEADLINE_PAGE_LINE_DP + 2 * META_LINE_DP + META_LINE_DP +
+        META_LINE_DP + EYEBROW_LINE_DP
 
 // ---- The tracker tally ------------------------------------------------------
 
@@ -470,9 +639,6 @@ fun sleepSpoken(model: SleepTonightModel?): String {
         model.cachedLine?.let { append(". $it") }
     }
 }
-
-/** 12dp of padding on each side; the content is what is left between them. */
-private const val WIDGET_PADDING_DP = 12f
 
 /** A tally is kept in fives: four posts and the gate struck across them. */
 private const val TALLY_GROUP_SIZE = 5

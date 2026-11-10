@@ -7,7 +7,6 @@ import androidx.glance.ColorFilter
 import androidx.glance.GlanceModifier
 import androidx.glance.Image
 import androidx.glance.ImageProvider
-import androidx.glance.LocalContext
 import androidx.glance.LocalSize
 import androidx.glance.action.actionStartActivity
 import androidx.glance.action.clickable
@@ -63,25 +62,18 @@ import dev.jtiisto.wellness.core.ui.theme.INK_BANG
  * mono an acceptable stand-in and a proportional face not one.
  */
 
-/** `needText` and the bang — StatTile's 24sp mono Medium, unchanged. */
+/**
+ * `needText` and the bang — StatTile's 24sp mono Medium. The size it is drawn at
+ * is [headlineSp]'s answer for the bucket's [HeadlineStep]: 32sp at PAGE, where
+ * the card's size read as a note in a margin, and a compact 16sp at a CARD too
+ * short for 24sp.
+ */
 private val WIDGET_HEADLINE = TextStyle(
     color = WIDGET_INK,
     fontSize = 24.sp,
     fontWeight = FontWeight.Medium,
     fontFamily = FontFamily.Monospace,
 )
-
-/**
- * PAGE's headline: one step up. The tallest bucket was setting the card's own
- * 24sp in a cell three sizes larger and reading as a note in a margin; the
- * number is the widget's reason to exist, so at PAGE it takes the room it has.
- */
-private val WIDGET_HEADLINE_PAGE = WIDGET_HEADLINE.copy(fontSize = 32.sp)
-
-/** The pending floor's `-:--`: the same headline, receded to ink-faint. */
-private val WIDGET_HEADLINE_PENDING = WIDGET_HEADLINE.copy(color = WIDGET_INK_FAINT)
-
-private val WIDGET_HEADLINE_PAGE_PENDING = WIDGET_HEADLINE_PAGE.copy(color = WIDGET_INK_FAINT)
 
 /** The debt line, the one meta line that is the answer rather than a caveat. */
 private val WIDGET_META_INK = TextStyle(
@@ -122,21 +114,21 @@ private val WIDGET_EYEBROW = TextStyle(
  * it would hold none — no trackers configured — gives the line to the next
  * element in the compact form the floor can hold ([showsCompactSleep]).
  *
- * The user's font scale is read here and handed to the fit rule: the counts are
- * sized in sp and the marks in dp, so the row's arithmetic is only true if it
- * knows how much the words grew.
+ * [fontScale] is the system font scale, handed in as collected state (see
+ * [WidgetFontScale]) rather than read here: a read at draw time is frozen until
+ * something else recomposes. The bucket floors, the headline step and the tally
+ * fit rule all take it, because text is sized in sp and everything else in dp.
  */
 @Composable
-fun TodayWidgetContent(rollup: CategoryRollup?, model: SleepTonightModel?) {
+fun TodayWidgetContent(rollup: CategoryRollup?, model: SleepTonightModel?, fontScale: Float) {
     val size = LocalSize.current
-    val bucket = widgetBucket(size)
-    val fontScale = LocalContext.current.resources.configuration.fontScale
+    val bucket = widgetBucket(size, fontScale)
     val tally = tallyLayout(rollup, bucket, tallyFitWidthDp(bucket, size.width.value), fontScale)
     val sleep = showsSleep(bucket)
-    // A page's worth of air: the rule earns wider margins where there is height
-    // to spend, and the headline steps up with it (WIDGET_HEADLINE_PAGE).
-    val page = bucket == WidgetBucket.PAGE
-    val blockGap = if (page) 10.dp else 6.dp
+    val blockGap = blockGapDp(bucket).dp
+    val headline = WIDGET_HEADLINE.copy(
+        fontSize = headlineSp(headlineStep(bucket, size.height.value, fontScale)).sp,
+    )
 
     Column(
         modifier = GlanceModifier
@@ -189,8 +181,9 @@ fun TodayWidgetContent(rollup: CategoryRollup?, model: SleepTonightModel?) {
                     model = model,
                     showStrain = showsStrain(bucket),
                     showHonesty = showsHonestyLines(bucket),
-                    headline = if (page) WIDGET_HEADLINE_PAGE else WIDGET_HEADLINE,
-                    headlinePending = if (page) WIDGET_HEADLINE_PAGE_PENDING else WIDGET_HEADLINE_PENDING,
+                    headline = headline,
+                    // The pending floor's `-:--`: the same headline, receded to ink-faint.
+                    headlinePending = headline.copy(color = WIDGET_INK_FAINT),
                 )
             } else if (showsCompactSleep(bucket, hasTally = tally != null)) {
                 CompactSleepRow(model)

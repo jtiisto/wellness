@@ -54,7 +54,9 @@ kover {
                     "dev.jtiisto.wellness.core.ble.device.PrefsKnownDeviceStorage$*",
                     // Home-screen widget glue: a Glance session, an AppWidget
                     // provider, a WorkManager job and a process-lifecycle
-                    // observer. None of them can execute off a device — they
+                    // observer, which also registers the font-scale
+                    // configuration callback (its one decision is the counted
+                    // fontScaleChanged). None of them can execute off a device — they
                     // need a GlanceId, an AppWidget host, WorkManager's runtime
                     // or a real process lifecycle — and they are verified on the
                     // emulator against specs/widget.md §Size buckets.

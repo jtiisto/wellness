@@ -178,25 +178,37 @@ class TodayWidgetLogicTest {
     // ---- Buckets -----------------------------------------------------------
 
     @Test
-    @DisplayName("each declared size lands in its own bucket")
+    @DisplayName("each declared size lands in its own bucket at font scale 1.0")
     fun declaredSizesMapToThemselves() {
-        assertEquals(WidgetBucket.STRIP, widgetBucket(STRIP))
-        assertEquals(WidgetBucket.CARD, widgetBucket(CARD))
-        assertEquals(WidgetBucket.PAGE, widgetBucket(PAGE))
+        assertEquals(WidgetBucket.STRIP, widgetBucket(STRIP, 1f))
+        assertEquals(WidgetBucket.CARD, widgetBucket(CARD, 1f))
+        assertEquals(WidgetBucket.PAGE, widgetBucket(PAGE, 1f))
+    }
+
+    @Test
+    @DisplayName("the declared floors are the measured stacks at font scale 1.0")
+    fun declaredFloorsAreTheBudgets() {
+        assertEquals(DpSize(180.dp, 110.dp), CARD)
+        // Rewritten 2026-11-10 with the spec: PAGE's floor was a guessed 170dp
+        // and is now the measured gap-night worst case.
+        assertEquals(DpSize(180.dp, 207.5.dp), PAGE)
     }
 
     @Test
     @DisplayName("110dp of height is where the sleep block becomes affordable")
     fun cardHeightBoundary() {
-        assertEquals(WidgetBucket.STRIP, widgetBucket(DpSize(180.dp, 109.9.dp)))
-        assertEquals(WidgetBucket.CARD, widgetBucket(DpSize(180.dp, 110.dp)))
+        assertEquals(WidgetBucket.STRIP, widgetBucket(DpSize(180.dp, 109.9.dp), 1f))
+        assertEquals(WidgetBucket.CARD, widgetBucket(DpSize(180.dp, 110.dp), 1f))
     }
 
     @Test
-    @DisplayName("170dp of height is where strain and the honesty lines fit")
+    @DisplayName("207.5dp of height is where strain and the honesty lines fit")
     fun pageHeightBoundary() {
-        assertEquals(WidgetBucket.CARD, widgetBucket(DpSize(180.dp, 169.9.dp)))
-        assertEquals(WidgetBucket.PAGE, widgetBucket(DpSize(180.dp, 170.dp)))
+        // Rewritten 2026-11-10 with the spec: the floor was 170dp (169.9 CARD,
+        // 170 PAGE). It is now the measured 207.5dp, so 170 is a CARD.
+        assertEquals(WidgetBucket.CARD, widgetBucket(DpSize(180.dp, 170.dp), 1f))
+        assertEquals(WidgetBucket.CARD, widgetBucket(DpSize(180.dp, 207.4.dp), 1f))
+        assertEquals(WidgetBucket.PAGE, widgetBucket(DpSize(180.dp, 207.5.dp), 1f))
     }
 
     @Test
@@ -204,19 +216,30 @@ class TodayWidgetLogicTest {
     fun narrowButTallIsStrip() {
         // Both dimensions have to clear the floor. A 179dp column would render
         // `! 8:20 h:mm` clipped, which is worse than not rendering it.
-        assertEquals(WidgetBucket.STRIP, widgetBucket(DpSize(179.9.dp, 400.dp)))
-        assertEquals(WidgetBucket.STRIP, widgetBucket(DpSize(110.dp, 170.dp)))
+        assertEquals(WidgetBucket.STRIP, widgetBucket(DpSize(179.9.dp, 400.dp), 1f))
+        assertEquals(WidgetBucket.STRIP, widgetBucket(DpSize(110.dp, 170.dp), 1f))
+    }
+
+    @Test
+    @DisplayName("the stacked buckets start at 180dp of width, WIDE at 250dp")
+    fun widthFloors() {
+        assertEquals(WidgetBucket.STRIP, widgetBucket(DpSize(179.dp, 110.dp), 1f))
+        assertEquals(WidgetBucket.CARD, widgetBucket(DpSize(180.dp, 110.dp), 1f))
+        assertEquals(WidgetBucket.STRIP, widgetBucket(DpSize(179.dp, 300.dp), 1f))
+        assertEquals(WidgetBucket.PAGE, widgetBucket(DpSize(180.dp, 300.dp), 1f))
+        assertEquals(WidgetBucket.STRIP, widgetBucket(DpSize(249.dp, 100.dp), 1f))
+        assertEquals(WidgetBucket.WIDE, widgetBucket(DpSize(250.dp, 100.dp), 1f))
     }
 
     @Test
     @DisplayName("a strip with the width for two ideas is WIDE — and CARD height outranks it")
     fun wideBucketBoundaries() {
-        assertEquals(WidgetBucket.WIDE, widgetBucket(DpSize(250.dp, 100.dp)))
-        assertEquals(WidgetBucket.STRIP, widgetBucket(DpSize(249.9.dp, 100.dp)))
-        assertEquals(WidgetBucket.WIDE, widgetBucket(DpSize(300.dp, 109.9.dp)))
+        assertEquals(WidgetBucket.WIDE, widgetBucket(DpSize(250.dp, 100.dp), 1f))
+        assertEquals(WidgetBucket.STRIP, widgetBucket(DpSize(249.9.dp, 100.dp), 1f))
+        assertEquals(WidgetBucket.WIDE, widgetBucket(DpSize(300.dp, 109.9.dp), 1f))
         // At CARD height the page stacks instead: WIDE is strictly the
         // strip-height family using its width.
-        assertEquals(WidgetBucket.CARD, widgetBucket(DpSize(300.dp, 110.dp)))
+        assertEquals(WidgetBucket.CARD, widgetBucket(DpSize(300.dp, 110.dp), 1f))
     }
 
     @Test
@@ -242,7 +265,203 @@ class TodayWidgetLogicTest {
     @Test
     @DisplayName("anything larger than PAGE is still PAGE")
     fun oversizeIsPage() {
-        assertEquals(WidgetBucket.PAGE, widgetBucket(DpSize(320.dp, 400.dp)))
+        assertEquals(WidgetBucket.PAGE, widgetBucket(DpSize(320.dp, 400.dp), 1f))
+    }
+
+    // ---- Vertical budgets and the font scale -------------------------------
+
+    /** The reference launcher's cells (API 35 emulator, 420dpi), in dp. */
+    private val cell2x1 = DpSize(172.dp, 110.5.dp)
+    private val cell4x1 = DpSize(360.dp, 110.5.dp)
+    private val cell3x2 = DpSize(266.dp, 237.dp)
+    private val cell3x3 = DpSize(266.dp, 363.dp)
+
+    @Test
+    @DisplayName("the three stacks at font scale 1.0 are the spec's floors")
+    fun stackHeightsAtDefaultScale() {
+        assertEquals(110f, stackHeightDp(WidgetStack.CARD_COMPACT, 1f))
+        assertEquals(120.5f, stackHeightDp(WidgetStack.CARD_24SP, 1f))
+        assertEquals(207.5f, stackHeightDp(WidgetStack.PAGE, 1f))
+    }
+
+    @Test
+    @DisplayName("only the text grows with the font scale: 1.3 scales the lines, not the fixed dp")
+    fun stackHeightsAtLargeScale() {
+        // 41 + 67 × 1.3 + 2; 41 + 77.5 × 1.3 + 2; 55 + 150.5 × 1.3 + 2.
+        assertEquals(130.1f, stackHeightDp(WidgetStack.CARD_COMPACT, 1.3f), 0.001f)
+        assertEquals(143.75f, stackHeightDp(WidgetStack.CARD_24SP, 1.3f), 0.001f)
+        assertEquals(252.65f, stackHeightDp(WidgetStack.PAGE, 1.3f), 0.001f)
+    }
+
+    @Test
+    @DisplayName("a font scale under 1.0 does not lower a floor")
+    fun smallScaleKeepsTheFloors() {
+        assertEquals(110f, stackHeightDp(WidgetStack.CARD_COMPACT, 0.85f))
+        assertEquals(120.5f, stackHeightDp(WidgetStack.CARD_24SP, 0.85f))
+        assertEquals(207.5f, stackHeightDp(WidgetStack.PAGE, 0.85f))
+        assertEquals(WidgetBucket.STRIP, widgetBucket(DpSize(180.dp, 109.9.dp), 0.85f))
+        assertEquals(WidgetBucket.CARD, widgetBucket(DpSize(180.dp, 110.dp), 0.85f))
+        assertEquals(WidgetBucket.CARD, widgetBucket(DpSize(180.dp, 207.4.dp), 0.85f))
+        assertEquals(WidgetBucket.PAGE, widgetBucket(DpSize(180.dp, 207.5.dp), 0.85f))
+    }
+
+    @Test
+    @DisplayName("the reference cells at font scale 1.0: 2×1 STRIP, 4×1 CARD, 3×2 and 3×3 PAGE")
+    fun referenceCellsAtDefaultScale() {
+        assertEquals(WidgetBucket.STRIP, widgetBucket(cell2x1, 1f))
+        assertEquals(WidgetBucket.CARD, widgetBucket(cell4x1, 1f))
+        assertEquals(WidgetBucket.PAGE, widgetBucket(cell3x2, 1f))
+        assertEquals(WidgetBucket.PAGE, widgetBucket(cell3x3, 1f))
+    }
+
+    @Test
+    @DisplayName("the reference cells at font scale 1.3: 2×1 STRIP, 4×1 WIDE, 3×2 CARD, 3×3 PAGE")
+    fun referenceCellsAtLargeScale() {
+        assertEquals(WidgetBucket.STRIP, widgetBucket(cell2x1, 1.3f))
+        // 110.5dp is short of the 130.1dp stack: the 4×1 falls to WIDE rather
+        // than clipping its last line.
+        assertEquals(WidgetBucket.WIDE, widgetBucket(cell4x1, 1.3f))
+        // 237dp is short of 252.65 for PAGE: the upper bound at work.
+        assertEquals(WidgetBucket.CARD, widgetBucket(cell3x2, 1.3f))
+        assertEquals(WidgetBucket.PAGE, widgetBucket(cell3x3, 1.3f))
+    }
+
+    @Test
+    @DisplayName("at font scale 1.3 each floor holds just under and exactly at it")
+    fun floorsAtLargeScale() {
+        val card = stackHeightDp(WidgetStack.CARD_COMPACT, 1.3f)
+        val page = stackHeightDp(WidgetStack.PAGE, 1.3f)
+        assertEquals(WidgetBucket.STRIP, widgetBucket(DpSize(180.dp, (card - 0.1f).dp), 1.3f))
+        assertEquals(WidgetBucket.WIDE, widgetBucket(DpSize(250.dp, (card - 0.1f).dp), 1.3f))
+        assertEquals(WidgetBucket.CARD, widgetBucket(DpSize(180.dp, card.dp), 1.3f))
+        assertEquals(WidgetBucket.CARD, widgetBucket(DpSize(180.dp, (page - 0.1f).dp), 1.3f))
+        assertEquals(WidgetBucket.PAGE, widgetBucket(DpSize(180.dp, page.dp), 1.3f))
+        // The 1.0 floors are not enough at 1.3.
+        assertEquals(WidgetBucket.STRIP, widgetBucket(DpSize(180.dp, 110.dp), 1.3f))
+        assertEquals(WidgetBucket.CARD, widgetBucket(DpSize(180.dp, 207.5.dp), 1.3f))
+    }
+
+    @Test
+    @DisplayName("a CARD draws the 24sp headline from 120.5dp, the compact one below it")
+    fun headlineStepAtCard() {
+        assertEquals(HeadlineStep.COMPACT, headlineStep(WidgetBucket.CARD, 110f, 1f))
+        assertEquals(HeadlineStep.COMPACT, headlineStep(WidgetBucket.CARD, 120f, 1f))
+        assertEquals(HeadlineStep.CARD, headlineStep(WidgetBucket.CARD, 120.5f, 1f))
+        assertEquals(HeadlineStep.CARD, headlineStep(WidgetBucket.CARD, 121f, 1f))
+    }
+
+    @Test
+    @DisplayName("PAGE always draws 32sp; STRIP and WIDE, which draw no headline, answer COMPACT")
+    fun headlineStepElsewhere() {
+        assertEquals(HeadlineStep.PAGE, headlineStep(WidgetBucket.PAGE, 237f, 1f))
+        assertEquals(HeadlineStep.PAGE, headlineStep(WidgetBucket.PAGE, 237f, 1.3f))
+        assertEquals(HeadlineStep.COMPACT, headlineStep(WidgetBucket.STRIP, 400f, 1f))
+        assertEquals(HeadlineStep.COMPACT, headlineStep(WidgetBucket.WIDE, 400f, 1f))
+    }
+
+    @Test
+    @DisplayName("a 4×1 at font scale 1.0 is a CARD with the compact 16sp headline")
+    fun fourByOneEndToEnd() {
+        val bucket = widgetBucket(cell4x1, 1f)
+        assertEquals(WidgetBucket.CARD, bucket)
+        val step = headlineStep(bucket, cell4x1.height.value, 1f)
+        assertEquals(HeadlineStep.COMPACT, step)
+        assertEquals(16f, headlineSp(step))
+    }
+
+    @Test
+    @DisplayName("at font scale 1.3 a 237dp CARD has the height for the 24sp headline")
+    fun headlineStepAtLargeScale() {
+        val bucket = widgetBucket(cell3x2, 1.3f)
+        assertEquals(WidgetBucket.CARD, bucket)
+        assertEquals(HeadlineStep.CARD, headlineStep(bucket, 237f, 1.3f))
+        // ...where the 1.0 threshold would not be enough at 1.3.
+        assertEquals(HeadlineStep.COMPACT, headlineStep(WidgetBucket.CARD, 143.7f, 1.3f))
+        assertEquals(HeadlineStep.CARD, headlineStep(WidgetBucket.CARD, 143.75f, 1.3f))
+    }
+
+    @Test
+    @DisplayName("the headline steps are 16, 24 and 32sp")
+    fun headlineSizes() {
+        assertEquals(16f, headlineSp(HeadlineStep.COMPACT))
+        assertEquals(24f, headlineSp(HeadlineStep.CARD))
+        assertEquals(32f, headlineSp(HeadlineStep.PAGE))
+    }
+
+    @Test
+    @DisplayName("the block gap widens to 10dp at PAGE and is 6dp elsewhere")
+    fun blockGaps() {
+        assertEquals(
+            listOf(6f, 6f, 6f, 10f),
+            WidgetBucket.entries.map { blockGapDp(it) },
+        )
+    }
+
+    @Test
+    @DisplayName("only a different font scale counts as a font-scale change")
+    fun fontScaleChange() {
+        assertFalse(fontScaleChanged(1f, 1f))
+        assertFalse(fontScaleChanged(1.3f, 1.3f))
+        assertTrue(fontScaleChanged(1f, 1.3f))
+        assertTrue(fontScaleChanged(1.3f, 1f))
+    }
+
+    @Test
+    @DisplayName("the font-scale holder starts at the default and reports only changes")
+    fun fontScaleHolder() {
+        val holder = WidgetFontScale()
+        assertEquals(1f, holder.state.value)
+
+        assertTrue(holder.offer(1.3f))
+        assertEquals(1.3f, holder.state.value)
+
+        assertFalse(holder.offer(1.3f))
+        assertEquals(1.3f, holder.state.value)
+
+        assertTrue(holder.offer(1f))
+        assertEquals(1f, holder.state.value)
+    }
+
+    @Test
+    @DisplayName("a holder primed with a scale holds it until a different one is offered")
+    fun fontScaleHolderInitial() {
+        val holder = WidgetFontScale(initial = 1.15f)
+        assertEquals(1.15f, holder.state.value)
+        assertFalse(holder.offer(1.15f))
+        assertEquals(WidgetFontScale.DEFAULT_FONT_SCALE, WidgetFontScale().state.value)
+    }
+
+    @Test
+    @DisplayName("an unusable font scale is never a change: zero, negative, NaN, infinite")
+    fun unusableFontScaleIsNoChange() {
+        // Configuration.fontScale reads 0 when undefined; NaN compares unequal
+        // to everything and would otherwise report a change on every call.
+        assertFalse(fontScaleChanged(1f, 0f))
+        assertFalse(fontScaleChanged(1f, -1f))
+        assertFalse(fontScaleChanged(1f, Float.NaN))
+        assertFalse(fontScaleChanged(1f, Float.POSITIVE_INFINITY))
+    }
+
+    @Test
+    @DisplayName("the holder neither adopts nor reports an unusable font scale")
+    fun fontScaleHolderRejectsUnusable() {
+        val holder = WidgetFontScale(initial = 1.3f)
+        listOf(0f, -1f, Float.NaN, Float.POSITIVE_INFINITY).forEach { unusable ->
+            assertFalse(holder.offer(unusable))
+            assertEquals(1.3f, holder.state.value)
+        }
+        // A real change afterwards still goes through.
+        assertTrue(holder.offer(1f))
+        assertEquals(1f, holder.state.value)
+    }
+
+    @Test
+    @DisplayName("an unusable initial font scale is replaced by the default; a usable one is kept")
+    fun fontScaleHolderRejectsUnusableInitial() {
+        listOf(0f, -1f, Float.NaN, Float.POSITIVE_INFINITY).forEach { unusable ->
+            assertEquals(1f, WidgetFontScale(initial = unusable).state.value)
+        }
+        assertEquals(1.3f, WidgetFontScale(initial = 1.3f).state.value)
     }
 
     // ---- What each bucket shows --------------------------------------------
@@ -521,6 +740,21 @@ class TodayWidgetLogicTest {
 
         assertEquals(12, layout?.marks()?.size)
         assertEquals("2/12", layout?.text)
+    }
+
+    @Test
+    @DisplayName("a 4×1 at font scale 1.3 is WIDE, and its column keeps the marks with the sentence")
+    fun fourByOneAtLargeScale() {
+        val cell = DpSize(360.dp, 110.5.dp)
+        val bucket = widgetBucket(cell, 1.3f)
+        assertEquals(WidgetBucket.WIDE, bucket)
+
+        // A 184.8dp column: 59dp of marks + 8 + `2 OF 12 DONE` at 1.3
+        // (12 × 6.3 × 1.3 = 98.28dp) needs about 165.3dp.
+        val layout = tally(twelve, bucket, tallyFitWidthDp(bucket, cell.width.value), fontScale = 1.3f)
+
+        assertEquals(12, layout?.marks()?.size)
+        assertEquals("2 OF 12 DONE", layout?.text)
     }
 
     @Test

@@ -1,6 +1,6 @@
 # Spec: Home-screen widget — "Today" (Glance)
 
-Status: **approved 2026-08-28** (the widget plan was approved as a whole; approval of that plan is approval of this spec, per its Phase 0 gate) · **amended 2026-11-10**: the tally is drawn as tally marks, not dots (owner; §Open questions, item 4)
+Status: **approved 2026-08-28** (the widget plan was approved as a whole; approval of that plan is approval of this spec, per its Phase 0 gate) · **amended 2026-11-10**: the tally is drawn as tally marks, not dots (owner; §Open questions, item 4); the stacked page's heights are budgeted from measured lines, a 4×1 draws its headline at a compact size, the floors follow the font scale, and a font-scale change redraws (owner; §Open questions, items 5 to 8)
 
 > **Origin.** Phase 2 of the sleep-debt round (`specs/trends.md` §Sleep need promised it in writing) and the answer to the in-app Home screen question, which is **deferred**: the widget ships first and real use decides whether an in-app Home is ever needed. The code was pre-positioned for this — `SleepDebtLogic` / `SleepTonightModel` live in `:core:data` precisely so a surface with no feature module on its classpath can render them, and `categoryRollup` has lived there since the journal UI round for the same reason.
 
@@ -22,18 +22,20 @@ Naming and homes:
 
 ## Size buckets
 
-`SizeMode.Exact`. Each bucket is a **threshold on the widget's real size** (`widgetBucket`), and every bucket is verified to render whole at its own floor; real launchers give more room, and with Exact the composition *knows* it has more. The first cut used `SizeMode.Responsive` over the three floors, which hands the composition the matched **bucket** size rather than the real one — so a strip stretched to twice its floor still laid out (and fit its tally) as if it were 110×40 dp, drawing a lone fraction in a field of paper. First device report; the mode flipped, and the fit rule reads the truth. STRIP content is vertically centred (one line in a box usually taller than the line); CARD and PAGE read top-down like the card.
+`SizeMode.Exact`. Each bucket is a **threshold on the widget's real size** (`widgetBucket`), and every bucket is verified to render whole at its own floor on the reference launcher's widths (§Vertical budgets names the narrow-width wraps the budgets do not count); real launchers give more room, and with Exact the composition *knows* it has more. The first cut used `SizeMode.Responsive` over the three floors, which hands the composition the matched **bucket** size rather than the real one — so a strip stretched to twice its floor still laid out (and fit its tally) as if it were 110×40 dp, drawing a lone fraction in a field of paper. First device report; the mode flipped, and the fit rule reads the truth. Content is vertically centred at every bucket (below); within the stacked page the lines read top-down in the card's order.
 
-| Bucket | DpSize (min) | Cells | Shows |
+| Bucket | DpSize (min, font scale 1.0) | Cells on the reference launcher | Shows |
 |---|---|---|---|
-| STRIP | 110 × 40 | 2×1 | tally only — or, with no tally to draw, the compact sleep row (below) |
-| WIDE | 250 wide, under CARD height | 4×1-ish | tally in its own column · vertical rule · compact sleep row, side by side |
-| CARD | 180 × 110 | 3×2 (default placement) | tally · rule · eyebrow + judgment glyph · need headline · debt line |
-| PAGE | 180 × 170 | 3×3 and up | everything, card-faithful: + strain and the honesty lines, headline stepped up to 32 sp, block gaps widened to 10 dp |
+| STRIP | 110 × 40 | 2×1 (172 × 110) | tally only — or, with no tally to draw, the compact sleep row (below) |
+| WIDE | 250 wide, under CARD height | a 4×1 whose row is shorter than the CARD floor, or a 4×1 once the scaled CARD floor passes its height (110.5 dp falls short just above font scale 1.0; at 1.3 the floor is 130.1 dp) | tally in its own column · vertical rule · compact sleep row, side by side |
+| CARD | 180 × 110 | 4×1 (360 × 110), with the compact headline; a 3×2 at font scale 1.3 | tally · rule · eyebrow + judgment glyph · need headline · debt line |
+| PAGE | 180 × 207.5 | 3×2 (266 × 237, the default placement) and up | everything, card-faithful: + strain and the honesty lines, headline stepped up to 32 sp, block gaps widened to 10 dp |
+
+The reference launcher is the one the device checks run on: the API 35 emulator's, 420 dpi, where a cell is 94 dp wide and 126.5 dp tall less the launcher's insets. The Cells column is what those cells measure, not a promise about other launchers; the thresholds are what decides. Until 2026-11-10 this table called a 3×2 a CARD and gave PAGE a 170 dp floor; a real 3×2 is 237 dp tall and was always a PAGE, and the 170 dp floor could not hold the page it promised (§Vertical budgets).
 
 Space is spent, not left over (the sixth device report asked where it all went): content is **vertically centred at every bucket** — launcher cells run taller than the floors, and a column pinned to the top leaves the surplus as a void under the last line. WIDE is the strip-height family using its width: the tally takes a fixed 55 % column (`wideTallyWidthDp`; the fit ladder is fitted to that column via `tallyFitWidthDp`, not to the page), a vertical hairline divides, and the compact sleep line takes the rest. WIDE with no tally drops the rule and gives the row to the sleep line alone — a rule may not separate a column from nothing. CARD height outranks WIDE: given the height to stack, the page stacks.
 
-**Element priority.** Elements are added in this order as the bucket grows, and dropped in reverse as it shrinks. Nothing is ever shrunk to fit — a size that cannot hold an element omits it.
+**Element priority.** Elements are added in this order as the bucket grows, and dropped in reverse as it shrinks. Nothing is ever shrunk to fit — a size that cannot hold an element omits it. **One exception, by the owner (2026-11-10):** the need headline at CARD is drawn at a compact size when the widget is too short for it at 24 sp (§Vertical budgets). The number is still the largest thing on the page, and every counted line of the block is still drawn whole at the reference widths (§Vertical budgets, *Width*, carries the two narrow-widget wraps that are not counted); the alternative was a 4×1 that showed the tally beside a one-line sleep row and never the debt.
 
 | # | Element | STRIP | CARD | PAGE |
 |---|---|---|---|---|
@@ -46,10 +48,40 @@ The honesty lines sit at PAGE only, and that is a **measured compromise, not an 
 
 **STRIP with no tally** — the one day the strip's own element has nothing to draw, because no habits are expected — hands its line to the next element in priority order, in the only form the floor holds: the **judgment glyph + `needText`** (or `-:--` in ink-faint when pending), meta-ink, no eyebrow and no `h:mm` unit. `TONIGHT'S SLEEP NEED` alone measures ≈126 dp against 86 dp of content and would wrap; the glyph carries what that label would have said, which is what the mark vocabulary is for. The decision is `showsCompactSleep(bucket, hasTally)` in `TodayWidgetLogic`, not a branch invented in the composable. An empty strip is never an option — it reads as broken.
 
-Vertical budgets at the floors: CARD = 12+14+6+1+6+13+2+26+2+15+12 = **109 dp ≤ 110**; PAGE normal = **152 dp**, gap-night worst case (the debt line wraps to two lines) = **167 dp ≤ 170**. Width at 180 dp: the widest headline `! 8:05 h:mm` measures 89–105 dp; the 31-character gap-night debt line wraps under `maxLines = 2`.
+### Vertical budgets
+
+Glance sets no line height, so a line of text is as tall as the font's own metrics make it, and the first budget here was written from guessed lines (a 26 dp headline, 15 dp captions) that the device did not honour: the CARD block was budgeted at 109 dp and measured 118, so a 4×1 at 110.5 dp clipped its last line by 7 dp. The budgets below are **measured** (2026-11-10, API 35 emulator, 420 dpi, system mono, `uiautomator` bounds), and each constant is the measured height rounded up to the next half dp:
+
+| Line | Size | Measured at font scale 1.0 | At 1.3 | Budgeted |
+|---|---|---|---|---|
+| eyebrow, tally count, cached badge | 10.5 sp | 38 px = 14.48 dp | 48 px = 18.29 dp | 14.5 dp |
+| meta (debt, `h:mm`, strain, freshness) | 11.5 sp | 41 px = 15.62 dp | 53 px = 20.19 dp | 16 dp |
+| headline, compact | 16 sp | 57 px = 21.71 dp (computed) | not measured | 22 dp |
+| headline, CARD | 24 sp | 85 px = 32.38 dp | 93 px = 35.43 dp (computed; 92 px were visible before the widget's edge clipped the line) | 32.5 dp |
+| headline, PAGE | 32 sp | 112 px = 42.67 dp | 112 px = 42.67 dp | 43 dp |
+
+The 16 sp row is computed from the font's own vertical metrics, with the formula that reproduces the other four measurements to the pixel (line px = ⌈0.271 × size px⌉ + ⌈1.056 × size px⌉ for the system mono), and is confirmed on the device with the build that draws it.
+
+The stacked page is fixed dp plus lines of text, and only the text grows with the font scale:
+
+| Stack | Fixed dp | Text at font scale 1.0 | Needs at 1.0 | Floor (needs + 2 dp to spare) |
+|---|---|---|---|---|
+| CARD, compact headline | 12 + (6+1+6) + 2 + 2 + 12 = 41 | 14.5 + 14.5 + 22 + 16 = 67 | 108 | **110** |
+| CARD, 24 sp headline | 41 | 14.5 + 14.5 + 32.5 + 16 = 77.5 | 118.5 | **120.5** |
+| PAGE, worst case | 12 + (10+1+10) + 5 × 2 + 12 = 55 | 14.5 + 14.5 + 43 + 16 + 16 + 16 + 16 + 14.5 = 150.5 | 205.5 | **207.5** |
+
+CARD counts the tally row, the eyebrow, the headline and one debt line. PAGE's worst case is a gap night seen through a stale cache: the debt line wrapped to two lines, the strain line, and both honesty lines, each of those three counted as one line. The 2 dp to spare covers the pixel rounding of four to eight lines on a density other than the measured one.
+
+`stackHeightDp(stack, fontScale)` = fixed + text × max(fontScale, 1) + 2. The scale is applied linearly, the estimate style the tally's fit rule already uses, and it is an **upper bound**: Android scales large text by less than the nominal factor (the 32 sp headline does not grow at all at 1.3, the 24 sp one grows by 9 %), so the estimate can send a widget one bucket down that would have fitted, and never draws one whose counted lines clip. What it bounds is how tall the counted lines grow, not how many there are: a line that wraps where the budget counts one is the limit named under *Width* below. A font scale below 1.0 does not lower a floor.
+
+**The floors follow the font scale** (`widgetBucket(size, fontScale)`): PAGE needs 180 dp of width and `stackHeightDp(PAGE)`; CARD needs 180 dp and `stackHeightDp(CARD compact)`; anything shorter is WIDE at 250 dp of width, else STRIP. A widget too short for the stack at the reader's font scale falls to the next bucket down instead of clipping its last line. On the reference launcher: at 1.0 a 4×1 is CARD and a 3×2 is PAGE; at 1.3 a 4×1 needs 130.1 dp and falls to WIDE, and a 3×2 needs 252.65 dp for PAGE and is a CARD with the 24 sp headline. That last step is the upper bound at work (the page would have measured about 233 dp); it is accepted, because the cost is two context lines at a non-default font scale and the alternative is a per-size copy of the platform's scaling tables.
+
+**The headline step** (`headlineStep(bucket, heightDp, fontScale)`): PAGE draws 32 sp. CARD draws 24 sp when the widget's real height reaches `stackHeightDp(CARD 24 sp)`, otherwise the **compact 16 sp**. 16 sp is the largest whole size that fits the 110 dp floor with 2 dp to spare: 17 sp computes to 61 px (23.24 dp) and leaves less than 2. At 1.0 the step falls at 120.5 dp: a 110.5 dp 4×1 is compact, and any CARD from 120.5 dp up is 24 sp. The block gap is `blockGapDp(bucket)`: 10 dp at PAGE, 6 dp elsewhere. Neither is decided in the composable.
+
+Width at 180 dp: the widest headline `! 8:05 h:mm` measures 89–105 dp at 24 sp; the 31-character gap-night debt line wraps under `maxLines = 2`. At CARD the budget counts one debt line: a gap night on a CARD narrower than about 240 dp wraps to two, and at exactly the floor height the second is clipped. That case is known and outside this round (no cell on the reference launcher is both that narrow and that short while still a CARD). PAGE has the same limit in the lines it counts once: the longest freshness line, the 23-character `data through 2030-01-01`, measures 158.7 dp against the 156 dp of content a 180 dp widget has, so a PAGE narrower than 183 dp wraps it, and a larger font scale moves that width up (230 dp at 1.3). At exactly the floor height the last line is then clipped (Codex, 2026-11-10). Known and outside this round for the same reason: the reference launcher's PAGE cells are 266 dp wide, where every counted line holds at 1.0 and at 1.3. Counting lines from the width as well as the font scale would close both cases; it is proposed, not adopted (§Open questions).
 
 ```
-STRIP (2×1)         CARD (3×2, default)              PAGE (3×3, gap night)
+STRIP (2×1)         CARD (4×1 is wider)              PAGE (3×2 and up, gap night)
 ┌────────────────┐  ┌─────────────────────────────┐  ┌─────────────────────────────┐
 │ ┃┃╏│╱ ││││╱ ││ │  │ ┃┃╏│╱ ││││╱ ││ 2 OF 12 DONE │  │ ┃┃╏│╱ ││││╱ ││ 2 OF 12 DONE │
 └────────────────┘  │ ─────────────────────────── │  │ ─────────────────────────── │
@@ -81,7 +113,7 @@ Twelve trackers, two met and one partial: `┃` a met post, `╏` a partial one,
 |---|---|---|
 | Padding | 12 dp all sides | 3× the 4 dp grid; the app's 20 dp page margin scaled to a small page |
 | Keyline | single left keyline at the padding edge | every row starts on it, exactly as the card does |
-| Row gaps | 2 dp within a block; 6 dp · 1 dp rule · 6 dp between blocks | the card's own rhythm |
+| Row gaps | 2 dp within a block; 6 dp · 1 dp rule · 6 dp between blocks, 10 dp · rule · 10 dp at PAGE (`blockGapDp`) | the card's own rhythm |
 | Background | paper, full-bleed | the only surface; grouping is whitespace and one hairline rule |
 | Corner radius | launcher-controlled | no inner rounding of our own |
 
@@ -89,7 +121,7 @@ Type, faithful to `LogbookType` with the two Glance losses named in §Accepted d
 
 | Role | Face | Size / weight | Colour | Used for |
 |---|---|---|---|---|
-| headline | `FontFamily.Monospace` | 24 sp / Medium (26 sp line) — **32 sp at PAGE**, where the card's size read as a note in a margin | ink | `needText`, the `!` bang |
+| headline | `FontFamily.Monospace` | 24 sp / Medium — **32 sp at PAGE**, where the card's size read as a note in a margin, and **16 sp at a CARD too short for 24** (§Vertical budgets). Lines are as tall as the font makes them; the measured heights are in that section | ink | `needText`, the `!` bang |
 | meta-ink | Monospace | 11.5 sp / Normal | ink | `debtLine` |
 | meta-soft | Monospace | 11.5 sp / Normal | inkSoft | the `h:mm` unit, `strainLine`, `freshnessLine` |
 | eyebrow | Monospace | 10.5 sp / Normal, caps | inkSoft | `TONIGHT'S SLEEP NEED`, the tally count, `cachedLine` (uppercased) |
@@ -174,7 +206,7 @@ The tally element is a **rendering of `categoryRollup`, and owns no judgment of 
 
   Rung 5 is the **floor of the never-truncate rule, not an exception to it**: `N/M` is the shortest true statement of a tally, so it is drawn even where the estimate says it will clip, because there is nothing left to fall back to. The mark list is never shortened at any rung — a truncated row of marks is a confident wrong answer about the day.
 
-  The measurement is an **estimate**, stated as one: Glance measures on the device and the widget cannot, so a count's width is taken as 6.3 dp per character (10.5 sp mono at ≈0.6 em) **multiplied by the system font scale**, read from the render context. The counts are sized in `sp` and the marks in `dp`, so at a font scale of 1.3 the words grow by a third and the marks do not — a layout chosen without the scale would overflow the row it was fitted to. Mark widths are unaffected by it.
+  The measurement is an **estimate**, stated as one: Glance measures on the device and the widget cannot, so a count's width is taken as 6.3 dp per character (10.5 sp mono at ≈0.6 em) **multiplied by the system font scale**, handed to the composition as state (§Refresh model) so that a change redraws. The counts are sized in `sp` and the marks in `dp`, so at a font scale of 1.3 the words grow by a third and the marks do not — a layout chosen without the scale would overflow the row it was fitted to. Mark widths are unaffected by it.
 
   At the floors, with twelve trackers at font scale 1.0 (59 dp of marks, 75.6 dp of sentence, 25.2 dp of fraction): the 110 dp strip has 86 dp of content and draws the marks alone; a 140 dp strip draws marks + `2/12`; WIDE at 250 dp has a 124.3 dp column and draws marks + `2/12`; CARD and PAGE at 180 dp have 156 dp and draw marks + the sentence. At font scale 1.3 CARD falls one rung, to marks + `2/12`.
 
@@ -240,6 +272,7 @@ The one asymmetry in that table is deliberate. A sleep payload that will not dec
 | `TodayWidgetReceiver.onEnabled` / `onUpdate` | schedule the worker | `onEnabled` is the first placement; `onUpdate` heals the case where app data was cleared while a widget stayed on the home screen. KEEP makes re-asserting free |
 | `TodayWidgetReceiver.onDisabled` | cancel the worker | no widgets left; an hourly network job for nobody is a battery bug |
 | App backgrounded (`ProcessLifecycleOwner`, `ON_STOP`) | `updateAll()` in the app scope | wakes a session the launcher has let die; a live one already followed the Room emission. Local data only — no fetch |
+| System font scale changed (`ComponentCallbacks.onConfigurationChanged` on the application, registered beside the `ON_STOP` hook) | writes the new scale to a process-wide state the composition collects, then `updateAll()` in the app scope | the bucket, the headline step and the tally's rung are all chosen from the font scale; without a redraw the launcher re-inflates the old choice with bigger text and clips it. **Best effort, see below** |
 
 Rules the worker obeys:
 
@@ -248,6 +281,8 @@ Rules the worker obeys:
 - **`TrendsRepository` is resolved lazily *inside* `doWork`**, never in a field — the worker may be constructed in a process where resolution has not happened, and the guard (`shouldFetch`) may decide not to fetch at all.
 - Failures go to `DebugLog` under the tag `"widget"`, **never payload bodies** — the standing rule for this log.
 - `updatePeriodMillis = "0"` in the widget info XML: the AppWidget framework's own update alarm is not used, because it cannot be made conditional on connectivity and would fight the worker.
+
+**The font scale is state, not a read.** The composition takes the font scale from a process-wide state primed from the configuration when the session starts, never from the render context at draw time: a read is frozen until something else recomposes, and nothing else does. Whether a configuration change is a font-scale change is a pure function (`fontScaleChanged`), so a rotation or a dark-mode switch schedules nothing; a scale that is not finite and positive (an undefined configuration field reads 0) is never a change and is never adopted, and the holder never starts from one (an unusable initial value is replaced by the default, 1.0). **The limit:** the callback is delivered only while the app's process is **running**. Glance 1.2's receiver handles `LOCALE_CHANGED` and nothing else, and a manifest receiver cannot be sent `CONFIGURATION_CHANGED`, so a font-scale change wakes nothing: with the process dead, or alive but cached and frozen (which is what Android does to a backgrounded app within seconds), the widget draws its old choice at the new text size. A frozen process is handed the pending configuration the moment anything next runs it, and redraws then; a dead one is corrected by the next render (the hourly worker when online, or leaving the app), which reads the new scale. Measured on the emulator, 2026-11-10 (API 35, dev variant): process `cached`, `isFrozen=true`, font scale 1.0 → 1.3, no redraw after 11 s and the 4×1's last line clipped; an unrelated broadcast to the package unfroze it and the widget redrew as WIDE at once; with the process awake the change back to 1.0 redrew immediately without opening the app. Best effort was owner-accepted 2026-11-10 as "immediate while the process is alive"; the frozen case is narrower than that wording and is recorded here as measured (§Open questions, item 7).
 
 **The midnight problem is bounded by one period.** `today` is fixed per *session* (it keys the flows), and the hourly worker restarts dead sessions, so a stale calendar day survives at most one period past midnight; the ON_STOP hook usually beats it. `now` is read at every recomposition — the card's own clock rule. A midnight alarm was considered and rejected: an exact alarm for a cosmetic flip is not a fair use of the user's battery, and the failure mode is a tally that is one hour late on a day boundary.
 
@@ -269,6 +304,7 @@ Each is a Glance platform limit, taken deliberately rather than worked around:
 4. **Fractional sp survives** (11.5 sp, 10.5 sp) and is rounded to whole sp **only if a device renders it badly** — a device-check item, not a pre-emptive change.
 5. **Launcher-controlled corner radius**, with no inner rounding of our own: the host's shape is the one piece of chrome we do not get to author, and drawing a second radius inside it would read as a card floating on a card.
 6. **Honesty lines at PAGE only** — the measured compromise stated in §Size buckets.
+7. **The tally is not designed for right-to-left.** The rows inherit the layout direction, so under an RTL locale the groups run right to left, while the half marks keep filling their physical left half. Not a Glance limit but a decision (owner, 2026-11-10): the app ships in English only and the dot row inherited direction the same way. If an RTL locale ever ships, the choice is between forcing the tally left-to-right and mirroring it whole with `autoMirrored` gates.
 
 ## Glance constraints
 
@@ -277,6 +313,8 @@ Platform facts that shaped code, found the hard way and load-bearing enough to n
 - **Ten children per container, silently enforced.** A Glance `Row`/`Column`/`Box` renders at most ten children; the eleventh onward is dropped at render with no error surfaced to the app. Discovered on-device as "only completed trackers show": five dots plus their five gap `Spacer`s consumed the whole budget and every later mark vanished. Two consequences in code: gaps are **padding on the views, never `Spacer` children** (a spacer is a child too — padding sits inside a view's bounds, so a post with a 3 dp gap before it is sized 5×12 to keep its 2×12 canvas), and the child budget is a **term of the tally fit ladder** (§Tally semantics), so a row that cannot legally render its marks falls to the one-child sentence instead of being truncated. Audited ceilings: tally row ≤ 10 (8 groups + spacer + count, or 10 groups alone), a tally group's box ≤ 3 (ink-faint gate · the posts' row · ink gate), its posts' row ≤ 4, a partial post's box 2, sleep block 6, every other container ≤ 5.
 - **`SizeMode.Responsive` reports the matched bucket size, not the real one.** Any logic that consumes `LocalSize` arithmetically (the fit ladder, the bucket thresholds) needs `SizeMode.Exact`. §Size buckets carries the post-mortem.
 - **A session recomposes `provideContent` without re-running `provideGlance`.** Anything a widget must show *current* has to be a Flow collected inside the composition; values computed in `provideGlance` are frozen until the session dies. §Refresh model carries the post-mortem.
+- **Text has no line height.** Glance's `TextStyle` cannot set one, so a line is as tall as the font's metrics at the reader's font scale, and a vertical budget is only true if it was measured. §Vertical budgets carries the numbers and the 4×1 that clipped.
+- **A configuration change does not recompose.** The receiver reacts to a locale change only; a font-scale change reaches a session through state it collects, or not at all. §Refresh model carries the trigger and its limit.
 - **Vector marks are authored fill-only** — §Mark vocabulary carries that history, including the misdiagnosis.
 
 ## Testing & Kover posture
@@ -288,7 +326,7 @@ Everything that can be *wrong* is a pure function, and the untestable shells are
 | `TrendsCachePeekTest` | `:core:data` | first-key hit; first-key miss → second key served; decode failure on the first falls through to the second **and never deletes or writes**; all-miss → null; a DAO read that throws → null; `fetchedAt` propagated verbatim |
 | `JournalDayPeekTest` | `:core:data` | delegation to `categoryRollup` (asserted against its own output for the same inputs) with the day log keyed by tracker id — an entry for A must not judge B; a corrupt tracker row **throws**; a corrupt entry value **throws**; a DAO read that throws → null; `CancellationException` rethrown; an empty snapshot pins `categoryRollup`'s own empty answer; snapshot rows reach the rollup unmodified |
 | existing `JournalSyncStoreTest` | `:core:data` | the decoder promotion, by staying green — the promoted functions are the same ones the sync path uses |
-| `TodayWidgetLogicTest` | `:app` | peek-key order; the 7-day fetch window on far-future fixture dates; the 90-minute boundary at / below / above; the `shouldFetch` matrix; bucket → elements per size, `showsCompactSleep` included; the tally's grouping in fives and the gate taking its group's fifth state; the mark-row width table and every gap; the five-rung fit ladder walked rung by rung, at font scale 1.0 and 1.3, down to the `N/M` floor, with the twelve-tracker answers at the 110 / 140 / 180 dp floors; the child budget at 40, 41, 50 and 51 trackers; the never-truncate sweep over 1 to 60 trackers, six widths and three font scales, counting the words and their 8 dp of separation as well as the marks; stroke layers, their drawables, and which gate layers go under or over the posts; the spoken tally and the spoken sleep sentence; judgment drawable + tint mapping |
+| `TodayWidgetLogicTest` | `:app` | peek-key order; the 7-day fetch window on far-future fixture dates; the 90-minute boundary at / below / above; the `shouldFetch` matrix; bucket → elements per size, `showsCompactSleep` included; the bucket thresholds at font scale 1.0 and 1.3 on the four reference cells (2×1, 4×1, 3×2, 3×3) and just under and exactly at each floor, with a font scale under 1.0 leaving the floors where they are; `stackHeightDp` pinned to the three budget rows; the headline step at 110, 120, 120.5 and 121 dp and at PAGE, and at font scale 1.3; a 4×1 at font scale 1.3 end to end (WIDE, its tally fitted to the WIDE column); `blockGapDp`; `fontScaleChanged` for an unchanged scale, a changed one and an unusable one (zero, negative, not finite); the font-scale holder reporting only changes; the tally's grouping in fives and the gate taking its group's fifth state; the mark-row width table and every gap; the five-rung fit ladder walked rung by rung, at font scale 1.0 and 1.3, down to the `N/M` floor, with the twelve-tracker answers at the 110 / 140 / 180 dp floors; the child budget at 40, 41, 50 and 51 trackers; the never-truncate sweep over 1 to 60 trackers, six widths and three font scales, counting the words and their 8 dp of separation as well as the marks; stroke layers, their drawables, and which gate layers go under or over the posts; the spoken tally and the spoken sleep sentence; judgment drawable + tint mapping |
 | `TodayWidgetPaletteTest` | `:app` | every widget `Color` val equals its `LogbookLight` / `LogbookDark` field — the drift pin; each named tint (`widgetTintColor`) resolves to its own provider, so the content holds no colour decision |
 
 Fixtures are **synthetic only**, dates on the far-future `2030-01-*` convention (this repo is public; the rule is in `../CLAUDE.md` and is not negotiable for a widget either).
@@ -296,9 +334,9 @@ Fixtures are **synthetic only**, dates on the far-future `2030-01-*` convention 
 **Kover** — the floor stays **85**, and the exclusions are:
 
 - `TodayWidgetContent` needs **no by-name entry**: the root report already excludes `annotatedBy @Composable`, and every function in it is one. (The standing gotcha applies: a capturing lambda passed to a non-inline composable wrapper escapes that filter — layout wrappers here are `inline`, as Compose's own `Box`/`Row` are.)
-- `TodayWidget`, `TodayWidgetReceiver`, `TodayWidgetWorker` (+ their `$*` synthetics) and the background re-render observer are excluded **by name, with a justification comment in the established voice** (precedent: `HrCaptureService`): none can execute off a device — they need a `GlanceId`, an AppWidget host, or WorkManager's runtime — and each is a thin shell over logic that *is* counted. The rule this follows is the module's standing one: a by-name exclusion is a claim that the file holds no decisions, and every decision these four would make has been pushed into `TodayWidgetLogic` or the two peeks.
+- `TodayWidget`, `TodayWidgetReceiver`, `TodayWidgetWorker` (+ their `$*` synthetics) and the background re-render observer (which now also carries the font-scale callback) are excluded **by name, with a justification comment in the established voice** (precedent: `HrCaptureService`): none can execute off a device — they need a `GlanceId`, an AppWidget host, or WorkManager's runtime — and each is a thin shell over logic that *is* counted. The rule this follows is the module's standing one: a by-name exclusion is a claim that the file holds no decisions, and every decision these four would make has been pushed into `TodayWidgetLogic` or the two peeks.
 
-**Device acceptance** (not JVM-claimable, checked on the emulator against §Size buckets): pending state on a fresh install before the app is opened; the fallback key after opening Trends → Health once; the tally updating on background after logging a tracker; resize through 2×1 / 4×1 / 3×2 / 3×3; the tally with twelve trackers at each of those sizes — every mark present, a partial one reading as half, a gate legible across its posts in light and dark; cached-with-age past 90 minutes with the server unreachable; dark-mode toggle; the `dev` variant installing its own independent widget.
+**Device acceptance** (not JVM-claimable, checked on the emulator against §Size buckets): pending state on a fresh install before the app is opened; the fallback key after opening Trends → Health once; the tally updating on background after logging a tracker; resize through 2×1 / 4×1 / 3×2 / 3×3; a 4×1 at font scale 1.0 drawing all three sleep lines whole, in light and dark; the font scale set to 1.3 with the app's process running (awake, not cached and frozen) redrawing every size without the app being opened, nothing clipped, and back again at 1.0; the tally with twelve trackers at each of those sizes — every mark present, a partial one reading as half, a gate legible across its posts in light and dark; cached-with-age past 90 minutes with the server unreachable; dark-mode toggle; the `dev` variant installing its own independent widget.
 
 ## Dependencies
 
@@ -308,7 +346,9 @@ Fixtures are **synthetic only**, dates on the far-future `2030-01-*` convention 
 
 ## Open questions
 
-None. Resolved at the 2026-08-28 plan-approval gate:
+One, proposed and not adopted (2026-11-10): **line counts that follow the width.** The vertical budgets count lines from the font scale alone, so a line that wraps on a narrow widget is not counted (§Vertical budgets, *Width*: the gap-night debt line at CARD, the freshness line at PAGE). A worst-case line count per width and font scale, in `stackHeightDp`, would make a narrow widget fall a bucket instead of clipping. No cell on the reference launcher is affected.
+
+Resolved at the 2026-08-28 plan-approval gate:
 
 1. **In-app Home screen** — deferred pending real experience with this widget; it is not a dependency in either direction.
 2. **Deep links** — out of scope for v1; the whole widget opens the app on its normal start tab.
@@ -317,3 +357,8 @@ None. Resolved at the 2026-08-28 plan-approval gate:
 Resolved 2026-11-10, by the owner:
 
 4. **A tally that outgrew its dots.** With twelve positive trackers the dot row could not be rendered at any size — ten children per container is the limit, and twelve dots are 140 dp wide — so every bucket fell to `2 OF 12 DONE`. Five alternatives were mocked (dots in fives, tally marks, the rule as a measure, a segmented ring, dots by category) and the owner chose **tally marks**. Decided with it, each stated in the section it governs: strokes at every count, not only past ten (§Tally semantics, Marks); the `marks + N/M` rung (§Tally semantics, Fit rule); the partial stroke in two inks (§Mark vocabulary); whole-dp geometry, with a 2 dp gate overhang where the mock drew 2.5 (§Tally semantics, Geometry).
+
+5. **A 4×1 that clipped its last line.** The CARD stack measured 118 dp against a budget of 109, so the reference launcher's 110.5 dp 4×1 cut the debt line in half. Offered: drop a line at that height, or keep all three. The owner chose to **keep the stacked block and draw the sleep-need number smaller** where 24 sp does not fit; the size is 16 sp, by measurement (§Vertical budgets). This is the one dated exception to "nothing is ever shrunk to fit".
+6. **Floors that follow the font scale.** Approved with the plan: a bucket's floor is its measured stack at the reader's font scale, PAGE's floor moves from 170 dp to its measured worst case (207.5 dp), and a widget too short for a stack falls a bucket instead of clipping.
+7. **A font-scale change redraws, best effort.** Approved with the plan, limit included: immediate while the app's process is alive, otherwise corrected at the next render (§Refresh model). The device run then measured a narrower limit than the approved wording: immediate only while the process is running, because a cached, frozen process is not handed the change until it next runs. Recorded as measured, 2026-11-10; a trigger that works with the process frozen or dead (a WorkManager job on the `Settings.System.FONT_SCALE` content URI) is proposed and not adopted, and would be a new row in §Refresh model.
+8. **Right-to-left is left alone**, and recorded as an accepted limit (§Accepted deviations, item 7).

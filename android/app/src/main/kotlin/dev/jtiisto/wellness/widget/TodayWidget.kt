@@ -39,7 +39,9 @@ import java.time.LocalDate
  * report). As flows, Room re-emits the moment a tracker is ticked or a fetch
  * lands in the cache, and the widget follows the app instead of trailing it.
  * The first frame is primed with each flow's current value so a session start
- * never flashes pending on the way to the truth.
+ * never flashes pending on the way to the truth. The system font scale follows
+ * the same rule ([WidgetFontScale]): primed from the configuration, collected
+ * as state.
  *
  * `today` is fixed per session — the hourly worker restarts dead sessions, so a
  * stale calendar day survives at most one period past midnight (spec §Refresh
@@ -87,12 +89,21 @@ class TodayWidget : GlanceAppWidget(), KoinComponent {
         val initialRollup = rollupFlow.first()
         val initialSleep = sleepFlow.first()
 
+        // The font scale is state, not a read: primed from the configuration
+        // this session starts under, then collected, so a font-scale change
+        // offered by WidgetBackgroundRefresh recomposes a live session instead
+        // of leaving it drawing the old layout choice with bigger text.
+        val fontScale = WidgetFontScale.process
+        fontScale.offer(context.resources.configuration.fontScale)
+
         provideContent {
             val rollup by rollupFlow.collectAsState(initial = initialRollup)
             val peeked by sleepFlow.collectAsState(initial = initialSleep)
+            val scale by fontScale.state.collectAsState()
             TodayWidgetContent(
                 rollup = rollup,
                 model = widgetModel(peeked, now = System.currentTimeMillis(), today = today),
+                fontScale = scale,
             )
         }
     }
