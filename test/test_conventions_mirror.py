@@ -160,9 +160,29 @@ def test_palette_matches_mirrored_tokens():
 
 
 _GATE_HINT = (
-    "The Kover gate must never pass or fail on a cached verdict (docs/conventions/android.md, "
-    "Coverage): android/gradle.properties sets org.gradle.configuration-cache=false and the "
-    "pre-push gate line runs koverVerifyAggregated with --no-build-cache."
+    "The Kover gate must never pass or fail on a cached or random verdict "
+    "(docs/conventions/android.md, Coverage): android/gradle.properties sets "
+    "org.gradle.configuration-cache=false, and the pre-push gate line runs the root task "
+    ":koverVerifyAggregated (leading colon, not the bare name or a module's) with "
+    "--no-build-cache."
+)
+
+# Same rules as ../conventions/bin/check-android-gate.sh, in explicit ASCII
+# classes and the same line model (LF only), so both give the same verdict on
+# any NUL-free UTF-8 hook (one that is not UTF-8 fails here; one holding a NUL
+# byte is binary to grep and fails in the script). A whole-line comment is
+# dropped; a trailing comment ("#" at line start or after a space or tab,
+# through end of line) is stripped. Not quote-aware: no hook line needs a "#"
+# inside quotes.
+_WHOLE_LINE_COMMENT = re.compile(r"[ \t\n\v\f\r]*#")
+_TRAILING_COMMENT = re.compile(r"(^|[ \t])#.*")
+# The root token: ":koverVerifyAggregated" preceded by start of line, a space or
+# a tab, and not followed by [A-Za-z0-9_-] or any non-ASCII character. Each is
+# replaced by "." (neither a space nor a name character, so no neighbour changes
+# validity); any koverVerifyAggregated left over (bare, a module path such as
+# ":app:koverVerifyAggregated", or a longer name) verifies more than the root.
+_ROOT_KOVER_VERIFY = re.compile(
+    r"(?<![^ \t]):koverVerifyAggregated(?![A-Za-z0-9_\-\u0080-\U0010ffff])"
 )
 
 
@@ -174,13 +194,22 @@ def test_android_gate_settings_follow_android_md():
         re.fullmatch(r"\s*org\.gradle\.configuration-cache\s*=\s*false\s*", line) for line in props
     ), f"android/gradle.properties does not set org.gradle.configuration-cache=false. {_GATE_HINT}"
 
-    gate_lines = [
-        line for line in PRE_PUSH.read_text().splitlines()
-        if "koverVerifyAggregated" in line and not line.lstrip().startswith("#")
+    # Bytes decoded without newline translation, split on LF only: the script
+    # reads lines the way grep does, so a CR stays part of its line.
+    code = [
+        _TRAILING_COMMENT.sub(r"\1", line)
+        for line in PRE_PUSH.read_bytes().decode("utf-8").split("\n")
+        if not _WHOLE_LINE_COMMENT.match(line)
     ]
+    gate_lines = [line for line in code if "koverVerifyAggregated" in line]
     assert gate_lines, f"githooks/pre-push has no koverVerifyAggregated gate line. {_GATE_HINT}"
     bare = [line.strip() for line in gate_lines if "--no-build-cache" not in line]
     assert not bare, f"gate line(s) without --no-build-cache: {bare}. {_GATE_HINT}"
+    unrooted = [
+        line.strip() for line in gate_lines
+        if "koverVerifyAggregated" in _ROOT_KOVER_VERIFY.sub(".", line)
+    ]
+    assert not unrooted, f"gate line(s) not naming the root task: {unrooted}. {_GATE_HINT}"
 
     if GATE_CHECK.exists():
         result = subprocess.run(

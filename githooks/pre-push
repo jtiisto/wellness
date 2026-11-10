@@ -4,7 +4,7 @@
 #
 #   * server/PWA code changes -> full pytest + coverage (--cov-fail-under=88)
 #                                + JS node:test suite
-#   * android/** code changes -> full Gradle unit suite + koverVerifyAggregated (--no-build-cache)
+#   * android/** code changes -> full Gradle unit suite + :koverVerifyAggregated (root only, --no-build-cache)
 #                                (instrumented tests need the emulator and are
 #                                never run from hooks — /adb-* sessions only)
 #   * both touched            -> both suites, by design (protocol commits)
@@ -139,8 +139,15 @@ case "$decision" in
             # build cache on every later run, after clean included (2026-10-29:
             # 83.19 % three times in about a second, 127 tasks FROM-CACHE; the
             # same tree passed uncached in 37 s). The verdict must be computed
-            # in the run that reports it. See docs/conventions/android.md, Coverage.
-            (cd android && ./gradlew testDebugUnitTest koverVerifyAggregated --no-build-cache) || exit $?
+            # in the run that reports it.
+            # :koverVerifyAggregated (leading colon): the bare name also runs
+            # every module's Kover verify, and with it under org.gradle.parallel
+            # the same inputs gave different verdicts (2026-11-10: 4 of 12 runs
+            # wrong, 66 to 81 % on a tree at 89.07 %); the root task alone did
+            # not (24 of 24). The mechanism inside Kover is not proven.
+            # testDebugUnitTest stays bare so every module's tests run.
+            # See docs/conventions/android.md, Coverage.
+            (cd android && ./gradlew testDebugUnitTest :koverVerifyAggregated --no-build-cache) || exit $?
         fi
         echo "All tests passed with sufficient coverage. Pushing..."
         ;;

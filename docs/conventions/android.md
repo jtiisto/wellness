@@ -30,7 +30,7 @@ plugins, Koin for DI. Imported by every project that has an Android build.
   filter and under-reports; read the true number by raising `minBound` to 100 for
   one run and reading the violation, then restore it.
 - The gate's authority is the pre-push command, `./gradlew testDebugUnitTest
-  koverVerifyAggregated --no-build-cache`. Run `build` and other tasks in a separate invocation:
+  :koverVerifyAggregated --no-build-cache`. Run `build` and other tasks in a separate invocation:
   `build` in the same one yields unfiltered numbers (measured 70.23 % vs 88.42 % on
   the same tree).
 - **The configuration cache stays off** (`org.gradle.configuration-cache=false` in
@@ -56,7 +56,27 @@ plugins, Koin for DI. Imported by every project that has an Android build.
   runs with `--no-build-cache`: the verdict is computed in the run that reports
   it, on tests that actually ran. If a gate ever fails in about a second at a
   number that repeats exactly, check these two settings first.
-  `bin/check-android-gate.sh <project-root>` verifies both; a project's guard test
+- **The gate verifies the root project only:** `:koverVerifyAggregated`, with the
+  leading colon. The bare task name also runs every module's Kover verify, and
+  with `org.gradle.parallel=true` the same inputs then give different verdicts
+  (wellness, 2026-11-10, Kover 0.9.8: 4 of 12 recomputed runs reported 66.36 to
+  80.75 % on a tree at 89.07 %, with a root aggregate of 363162 or 417790 bytes
+  instead of 340623, holding classes the root filters exclude; the root task
+  alone passed 24 of 24 at 340623 bytes, and so did the bare name with
+  `--max-workers=1`, 12 of 12). That is a measured association, and the root
+  task alone is the workaround; the mechanism inside Kover is not proven. A
+  wrong verdict then repeats in about a second until the execution data
+  changes, because the verify stays up to date; neither the configuration-cache
+  setting nor `--no-build-cache` prevents it, so a fast repeated failure may be
+  a stale verdict and is recomputed before it is believed (it can also be a
+  real drop). Nothing is lost by the colon: the rule and
+  its bound live in the root project, which aggregates every module, and the
+  root-only gate still fails at the true number when the bound is raised
+  (89.07 % against 100). `testDebugUnitTest` stays unqualified, so every module's
+  tests run. To read the real verdict after a suspect failure:
+  `./gradlew :koverCachedVerifyAggregated --rerun :koverVerifyAggregated
+  --no-build-cache`.
+- `bin/check-android-gate.sh <project-root>` verifies all three; a project's guard test
   runs it, and `ADOPTION.md` says which projects have.
 
 ## Devices

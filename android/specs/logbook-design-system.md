@@ -959,7 +959,8 @@ what it adds to the design system's own vocabulary.
   ghost is still showing (so a half-logged past table still names its faint
   values), start-time bookkeeping (adopted only with the state it arrived
   with; cleared on retry, undo, session change).
-- Gate: `./gradlew testDebugUnitTest koverVerifyAggregated` (≥85);
+- Gate: `./gradlew testDebugUnitTest :koverVerifyAggregated --no-build-cache`
+  (≥85; the root task only, per `../docs/conventions/android.md`, Coverage);
   `./gradlew build assembleDebugAndroidTest` separately. Never module-scoped
   or `--tests`-filtered runs.
 - Visual acceptance: APK on device per delivery phase (the design's actual

@@ -33,7 +33,7 @@ create("dev") {
 
 Why a build type and not product flavors: flavors would rename every variant
 (`debug` → `prodDebug`/`devDebug`) across every module, breaking the documented
-gate commands (`testDebugUnitTest koverVerifyAggregated`,
+gate commands (`testDebugUnitTest :koverVerifyAggregated`,
 `build assembleDebugAndroidTest`), the pre-push hook, the Kover aggregation,
 and the ADB emulator skills. A `:app`-only build type with `matchingFallbacks`
 leaves **all of those untouched**: libraries keep two variants, the gate
@@ -95,7 +95,7 @@ Cleartext HTTP inside the tailnet is already permitted app-wide
 - Dev app syncs against the test server; prod install untouched (its data and
   server config unchanged after dev install/uninstall).
 - Full gate stays green and its commands stay byte-identical:
-  `./gradlew testDebugUnitTest koverVerifyAggregated` and
+  `./gradlew testDebugUnitTest :koverVerifyAggregated --no-build-cache` and
   `./gradlew build assembleDebugAndroidTest` (note: `build` now also
   assembles the dev variant of `:app` — slower, not different).
 - Emulator debug workflow unaffected (`assembleDebug`, same appId as before).
