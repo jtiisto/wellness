@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    A tally gate: the fifth tracker of a group, struck across its four posts.
+
+    A 2dp thick diagonal rising left to right across the whole 21×12 group box.
+    The centreline runs (0, 10.5) → (21, 1.5), which is 23.2°; at that slope a
+    2dp stroke measures 2.18 upright, so the edges sit 1.09 either side of the
+    centreline. The ends are cut upright rather than square so the stroke stays
+    inside its box: the posts stand at x 2…19, and the gate overhangs them by
+    2dp each side.
+
+    Met draws it in ink OVER the posts; not-yet draws it in ink-faint UNDER
+    them, so a gate that is not yet met never cuts a post that is. A partial
+    gate is this in ink-faint under the posts and widget_tally_gate_half in ink
+    over them.
+
+    A filled polygon, not a stroked line, and tinted at the use site like every
+    mark here; the authored colour is irrelevant (specs/widget.md §Mark
+    vocabulary).
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="21dp"
+    android:height="12dp"
+    android:viewportWidth="21"
+    android:viewportHeight="12">
+    <path
+        android:fillColor="#000000"
+        android:pathData="M0,9.41 L21,0.41 L21,2.59 L0,11.59 Z" />
+</vector>

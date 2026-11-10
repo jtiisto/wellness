@@ -227,11 +227,24 @@ fun showsCompactSleep(bucket: WidgetBucket, hasTally: Boolean): Boolean = when (
 
 // ---- The tracker tally ------------------------------------------------------
 
-/** One mark in the tally row. */
-enum class TallyDot { FILLED, HALF, OPEN }
+/** One tracker's state in the tally — `categoryRollup`'s three answers, nothing more. */
+enum class TallyMark { MET, PARTIAL, NOT_YET }
 
 /**
- * What the tally row draws after the fit rule has spoken: dots, a count, or
+ * Up to five marks, drawn the way a tally is kept: four upright [posts] and the
+ * fifth struck across them as the [gate].
+ *
+ * [gate] is null for the trailing group that has not reached five. It is a
+ * tracker like any other — it carries its own state — and because the marks are
+ * state-sorted it is never more done than the posts it crosses.
+ */
+data class TallyGroup(val posts: List<TallyMark>, val gate: TallyMark?) {
+    /** A full five: the group is drawn in the gate's 21dp box, posts inset. */
+    val gated: Boolean get() = gate != null
+}
+
+/**
+ * What the tally row draws after the fit rule has spoken: marks, a count, or
  * both. A null half is a part that is *absent*, never an empty one — and both
  * halves are never null at once, because a tally that exists always renders as
  * something.
@@ -239,32 +252,86 @@ enum class TallyDot { FILLED, HALF, OPEN }
  * [text] is whichever count form survived the ladder: the sentence `5 OF 8 DONE`
  * where it fits, the compact `5/8` where it does not.
  */
-data class TallyLayout(val dots: List<TallyDot>?, val text: String?)
+data class TallyLayout(val groups: List<TallyGroup>?, val text: String?)
+
+/**
+ * The marks, five at a time: the first four of each five are posts, the fifth
+ * is their gate. Order is preserved — the caller sorted by state and the row
+ * reads left to right.
+ */
+fun tallyGroups(marks: List<TallyMark>): List<TallyGroup> =
+    marks.chunked(TALLY_GROUP_SIZE).map { five ->
+        TallyGroup(posts = five.take(TALLY_GROUP_SIZE - 1), gate = five.getOrNull(TALLY_GROUP_SIZE - 1))
+    }
+
+/**
+ * A group's own width: the 21dp box of a gated group — four posts with the gate
+ * overhanging them 2dp each side — or just the posts of an ungated one.
+ */
+fun tallyGroupWidthDp(group: TallyGroup): Float =
+    if (group.gated) {
+        TALLY_GATED_GROUP_DP
+    } else {
+        TALLY_POST_DP * group.posts.size + TALLY_POST_GAP_DP * (group.posts.size - 1)
+    }
+
+/**
+ * The gap in front of the group at [index]. Both non-zero answers put the same
+ * 8dp between one cluster of posts and the next: a gated group brings its own
+ * 2dp of gate overhang on each side, an ungated one brings none.
+ */
+fun tallyGroupStartDp(index: Int, group: TallyGroup): Float = when {
+    index == 0 -> 0f
+    group.gated -> TALLY_GATED_GAP_DP
+    else -> TALLY_UNGATED_GAP_DP
+}
+
+/**
+ * The gap in front of the post at [index] within its group. A gated group's
+ * first post stands in from the box edge by the gate's overhang; every later
+ * post, gated or not, stands one post gap from the one before.
+ */
+fun tallyPostStartDp(index: Int, gated: Boolean): Float = when {
+    index > 0 -> TALLY_POST_GAP_DP
+    gated -> TALLY_GATE_OVERHANG_DP
+    else -> 0f
+}
+
+/** The whole mark row: every group and the gap in front of it. */
+fun tallyMarksWidthDp(groups: List<TallyGroup>): Float {
+    var width = 0f
+    groups.forEachIndexed { index, group ->
+        width += tallyGroupStartDp(index, group) + tallyGroupWidthDp(group)
+    }
+    return width
+}
 
 /**
  * The tally, laid out for [bucket] at [bucketWidthDp] under [fontScale].
  *
  * The element owns no judgment of its own: which trackers were met, partial or
- * not yet is entirely `categoryRollup`'s answer, and this arranges it. Dots read
- * left to right the way tallies fill a line — met, then partial, then not yet.
+ * not yet is entirely `categoryRollup`'s answer, and this arranges it. Marks
+ * read left to right the way tallies fill a line — met, then partial, then not
+ * yet — in groups of five.
  *
  * Null when there is nothing to say: no rollup, or a rollup holding no habits.
  * Avoidances and observations get no mark here (the app's ring gives them their
  * own), so a day of nothing but those is a day this element has no line about,
  * and it is omitted with its separator rule rather than drawn empty.
  *
- * **The ladder, in order:** dots + count, then dots alone, then the sentence
- * alone, then `N/M`. Each step is a whole layout — nothing is ever shrunk or
- * clipped to make the step above fit, because a silently shortened row of dots
- * is a confident wrong answer about the day. The last step is the **floor of the
- * never-truncate rule rather than an exception to it**: `N/M` is the shortest
- * true statement of a tally that exists, so it is drawn even where the estimate
- * says it will clip — there is nothing left to fall back to.
+ * **The ladder, in order:** marks + sentence, then marks + `N/M`, then marks
+ * alone, then the sentence alone, then `N/M`. Each step is a whole layout —
+ * nothing is ever shrunk or clipped to make the step above fit, because a
+ * silently shortened row of marks is a confident wrong answer about the day.
+ * The last step is the **floor of the never-truncate rule rather than an
+ * exception to it**: `N/M` is the shortest true statement of a tally that
+ * exists, so it is drawn even where the estimate says it will clip — there is
+ * nothing left to fall back to.
  *
  * **The arithmetic is an approximation and says so.** Glance measures on the
  * device and we cannot, so a count's width is taken as [EYEBROW_ADVANCE_DP] per
  * character — 10.5sp of monospace at the ≈0.6em advance a mono face gives —
- * times [fontScale], because the counts are sized in **sp** and the dots in
+ * times [fontScale], because the counts are sized in **sp** and the marks in
  * **dp**: at a system font scale of 1.3 the words grow by a third and the marks
  * do not, and a layout fitted at 1.0 would overflow the row it was chosen for.
  */
@@ -276,51 +343,62 @@ fun tallyLayout(
 ): TallyLayout? {
     if (rollup == null || rollup.habits == 0) return null
 
-    val dots = buildList {
-        repeat(rollup.habitsMet) { add(TallyDot.FILLED) }
-        repeat(rollup.habitsPartial) { add(TallyDot.HALF) }
-        repeat(rollup.habitsNotYet) { add(TallyDot.OPEN) }
-    }
+    val groups = tallyGroups(
+        buildList {
+            repeat(rollup.habitsMet) { add(TallyMark.MET) }
+            repeat(rollup.habitsPartial) { add(TallyMark.PARTIAL) }
+            repeat(rollup.habitsNotYet) { add(TallyMark.NOT_YET) }
+        },
+    )
     val text = tallyCountText(rollup)
+    val compact = tallyCompactText(rollup)
     val content = bucketWidthDp - 2 * WIDGET_PADDING_DP
 
-    // One ladder for every bucket, because [bucketWidthDp] is now the widget's
-    // REAL width (SizeMode.Exact), not a bucket floor. The first cut froze a
+    // One ladder for every bucket, because [bucketWidthDp] is the widget's REAL
+    // width (SizeMode.Exact), not a bucket floor. The first cut froze a
     // seven-dot strip rule at the 110dp minimum — under Responsive the width
     // handed in here WAS the floor, so a 220dp strip laid out as if it had 86dp
     // of content and drew a lone fraction in a field of paper (first device
     // report). With the width telling the truth, the arithmetic is the rule.
+    //
     // Width is not the only budget. A Glance container renders AT MOST
     // [GLANCE_MAX_CHILDREN] children and silently drops the rest — which is a
-    // truncated dot row, the confident wrong answer this ladder exists to
+    // truncated tally, the confident wrong answer this ladder exists to
     // prevent, discovered exactly that way on a device (five met dots survived,
     // every half and open mark after them vanished). So a rung is only open if
-    // the row can legally RENDER it: dots-with-count spends one child per dot
-    // plus the weight spacer plus the text; dots alone spend one per dot.
-    val dotsWidth = dotsWidthDp(dots.size)
-    val textWidth = textWidthDp(text, fontScale)
+    // the row can legally RENDER it. The row's children are the GROUPS, not the
+    // marks: with a count it spends one child per group plus the weight spacer
+    // plus the text, alone one per group. That is what the tally marks bought —
+    // as dots, a twelfth tracker pushed every size down to the sentence.
+    val marksWidth = tallyMarksWidthDp(groups)
+    val withCount = groups.size + 2 <= GLANCE_MAX_CHILDREN
+    val beside = content - marksWidth - TALLY_SEPARATION_DP
     return when {
-        dots.size + 2 <= GLANCE_MAX_CHILDREN &&
-            dotsWidth + TALLY_SEPARATION_DP + textWidth <= content ->
-            TallyLayout(dots = dots, text = text)
-        dots.size <= GLANCE_MAX_CHILDREN && dotsWidth <= content ->
-            TallyLayout(dots = dots, text = null)
+        withCount && textWidthDp(text, fontScale) <= beside ->
+            TallyLayout(groups = groups, text = text)
+        // The fraction beside the marks, where the sentence will not go: it is
+        // never drawn INSTEAD of marks that fit, only as the count that still
+        // fits next to them.
+        withCount && textWidthDp(compact, fontScale) <= beside ->
+            TallyLayout(groups = groups, text = compact)
+        groups.size <= GLANCE_MAX_CHILDREN && marksWidth <= content ->
+            TallyLayout(groups = groups, text = null)
         // The count is what is left when the marks will not fit: it states the
         // same fact in fewer characters, and it never lies by omission.
-        else -> countOnly(rollup, text, content, fontScale)
+        else -> countOnly(text, compact, content, fontScale)
     }
 }
 
 /** The last two rungs: the sentence where it fits, `N/M` where nothing else does. */
 private fun countOnly(
-    rollup: CategoryRollup,
     text: String,
+    compact: String,
     contentDp: Float,
     fontScale: Float,
 ): TallyLayout = if (textWidthDp(text, fontScale) <= contentDp) {
-    TallyLayout(dots = null, text = text)
+    TallyLayout(groups = null, text = text)
 } else {
-    TallyLayout(dots = null, text = tallyCompactText(rollup))
+    TallyLayout(groups = null, text = compact)
 }
 
 /**
@@ -358,8 +436,8 @@ private fun tallyCompactText(rollup: CategoryRollup): String =
  *
  * Deliberately not `describeCategoryRollup`: that sentence describes a category
  * cluster in the app, where the marks beside it disambiguate, and it never
- * states the partial count. Here the dots are only ever positive trackers, and
- * the half-dots are a fact nobody can hear otherwise — so this names both. If
+ * states the partial count. Here the marks are only ever positive trackers, and
+ * the half-done ones are a fact nobody can hear otherwise — so this names both. If
  * the app's phrasing changes, this does not have to follow it; they answer about
  * different drawings.
  */
@@ -396,16 +474,37 @@ fun sleepSpoken(model: SleepTonightModel?): String {
 /** 12dp of padding on each side; the content is what is left between them. */
 private const val WIDGET_PADDING_DP = 12f
 
-private const val TALLY_DOT_DP = 8f
-private const val TALLY_DOT_GAP_DP = 4f
+/** A tally is kept in fives: four posts and the gate struck across them. */
+private const val TALLY_GROUP_SIZE = 5
 
-/** The gap that keeps the dots and the count from reading as one string. */
+/** One upright stroke is 2dp wide. Public for the layout, which sizes its views from it. */
+const val TALLY_POST_DP = 2f
+
+/** Every tally stroke's height — posts and the gate's box — inside the 14dp eyebrow line. */
+const val TALLY_MARK_HEIGHT_DP = 12f
+
+private const val TALLY_POST_GAP_DP = 3f
+
+/** How far the gate reaches past the first and the last post it crosses. */
+private const val TALLY_GATE_OVERHANG_DP = 2f
+
+/** Four posts (17dp) and the gate's overhang on each side. */
+private const val TALLY_GATED_GROUP_DP = 21f
+
+/**
+ * The gaps in front of a group. Different numbers, one distance: each leaves
+ * 8dp between one cluster of posts and the next, since a gated group carries
+ * 2dp of overhang at each edge and an ungated one carries none.
+ */
+private const val TALLY_GATED_GAP_DP = 4f
+private const val TALLY_UNGATED_GAP_DP = 6f
+
+/** The gap that keeps the marks and the count from reading as one string. */
 private const val TALLY_SEPARATION_DP = 8f
 
 /** 10.5sp monospace ≈ 0.6em per character. An estimate, and only ever a choice. */
 private const val EYEBROW_ADVANCE_DP = 6.3f
 
-/** `12n − 4`: what STRIP's 86dp of content holds, and the rule it became. */
 /**
  * Glance's hard cap on children per Row/Column/Box: the generated RemoteViews
  * layout pool has ten slots, and an eleventh child is DROPPED at render with no
@@ -414,9 +513,6 @@ private const val EYEBROW_ADVANCE_DP = 6.3f
  */
 private const val GLANCE_MAX_CHILDREN = 10
 
-private fun dotsWidthDp(count: Int): Float =
-    TALLY_DOT_DP * count + TALLY_DOT_GAP_DP * (count - 1)
-
 /** Text is sized in sp, so the user's font scale is part of its width. */
 private fun textWidthDp(text: String, fontScale: Float): Float =
     text.length * EYEBROW_ADVANCE_DP * fontScale
@@ -424,7 +520,7 @@ private fun textWidthDp(text: String, fontScale: Float): Float =
 // ---- Marks: drawable and ink ------------------------------------------------
 
 /**
- * The judgment glyph, as one of the three mark drawables.
+ * The judgment glyph, as one of the three circle drawables.
  *
  * ATTENTION and the pending state share the hollow ring on purpose — it is what
  * `InkJudgment` does too, and they are told apart by ink versus ink-faint (see
@@ -439,13 +535,6 @@ fun judgmentDrawable(model: SleepTonightModel?): Int = when (model?.judgment) {
     null -> R.drawable.widget_mark_hollow
 }
 
-/** One tally dot, from the same three drawables the judgment glyph uses. */
-fun dotDrawable(dot: TallyDot): Int = when (dot) {
-    TallyDot.FILLED -> R.drawable.widget_mark_filled
-    TallyDot.HALF -> R.drawable.widget_mark_half
-    TallyDot.OPEN -> R.drawable.widget_mark_hollow
-}
-
 /**
  * Which of the two inks a mark is drawn in.
  *
@@ -458,6 +547,57 @@ enum class WidgetTint { INK, INK_FAINT }
 fun judgmentTint(model: SleepTonightModel?): WidgetTint =
     if (model == null) WidgetTint.INK_FAINT else WidgetTint.INK
 
-/** Not-yet recedes: "not yours yet" must not read as strongly as what is done. */
-fun dotTint(dot: TallyDot): WidgetTint =
-    if (dot == TallyDot.OPEN) WidgetTint.INK_FAINT else WidgetTint.INK
+/** How much of a tally stroke one layer draws. */
+enum class StrokePart {
+    WHOLE,
+
+    /** The half a stroke starts with: the bottom of a post, the left of a gate. */
+    FIRST_HALF,
+}
+
+/** One tinted drawable of a tally stroke. */
+data class StrokeLayer(val part: StrokePart, val tint: WidgetTint)
+
+/**
+ * A tally stroke as the layers that draw it, bottom first.
+ *
+ * Not-yet recedes — "not yours yet" must not read as strongly as what is done.
+ * Partial is the one mark on this surface in two inks: the whole stroke in
+ * ink-faint with its first half in ink over it, so it keeps its full length and
+ * reads as unfinished rather than as a shorter mark. Each layer is still one
+ * drawable under one tint; no drawable carries a colour of its own.
+ */
+fun strokeLayers(mark: TallyMark): List<StrokeLayer> = when (mark) {
+    TallyMark.MET -> listOf(StrokeLayer(StrokePart.WHOLE, WidgetTint.INK))
+    TallyMark.PARTIAL -> listOf(
+        StrokeLayer(StrokePart.WHOLE, WidgetTint.INK_FAINT),
+        StrokeLayer(StrokePart.FIRST_HALF, WidgetTint.INK),
+    )
+    TallyMark.NOT_YET -> listOf(StrokeLayer(StrokePart.WHOLE, WidgetTint.INK_FAINT))
+}
+
+/** The upright stroke, whole or its bottom half. */
+fun postDrawable(part: StrokePart): Int = when (part) {
+    StrokePart.WHOLE -> R.drawable.widget_tally_post
+    StrokePart.FIRST_HALF -> R.drawable.widget_tally_post_half
+}
+
+/** The diagonal struck across four posts, whole or its left half. */
+fun gateDrawable(part: StrokePart): Int = when (part) {
+    StrokePart.WHOLE -> R.drawable.widget_tally_gate
+    StrokePart.FIRST_HALF -> R.drawable.widget_tally_gate_half
+}
+
+/**
+ * The gate layers drawn *before* the posts: the ink-faint ones.
+ *
+ * A gate that is not yet met must not cut across posts that are, so its faint
+ * ink goes underneath them and only ink ([gateLayersOver]) goes on top. An
+ * ungated group has no layers either way.
+ */
+fun gateLayersUnder(gate: TallyMark?): List<StrokeLayer> =
+    gate?.let { mark -> strokeLayers(mark).filter { it.tint == WidgetTint.INK_FAINT } }.orEmpty()
+
+/** The gate layers drawn *after* the posts: the ink ones. See [gateLayersUnder]. */
+fun gateLayersOver(gate: TallyMark?): List<StrokeLayer> =
+    gate?.let { mark -> strokeLayers(mark).filter { it.tint == WidgetTint.INK } }.orEmpty()

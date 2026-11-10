@@ -2,9 +2,10 @@
 <!--
     The filled mark: "it happened, and it counted."
 
-    Geometry ported from InkJudgment.SETTLED / WeekMark.FILLED_DOT — a circle at
-    the full radius of its box, here viewport 12 so one drawable serves both the
-    9dp judgment glyph and the 8dp tally dot.
+    Geometry ported from InkJudgment.SETTLED — a circle at the full radius of
+    its box, at viewport 12. It is the 9dp judgment glyph; until 2026-11-10 it
+    was also the 8dp tally dot, before the tally became strokes
+    (widget_tally_post, widget_tally_gate).
 
     The authored fill colour is IRRELEVANT: every use site draws this through
     ColorFilter.tint(ColorProvider), which is how the one-ink rule survives into

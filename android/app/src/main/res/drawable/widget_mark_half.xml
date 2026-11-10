@@ -14,8 +14,9 @@
     stroked path while the filled mark drew fine, which left this one reading
     as a plain dot. Fill-only geometry rides the code path the working mark
     proves. The 1.85/12 ring thickness is within 0.05dp of BOTH source ratios
-    (1.4dp/9dp judgment glyph, 1.2dp/8dp tally dot), which is what lets one
-    drawable set serve both sizes.
+    (1.4dp/9dp judgment glyph, 1.2dp/8dp week dot), which is what let one
+    drawable set serve the judgment glyph and, until 2026-11-10, the tally dots.
+    The tally is strokes now; this is the judgment glyph only.
 
     The authored colour is IRRELEVANT: every use site draws this through
     ColorFilter.tint(ColorProvider), which is how the one-ink rule survives into

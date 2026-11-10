@@ -1,6 +1,6 @@
 # Spec: Home-screen widget — "Today" (Glance)
 
-Status: **approved 2026-08-28** (the widget plan was approved as a whole; approval of that plan is approval of this spec, per its Phase 0 gate)
+Status: **approved 2026-08-28** (the widget plan was approved as a whole; approval of that plan is approval of this spec, per its Phase 0 gate) · **amended 2026-11-10**: the tally is drawn as tally marks, not dots (owner; §Open questions, item 4)
 
 > **Origin.** Phase 2 of the sleep-debt round (`specs/trends.md` §Sleep need promised it in writing) and the answer to the in-app Home screen question, which is **deferred**: the widget ships first and real use decides whether an in-app Home is ever needed. The code was pre-positioned for this — `SleepDebtLogic` / `SleepTonightModel` live in `:core:data` precisely so a surface with no feature module on its classpath can render them, and `categoryRollup` has lived there since the journal UI round for the same reason.
 
@@ -49,18 +49,20 @@ The honesty lines sit at PAGE only, and that is a **measured compromise, not an 
 Vertical budgets at the floors: CARD = 12+14+6+1+6+13+2+26+2+15+12 = **109 dp ≤ 110**; PAGE normal = **152 dp**, gap-night worst case (the debt line wraps to two lines) = **167 dp ≤ 170**. Width at 180 dp: the widest headline `! 8:05 h:mm` measures 89–105 dp; the 31-character gap-night debt line wraps under `maxLines = 2`.
 
 ```
-STRIP (2×1)              CARD (3×2, default)             PAGE (3×3, gap night)
-┌────────────────┐  ┌───────────────────────────┐  ┌───────────────────────────┐
-│ ●●●●◐○         │  │ ●●●◐◐○        3 OF 6 DONE │  │ ●●●◐◐○        3 OF 6 DONE │
-└────────────────┘  │ ───────────────────────── │  │ ───────────────────────── │
-                    │ ◐ TONIGHT'S SLEEP NEED    │  │ ○ TONIGHT'S SLEEP NEED    │
-                    │ 8:05 h:mm                 │  │ ! 8:11 h:mm               │
-                    │ debt 1:11                 │  │ debt 1:33 · reset —       │
-                    └───────────────────────────┘  │ missing night             │
-                                                   │ strain 12.6 · so far      │
-                                                   │ CACHED · 3H AGO           │
-                                                   └───────────────────────────┘
+STRIP (2×1)         CARD (3×2, default)              PAGE (3×3, gap night)
+┌────────────────┐  ┌─────────────────────────────┐  ┌─────────────────────────────┐
+│ ┃┃╏│╱ ││││╱ ││ │  │ ┃┃╏│╱ ││││╱ ││ 2 OF 12 DONE │  │ ┃┃╏│╱ ││││╱ ││ 2 OF 12 DONE │
+└────────────────┘  │ ─────────────────────────── │  │ ─────────────────────────── │
+                    │ ◐ TONIGHT'S SLEEP NEED      │  │ ○ TONIGHT'S SLEEP NEED      │
+                    │ 8:05 h:mm                   │  │ ! 8:11 h:mm                 │
+                    │ debt 1:11                   │  │ debt 1:33 · reset —         │
+                    └─────────────────────────────┘  │ missing night               │
+                                                     │ strain 12.6 · so far        │
+                                                     │ CACHED · 3H AGO             │
+                                                     └─────────────────────────────┘
 ```
+
+Twelve trackers, two met and one partial: `┃` a met post, `╏` a partial one, `│` not yet, `╱` the gate that is each group's fifth mark (here not yet, so drawn faint behind its posts). The strip is at its 110 dp floor, where the marks stand alone; with 30 dp more it adds `2/12` (§Tally semantics).
 
 ### States
 
@@ -97,52 +99,84 @@ Colour is five tokens, hardcoded as day/night `ColorProvider` pairs because Glan
 | Token | Widget use |
 |---|---|
 | paper | background |
-| ink | headline, debt, bang, filled/half marks, the judgment glyph in every *judged* state |
+| ink | headline, debt, bang, met tally strokes and the done half of a partial one, the judgment glyph in every *judged* state |
 | inkSoft | eyebrow, unit, strain, freshness, cached |
-| inkFaint | open (not-yet) dots, the PENDING glyph, `-:--` |
+| inkFaint | not-yet tally strokes and the whole stroke under a partial one, the PENDING glyph, `-:--` |
 | rule | the 1 dp block separator |
 
 No other colour appears on this surface.
 
 ## Mark vocabulary
 
-Glance has no `Canvas`, so the two mark families the app draws — `InkJudgment`'s glyph and `WeekMarkGlyph`'s dots — become **three vector drawables** whose geometry is ported from those two files at viewport 12. Stroke 1.85/12 sits within 0.05 dp of *both* source ratios (1.4 dp/9 dp for the judgment glyph, 1.2 dp/8 dp for the dots), which is what lets one drawable set serve both sizes.
+Glance has no `Canvas`, so every mark on this surface is a **vector drawable**. There are two families, and they share nothing but the rules at the end of this section.
 
-| Drawable | Geometry | As 9 dp judgment glyph | As 8 dp tally dot |
-|---|---|---|---|
-| `widget_mark_filled` | filled circle r = 6 | SETTLED (ink) | met (ink) |
-| `widget_mark_half` | left half-disc fill + filled even-odd annulus, outer 6 / inner 4.15 | PARTIAL (ink) | partial (ink) |
-| `widget_mark_hollow` | filled even-odd annulus, outer 6 / inner 4.15 | ATTENTION (ink) · PENDING (inkFaint) | not-yet (inkFaint) |
+**The judgment glyph** — `InkJudgment`'s circle, ported at viewport 12 and drawn at 9 dp:
 
-**Every path is a fill — no vector strokes.** Kept as belt-and-braces, with its history told straight: the first device build showed only the filled marks, this was diagnosed as stroke paths dying in the launcher's RemoteViews pipeline, and the marks were re-authored as fills (the annulus is the stroked ring's geometry restated — centreline 5.075, thickness 1.85, outer edge 6, inner 4.15). The second device build showed the *same* symptom, which broke the theory: the real killer was the **ten-child container budget** (§Glance constraints) dropping every mark after the fifth — the drawables were never given the chance to render. Fill-only stays because it is the more conservative authoring and the fills are now proven on-device; the stroke variant was never exonerated.
+| Drawable | Geometry | Judgment |
+|---|---|---|
+| `widget_mark_filled` | filled circle r = 6 | SETTLED (ink) |
+| `widget_mark_half` | left half-disc fill + filled even-odd annulus, outer 6 / inner 4.15 | PARTIAL (ink) |
+| `widget_mark_hollow` | filled even-odd annulus, outer 6 / inner 4.15 | ATTENTION (ink) · PENDING (inkFaint) |
 
-Two rules govern their use:
+Until 2026-11-10 the same three drawables also served as 8 dp tally dots (the 1.85/12 ring sits within 0.05 dp of both `InkJudgment`'s 1.4 dp/9 dp and `WeekMarkGlyph`'s 1.2 dp/8 dp, which is why one set could do both). The tally no longer draws circles; the geometry is unchanged.
 
-- **Tint at the use site.** Authored fill/stroke colours in the XML are irrelevant; every draw applies `ColorFilter.tint(ColorProvider)`. This *is* the one-ink rule — the same drawable is ink in a judged state and ink-faint in a pending one, and no drawable ever carries a hue.
-- **The half mark keeps its closing outline**, so "the missing half reads as unfinished rather than as a smaller dot" (`WeekMarkGlyph`'s own words). It is not a 50%-scaled filled dot.
+**The tally strokes** — the Logbook's tally marks (`../../docs/conventions/logbook-design.md` names them as the way progress is carried), at the size a launcher cell affords. Four drawables, two shapes each whole and halved:
+
+| Drawable | Viewport | Geometry |
+|---|---|---|
+| `widget_tally_post` | 2 × 12 | the whole box: a 2 dp upright stroke 12 dp tall |
+| `widget_tally_post_half` | 2 × 12 | the bottom half of the post, y 6…12 |
+| `widget_tally_gate` | 21 × 12 | a 2 dp thick diagonal rising left to right across the whole box: `M0,9.41 L21,0.41 L21,2.59 L0,11.59 Z` (centreline (0, 10.5) → (21, 1.5), 23.2°; the ends are cut upright so the stroke stays inside its box) |
+| `widget_tally_gate_half` | 21 × 12 | the left half of the gate, x 0…10.5 |
+
+The half drawables keep the **whole viewport** of the stroke they halve, so a half layered over its whole registers without any alignment arithmetic in the layout.
+
+Rules for both families:
+
+- **Every path is a fill — no vector strokes.** Kept as belt-and-braces, with its history told straight: the first device build showed only the filled marks, this was diagnosed as stroke paths dying in the launcher's RemoteViews pipeline, and the marks were re-authored as fills (the annulus is the stroked ring's geometry restated — centreline 5.075, thickness 1.85, outer edge 6, inner 4.15). The second device build showed the *same* symptom, which broke the theory: the real killer was the **ten-child container budget** (§Glance constraints) dropping every mark after the fifth — the drawables were never given the chance to render. Fill-only stays because it is the more conservative authoring and the fills are proven on-device; the stroke variant was never exonerated. The tally strokes are polygons for the same reason.
+- **Tint at the use site.** Authored fill colours in the XML are irrelevant; every draw applies `ColorFilter.tint(ColorProvider)`. This *is* the one-ink rule — the same drawable is ink in one state and ink-faint in another, and no drawable ever carries a hue.
+- **A partial mark never reads as a smaller mark.** The half circle keeps its closing outline ("the missing half reads as unfinished rather than as a smaller dot" — `WeekMarkGlyph`'s own words). A partial tally stroke keeps its whole length for the same reason: the whole stroke in ink-faint with its first half in ink over it — two layers of one shape, each tinted at the use site. It is the one mark on this surface drawn in two inks, and both are tokens of the five-token palette (owner, 2026-11-10).
 
 ## Tally semantics
 
 The tally element is a **rendering of `categoryRollup`, and owns no judgment of its own.** Every question about what counts as met, partial, not-yet, expected-today, avoidance or observation is already answered by `categoryRollup(trackers, today, dayLog)` in `:core:data` and its tested rules (`specs/journal-ui.md`); this spec adds nothing to them and must never be read as re-stating them. The widget passes the whole tracker list — not a category's — so the rollup is the *day's*.
 
-- **Dots**: 8 dp, 4 dp gaps, on the keyline, ordered filled → half → hollow, that is `habitsMet` then `habitsPartial` then `habitsNotYet`. Done reads left-to-right, the way tallies fill a line. Avoidances and observations get **no dot**: the ring in the app gives them their own marks, and a strip 110 dp wide has room for one idea.
-- **Count**: `describeCategoryRollup`'s sentence ("5 of 8 done"), uppercased into the eyebrow style — `5 OF 8 DONE` — right-aligned on the dots' baseline.
-- **Fit rule** — pure, width-driven, and **never silent**. A four-rung ladder, each rung a whole layout rather than a shrunken version of the one above it:
+- **Marks**: one stroke per positive tracker, on the keyline, ordered met → partial → not-yet, that is `habitsMet` then `habitsPartial` then `habitsNotYet`. Done reads left-to-right, the way tallies fill a line. Avoidances and observations get **no mark**: the ring in the app gives them their own, and a strip 110 dp wide has room for one idea. The tally is strokes at **every** count, including the small ones a row of dots could still hold — one vocabulary, so adding a tracker never changes what the widget looks like (owner, 2026-11-10).
+- **Groups of five.** The marks are taken five at a time. The first four of a group are upright **posts**; the fifth is the **gate**, the diagonal struck across them. A trailing group of one to four marks is posts only. The gate is a tracker like any other: it carries the state of its group's fifth mark, and because the marks are state-sorted it is never more done than the posts it crosses.
+- **States**: met is the stroke in ink; not-yet is the stroke in ink-faint; partial is the ink-faint stroke with its **first half** in ink over it — the bottom half of a post, the left half of a gate (§Mark vocabulary). Ink-faint gate layers are drawn **under** the posts and ink gate layers **over** them, so a gate that is not yet met never cuts a post that is.
+- **Geometry**, in whole dp (`TodayWidgetLogic` owns every number; the composable multiplies nothing):
+
+  | Measure | dp |
+  |---|---|
+  | post | 2 wide × 12 tall |
+  | gap between posts | 3 (four posts: 17) |
+  | gated group | a 21 × 12 box: the posts inset 2 from each side, the gate spanning the box, so it overhangs the posts by 2 |
+  | gap before a gated group | 4 |
+  | gap before a trailing ungated group | 6 |
+
+  Both gaps put **8 dp between one cluster of posts and the next** (2 + 4 + 2, and 2 + 6). The row is `21·g + 4·(g − 1)` for `g` gated groups, plus, for `r` trailing posts, `2·r + 3·(r − 1)` and the 6 dp gap when a gated group precedes them: 4 marks 17 dp, 5 marks 21, 8 marks 39, 12 marks 59, 20 marks 96, 30 marks 146, 50 marks 246. The marks are 12 dp tall inside the 14 dp eyebrow line, so no vertical budget in §Size buckets moves.
+- **Count**: `describeCategoryRollup`'s sentence ("5 of 8 done"), uppercased into the eyebrow style — `5 OF 8 DONE` — right-aligned on the marks' line; or its compact form `5/8` where the ladder says so.
+- **Fit rule** — pure, width-driven, and **never silent**. A five-rung ladder, each rung a whole layout rather than a shrunken version of the one above it:
 
   | # | Rung | Taken when |
   |---|---|---|
-  | 1 | dots + `5 OF 8 DONE` | both fit the content width, with an 8 dp gap between them |
-  | 2 | dots alone | the pair does not fit but the dots do |
-  | 3 | `5 OF 8 DONE` alone | the dots do not fit but the sentence does |
-  | 4 | `5/8` | the sentence does not fit either |
+  | 1 | marks + `5 OF 8 DONE` | both fit the content width, with an 8 dp gap between them |
+  | 2 | marks + `5/8` | the sentence does not fit beside the marks but the fraction does |
+  | 3 | marks alone | neither count fits beside the marks, but the marks do |
+  | 4 | `5 OF 8 DONE` alone | the marks do not fit but the sentence does |
+  | 5 | `5/8` | the sentence does not fit either |
 
-  One ladder for every bucket, walked against the widget's **real** content width (`SizeMode.Exact`). The first cut froze a "≤ 7 dots" rule onto STRIP — rung 2's arithmetic evaluated at the 110 dp floor — because under `Responsive` the width handed to the rule *was* the floor and the freeze at least made that honest. With the width telling the truth the freeze became the bug (a 220 dp strip refusing dots it could hold), so the rule retired; at the 110 dp floor the arithmetic still answers exactly as the frozen rule did, and the test suite pins that.
+  One ladder for every bucket, walked against the widget's **real** content width (`SizeMode.Exact`). The first cut froze a "≤ 7 dots" rule onto STRIP — the arithmetic evaluated at the 110 dp floor — because under `Responsive` the width handed to the rule *was* the floor and the freeze at least made that honest. With the width telling the truth the freeze became the bug (a 220 dp strip refusing dots it could hold), so the rule retired and plain width arithmetic took over.
 
-  **Width is not the only budget.** A Glance container renders at most **ten children** and silently drops the rest (§Glance constraints), and a dropped child is a truncated dot row — the confident wrong answer the ladder exists to prevent, and exactly what the second device build showed (five met dots survived, every half and open mark after them vanished). So a rung is only open if the row can legally render it: rung 1 spends one child per dot plus the weight spacer plus the count (dots + 2 ≤ 10 → at most 8 dots with text), rung 2 one per dot (at most 10 dots alone); above that the ladder falls to the sentence, which states the full tally in one child.
+  Rung 2 arrived with the tally marks (owner, 2026-11-10). The design language prefers marks to `2/3` counters, and this rung does not contradict it: the fraction is never drawn *instead of* marks while marks fit — it is the count that still fits beside them on a strip too narrow for the sentence, and marks past the second group are slower to count than a fraction is to read.
 
-  Rung 4 is the **floor of the never-truncate rule, not an exception to it**: `N/M` is the shortest true statement of a tally, so it is drawn even where the estimate says it will clip, because there is nothing left to fall back to. The dot list is never shortened at any rung — a truncated row of dots is a confident wrong answer about the day.
+  **Width is not the only budget.** A Glance container renders at most **ten children** and silently drops the rest (§Glance constraints), and a dropped child is a truncated tally — the confident wrong answer the ladder exists to prevent, and exactly what the second device build showed (five met dots survived, every half and open mark after them vanished). So a rung is only open if the row can legally render it. The row's children are the **groups**, not the marks: rungs 1 and 2 spend one child per group plus the weight spacer plus the count (groups + 2 ≤ 10 → at most 8 groups, 40 trackers, with a count), rung 3 one per group (at most 10 groups, 50 trackers, alone); above that the ladder falls to the sentence, which states the full tally in one child. Counting in groups is what the tally marks bought: as dots, the same budget capped the row at 8 trackers with a count and 10 without, and the owner's twelfth tracker pushed every size down to the sentence.
 
-  The measurement is an **estimate**, stated as one: Glance measures on the device and the widget cannot, so a count's width is taken as 6.3 dp per character (10.5 sp mono at ≈0.6 em) **multiplied by the system font scale**, read from the render context. The counts are sized in `sp` and the marks in `dp`, so at a font scale of 1.3 the words grow by a third and the dots do not — a layout chosen without the scale would overflow the row it was fitted to. Dot widths are unaffected by it.
+  Rung 5 is the **floor of the never-truncate rule, not an exception to it**: `N/M` is the shortest true statement of a tally, so it is drawn even where the estimate says it will clip, because there is nothing left to fall back to. The mark list is never shortened at any rung — a truncated row of marks is a confident wrong answer about the day.
+
+  The measurement is an **estimate**, stated as one: Glance measures on the device and the widget cannot, so a count's width is taken as 6.3 dp per character (10.5 sp mono at ≈0.6 em) **multiplied by the system font scale**, read from the render context. The counts are sized in `sp` and the marks in `dp`, so at a font scale of 1.3 the words grow by a third and the marks do not — a layout chosen without the scale would overflow the row it was fitted to. Mark widths are unaffected by it.
+
+  At the floors, with twelve trackers at font scale 1.0 (59 dp of marks, 75.6 dp of sentence, 25.2 dp of fraction): the 110 dp strip has 86 dp of content and draws the marks alone; a 140 dp strip draws marks + `2/12`; WIDE at 250 dp has a 124.3 dp column and draws marks + `2/12`; CARD and PAGE at 180 dp have 156 dp and draw marks + the sentence. At font scale 1.3 CARD falls one rung, to marks + `2/12`.
 
   There is no state in which a tally that exists renders as nothing.
 - **No trackers expected today** (the rollup returns null, or holds no habits) → the element is **omitted entirely, with its separator rule** — the same "absent, not empty" posture the tonight card takes.
@@ -240,7 +274,7 @@ Each is a Glance platform limit, taken deliberately rather than worked around:
 
 Platform facts that shaped code, found the hard way and load-bearing enough to name:
 
-- **Ten children per container, silently enforced.** A Glance `Row`/`Column`/`Box` renders at most ten children; the eleventh onward is dropped at render with no error surfaced to the app. Discovered on-device as "only completed trackers show": five dots plus their five gap `Spacer`s consumed the whole budget and every later mark vanished. Two consequences in code: gaps are **padding on the views, never `Spacer` children** (a spacer is a child too — padding sits inside a view's bounds, so a padded 8 dp mark is sized 12×8 to keep its 8×8 canvas), and the child budget is a **term of the tally fit ladder** (§Tally semantics), so a row that cannot legally render its dots falls to the one-child sentence instead of being truncated. Audited ceilings: tally row ≤ 10 (8 dots + spacer + count, or 10 dots alone), sleep block 6, every other container ≤ 5.
+- **Ten children per container, silently enforced.** A Glance `Row`/`Column`/`Box` renders at most ten children; the eleventh onward is dropped at render with no error surfaced to the app. Discovered on-device as "only completed trackers show": five dots plus their five gap `Spacer`s consumed the whole budget and every later mark vanished. Two consequences in code: gaps are **padding on the views, never `Spacer` children** (a spacer is a child too — padding sits inside a view's bounds, so a post with a 3 dp gap before it is sized 5×12 to keep its 2×12 canvas), and the child budget is a **term of the tally fit ladder** (§Tally semantics), so a row that cannot legally render its marks falls to the one-child sentence instead of being truncated. Audited ceilings: tally row ≤ 10 (8 groups + spacer + count, or 10 groups alone), a tally group's box ≤ 3 (ink-faint gate · the posts' row · ink gate), its posts' row ≤ 4, a partial post's box 2, sleep block 6, every other container ≤ 5.
 - **`SizeMode.Responsive` reports the matched bucket size, not the real one.** Any logic that consumes `LocalSize` arithmetically (the fit ladder, the bucket thresholds) needs `SizeMode.Exact`. §Size buckets carries the post-mortem.
 - **A session recomposes `provideContent` without re-running `provideGlance`.** Anything a widget must show *current* has to be a Flow collected inside the composition; values computed in `provideGlance` are frozen until the session dies. §Refresh model carries the post-mortem.
 - **Vector marks are authored fill-only** — §Mark vocabulary carries that history, including the misdiagnosis.
@@ -254,8 +288,8 @@ Everything that can be *wrong* is a pure function, and the untestable shells are
 | `TrendsCachePeekTest` | `:core:data` | first-key hit; first-key miss → second key served; decode failure on the first falls through to the second **and never deletes or writes**; all-miss → null; a DAO read that throws → null; `fetchedAt` propagated verbatim |
 | `JournalDayPeekTest` | `:core:data` | delegation to `categoryRollup` (asserted against its own output for the same inputs) with the day log keyed by tracker id — an entry for A must not judge B; a corrupt tracker row **throws**; a corrupt entry value **throws**; a DAO read that throws → null; `CancellationException` rethrown; an empty snapshot pins `categoryRollup`'s own empty answer; snapshot rows reach the rollup unmodified |
 | existing `JournalSyncStoreTest` | `:core:data` | the decoder promotion, by staying green — the promoted functions are the same ones the sync path uses |
-| `TodayWidgetLogicTest` | `:app` | peek-key order; the 7-day fetch window on far-future fixture dates; the 90-minute boundary at / below / above; the `shouldFetch` matrix; bucket → elements per size, `showsCompactSleep` included; the fit ladder walked rung by rung, at font scale 1.0 and 1.3, down to the `N/M` floor; the spoken tally and the spoken sleep sentence; drawable + tint mapping |
-| `TodayWidgetPaletteTest` | `:app` | every widget `Color` val equals its `LogbookLight` / `LogbookDark` field — the drift pin |
+| `TodayWidgetLogicTest` | `:app` | peek-key order; the 7-day fetch window on far-future fixture dates; the 90-minute boundary at / below / above; the `shouldFetch` matrix; bucket → elements per size, `showsCompactSleep` included; the tally's grouping in fives and the gate taking its group's fifth state; the mark-row width table and every gap; the five-rung fit ladder walked rung by rung, at font scale 1.0 and 1.3, down to the `N/M` floor, with the twelve-tracker answers at the 110 / 140 / 180 dp floors; the child budget at 40, 41, 50 and 51 trackers; the never-truncate sweep over 1 to 60 trackers, six widths and three font scales, counting the words and their 8 dp of separation as well as the marks; stroke layers, their drawables, and which gate layers go under or over the posts; the spoken tally and the spoken sleep sentence; judgment drawable + tint mapping |
+| `TodayWidgetPaletteTest` | `:app` | every widget `Color` val equals its `LogbookLight` / `LogbookDark` field — the drift pin; each named tint (`widgetTintColor`) resolves to its own provider, so the content holds no colour decision |
 
 Fixtures are **synthetic only**, dates on the far-future `2030-01-*` convention (this repo is public; the rule is in `../CLAUDE.md` and is not negotiable for a widget either).
 
@@ -264,12 +298,12 @@ Fixtures are **synthetic only**, dates on the far-future `2030-01-*` convention 
 - `TodayWidgetContent` needs **no by-name entry**: the root report already excludes `annotatedBy @Composable`, and every function in it is one. (The standing gotcha applies: a capturing lambda passed to a non-inline composable wrapper escapes that filter — layout wrappers here are `inline`, as Compose's own `Box`/`Row` are.)
 - `TodayWidget`, `TodayWidgetReceiver`, `TodayWidgetWorker` (+ their `$*` synthetics) and the background re-render observer are excluded **by name, with a justification comment in the established voice** (precedent: `HrCaptureService`): none can execute off a device — they need a `GlanceId`, an AppWidget host, or WorkManager's runtime — and each is a thin shell over logic that *is* counted. The rule this follows is the module's standing one: a by-name exclusion is a claim that the file holds no decisions, and every decision these four would make has been pushed into `TodayWidgetLogic` or the two peeks.
 
-**Device acceptance** (not JVM-claimable, checked on the emulator against §Size buckets): pending state on a fresh install before the app is opened; the fallback key after opening Trends → Health once; the tally updating on background after logging a tracker; resize through 2×1 / 3×2 / 3×3; cached-with-age past 90 minutes with the server unreachable; dark-mode toggle; the `dev` variant installing its own independent widget.
+**Device acceptance** (not JVM-claimable, checked on the emulator against §Size buckets): pending state on a fresh install before the app is opened; the fallback key after opening Trends → Health once; the tally updating on background after logging a tracker; resize through 2×1 / 4×1 / 3×2 / 3×3; the tally with twelve trackers at each of those sizes — every mark present, a partial one reading as half, a gate legible across its posts in light and dark; cached-with-age past 90 minutes with the server unreachable; dark-mode toggle; the `dev` variant installing its own independent widget.
 
 ## Dependencies
 
-- **New**: `androidx.glance:glance-appwidget` 1.2.0 (no `glance-material3` — the colours are hardcoded), `androidx.work:work-runtime` as a direct `:app` dependency (it is not transitive from `:core:data`), the receiver + `res/xml/today_widget_info.xml` + three mark drawables + label/description strings.
-- **Existing, reused unchanged**: `SleepDebtLogic`, `JournalUiLogic.categoryRollup`, `CategoryRollupVoice`, `TrendsRepository.sleepKey` / `MODULE` / `healthSleep`, `TrendsPrefs`, `SyncFlushWorker`'s guard pattern and its public `instanceOrNull`, `payload_cache`, `LogbookPalette` (as the pin source), `WeekMarkGlyph` + `InkJudgment` (as the drawables' geometry source).
+- **New**: `androidx.glance:glance-appwidget` 1.2.0 (no `glance-material3` — the colours are hardcoded), `androidx.work:work-runtime` as a direct `:app` dependency (it is not transitive from `:core:data`), the receiver + `res/xml/today_widget_info.xml` + three judgment-mark drawables + four tally-stroke drawables (2026-11-10) + label/description strings.
+- **Existing, reused unchanged**: `SleepDebtLogic`, `JournalUiLogic.categoryRollup`, `CategoryRollupVoice`, `TrendsRepository.sleepKey` / `MODULE` / `healthSleep`, `TrendsPrefs`, `SyncFlushWorker`'s guard pattern and its public `instanceOrNull`, `payload_cache`, `LogbookPalette` (as the pin source), `InkJudgment` (as the judgment drawables' geometry source; `WeekMarkGlyph` was the dots' until the tally became strokes).
 - **New in `:core:data`**: `TrendsCachePeek`, `JournalDayPeek`, the promoted journal decoders, two Koin registrations. No Room migration — `payload_cache` is generic and the widget's key is just another row.
 
 ## Open questions
@@ -279,3 +313,7 @@ None. Resolved at the 2026-08-28 plan-approval gate:
 1. **In-app Home screen** — deferred pending real experience with this widget; it is not a dependency in either direction.
 2. **Deep links** — out of scope for v1; the whole widget opens the app on its normal start tab.
 3. **Glance generated previews** (1.2's `previewLayout` successor) — follow-up; v1 ships the static RemoteViews mock.
+
+Resolved 2026-11-10, by the owner:
+
+4. **A tally that outgrew its dots.** With twelve positive trackers the dot row could not be rendered at any size — ten children per container is the limit, and twelve dots are 140 dp wide — so every bucket fell to `2 OF 12 DONE`. Five alternatives were mocked (dots in fives, tally marks, the rule as a measure, a segmented ring, dots by category) and the owner chose **tally marks**. Decided with it, each stated in the section it governs: strokes at every count, not only past ten (§Tally semantics, Marks); the `marks + N/M` rung (§Tally semantics, Fit rule); the partial stroke in two inks (§Mark vocabulary); whole-dp geometry, with a 2 dp gate overhang where the mock drew 2.5 (§Tally semantics, Geometry).

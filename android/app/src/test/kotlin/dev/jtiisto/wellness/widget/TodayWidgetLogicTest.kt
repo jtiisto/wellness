@@ -297,11 +297,21 @@ class TodayWidgetLogicTest {
         fontScale: Float = 1f,
     ) = tallyLayout(rollup, bucket, widthDp, fontScale)
 
+    /** The marks a layout draws, flattened back to reading order; null when it draws none. */
+    private fun TallyLayout.marks(): List<TallyMark>? =
+        groups?.flatMap { it.posts + listOfNotNull(it.gate) }
+
+    /** [count] met marks, grouped — the widths and budgets below do not care about state. */
+    private fun groupsOf(count: Int) = tallyGroups(List(count) { TallyMark.MET })
+
+    /** The day the change was made for: twelve trackers, two done, one half done. */
+    private val twelve = CategoryRollup(habitsMet = 2, habitsPartial = 1, habitsNotYet = 9)
+
     @Test
     @DisplayName("no rollup is no tally, and neither is a day of no habits")
     fun tallyAbsent() {
         assertNull(tally(null, WidgetBucket.CARD, 180f))
-        // Avoidances and observations get no dot here — a day holding nothing
+        // Avoidances and observations get no mark here — a day holding nothing
         // else has no line for this element to draw.
         assertNull(
             tally(
@@ -313,21 +323,33 @@ class TodayWidgetLogicTest {
     }
 
     @Test
-    @DisplayName("dots read met, then partial, then not-yet — left to right")
-    fun dotOrder() {
+    @DisplayName("marks read met, then partial, then not-yet — left to right")
+    fun markOrder() {
         val layout = tally(
             CategoryRollup(habitsMet = 3, habitsPartial = 2, habitsNotYet = 1),
             WidgetBucket.PAGE,
             180f,
         )
 
+        // Six trackers: the fifth is struck across the first four as their
+        // gate, and the sixth starts the next group as a lone post.
         assertEquals(
             listOf(
-                TallyDot.FILLED, TallyDot.FILLED, TallyDot.FILLED,
-                TallyDot.HALF, TallyDot.HALF,
-                TallyDot.OPEN,
+                TallyGroup(
+                    posts = listOf(TallyMark.MET, TallyMark.MET, TallyMark.MET, TallyMark.PARTIAL),
+                    gate = TallyMark.PARTIAL,
+                ),
+                TallyGroup(posts = listOf(TallyMark.NOT_YET), gate = null),
             ),
-            layout?.dots,
+            layout?.groups,
+        )
+        assertEquals(
+            listOf(
+                TallyMark.MET, TallyMark.MET, TallyMark.MET,
+                TallyMark.PARTIAL, TallyMark.PARTIAL,
+                TallyMark.NOT_YET,
+            ),
+            layout?.marks(),
         )
         assertEquals("3 OF 6 DONE", layout?.text)
     }
@@ -352,98 +374,282 @@ class TodayWidgetLogicTest {
         )
 
         assertEquals("3 OF 4 DONE", layout?.text)
-        assertEquals(4, layout?.dots?.size)
+        assertEquals(4, layout?.marks()?.size)
     }
 
     @Test
-    @DisplayName("at the CARD floor six habits and their count both fit")
-    fun dotsAndTextTogether() {
-        val layout = tally(
-            CategoryRollup(habitsMet = 3, habitsPartial = 2, habitsNotYet = 1),
+    @DisplayName("a tally is kept in fives: four posts, and the fifth struck across them")
+    fun groupsOfFive() {
+        val four = groupsOf(4)
+        assertEquals(1, four.size)
+        assertEquals(4, four[0].posts.size)
+        assertNull(four[0].gate)
+        assertFalse(four[0].gated)
+
+        val five = groupsOf(5)
+        assertEquals(1, five.size)
+        assertEquals(4, five[0].posts.size)
+        assertEquals(TallyMark.MET, five[0].gate)
+        assertTrue(five[0].gated)
+
+        val six = groupsOf(6)
+        assertEquals(listOf(4, 1), six.map { it.posts.size })
+        assertEquals(listOf(true, false), six.map { it.gated })
+
+        val dozen = groupsOf(12)
+        assertEquals(listOf(4, 4, 2), dozen.map { it.posts.size })
+        assertEquals(listOf(true, true, false), dozen.map { it.gated })
+
+        assertEquals(emptyList<TallyGroup>(), tallyGroups(emptyList()))
+    }
+
+    @Test
+    @DisplayName("the gate is the fifth tracker, and carries that tracker's own state")
+    fun gateTakesTheFifthState() {
+        // Four met and one half done: the posts are ink and the gate is the
+        // partial one. Because the marks are state-sorted, a gate is never more
+        // done than the posts it crosses.
+        val partialGate = tally(
+            CategoryRollup(habitsMet = 4, habitsPartial = 1),
             WidgetBucket.CARD,
             180f,
         )
+        assertEquals(List(4) { TallyMark.MET }, partialGate?.groups?.single()?.posts)
+        assertEquals(TallyMark.PARTIAL, partialGate?.groups?.single()?.gate)
 
-        // 68dp of dots + 8dp + 69.3dp of text = 145.3 ≤ 156dp of content.
-        assertNotNull(layout?.dots)
-        assertNotNull(layout?.text)
+        val openGate = tally(
+            CategoryRollup(habitsMet = 4, habitsNotYet = 1),
+            WidgetBucket.CARD,
+            180f,
+        )
+        assertEquals(TallyMark.NOT_YET, openGate?.groups?.single()?.gate)
+
+        // The twelve-tracker day: the half-done tracker is the third post of
+        // the first group, and both gates are still to come.
+        val layout = tally(twelve, WidgetBucket.CARD, 180f)
+        assertEquals(
+            listOf(TallyMark.MET, TallyMark.MET, TallyMark.PARTIAL, TallyMark.NOT_YET),
+            layout?.groups?.get(0)?.posts,
+        )
+        assertEquals(listOf(TallyMark.NOT_YET, TallyMark.NOT_YET, null), layout?.groups?.map { it.gate })
     }
 
     @Test
-    @DisplayName("when both will not fit, the dots stay and the count goes")
-    fun dotsWinOverText() {
-        val layout = tally(CategoryRollup(habitsMet = 10), WidgetBucket.CARD, 180f)
-
-        // 116dp of dots fits 156dp of content; 116 + 8 + 81.9 does not — and
-        // ten is also the whole child budget, so the count could not have
-        // joined the row even if the width had allowed it.
-        assertEquals(10, layout?.dots?.size)
-        assertNull(layout?.text)
+    @DisplayName("the width of a row of marks, from one tracker to fifty")
+    fun marksWidthTable() {
+        // A post is 2dp with 3dp between posts; a full five is the gate's 21dp
+        // box; 8dp separates one cluster of posts from the next. The spec's
+        // geometry table, number for number.
+        assertEquals(2f, TALLY_POST_DP)
+        assertEquals(12f, TALLY_MARK_HEIGHT_DP)
+        assertEquals(
+            listOf(2f, 17f, 21f, 29f, 39f, 44f, 46f, 59f, 96f, 146f, 246f),
+            listOf(1, 4, 5, 6, 8, 9, 10, 12, 20, 30, 50).map { tallyMarksWidthDp(groupsOf(it)) },
+        )
+        assertEquals(0f, tallyMarksWidthDp(emptyList()))
     }
 
     @Test
-    @DisplayName("dots that overflow are replaced by the sentence, never truncated")
-    fun textWhenDotsOverflow() {
-        val layout = tally(CategoryRollup(habitsMet = 14), WidgetBucket.CARD, 180f)
-
-        // 164dp of dots against 156dp of content. A shortened row would be a
-        // confident wrong answer about the day, which is the one thing a
-        // glanceable surface must never produce.
-        assertNull(layout?.dots)
-        assertEquals("14 OF 14 DONE", layout?.text)
+    @DisplayName("a group's own width: the gate's box when gated, just its posts when not")
+    fun groupWidths() {
+        assertEquals(
+            listOf(2f, 7f, 12f, 17f, 21f),
+            (1..5).map { tallyGroupWidthDp(groupsOf(it).single()) },
+        )
     }
 
     @Test
-    @DisplayName("the four rungs, in order, as the same tally loses room")
+    @DisplayName("both group gaps leave 8dp between one cluster of posts and the next")
+    fun groupStarts() {
+        val gated = groupsOf(5).single()
+        val ungated = groupsOf(3).single()
+
+        // The first group starts on the keyline whatever it is.
+        assertEquals(0f, tallyGroupStartDp(0, gated))
+        assertEquals(0f, tallyGroupStartDp(0, ungated))
+        // A gated group brings 2dp of overhang at each edge, so 4dp of gap is
+        // 2 + 4 + 2 post to post; an ungated one brings none on its own side,
+        // so it takes 6dp after the 2dp the group before it overhangs.
+        assertEquals(4f, tallyGroupStartDp(1, gated))
+        assertEquals(6f, tallyGroupStartDp(1, ungated))
+        assertEquals(4f, tallyGroupStartDp(7, gated))
+    }
+
+    @Test
+    @DisplayName("posts stand 3dp apart, and a gated group's first stands in by the overhang")
+    fun postStarts() {
+        assertEquals(listOf(2f, 3f, 3f, 3f), (0..3).map { tallyPostStartDp(it, gated = true) })
+        assertEquals(listOf(0f, 3f, 3f, 3f), (0..3).map { tallyPostStartDp(it, gated = false) })
+
+        // The four posts and their gaps span exactly the gate's box less its
+        // far overhang: 2 + 2 + 3×(3 + 2) = 19 of 21.
+        assertEquals(19f, (0..3).map { tallyPostStartDp(it, gated = true) + TALLY_POST_DP }.sum())
+    }
+
+    @Test
+    @DisplayName("twelve trackers draw their marks at every size")
+    fun twelveTrackersAtEverySize() {
+        // The reason for the change: as dots, a twelfth tracker pushed every
+        // size down to the sentence. Twelve marks are 59dp; `2 OF 12 DONE` is
+        // 75.6dp and `2/12` is 25.2dp.
+
+        // The 2×1 floor: 86dp of content holds the marks and nothing beside
+        // them (86 − 59 − 8 = 19).
+        val floor = tally(twelve, WidgetBucket.STRIP, 110f)
+        assertEquals(12, floor?.marks()?.size)
+        assertNull(floor?.text)
+
+        // A typical 2×1: 116dp of content leaves 49dp, room for the fraction.
+        val strip = tally(twelve, WidgetBucket.STRIP, 140f)
+        assertEquals(12, strip?.marks()?.size)
+        assertEquals("2/12", strip?.text)
+
+        // CARD and PAGE at their 180dp floor: 59 + 8 + 75.6 = 142.6 ≤ 156.
+        listOf(WidgetBucket.CARD, WidgetBucket.PAGE).forEach { bucket ->
+            val page = tally(twelve, bucket, 180f)
+            assertEquals(12, page?.marks()?.size)
+            assertEquals("2 OF 12 DONE", page?.text)
+        }
+    }
+
+    @Test
+    @DisplayName("the WIDE tally fits its own column: marks and the fraction at the floor")
+    fun wideColumnAtItsFloor() {
+        // 250dp wide is a 124.3dp tally column: 59 + 8 leaves 57.3dp, which
+        // holds `2/12` and not the 75.6dp sentence.
+        val layout = tally(twelve, WidgetBucket.WIDE, tallyFitWidthDp(WidgetBucket.WIDE, 250f))
+
+        assertEquals(12, layout?.marks()?.size)
+        assertEquals("2/12", layout?.text)
+    }
+
+    @Test
+    @DisplayName("the five rungs, in order, as the same tally loses room")
     fun theFitLadder() {
-        // One rollup, four widths: 92dp of dots and 69.3dp of sentence, so each
-        // step is the one below the last thing that stopped fitting. The final
-        // width is far under the CARD floor — the parameter under test is the
-        // width, not the bucket, and this is the arithmetic the ladder runs.
-        // Eight habits on purpose: dots-with-count spends 8 + 2 children of the
-        // ten-child render budget, so every rung here is open and only width
-        // decides. The budget itself is pinned separately below.
-        val rollup = CategoryRollup(habitsMet = 8)
+        // One rollup, five widths: 146dp of marks, a 75.6dp sentence and a
+        // 25.2dp fraction, so each step is the one below the last thing that
+        // stopped fitting. Thirty trackers are six groups, well inside the
+        // child budget, so only width decides here; the budget is pinned
+        // separately below. The narrow widths are under every bucket's floor —
+        // the parameter under test is the width, not the bucket.
+        val rollup = CategoryRollup(habitsMet = 8, habitsNotYet = 22)
 
-        val both = tally(rollup, WidgetBucket.CARD, 280f)
-        assertEquals(8, both?.dots?.size)
-        assertEquals("8 OF 8 DONE", both?.text)
+        // 236 − 146 − 8 = 82 ≥ 75.6.
+        val sentenceBeside = tally(rollup, WidgetBucket.CARD, 260f)
+        assertEquals(30, sentenceBeside?.marks()?.size)
+        assertEquals("8 OF 30 DONE", sentenceBeside?.text)
 
-        val dotsOnly = tally(rollup, WidgetBucket.CARD, 180f)
-        assertEquals(8, dotsOnly?.dots?.size)
-        assertNull(dotsOnly?.text)
+        // 186 − 146 − 8 = 32: the sentence is out, the fraction is in.
+        val fractionBeside = tally(rollup, WidgetBucket.CARD, 210f)
+        assertEquals(30, fractionBeside?.marks()?.size)
+        assertEquals("8/30", fractionBeside?.text)
 
+        // 156 − 146 − 8 = 2: nothing goes beside, and the marks still fit.
+        val marksAlone = tally(rollup, WidgetBucket.CARD, 180f)
+        assertEquals(30, marksAlone?.marks()?.size)
+        assertNull(marksAlone?.text)
+
+        // 86dp of content: the marks are out, the sentence fits alone.
         val sentence = tally(rollup, WidgetBucket.CARD, 110f)
-        assertNull(sentence?.dots)
-        assertEquals("8 OF 8 DONE", sentence?.text)
+        assertNull(sentence?.groups)
+        assertEquals("8 OF 30 DONE", sentence?.text)
 
-        val compact = tally(rollup, WidgetBucket.CARD, 60f)
-        assertNull(compact?.dots)
-        assertEquals("8/8", compact?.text)
+        // 36dp of content: the floor.
+        val fraction = tally(rollup, WidgetBucket.CARD, 60f)
+        assertNull(fraction?.groups)
+        assertEquals("8/30", fraction?.text)
     }
 
     @Test
-    @DisplayName("the render budget: ten children, dots plus count costing two more")
+    @DisplayName("the separation is part of the fit: a count that would touch the marks is not beside them")
+    fun separationBoundary() {
+        // Twelve marks and `2/12`: 59 + 8 + 25.2 = 92.2dp of content, so
+        // 116.2dp of widget. A hair under that and the fraction goes.
+        assertEquals("2/12", tally(twelve, WidgetBucket.STRIP, 116.3f)?.text)
+        assertNull(tally(twelve, WidgetBucket.STRIP, 116.1f)?.text)
+        assertEquals(12, tally(twelve, WidgetBucket.STRIP, 116.1f)?.marks()?.size)
+    }
+
+    @Test
+    @DisplayName("the render budget: ten children, counted in groups, a count costing two more")
     fun theGlanceChildBudget() {
         // A Glance container renders at most ten children and silently DROPS
-        // the rest — on a device that read as five met dots and every half and
-        // open mark after them gone. So the budget is a term of the ladder, not
-        // a layout accident: at a width where everything fits, nine dots cannot
-        // take the count (9 + spacer + text = 11), ten can stand alone, and
-        // eleven fall to the sentence outright.
+        // the rest — on a device that read as five met dots and every mark
+        // after them gone. So the budget is a term of the ladder, not a layout
+        // accident. The row's children are the groups: at a width where
+        // everything fits, eight groups can take the count (8 + spacer + text =
+        // 10), nine and ten stand alone, and eleven fall to the sentence
+        // outright.
         val wide = 400f
 
-        val nine = tally(CategoryRollup(habitsMet = 5, habitsPartial = 2, habitsNotYet = 2), WidgetBucket.CARD, wide)
-        assertEquals(9, nine?.dots?.size)
-        assertNull(nine?.text)
+        val forty = tally(CategoryRollup(habitsMet = 9, habitsNotYet = 31), WidgetBucket.CARD, wide)
+        assertEquals(8, forty?.groups?.size)
+        assertEquals(40, forty?.marks()?.size)
+        assertEquals("9 OF 40 DONE", forty?.text)
 
-        val ten = tally(CategoryRollup(habitsMet = 5, habitsPartial = 2, habitsNotYet = 3), WidgetBucket.CARD, wide)
-        assertEquals(10, ten?.dots?.size)
-        assertNull(ten?.text)
+        val fortyOne = tally(CategoryRollup(habitsMet = 9, habitsNotYet = 32), WidgetBucket.CARD, wide)
+        assertEquals(9, fortyOne?.groups?.size)
+        assertEquals(41, fortyOne?.marks()?.size)
+        assertNull(fortyOne?.text)
 
-        val eleven = tally(CategoryRollup(habitsMet = 5, habitsPartial = 3, habitsNotYet = 3), WidgetBucket.CARD, wide)
-        assertNull(eleven?.dots)
-        assertEquals("5 OF 11 DONE", eleven?.text)
+        val fifty = tally(CategoryRollup(habitsMet = 9, habitsNotYet = 41), WidgetBucket.CARD, wide)
+        assertEquals(10, fifty?.groups?.size)
+        assertEquals(50, fifty?.marks()?.size)
+        assertNull(fifty?.text)
+
+        val fiftyOne = tally(CategoryRollup(habitsMet = 9, habitsNotYet = 42), WidgetBucket.CARD, wide)
+        assertNull(fiftyOne?.groups)
+        assertEquals("9 OF 51 DONE", fiftyOne?.text)
+    }
+
+    @Test
+    @DisplayName("whatever is drawn is the whole tally: every mark, inside the width and the budget")
+    fun marksAreNeverTruncated() {
+        // The rule the ladder exists for, swept rather than sampled: at any
+        // count, width and font scale, a layout that draws marks draws ALL of
+        // them, in a row Glance will render whole and the content can hold.
+        for (count in 1..60) {
+            for (width in listOf(60f, 110f, 140f, 180f, 250f, 400f)) {
+                for (scale in listOf(1f, 1.3f, 2f)) {
+                    val met = count / 3
+                    val partial = count % 3
+                    val rollup = CategoryRollup(
+                        habitsMet = met,
+                        habitsPartial = partial,
+                        habitsNotYet = count - met - partial,
+                    )
+                    val layout = tally(rollup, WidgetBucket.CARD, width, scale)
+                    val where = "$count trackers at ${width}dp ×$scale"
+
+                    assertNotNull(layout, where)
+                    assertTrue(layout!!.groups != null || layout.text != null, where)
+                    val content = width - 24f
+                    // The estimate the ladder fits with, restated: 6.3dp a
+                    // character, times the font scale.
+                    val textWidth = (layout.text?.length ?: 0) * 6.3f * scale
+                    val groups = layout.groups
+                    if (groups == null) {
+                        // Words alone. The sentence is only ever chosen where
+                        // it fits; `N/M` is the floor and draws regardless.
+                        if (layout.text!!.contains(" OF ")) {
+                            assertTrue(textWidth <= content, where)
+                        }
+                        continue
+                    }
+                    assertEquals(count, layout.marks()?.size, where)
+                    val marksWidth = tallyMarksWidthDp(groups)
+                    assertTrue(marksWidth <= content, where)
+                    // A count beside the marks is inside the row WITH its 8dp
+                    // of separation — marks that fit and words that overflow
+                    // them would be a truncated count.
+                    if (layout.text != null) {
+                        assertTrue(marksWidth + 8f + textWidth <= content, where)
+                    }
+                    val children = groups.size + if (layout.text != null) 2 else 0
+                    assertTrue(children <= 10, where)
+                }
+            }
+        }
     }
 
     @Test
@@ -458,50 +664,91 @@ class TodayWidgetLogicTest {
             110f,
         )
 
-        assertNull(layout?.dots)
+        assertNull(layout?.groups)
         assertEquals("60/100", layout?.text)
     }
 
     @Test
     @DisplayName("a larger system font shrinks the words, never the marks")
     fun fontScaleDegradesTheRow() {
-        val rollup = CategoryRollup(habitsMet = 3, habitsPartial = 2, habitsNotYet = 1)
+        val unscaled = tally(twelve, WidgetBucket.CARD, 180f, fontScale = 1f)
+        assertEquals(12, unscaled?.marks()?.size)
+        assertEquals("2 OF 12 DONE", unscaled?.text)
 
-        val unscaled = tally(rollup, WidgetBucket.CARD, 180f, fontScale = 1f)
-        assertEquals(6, unscaled?.dots?.size)
-        assertEquals("3 OF 6 DONE", unscaled?.text)
+        // At 1.3 the sentence measures 98.3dp against the 89dp beside the
+        // marks — and the marks, being dp, have not moved. The count steps down
+        // to the fraction (32.8dp) rather than leaving. Without the scale this
+        // layout would have been chosen for a width it overflows.
+        val scaled = tally(twelve, WidgetBucket.CARD, 180f, fontScale = 1.3f)
+        assertEquals(12, scaled?.marks()?.size)
+        assertEquals("2/12", scaled?.text)
+    }
 
-        // At 1.3 the sentence measures 90.1dp, so 68 + 8 + 90.1 no longer fits
-        // 156 — and the dots, being dp, still do. Without the scale this layout
-        // would have been chosen for a width it overflows.
-        val scaled = tally(rollup, WidgetBucket.CARD, 180f, fontScale = 1.3f)
-        assertEquals(6, scaled?.dots?.size)
-        assertNull(scaled?.text)
+    @Test
+    @DisplayName("the five rungs again at font scale 1.3: every boundary moves, the order does not")
+    fun theFitLadderAtLargeFont() {
+        // The same thirty trackers as theFitLadder: 146dp of marks, which the
+        // scale does not touch, beside a sentence now 98.3dp and a fraction
+        // now 32.8dp. Three of these widths sat one rung higher at 1.0.
+        val rollup = CategoryRollup(habitsMet = 8, habitsNotYet = 22)
+        fun at(widthDp: Float) = tally(rollup, WidgetBucket.CARD, widthDp, fontScale = 1.3f)
+
+        // 256 − 146 − 8 = 102 ≥ 98.3.
+        assertEquals(30, at(280f)?.marks()?.size)
+        assertEquals("8 OF 30 DONE", at(280f)?.text)
+
+        // 236 − 146 − 8 = 82: held the sentence at 1.0, holds the fraction now.
+        assertEquals(30, at(260f)?.marks()?.size)
+        assertEquals("8/30", at(260f)?.text)
+
+        // 186 − 146 − 8 = 32 < 32.8: held the fraction at 1.0, marks alone now.
+        assertEquals(30, at(210f)?.marks()?.size)
+        assertNull(at(210f)?.text)
+
+        // 106dp of content: no marks, and the 98.3dp sentence fits alone.
+        assertNull(at(130f)?.groups)
+        assertEquals("8 OF 30 DONE", at(130f)?.text)
+
+        // 86dp of content: held the sentence at 1.0, the floor now.
+        assertNull(at(110f)?.groups)
+        assertEquals("8/30", at(110f)?.text)
     }
 
     @Test
     @DisplayName("font scale can walk a strip's count all the way down to N/M")
     fun fontScaleReachesTheCompactForm() {
-        val rollup = CategoryRollup(habitsMet = 4, habitsNotYet = 4)
+        // Sixty trackers are twelve groups, past the child budget, so the row
+        // is words at any width: 75.6dp fits the strip's 86dp, 98.3dp does not.
+        val rollup = CategoryRollup(habitsMet = 4, habitsNotYet = 56)
 
-        assertEquals("4 OF 8 DONE", tally(rollup, WidgetBucket.STRIP, 110f)?.text)
-        assertEquals("4/8", tally(rollup, WidgetBucket.STRIP, 110f, fontScale = 1.3f)?.text)
+        assertEquals("4 OF 60 DONE", tally(rollup, WidgetBucket.STRIP, 110f)?.text)
+        assertEquals("4/60", tally(rollup, WidgetBucket.STRIP, 110f, fontScale = 1.3f)?.text)
+        assertNull(tally(rollup, WidgetBucket.STRIP, 110f)?.groups)
     }
 
     @Test
-    @DisplayName("at the strip's floor the arithmetic holds seven dots, then the count")
+    @DisplayName("at the strip's floor: ten marks with their fraction, seventeen alone, then the count")
     fun stripFloorArithmetic() {
-        // 86dp of content: seven dots (80dp) fit alone, eight (92dp) do not.
-        // These are the same answers the retired frozen seven-dot rule gave —
-        // pinned here so the floor keeps behaving after the rule became plain
-        // width arithmetic.
-        val seven = tally(CategoryRollup(habitsMet = 4, habitsNotYet = 3), WidgetBucket.STRIP, 110f)
-        assertEquals(7, seven?.dots?.size)
-        assertNull(seven?.text)
+        // 86dp of content. Ten marks are 46dp and leave 32dp, which holds
+        // `4/10` (25.2dp) but never the sentence.
+        val ten = tally(CategoryRollup(habitsMet = 4, habitsNotYet = 6), WidgetBucket.STRIP, 110f)
+        assertEquals(10, ten?.marks()?.size)
+        assertEquals("4/10", ten?.text)
 
-        val eight = tally(CategoryRollup(habitsMet = 4, habitsNotYet = 4), WidgetBucket.STRIP, 110f)
-        assertNull(eight?.dots)
-        assertEquals("4 OF 8 DONE", eight?.text)
+        // Seventeen marks are 84dp: they fit, alone.
+        val seventeen = tally(CategoryRollup(habitsMet = 4, habitsNotYet = 13), WidgetBucket.STRIP, 110f)
+        assertEquals(17, seventeen?.marks()?.size)
+        assertNull(seventeen?.text)
+
+        // Eighteen are 89dp: the marks go, whole, and the sentence takes over.
+        val eighteen = tally(CategoryRollup(habitsMet = 4, habitsNotYet = 14), WidgetBucket.STRIP, 110f)
+        assertNull(eighteen?.groups)
+        assertEquals("4 OF 18 DONE", eighteen?.text)
+
+        // A finished day of twenty: 96dp of marks, an 81.9dp sentence.
+        val twenty = tally(CategoryRollup(habitsMet = 20), WidgetBucket.STRIP, 110f)
+        assertNull(twenty?.groups)
+        assertEquals("20 OF 20 DONE", twenty?.text)
     }
 
     @Test
@@ -510,15 +757,15 @@ class TodayWidgetLogicTest {
         // The first device build drew a lone fraction on a strip twice its
         // floor, because Responsive handed the fit rule the 110dp bucket size
         // instead of the real one. With SizeMode.Exact the width is the truth:
-        // eight dots and the sentence both fit 376dp of content.
+        // eight marks and the sentence both fit 376dp of content.
         val layout = tally(CategoryRollup(habitsMet = 4, habitsNotYet = 4), WidgetBucket.STRIP, 400f)
 
-        assertEquals(8, layout?.dots?.size)
+        assertEquals(8, layout?.marks()?.size)
         assertEquals("4 OF 8 DONE", layout?.text)
     }
 
     @Test
-    @DisplayName("the spoken sentence names the partial dots nobody can hear")
+    @DisplayName("the spoken sentence names the partial marks nobody can hear")
     fun spokenTally() {
         assertEquals(
             "5 of 8 positive trackers done, 2 partial",
@@ -584,16 +831,20 @@ class TodayWidgetLogicTest {
     // ---- Marks -------------------------------------------------------------
 
     @Test
-    @DisplayName("the three mark drawables are three different drawables")
+    @DisplayName("the seven mark drawables are seven different drawables")
     fun marksAreDistinct() {
         // Guards every mapping below from passing on a tree where the ids all
         // resolved to the same value.
         assertEquals(
-            3,
+            7,
             setOf(
                 R.drawable.widget_mark_filled,
                 R.drawable.widget_mark_half,
                 R.drawable.widget_mark_hollow,
+                R.drawable.widget_tally_post,
+                R.drawable.widget_tally_post_half,
+                R.drawable.widget_tally_gate,
+                R.drawable.widget_tally_gate_half,
             ).size,
         )
     }
@@ -608,14 +859,6 @@ class TodayWidgetLogicTest {
     }
 
     @Test
-    @DisplayName("tally dots use the same three marks")
-    fun dotMarks() {
-        assertEquals(R.drawable.widget_mark_filled, dotDrawable(TallyDot.FILLED))
-        assertEquals(R.drawable.widget_mark_half, dotDrawable(TallyDot.HALF))
-        assertEquals(R.drawable.widget_mark_hollow, dotDrawable(TallyDot.OPEN))
-    }
-
-    @Test
     @DisplayName("ink for every judged state; faint is what pending means")
     fun judgmentInk() {
         // ATTENTION and pending share the hollow ring, so the ink is the whole
@@ -627,10 +870,92 @@ class TodayWidgetLogicTest {
     }
 
     @Test
-    @DisplayName("only the not-yet dot recedes")
-    fun dotInk() {
-        assertEquals(WidgetTint.INK, dotTint(TallyDot.FILLED))
-        assertEquals(WidgetTint.INK, dotTint(TallyDot.HALF))
-        assertEquals(WidgetTint.INK_FAINT, dotTint(TallyDot.OPEN))
+    @DisplayName("a stroke is ink when met, faint when not yet, and both when half done")
+    fun strokeInk() {
+        assertEquals(
+            listOf(StrokeLayer(StrokePart.WHOLE, WidgetTint.INK)),
+            strokeLayers(TallyMark.MET),
+        )
+        assertEquals(
+            listOf(StrokeLayer(StrokePart.WHOLE, WidgetTint.INK_FAINT)),
+            strokeLayers(TallyMark.NOT_YET),
+        )
+        // Order is z-order, bottom first: the whole stroke in faint, then its
+        // first half in ink over it. The other way round the faint layer would
+        // paint the ink out, and a half-done tracker would read as not started.
+        assertEquals(
+            listOf(
+                StrokeLayer(StrokePart.WHOLE, WidgetTint.INK_FAINT),
+                StrokeLayer(StrokePart.FIRST_HALF, WidgetTint.INK),
+            ),
+            strokeLayers(TallyMark.PARTIAL),
+        )
+    }
+
+    @Test
+    @DisplayName("a partial mark keeps its full length — it never reads as a smaller mark")
+    fun partialKeepsItsLength() {
+        // Every state's bottom layer is the WHOLE stroke, so the three states
+        // differ in ink and never in extent.
+        TallyMark.entries.forEach { mark ->
+            assertEquals(StrokePart.WHOLE, strokeLayers(mark).first().part)
+        }
+    }
+
+    @Test
+    @DisplayName("posts and gates each have a whole drawable and a first-half one")
+    fun strokeDrawables() {
+        assertEquals(R.drawable.widget_tally_post, postDrawable(StrokePart.WHOLE))
+        assertEquals(R.drawable.widget_tally_post_half, postDrawable(StrokePart.FIRST_HALF))
+        assertEquals(R.drawable.widget_tally_gate, gateDrawable(StrokePart.WHOLE))
+        assertEquals(R.drawable.widget_tally_gate_half, gateDrawable(StrokePart.FIRST_HALF))
+    }
+
+    @Test
+    @DisplayName("a gate's faint ink goes under the posts and its ink over them")
+    fun gateLayerOrder() {
+        val faintWhole = StrokeLayer(StrokePart.WHOLE, WidgetTint.INK_FAINT)
+
+        // A gate not yet met must not cut posts that are: all of it is under.
+        assertEquals(listOf(faintWhole), gateLayersUnder(TallyMark.NOT_YET))
+        assertEquals(emptyList<StrokeLayer>(), gateLayersOver(TallyMark.NOT_YET))
+
+        // A met gate strikes across the posts.
+        assertEquals(emptyList<StrokeLayer>(), gateLayersUnder(TallyMark.MET))
+        assertEquals(listOf(StrokeLayer(StrokePart.WHOLE, WidgetTint.INK)), gateLayersOver(TallyMark.MET))
+
+        // A half-done gate is split across them: faint below, its ink half above.
+        assertEquals(listOf(faintWhole), gateLayersUnder(TallyMark.PARTIAL))
+        assertEquals(
+            listOf(StrokeLayer(StrokePart.FIRST_HALF, WidgetTint.INK)),
+            gateLayersOver(TallyMark.PARTIAL),
+        )
+
+        // An ungated group draws no gate at all.
+        assertEquals(emptyList<StrokeLayer>(), gateLayersUnder(null))
+        assertEquals(emptyList<StrokeLayer>(), gateLayersOver(null))
+    }
+
+    @Test
+    @DisplayName("under and over together are exactly the gate's layers — none lost, none drawn twice")
+    fun gateLayersAreComplete() {
+        TallyMark.entries.forEach { gate ->
+            assertEquals(
+                strokeLayers(gate).toSet(),
+                (gateLayersUnder(gate) + gateLayersOver(gate)).toSet(),
+            )
+            assertEquals(strokeLayers(gate).size, gateLayersUnder(gate).size + gateLayersOver(gate).size)
+        }
+    }
+
+    @Test
+    @DisplayName("a group box never needs more than three children, nor a post more than two")
+    fun groupBoxChildCeiling() {
+        // The audited ceilings in the spec's Glance constraints: gate under,
+        // the posts row, gate over; and the two layers of a partial post.
+        TallyMark.entries.forEach { mark ->
+            assertTrue(gateLayersUnder(mark).size + 1 + gateLayersOver(mark).size <= 3)
+            assertTrue(strokeLayers(mark).size <= 2)
+        }
     }
 }

@@ -36,7 +36,7 @@ internal val WIDGET_INK_NIGHT = Color(0xFFEDECE7)
 internal val WIDGET_INK_SOFT_DAY = Color(0xFF6A6D73)
 internal val WIDGET_INK_SOFT_NIGHT = Color(0xFF7D8288)
 
-/** Not-yet dots, the pending glyph and its `-:--`. Recedes on purpose. */
+/** Not-yet tally marks, the faint half of a partial one, the pending glyph and its `-:--`. Recedes on purpose. */
 internal val WIDGET_INK_FAINT_DAY = Color(0xFFA6A9AD)
 internal val WIDGET_INK_FAINT_NIGHT = Color(0xFF55585D)
 
@@ -53,3 +53,14 @@ internal val WIDGET_INK_SOFT =
 internal val WIDGET_INK_FAINT =
     ColorProvider(day = WIDGET_INK_FAINT_DAY, night = WIDGET_INK_FAINT_NIGHT)
 internal val WIDGET_RULE = ColorProvider(day = WIDGET_RULE_DAY, night = WIDGET_RULE_NIGHT)
+
+/**
+ * The provider a named tint is drawn with — the one place a [WidgetTint] turns
+ * into a colour. It lives here, counted and pinned by `TodayWidgetPaletteTest`,
+ * rather than as a `when` in the content: swapped arms would draw every met
+ * mark faint and every open one in ink, with every logic test still green.
+ */
+internal fun widgetTintColor(tint: WidgetTint) = when (tint) {
+    WidgetTint.INK -> WIDGET_INK
+    WidgetTint.INK_FAINT -> WIDGET_INK_FAINT
+}

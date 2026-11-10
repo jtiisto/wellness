@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    The done half of a partial post: the bottom of the stroke, y 6…12.
+
+    It keeps the WHOLE post's 2×12 viewport on purpose. Layered over
+    widget_tally_post in the same box it registers by construction, so the
+    layout does no alignment arithmetic, and the partial mark keeps its full
+    length: it reads as unfinished, never as a shorter mark.
+
+    Fill-only, and tinted at the use site like every mark here; the authored
+    colour is irrelevant (specs/widget.md §Mark vocabulary).
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="2dp"
+    android:height="12dp"
+    android:viewportWidth="2"
+    android:viewportHeight="12">
+    <path
+        android:fillColor="#000000"
+        android:pathData="M0,6 L2,6 L2,12 L0,12 Z" />
+</vector>

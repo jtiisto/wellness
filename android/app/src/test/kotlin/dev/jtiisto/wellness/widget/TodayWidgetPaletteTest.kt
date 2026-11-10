@@ -4,6 +4,8 @@ import androidx.glance.color.ColorProvider
 import dev.jtiisto.wellness.core.ui.theme.LogbookDark
 import dev.jtiisto.wellness.core.ui.theme.LogbookLight
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertNotEquals
+import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 
@@ -79,5 +81,16 @@ class TodayWidgetPaletteTest {
             WIDGET_INK_FAINT,
         )
         assertEquals(ColorProvider(day = WIDGET_RULE_DAY, night = WIDGET_RULE_NIGHT), WIDGET_RULE)
+    }
+
+    @Test
+    @DisplayName("a named tint is drawn in its own ink: met marks in ink, open ones faint")
+    fun tintsMapToTheirInks() {
+        // The mapping the content calls for every mark. Swapped arms would
+        // invert the whole tally — met strokes receding, open ones in ink —
+        // and nothing in the logic tests looks at a colour.
+        assertSame(WIDGET_INK, widgetTintColor(WidgetTint.INK))
+        assertSame(WIDGET_INK_FAINT, widgetTintColor(WidgetTint.INK_FAINT))
+        assertNotEquals(WIDGET_INK, WIDGET_INK_FAINT)
     }
 }

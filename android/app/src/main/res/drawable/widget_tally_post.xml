@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    A tally post: one positive tracker, as the upright stroke a tally is kept in.
+
+    The whole 2×12 box. Met draws it in ink, not-yet in ink-faint, and a partial
+    tracker draws it in ink-faint with widget_tally_post_half in ink over it.
+
+    A filled polygon, not a stroked line: every mark on this surface is
+    fill-only (specs/widget.md §Mark vocabulary).
+
+    The authored colour is IRRELEVANT: every use site draws this through
+    ColorFilter.tint(ColorProvider), which is how the one-ink rule survives into
+    a surface that cannot read LogbookTheme. Black is simply the neutral author.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="2dp"
+    android:height="12dp"
+    android:viewportWidth="2"
+    android:viewportHeight="12">
+    <path
+        android:fillColor="#000000"
+        android:pathData="M0,0 L2,0 L2,12 L0,12 Z" />
+</vector>

@@ -40,7 +40,7 @@ import dev.jtiisto.wellness.core.ui.theme.INK_BANG
  * on the same paper, with one hairline between them.
  *
  * **This file lays out; it decides nothing.** Which bucket a size is, whether a
- * tally draws its dots or its sentence, which drawable a judgment takes, which
+ * tally draws its marks or its sentence, which drawable a judgment takes, which
  * ink a mark is drawn in — every one of those answers arrives from
  * `TodayWidgetLogic`, where it is a plain function a JVM test can pin. The rule
  * is the one the widget's Kover exclusions rest on, and it is the reason this
@@ -202,12 +202,12 @@ fun TodayWidgetContent(rollup: CategoryRollup?, model: SleepTonightModel?) {
 // ---- Element 1: the tracker tally -------------------------------------------
 
 /**
- * Dots on the keyline, the count pushed to the far edge — one line, read
+ * Tally marks on the keyline, the count pushed to the far edge — one line, read
  * left to right the way a tally fills.
  *
- * The row speaks [spoken] as a single node whatever the fit rule drew: the dots
+ * The row speaks [spoken] as a single node whatever the fit rule drew: the marks
  * are decorative (they are the count, drawn), and a screen reader announcing
- * six anonymous images would be worse than silence.
+ * twelve anonymous images would be worse than silence.
  */
 @Composable
 private fun TallyRow(layout: TallyLayout, spoken: String) {
@@ -217,38 +217,80 @@ private fun TallyRow(layout: TallyLayout, spoken: String) {
             .semantics { contentDescription = spoken },
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // The gaps are start-padding on the marks, never Spacer children: a
-        // Glance container renders AT MOST TEN children and silently drops the
-        // rest, and the first device build spent the whole budget on five dots
-        // plus their five spacers — every mark after the fifth simply vanished,
-        // which read as "only completed trackers show". The same limit is a
-        // term in the fit ladder now; see tallyLayout. Padding sits inside a
-        // view's bounds, so the padded marks are sized 12×8 to keep an 8×8
-        // canvas for the glyph.
-        layout.dots?.forEachIndexed { index, dot ->
-            Image(
-                provider = ImageProvider(dotDrawable(dot)),
-                contentDescription = null,
-                modifier = if (index > 0) {
-                    GlanceModifier.size(width = 12.dp, height = 8.dp).padding(start = 4.dp)
-                } else {
-                    GlanceModifier.size(8.dp)
-                },
-                colorFilter = ColorFilter.tint(
-                    when (dotTint(dot)) {
-                        WidgetTint.INK -> WIDGET_INK
-                        WidgetTint.INK_FAINT -> WIDGET_INK_FAINT
-                    },
-                ),
-            )
+        // One child per GROUP, never per mark: a Glance container renders AT
+        // MOST TEN children and silently drops the rest. The first device build
+        // spent that whole budget on five dots plus their five spacers, and
+        // every mark after the fifth vanished. The limit is a term in the fit
+        // ladder (tallyLayout), which is why this loop can trust its list.
+        layout.groups?.forEachIndexed { index, group ->
+            TallyGroupBox(group, startDp = tallyGroupStartDp(index, group))
         }
         // Only when both halves drew: with one of them the row starts on the
         // keyline and ends where it ends.
-        if (layout.dots != null && layout.text != null) {
+        if (layout.groups != null && layout.text != null) {
             Spacer(GlanceModifier.defaultWeight())
         }
         layout.text?.let { Text(text = it, style = WIDGET_EYEBROW, maxLines = 1) }
     }
+}
+
+/**
+ * Up to five marks: the posts in a row, and the gate struck across them.
+ *
+ * Three children at most, in z-order: the gate's ink-faint layers, the posts,
+ * the gate's ink layers — so a gate that is not yet met never cuts a post that
+ * is. The gap in front of the group is start-padding on this box, never a
+ * `Spacer` child of the row: padding sits inside a view's bounds, so the box is
+ * sized gap + group to keep the group's own canvas.
+ */
+@Composable
+private fun TallyGroupBox(group: TallyGroup, startDp: Float) {
+    val widthDp = tallyGroupWidthDp(group)
+    Box(
+        modifier = GlanceModifier
+            .size(width = (startDp + widthDp).dp, height = TALLY_MARK_HEIGHT_DP.dp)
+            .padding(start = startDp.dp),
+    ) {
+        gateLayersUnder(group.gate).forEach { layer ->
+            TallyStroke(gateDrawable(layer.part), layer.tint, widthDp)
+        }
+        Row {
+            group.posts.forEachIndexed { index, post ->
+                TallyPost(post, startDp = tallyPostStartDp(index, group.gated))
+            }
+        }
+        gateLayersOver(group.gate).forEach { layer ->
+            TallyStroke(gateDrawable(layer.part), layer.tint, widthDp)
+        }
+    }
+}
+
+/**
+ * One upright stroke, as the one or two layers its state is drawn in. The gap
+ * in front of it is start-padding, for the reason [TallyGroupBox] gives.
+ */
+@Composable
+private fun TallyPost(mark: TallyMark, startDp: Float) {
+    Box(
+        modifier = GlanceModifier
+            .size(width = (startDp + TALLY_POST_DP).dp, height = TALLY_MARK_HEIGHT_DP.dp)
+            .padding(start = startDp.dp),
+    ) {
+        strokeLayers(mark).forEach { layer ->
+            TallyStroke(postDrawable(layer.part), layer.tint, TALLY_POST_DP)
+        }
+    }
+}
+
+/** One layer of a tally stroke: a fill-only drawable, tinted here and nowhere else. */
+@Composable
+private fun TallyStroke(drawable: Int, tint: WidgetTint, widthDp: Float) {
+    Image(
+        provider = ImageProvider(drawable),
+        contentDescription = null,
+        modifier = GlanceModifier.size(width = widthDp.dp, height = TALLY_MARK_HEIGHT_DP.dp),
+        colorFilter = ColorFilter.tint(widgetTintColor(tint)),
+    )
 }
 
 // ---- Element 2 (+3): tonight's sleep -----------------------------------------
@@ -373,12 +415,7 @@ private fun CompactSleepRow(model: SleepTonightModel?) {
             provider = ImageProvider(judgmentDrawable(model)),
             contentDescription = null,
             modifier = GlanceModifier.size(9.dp),
-            colorFilter = ColorFilter.tint(
-                when (judgmentTint(model)) {
-                    WidgetTint.INK -> WIDGET_INK
-                    WidgetTint.INK_FAINT -> WIDGET_INK_FAINT
-                },
-            ),
+            colorFilter = ColorFilter.tint(widgetTintColor(judgmentTint(model))),
         )
         Spacer(GlanceModifier.width(6.dp))
         if (model == null) {
@@ -397,12 +434,7 @@ private fun SleepEyebrow(model: SleepTonightModel?) {
             provider = ImageProvider(judgmentDrawable(model)),
             contentDescription = null,
             modifier = GlanceModifier.size(9.dp),
-            colorFilter = ColorFilter.tint(
-                when (judgmentTint(model)) {
-                    WidgetTint.INK -> WIDGET_INK
-                    WidgetTint.INK_FAINT -> WIDGET_INK_FAINT
-                },
-            ),
+            colorFilter = ColorFilter.tint(widgetTintColor(judgmentTint(model))),
         )
         Spacer(GlanceModifier.width(6.dp))
         Text(text = "TONIGHT'S SLEEP NEED", style = WIDGET_EYEBROW, maxLines = 1)
