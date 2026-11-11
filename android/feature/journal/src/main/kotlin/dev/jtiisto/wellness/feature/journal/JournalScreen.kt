@@ -38,6 +38,7 @@ import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -136,7 +137,7 @@ private fun JournalContent(
     onRefresh: () -> Unit,
     onSelectDate: (String) -> Unit,
     onToggleCategory: (String) -> Unit,
-    onChecked: (String, Boolean) -> Unit,
+    onChecked: (String, Boolean, Double?, String?) -> Unit,
     onCommitNumeric: (String, Double?, String) -> Unit,
     onAccumulate: (String, Double?, String) -> Unit,
     onSlider: (String, Float) -> Unit,
@@ -534,7 +535,7 @@ private fun RollupClusterRow(cluster: RollupCluster) {
 @Composable
 private fun TrackerRow(
     row: TrackerRowState,
-    onChecked: (String, Boolean) -> Unit,
+    onChecked: (String, Boolean, Double?, String?) -> Unit,
     onCommitNumeric: (String, Double?, String) -> Unit,
     onOpenAccumulator: () -> Unit,
     onSlider: (String, Float) -> Unit,
@@ -542,6 +543,16 @@ private fun TrackerRow(
     modifier: Modifier = Modifier,
 ) {
     val palette = LogbookTheme.palette
+    // The numeric field's text lives here rather than in the field so the
+    // checkbox can hand over what is typed but not yet committed: the toggle
+    // takes no focus on a touch tap, so the field never blurs, and a tick that
+    // ignored the text wrote done-with-no-value or seeded a default over the
+    // typed number (device-found, 2026-11-10). Same keys as the field had, so
+    // it still re-seeds whenever the stored value changes. Rows without a
+    // numeric field never edit it, so they never have anything pending.
+    // Handed down as the state itself, not a value: the field's commit reads
+    // the text at the moment it fires, exactly as it did when it owned it.
+    val numericText = remember(row.id, row.valueText) { mutableStateOf(row.valueText) }
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -563,7 +574,14 @@ private fun TrackerRow(
                     checked = row.checked,
                     editable = true,
                     description = if (row.checked) "${row.name}, done" else "${row.name}, not done",
-                    onCheckedChange = { onChecked(row.id, it) },
+                    onCheckedChange = {
+                        val pending = pendingNumericInput(numericText.value, row.valueText)
+                        onChecked(row.id, it, row.displayedNumber, pending)
+                        // As the field's own commit does: the pending text is
+                        // in this write now, and a later blur or disposal must
+                        // not find it pending and write it a second time.
+                        numericText.value = row.valueText
+                    },
                 )
             } else {
                 Spacer(Modifier.width(MARK_COLUMN))
@@ -593,7 +611,12 @@ private fun TrackerRow(
                 }
             }
             when (row.type) {
-                TrackerType.QUANTIFIABLE -> NumericField(row, onCommitNumeric, onOpenAccumulator)
+                TrackerType.QUANTIFIABLE -> NumericField(
+                    row = row,
+                    textState = numericText,
+                    onCommit = onCommitNumeric,
+                    onOpenAccumulator = onOpenAccumulator,
+                )
                 TrackerType.EVALUATION -> EvaluationSlider(row, onSlider)
                 else -> Unit
             }
@@ -701,17 +724,19 @@ private fun WeekMarkRun(row: TrackerRowState) {
  * never per keystroke: committing while typing would file "1", "12", "125" as
  * three separate values.
  *
- * The text is re-seeded from [TrackerRowState.valueText] whenever the stored
- * value changes, which is also how an unusable entry gets restored — the commit
+ * The text is held by [TrackerRow] (so the checkbox can commit it too) and is
+ * re-seeded from [TrackerRowState.valueText] whenever the stored value
+ * changes, which is also how an unusable entry gets restored — the commit
  * writes nothing and the next recomposition puts the displayed value back.
  */
 @Composable
 private fun NumericField(
     row: TrackerRowState,
+    textState: MutableState<String>,
     onCommit: (String, Double?, String) -> Unit,
     onOpenAccumulator: () -> Unit,
 ) {
-    var text by remember(row.id, row.valueText) { mutableStateOf(row.valueText) }
+    var text by textState
     var focused by remember(row.id) { mutableStateOf(false) }
     val palette = LogbookTheme.palette
 
@@ -729,7 +754,9 @@ private fun NumericField(
     // and the write lands in the ViewModel's scope, which outlives this row.
     CommitOnDispose(
         key = row.id,
-        text = text,
+        // The state itself, read when the row goes: a reset by the toggle or
+        // the blur that has not recomposed yet must already count.
+        text = { textState.value },
         seededText = row.valueText,
         commit = { pending -> onCommit(row.id, row.displayedNumber, pending) },
     )

@@ -1,10 +1,15 @@
 package dev.jtiisto.wellness.feature.journal
 
+import dev.jtiisto.wellness.core.data.journal.EntryField
+import dev.jtiisto.wellness.core.data.journal.EntryPatch
 import dev.jtiisto.wellness.core.data.journal.JournalSyncStore
 import dev.jtiisto.wellness.core.data.journal.JournalUiPrefs
+import dev.jtiisto.wellness.core.data.journal.TrackerDto
+import dev.jtiisto.wellness.core.data.journal.journalNumberJson
 import dev.jtiisto.wellness.core.data.sync.SyncErrorEvents
 import dev.jtiisto.wellness.core.data.sync.SyncScheduler
 import dev.jtiisto.wellness.core.data.sync.SyncStatus
+import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.verify
@@ -15,12 +20,15 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -37,6 +45,10 @@ import java.time.LocalDate
  * [StandardTestDispatcher] on the test's own scheduler — the refresh coroutine,
  * the minimum-visible timer and the sync it waits for then all advance on one
  * clock, which is what makes the floor assertable rather than approximate.
+ *
+ * Also the checkbox tap's write shape: the patch itself is decided (and
+ * tested) in `JournalRowActions`; what is pinned here is that the tap issues
+ * ONE `mergeEntry` and stamps only for a numeric part.
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class JournalViewModelTest {
@@ -72,7 +84,7 @@ class JournalViewModelTest {
         Dispatchers.resetMain()
     }
 
-    private fun viewModel() = JournalViewModel(
+    private fun viewModel(today: LocalDate = this.today) = JournalViewModel(
         store = store,
         prefs = prefs,
         scheduler = scheduler,
@@ -240,5 +252,69 @@ class JournalViewModelTest {
         isSyncing.value = true
         runCurrent()
         assertTrue(viewModel.uiState.value.isSyncing)
+    }
+
+    // ---- the checkbox with pending numeric text (Behavior rule 4, 2026-11-10) --
+
+    private val writeDay = LocalDate.parse("2030-01-10")
+    private val glasses = TrackerDto(
+        id = "glasses",
+        name = "glasses",
+        category = "Habits",
+        type = "quantifiable",
+        extras = JsonObject(mapOf("defaultValue" to JsonPrimitive(3))),
+    )
+
+    /** A view model whose tracker list is live, so a tap can find the tracker. */
+    private fun TestScope.tapViewModel(): JournalViewModel {
+        every { store.observeTrackers() } returns flowOf(listOf(glasses))
+        val viewModel = viewModel(today = writeDay)
+        backgroundScope.launch { viewModel.uiState.collect { } }
+        runCurrent()
+        return viewModel
+    }
+
+    @Test
+    @DisplayName("a tick with a typed number issues one write carrying the number and the tick, and stamps")
+    fun tickWithPendingTextIsOneStampedWrite() = runTest(dispatcher) {
+        val viewModel = tapViewModel()
+
+        viewModel.setChecked("glasses", checked = true, displayedNumber = 3.0, pendingInput = "5")
+        advanceUntilIdle()
+
+        val expected = EntryPatch(value = EntryField.Set(journalNumberJson(5.0)), completed = EntryField.Set(true))
+        coVerify(exactly = 1) { store.mergeEntry(any(), any(), any()) }
+        coVerify(exactly = 1) { store.mergeEntry("2030-01-10", "glasses", expected) }
+        coVerify(exactly = 1) { prefs.markValueUpdated("2030-01-10", "glasses") }
+    }
+
+    @Test
+    @DisplayName("a tick with nothing pending is the write it always was, unstamped")
+    fun tickWithNothingPendingIsUnchanged() = runTest(dispatcher) {
+        val viewModel = tapViewModel()
+
+        viewModel.setChecked("glasses", checked = true)
+        advanceUntilIdle()
+
+        coVerify(exactly = 1) { store.mergeEntry(any(), any(), any()) }
+        coVerify(exactly = 1) {
+            store.mergeEntry("2030-01-10", "glasses", checkboxPatch(glasses, entry = null, checked = true))
+        }
+        coVerify(exactly = 0) { prefs.markValueUpdated(any(), any()) }
+    }
+
+    @Test
+    @DisplayName("a tick whose pending text is a no-op writes the plain tick and does not stamp")
+    fun tickWithNoOpPendingTextDoesNotStamp() = runTest(dispatcher) {
+        val viewModel = tapViewModel()
+
+        viewModel.setChecked("glasses", checked = true, displayedNumber = 3.0, pendingInput = "3.0")
+        viewModel.setChecked("glasses", checked = true, displayedNumber = 3.0, pendingInput = "abc")
+        advanceUntilIdle()
+
+        coVerify(exactly = 2) {
+            store.mergeEntry("2030-01-10", "glasses", checkboxPatch(glasses, entry = null, checked = true))
+        }
+        coVerify(exactly = 0) { prefs.markValueUpdated(any(), any()) }
     }
 }

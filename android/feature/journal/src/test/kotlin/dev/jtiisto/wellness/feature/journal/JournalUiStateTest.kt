@@ -13,6 +13,7 @@ import dev.jtiisto.wellness.core.data.journal.TargetDto
 import dev.jtiisto.wellness.core.data.journal.TargetSegmentDto
 import dev.jtiisto.wellness.core.data.journal.TrackerDto
 import dev.jtiisto.wellness.core.data.journal.TrackerType
+import dev.jtiisto.wellness.core.data.journal.journalNumberJson
 import dev.jtiisto.wellness.core.data.network.DateString
 import dev.jtiisto.wellness.core.data.sync.SyncStatus
 import dev.jtiisto.wellness.core.ui.theme.WeekMark
@@ -666,6 +667,95 @@ class JournalUiStateTest {
         assertNull(pendingNumericInput("", ""), "an untouched empty field")
     }
 
+    // ---- a checkbox tap with pending numeric text (Behavior rule 4, 2026-11-10) --
+
+    @Test
+    @DisplayName("ticking with a typed number writes the number with the tick — never the default")
+    fun tickWithATypedNumberKeepsIt() {
+        // The device finding: a tracker with a default and no entry, a number
+        // typed with the keyboard still up, then the tick. The tick seeded the
+        // default, the field re-keyed, and the typed number was gone.
+        val tap = checkboxCommit(withDefault, entry = null, checked = true, displayedNumber = 3.0, pendingInput = "5")
+        assertEquals(EntryPatch(value = number(5.0), completed = EntryField.Set(true)), tap.patch)
+        assertTrue(tap.numericWrote)
+        assertEquals(commitThenTap(withDefault, null, true, 3.0, "5"), null.after(tap.patch))
+    }
+
+    @Test
+    @DisplayName("a tap with pending text writes exactly what commit-then-tap would, as one patch")
+    fun tapWithPendingTextEqualsCommitThenTap() {
+        val five = EntryDto(value = JsonPrimitive(5), completed = false)
+        val fiveDone = EntryDto(value = JsonPrimitive(5), completed = true)
+        val threeDone = EntryDto(value = JsonPrimitive(3), completed = true)
+        val twoDone = EntryDto(value = JsonPrimitive(2), completed = true)
+        val cases = listOf(
+            // A typed number.
+            PendingTap("tick, default, typed", withDefault, null, true, 3.0, "5",
+                EntryPatch(value = number(5.0), completed = EntryField.Set(true)), wrote = true),
+            PendingTap("tick, no default, typed", noDefault, null, true, null, "5",
+                EntryPatch(value = number(5.0), completed = EntryField.Set(true)), wrote = true),
+            PendingTap("untick, default, typed", withDefault, threeDone, false, 3.0, "5",
+                EntryPatch(value = number(5.0), completed = EntryField.Set(false)), wrote = true),
+            PendingTap("untick, no default, typed", noDefault, twoDone, false, 2.0, "5",
+                EntryPatch(value = number(5.0), completed = EntryField.Set(false)), wrote = true),
+            // A typed number equal to the seed: the tick keeps it, the untick
+            // retracts it exactly as it would a stored seed.
+            PendingTap("tick, default, typed the seed", withDefault, five, true, 5.0, "3",
+                EntryPatch(value = number(3.0), completed = EntryField.Set(true)), wrote = true),
+            PendingTap("untick, default, typed the seed", withDefault, fiveDone, false, 5.0, "3",
+                EntryPatch(value = EntryField.Set(null), completed = EntryField.Set(false)), wrote = true),
+            // An emptied field is a pending clear.
+            PendingTap("tick, default, emptied", withDefault, five, true, 5.0, "",
+                EntryPatch(value = number(3.0), completed = EntryField.Set(true)), wrote = true),
+            PendingTap("tick, no default, emptied", noDefault, five, true, 5.0, "",
+                EntryPatch(value = EntryField.Set(null), completed = EntryField.Set(true)), wrote = true),
+            PendingTap("untick, default, emptied", withDefault, fiveDone, false, 5.0, "",
+                EntryPatch(value = EntryField.Set(null), completed = EntryField.Set(false)), wrote = true),
+            PendingTap("untick, no default, emptied", noDefault, fiveDone, false, 5.0, "",
+                EntryPatch(value = EntryField.Set(null), completed = EntryField.Set(false)), wrote = true),
+            // Text that will not parse: no commit, the plain tap.
+            PendingTap("tick, default, junk", withDefault, null, true, 3.0, "abc",
+                EntryPatch(value = number(3.0), completed = EntryField.Set(true)), wrote = false),
+            PendingTap("tick, no default, junk", noDefault, null, true, null, "1e",
+                EntryPatch.completed(true), wrote = false),
+            PendingTap("untick, default, junk", withDefault, threeDone, false, 3.0, "abc",
+                EntryPatch(value = EntryField.Set(null), completed = EntryField.Set(false)), wrote = false),
+            PendingTap("untick, no default, junk", noDefault, twoDone, false, 2.0, "abc",
+                EntryPatch.completed(false), wrote = false),
+            // Text that parses to the number already displayed: no commit.
+            PendingTap("tick, default, the displayed default respelled", withDefault, null, true, 3.0, "3.0",
+                EntryPatch(value = number(3.0), completed = EntryField.Set(true)), wrote = false),
+            PendingTap("tick, no default, the displayed number respelled", noDefault, five, true, 5.0, "5.0",
+                EntryPatch.completed(true), wrote = false),
+            PendingTap("untick, default, the displayed seed respelled", withDefault, threeDone, false, 3.0, "3.0",
+                EntryPatch(value = EntryField.Set(null), completed = EntryField.Set(false)), wrote = false),
+            PendingTap("untick, no default, the displayed number respelled", noDefault, twoDone, false, 2.0, "2.0",
+                EntryPatch.completed(false), wrote = false),
+            // Nothing pending: exactly today's checkbox.
+            PendingTap("tick, default, nothing pending", withDefault, null, true, 3.0, null,
+                EntryPatch(value = number(3.0), completed = EntryField.Set(true)), wrote = false),
+            PendingTap("tick, no default, nothing pending", noDefault, null, true, null, null,
+                EntryPatch.completed(true), wrote = false),
+            PendingTap("untick, default, nothing pending", withDefault, threeDone, false, 3.0, null,
+                EntryPatch(value = EntryField.Set(null), completed = EntryField.Set(false)), wrote = false),
+            PendingTap("untick, no default, nothing pending", noDefault, twoDone, false, 2.0, null,
+                EntryPatch.completed(false), wrote = false),
+        )
+        for (case in cases) {
+            val tap = checkboxCommit(case.tracker, case.entry, case.checked, case.displayed, case.pending)
+            assertEquals(case.patch, tap.patch, case.name)
+            assertEquals(case.wrote, tap.numericWrote, "${case.name}: stamp")
+            assertEquals(
+                commitThenTap(case.tracker, case.entry, case.checked, case.displayed, case.pending),
+                case.entry.after(tap.patch),
+                "${case.name}: one patch lands where commit-then-tap does",
+            )
+            if (!case.wrote) {
+                assertEquals(checkboxPatch(case.tracker, case.entry, case.checked), tap.patch, "${case.name}: plain tap")
+            }
+        }
+    }
+
     @Test
     @DisplayName("the accumulator adds to what is displayed, allows negatives, ignores zero and junk")
     fun accumulator() {
@@ -722,6 +812,47 @@ class JournalUiStateTest {
     }
 
     // ---- fixtures --------------------------------------------------------------
+
+    private val withDefault = quantifiable("glasses", defaultValue = 3)
+    private val noDefault = quantifiable("pages")
+
+    private class PendingTap(
+        val name: String,
+        val tracker: TrackerDto,
+        val entry: EntryDto?,
+        val checked: Boolean,
+        val displayed: Double?,
+        val pending: String?,
+        val patch: EntryPatch,
+        val wrote: Boolean,
+    )
+
+    private fun number(value: Double): EntryField<JsonElement?> = EntryField.Set(journalNumberJson(value))
+
+    /** What `mergeEntry` makes of [patch]: a set field wins, an unchanged one keeps the stored column. */
+    private fun EntryDto?.after(patch: EntryPatch): EntryDto = EntryDto(
+        value = when (val value = patch.value) {
+            is EntryField.Set -> value.value
+            EntryField.Unchanged -> this?.value
+        },
+        completed = when (val completed = patch.completed) {
+            is EntryField.Set -> completed.value
+            EntryField.Unchanged -> this?.completed
+        },
+        lastModifiedAt = this?.lastModifiedAt,
+    )
+
+    /** The reference: the field's commit lands, then the tap reads the entry it left. */
+    private fun commitThenTap(
+        tracker: TrackerDto,
+        entry: EntryDto?,
+        checked: Boolean,
+        displayed: Double?,
+        pending: String?,
+    ): EntryDto {
+        val committed = pending?.let { numericCommitPatch(displayed, it) }?.let { entry.after(it) } ?: entry
+        return committed.after(checkboxPatch(tracker, committed, checked))
+    }
 
     private fun row(state: JournalUiState, id: String): TrackerRowState =
         state.groups.flatMap { it.trackers }.first { it.id == id }

@@ -164,9 +164,21 @@ class JournalViewModel(
 
     // ---- widget writes -----------------------------------------------------
 
-    fun setChecked(trackerId: String, checked: Boolean) {
+    /**
+     * A checkbox tap. [pendingInput] is the row's numeric text that no blur has
+     * committed yet (null when there is none), and [displayedNumber] the number
+     * it is compared against — the two the field's own commit would use. Both
+     * land in ONE write; see [checkboxCommit].
+     */
+    fun setChecked(
+        trackerId: String,
+        checked: Boolean,
+        displayedNumber: Double? = null,
+        pendingInput: String? = null,
+    ) {
         val tracker = trackerOf(trackerId) ?: return
-        write(trackerId, checkboxPatch(tracker, entryOf(trackerId), checked), stamp = false)
+        val tap = checkboxCommit(tracker, entryOf(trackerId), checked, displayedNumber, pendingInput)
+        write(trackerId, tap.patch, stamp = tap.numericWrote)
     }
 
     /**

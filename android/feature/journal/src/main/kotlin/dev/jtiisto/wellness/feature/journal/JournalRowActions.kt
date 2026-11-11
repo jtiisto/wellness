@@ -7,9 +7,9 @@ import dev.jtiisto.wellness.core.data.journal.TrackerDto
 import dev.jtiisto.wellness.core.data.journal.TrackerType
 import dev.jtiisto.wellness.core.data.journal.coerceNumericValue
 import dev.jtiisto.wellness.core.data.journal.defaultValueOrNull
-import dev.jtiisto.wellness.core.data.journal.isValueAbsent
 import dev.jtiisto.wellness.core.data.journal.journalNumberJson
 import dev.jtiisto.wellness.core.data.journal.trackerType
+import kotlinx.serialization.json.JsonElement
 
 /**
  * What each widget writes. Pure, so the awkward cases — the checkbox that also
@@ -38,21 +38,82 @@ import dev.jtiisto.wellness.core.data.journal.trackerType
  * assertion, and blanking the field is its retraction. The comparison is
  * numeric because the server round-trips integers as floats.
  */
-fun checkboxPatch(tracker: TrackerDto, entry: EntryDto?, checked: Boolean): EntryPatch {
+fun checkboxPatch(tracker: TrackerDto, entry: EntryDto?, checked: Boolean): EntryPatch =
+    checkboxPatchOver(tracker, entry?.value, checked)
+
+/**
+ * The checkbox rules over the entry's stored value alone — the only part of
+ * the entry they read — so [checkboxCommit] can apply them to the value a
+ * pending numeric commit is about to leave behind. Null is ABSENT (no row, or
+ * SQL NULL); an explicitly stored JsonNull is a value and never gets the seed.
+ */
+private fun checkboxPatchOver(tracker: TrackerDto, storedValue: JsonElement?, checked: Boolean): EntryPatch {
     if (!checked) {
         val seed = seededDefault(tracker)
-        return if (seed != null && seed == coerceNumericValue(entry?.value)) {
+        return if (seed != null && seed == coerceNumericValue(storedValue)) {
             EntryPatch(value = EntryField.Set(null), completed = EntryField.Set(false))
         } else {
             EntryPatch.completed(false)
         }
     }
-    if (!entry.isValueAbsent()) return EntryPatch.completed(true)
+    if (storedValue != null) return EntryPatch.completed(true)
     val default = seededDefault(tracker) ?: return EntryPatch.completed(true)
     return EntryPatch(
         value = EntryField.Set(journalNumberJson(default)),
         completed = EntryField.Set(true),
     )
+}
+
+/**
+ * What a checkbox tap writes, and whether that write carries a numeric commit.
+ *
+ * [numericWrote] is the stamp's question: "last updated" belongs to the number,
+ * so the write stamps when a pending commit went into it and never for the
+ * checkbox part alone.
+ */
+data class CheckboxWrite(val patch: EntryPatch, val numericWrote: Boolean)
+
+/**
+ * A checkbox tap while the row's numeric field may still hold typed text.
+ *
+ * The toggle takes no focus on a touch tap, so the field never blurs and its
+ * text is still local when the tick lands. Ticking on its own then either
+ * marked the entry done with no value, or — on a tracker with a default —
+ * seeded the default, which re-keyed the field and silently replaced the typed
+ * number (device-found, 2026-11-10). The tap therefore writes what "commit,
+ * then tap" would have written: [pendingInput] goes through
+ * [numericCommitPatch] against [displayedNumber], the checkbox rules read the
+ * value as that commit leaves it, and the two become one patch so
+ * `mergeEntry` lands them atomically.
+ *
+ * [pendingInput] is [pendingNumericInput]'s answer (null when the field holds
+ * nothing typed). Input the commit would ignore — unparseable, or the number
+ * already displayed — is no commit at all, and the tap is the plain
+ * [checkboxPatch].
+ */
+fun checkboxCommit(
+    tracker: TrackerDto,
+    entry: EntryDto?,
+    checked: Boolean,
+    displayedNumber: Double?,
+    pendingInput: String?,
+): CheckboxWrite {
+    val numeric = pendingInput?.let { numericCommitPatch(displayedNumber, it) }
+        ?: return CheckboxWrite(checkboxPatch(tracker, entry, checked), numericWrote = false)
+    val committedValue = numeric.value.valueOr(entry?.value)
+    val box = checkboxPatchOver(tracker, committedValue, checked)
+    return CheckboxWrite(numeric.then(box), numericWrote = true)
+}
+
+/** [later] applied over this patch: a field it sets wins, one it leaves keeps ours. */
+private fun EntryPatch.then(later: EntryPatch): EntryPatch = EntryPatch(
+    value = if (later.value is EntryField.Set) later.value else value,
+    completed = if (later.completed is EntryField.Set) later.completed else completed,
+)
+
+private fun <T> EntryField<T>.valueOr(stored: T): T = when (this) {
+    is EntryField.Set -> value
+    EntryField.Unchanged -> stored
 }
 
 /** The value a tick would seed: quantifiable's default, evaluation's default-or-midpoint. */

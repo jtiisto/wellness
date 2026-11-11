@@ -77,7 +77,7 @@ class CommitOnDisposeTest {
         val committed = mutableListOf<String>()
 
         composition.setContent {
-            if (present) CommitOnDispose(key = "protein", text = text, seededText = "") { committed += it }
+            if (present) CommitOnDispose(key = "protein", text = { text }, seededText = "") { committed += it }
         }
         text = "125"
         recompose()
@@ -95,7 +95,7 @@ class CommitOnDisposeTest {
         val committed = mutableListOf<String>()
 
         composition.setContent {
-            if (present) CommitOnDispose(key = "protein", text = "7", seededText = "7") { committed += it }
+            if (present) CommitOnDispose(key = "protein", text = { "7" }, seededText = "7") { committed += it }
         }
         present = false
         recompose()
@@ -110,7 +110,7 @@ class CommitOnDisposeTest {
         val committed = mutableListOf<String>()
 
         composition.setContent {
-            if (present) CommitOnDispose(key = "protein", text = text, seededText = "7") { committed += it }
+            if (present) CommitOnDispose(key = "protein", text = { text }, seededText = "7") { committed += it }
         }
         text = "125"
         recompose()
@@ -130,7 +130,7 @@ class CommitOnDisposeTest {
         val committed = mutableListOf<String>()
 
         composition.setContent {
-            CommitOnDispose(key = "protein", text = text, seededText = "") { committed += it }
+            CommitOnDispose(key = "protein", text = { text }, seededText = "") { committed += it }
         }
         text = "90"
         recompose()
@@ -150,7 +150,7 @@ class CommitOnDisposeTest {
             // Recreated every recomposition, as the screen's lambda is — it
             // captures the row as it stands, so the stale one must never run.
             val label = target
-            if (present) CommitOnDispose(key = "protein", text = "125", seededText = "") { committed += "$label:$it" }
+            if (present) CommitOnDispose(key = "protein", text = { "125" }, seededText = "") { committed += "$label:$it" }
         }
         target = "second"
         recompose()
@@ -158,5 +158,42 @@ class CommitOnDisposeTest {
         present = false
         recompose()
         assertEquals(listOf("second:125"), committed)
+    }
+
+    // ---- disposal before the reset has recomposed (Codex review, 2026-11-11) ----
+
+    @Test
+    @DisplayName("a reset that has not recomposed yet still counts: disposal writes nothing a second time")
+    fun resetThenDisposeWithoutRecomposition() = compositionTest {
+        var text by mutableStateOf("5")
+        val committed = mutableListOf<String>()
+
+        composition.setContent {
+            CommitOnDispose(key = "glasses", text = { text }, seededText = "5") { committed += it }
+        }
+        text = "3"
+        recompose()
+
+        // The checkbox (or the blur) hands "3" to its own write and resets the
+        // text to the seed of the composition it ran in — and the row goes
+        // before anything recomposes. The seed the effect holds is that same
+        // composition's, so the live text must compare equal to it.
+        text = "5"
+        composition.dispose()
+        assertEquals(emptyList<String>(), committed, "the tap's write was the only one")
+    }
+
+    @Test
+    @DisplayName("text typed but not yet recomposed is committed once at disposal")
+    fun typeThenDisposeWithoutRecomposition() = compositionTest {
+        var text by mutableStateOf("5")
+        val committed = mutableListOf<String>()
+
+        composition.setContent {
+            CommitOnDispose(key = "glasses", text = { text }, seededText = "5") { committed += it }
+        }
+        text = "8"
+        composition.dispose()
+        assertEquals(listOf("8"), committed, "read live, not the text of the last composition")
     }
 }
