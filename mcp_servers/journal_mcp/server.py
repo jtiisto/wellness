@@ -51,7 +51,7 @@ schedule adherence and trends. Read-only.
   counts as no entry.
 - Schedules, polarity and targets have data epochs: read the guide's Data
   epochs before comparing across them.
-- Full guide: resource file://journal_data_guide.
+- Full guide: resource file://journal_data_guide/.
 """
 
 
@@ -316,11 +316,12 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
         trackers, entries or find patterns.
         ONLY SELECT and WITH queries are allowed, for security.
         Unsure of column names? Call get_table_details(table_name); do not guess.
-        Trackers are soft-deleted (filter deleted = 0). tracker_id is a UUID, so
-        same-named re-created trackers are distinct rows.
+        Trackers are soft-deleted (deleted = 1). Filter deleted = 0 only for the
+        current UI view, never for history. tracker_id is a UUID, so same-named
+        re-created trackers are distinct rows.
 
         Sample queries:
-        - All trackers: SELECT id, name, category, type FROM trackers WHERE deleted = 0
+        - All trackers: SELECT id, name, category, type, deleted FROM trackers
         - Entries for a date: SELECT * FROM entries WHERE date = '2030-01-22'
         - Join trackers and entries: SELECT t.name, e.date, e.value, e.completed FROM entries e JOIN trackers t ON e.tracker_id = t.id
 

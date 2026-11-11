@@ -71,6 +71,10 @@ on the watch, which this database knows nothing about. No third case.
   says which and decides how to analyse the session.
 - guided: the guide recorded the timeline actually ridden; that recording IS
   the plan. Do not look for a plan elsewhere and do not supply one.
+- A capture usually spans the whole workout; the guided window is the ride
+  only, and the report's set_events are cropped to it. For the strength
+  portion (set markers, rest, restart HR) call
+  get_aligned_timeseries(session_id, whole_capture=true).
 - unguided: nothing recorded; the result covers the whole capture with no
   RECORDED structure. A known interval plan is matched with get_vo2_summary.
 

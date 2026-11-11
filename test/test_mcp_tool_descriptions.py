@@ -48,7 +48,7 @@ from hr_mcp.config import MCPConfig as HrConfig
 from hr_mcp.server import create_mcp_server as create_hr_server
 from journal_mcp.config import MCPConfig as JournalConfig
 from journal_mcp.server import create_mcp_server as create_journal_server
-from mcp_tools import list_tools, server_instructions
+from mcp_tools import list_tools, resource_uris, server_instructions
 from modules import coach, hr, journal
 from modules.db import DbAccessor
 
@@ -94,6 +94,8 @@ HR_RULES_IN_INSTRUCTIONS = [
     "not worth mentioning",
     "never by a clock",
     "needs_exercise_key",
+    "whole_capture",
+    "spans the whole workout",
 ]
 HR_RULES_ON_EACH_TOOL = [
     "THE TWO CASES:",
@@ -103,6 +105,12 @@ HR_RULES_ON_EACH_TOOL = [
     "Garmin/watch",
     "not worth mentioning",
 ]
+
+# `file://` resources each server's instructions name. Pinned, so the resource
+# test cannot pass on instructions that name nothing.
+RESOURCES_NAMED = {"journal": 1, "coach": 2, "hr": 0}
+# Captures a trailing slash, never a sentence's final period.
+_RESOURCE_URI = re.compile(r"file://[A-Za-z0-9_\-/]+")
 
 _ARGS_HEADING = re.compile(r"^Args:$", re.MULTILINE)
 _ARGS_ENTRY = re.compile(r"^(\w+)(\s*\([^)]*\))?:(.*)$")
@@ -271,6 +279,18 @@ class TestServerInstructions:
         assert length <= MAX_INSTRUCTIONS_CHARS, (
             f"instructions are {length} characters, over the client's "
             f"{MAX_INSTRUCTIONS_CHARS}-character cut")
+
+    @pytest.mark.parametrize("server", sorted(EXPECTED_COUNTS))
+    def test_named_resources_are_written_as_listed(self, servers, instructions, server):
+        """FastMCP lists `file://x` as `file://x/`, and Claude Code's resource
+        reader rejects the bare form: a pointer must match the listing exactly."""
+        named = _RESOURCE_URI.findall(instructions[server] or "")
+        assert len(named) == RESOURCES_NAMED[server], (
+            f"the instructions name {named}, expected {RESOURCES_NAMED[server]}")
+        listed = resource_uris(servers[server])
+        unlisted = [uri for uri in named if uri not in listed]
+        assert not unlisted, (
+            f"named but not listed verbatim: {unlisted}; the server lists {listed}")
 
     @pytest.mark.parametrize("marker", HR_RULES_IN_INSTRUCTIONS)
     def test_hr_instructions_carry_the_standing_rules(self, instructions, marker):

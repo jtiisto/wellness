@@ -1,4 +1,4 @@
-"""Reach the tools and instructions a FastMCP server exposes, through its public API."""
+"""Reach a FastMCP server's tools, instructions and resources through its public API."""
 
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
@@ -32,6 +32,23 @@ def server_instructions(mcp_server):
 
     with ThreadPoolExecutor(max_workers=1) as pool:
         return pool.submit(asyncio.run, handshake()).result()
+
+
+def resource_uris(mcp_server):
+    """Return the URI strings `mcp_server` lists as resources, in listing order.
+
+    Read through an in-memory `fastmcp.Client` (`mode="legacy"`, as in
+    `server_instructions`), so each URI is the form a client receives. Same
+    worker-thread pattern as `list_tools`.
+    """
+    from fastmcp import Client
+
+    async def listing():
+        async with Client(mcp_server, mode="legacy") as client:
+            return [str(resource.uri) for resource in await client.list_resources()]
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(asyncio.run, listing()).result()
 
 
 def extract_tools(mcp_server):

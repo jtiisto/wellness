@@ -80,8 +80,8 @@ analyze workout history and exercise progress.
 - Timing (rounds, work/rest seconds) goes on the block for circuit/power
   blocks and a multi-station interval block; a standalone interval exercise
   in a cardio block may carry it on the exercise.
-- Guides: resources file://coach_plan_guide and
-  file://exercise_registry_summary.
+- Guides: resources file://coach_plan_guide/ and
+  file://exercise_registry_summary/.
 """
 
 
