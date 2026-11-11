@@ -49,7 +49,7 @@ from hr_mcp.server import create_mcp_server as create_hr_server
 from journal_mcp.config import MCPConfig as JournalConfig
 from journal_mcp.server import create_mcp_server as create_journal_server
 from mcp_tools import list_tools, resource_uris, server_instructions
-from modules import coach, hr, journal
+from modules import coach, coach_plans, hr, journal
 from modules.db import DbAccessor
 
 EXPECTED_TOOLS = {
@@ -259,6 +259,24 @@ class TestToolDescriptions:
             f"description is {length} characters, over the client's "
             f"{MAX_DESCRIPTION_CHARS}-character cut: move a standing rule to the "
             "server's instructions or tighten the wording")
+
+    def test_update_exercise_names_every_segment_key_and_role(self, listed_tools):
+        """The `updates` text is the only coach docstring that lists segment
+        keys; a key or role the server accepts but its `segments` entry omits is
+        one the model never writes. Only the text from that entry on is
+        searched, so a word elsewhere in `updates` cannot stand in for it."""
+        listed = listed_tools["coach"]["update_exercise"]
+        text = listed.parameters["properties"]["updates"].get("description") or ""
+        marker = "`segments`:"
+        assert marker in text, (
+            f"update_exercise `updates` has no {marker!r} entry to check")
+        segments = text[text.index(marker):]
+        names = coach_plans.SEGMENT_KEYS + coach_plans.SEGMENT_ROLES
+        missing = [n for n in names
+                   if not re.search(rf"\b{re.escape(n)}\b", segments)]
+        assert not missing, (
+            f"update_exercise `updates` does not name segment key/role {missing}: "
+            "add it to the `segments` entry")
 
 
 _HR_TOOLS = [pytest.param(tool, id=f"hr:{tool}") for tool in EXPECTED_TOOLS["hr"]]

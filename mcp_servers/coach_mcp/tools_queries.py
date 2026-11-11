@@ -32,9 +32,10 @@ class QueryTools:
 
         Result: list of logs with date, exercise completion data and, when
         available, pre/post workout stats (readiness metrics, recovery data,
-        etc.). "off_plan": true = recorded on a day with no workout plan (an
-        extra session, e.g. ad-hoc Zone 2); treat it as additional volume, not
-        plan adherence.
+        etc.). "off_plan": true marks extra work; treat it as additional
+        volume, not plan adherence. On a log: logged when the day had no workout
+        plan. On an entry in `log`: not a planned exercise, on a day with no
+        plan or an ad-hoc extra (e.g. `extra_zone2`) on a planned day.
 
         Args:
             start_date: Start date (YYYY-MM-DD)
@@ -74,8 +75,9 @@ class QueryTools:
         Summary statistics of workout plans and completed logs.
 
         Result: planned vs completed workouts, exercise counts and off-plan
-        activity (`extra_sessions` / `extra_session_dates`: sessions logged on
-        days with no plan; they never count toward the completion rates).
+        activity (`extra_sessions` / `extra_session_dates`: days with extra work
+        logged, on a day with no plan or as an ad-hoc extra on a planned day;
+        extra work never counts toward the completion rates).
 
         Args:
             days: Number of recent days to analyze (max 365, default: 30)

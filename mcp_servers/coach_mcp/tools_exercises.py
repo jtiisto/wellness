@@ -51,8 +51,9 @@ class ExerciseTools:
                 Already-logged rows are never rewritten; they keep the exposure
                 they were logged with.
                 `segments`: the cardio target-HR timeline, a flat ordered list of
-                {duration_sec, hr_min?, hr_max?, label?}; `duration`/`interval`
-                exercises only; None/[] clears it.
+                {duration_sec, hr_min?, hr_max?, label?, role?}; `role`: warmup,
+                work or cooldown, absent = work; `duration`/`interval` exercises
+                only; None/[] clears it.
         """
         # Map update keys to column names
         column_map = {
@@ -452,7 +453,8 @@ class ExerciseTools:
         join needed.
 
         Result: exercise info and the list of logged sessions, with set details
-        grouped by date.
+        grouped by date. "off_plan": true on a session = extra work, not a
+        planned exercise.
 
         Args:
             exercise_slug: Canonical exercise slug (e.g., "kb_goblet_squat")
