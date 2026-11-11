@@ -20,6 +20,7 @@ from coach_mcp.server import (
     _transform_block_to_exercises,
     create_mcp_server,
 )
+from mcp_tools import extract_tools
 
 
 # ==================== Phase 3: shared-package import boundary ====================
@@ -608,14 +609,6 @@ class TestTransformBlockPlan:
 # ==================== Unit 2: Read Tools Integration Tests ====================
 
 
-def _extract_tools(mcp_server):
-    """Extract tool functions from MCP server by name."""
-    tools = {}
-    for tool in mcp_server._tool_manager._tools.values():
-        tools[tool.fn.__name__] = tool.fn
-    return tools
-
-
 @pytest.mark.integration
 class TestReadTools:
     """Tests for read-only coach MCP tools against a seeded database."""
@@ -625,7 +618,7 @@ class TestReadTools:
         self.seed = coach_seeded_database
         config = MCPConfig(db_path=tmp_coach_db)
         mcp = create_mcp_server(config)
-        self.tools = _extract_tools(mcp)
+        self.tools = extract_tools(mcp)
 
     def test_get_workout_plan_returns_seeded_plans(self):
         today = self.seed["dates"][0]
@@ -769,7 +762,7 @@ class TestOffPlanSessions:
 
         config = MCPConfig(db_path=tmp_coach_db)
         mcp = create_mcp_server(config)
-        self.tools = _extract_tools(mcp)
+        self.tools = extract_tools(mcp)
 
     def test_summary_reports_extra_separately(self):
         result = self.tools["get_workout_summary"](days=30)
@@ -953,7 +946,7 @@ class TestWriteTools:
         self.db_path = tmp_coach_db
         config = MCPConfig(db_path=tmp_coach_db)
         mcp = create_mcp_server(config)
-        self.tools = _extract_tools(mcp)
+        self.tools = extract_tools(mcp)
 
     def _make_plan(self, **overrides):
         """Build a minimal valid plan dict."""
@@ -2098,7 +2091,7 @@ class TestSearchExercises:
         self.db_path = tmp_coach_db
         config = MCPConfig(db_path=tmp_coach_db)
         mcp = create_mcp_server(config)
-        self.tools = _extract_tools(mcp)
+        self.tools = extract_tools(mcp)
         # Seed the exercises table by creating a plan via MCP tool
         plan = {
             "day_name": "Search Test",
@@ -2157,7 +2150,7 @@ class TestGetExerciseHistory:
         self.db_path = tmp_coach_db
         config = MCPConfig(db_path=tmp_coach_db)
         mcp = create_mcp_server(config)
-        self.tools = _extract_tools(mcp)
+        self.tools = extract_tools(mcp)
         # Seed an exercise into the registry via set_workout_plan
         plan = {
             "day_name": "History Test",
@@ -2241,7 +2234,7 @@ class TestExerciseHistoryExposure:
         self.client = client
         config = MCPConfig(db_path=tmp_coach_db)
         mcp = create_mcp_server(config)
-        self.tools = _extract_tools(mcp)
+        self.tools = extract_tools(mcp)
 
         # One movement, two exposures across the week (they share a canonical
         # slug on purpose) plus an entry carrying none — the three shapes a
@@ -2453,7 +2446,7 @@ class TestRemoveLoggedExercise:
         self.db_path = tmp_coach_db
         config = MCPConfig(db_path=tmp_coach_db)
         mcp = create_mcp_server(config)
-        self.tools = _extract_tools(mcp)
+        self.tools = extract_tools(mcp)
 
     def _plan_with_logged_exercise(self):
         """Create a plan and log a workout against its exercise; return the
@@ -2530,7 +2523,7 @@ class TestMoveWorkoutPlan:
         self.db_path = tmp_coach_db
         config = MCPConfig(db_path=tmp_coach_db)
         mcp = create_mcp_server(config)
-        self.tools = _extract_tools(mcp)
+        self.tools = extract_tools(mcp)
 
     def _plan(self, day_name="Push"):
         return {

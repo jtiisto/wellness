@@ -12,6 +12,7 @@ a formula and anchored in 2030: nothing here is transcribed from a capture.
 """
 
 import ast
+import asyncio
 import hashlib
 import os
 import sqlite3
@@ -36,6 +37,7 @@ from hr_analysis.quality import classify, rr_coverage
 from hr_analysis.hr import time_weighted_mean_hr
 from modules.db import DbAccessor
 from modules.hr import init_database
+from mcp_tools import extract_tools
 
 # 2030-01-01T00:00:00Z. Far-future on purpose: a plausible *past* epoch-ms
 # anchor in a public repo invites the question of whether it came from a real
@@ -218,11 +220,6 @@ def guided_db(empty_hr_db):
 @pytest.fixture
 def gdb(guided_db):
     return DatabaseManager(MCPConfig.from_db_path(guided_db))
-
-
-def _extract_tools(mcp_server):
-    """Extract tool functions from an MCP server by name."""
-    return {tool.fn.__name__: tool.fn for tool in mcp_server._tool_manager._tools.values()}
 
 
 # ==================== Unit: argument parsing ====================
@@ -1087,7 +1084,34 @@ class TestConfig:
 @pytest.mark.integration
 class TestServerRegistration:
     def test_registers_the_five_tools(self, hr_db_path):
-        tools = _extract_tools(create_mcp_server(MCPConfig.from_db_path(hr_db_path)))
+        tools = extract_tools(create_mcp_server(MCPConfig.from_db_path(hr_db_path)))
+        assert set(tools) == {
+            "list_sessions",
+            "get_session_report",
+            "get_latest_session_report",
+            "get_aligned_timeseries",
+            "get_vo2_summary",
+        }
+
+    def test_extracts_the_tools_inside_a_running_event_loop(self, hr_db_path):
+        """The browser tests leave a loop running on the main thread (Playwright's
+        sync API); `extract_tools` must still list the tools there, not raise.
+
+        A sync test on purpose: an `async def` test cannot run at all once
+        pytest-playwright has (see `_run_async` in test/analysis/test_server.py).
+        """
+        mcp = create_mcp_server(MCPConfig.from_db_path(hr_db_path))
+
+        async def inside_a_running_loop():
+            asyncio.get_running_loop()
+            return extract_tools(mcp)
+
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            tools = asyncio.run(inside_a_running_loop())
+        else:  # the browser tests already left one running in this thread
+            tools = extract_tools(mcp)
         assert set(tools) == {
             "list_sessions",
             "get_session_report",
@@ -1102,7 +1126,7 @@ class TestServerRegistration:
         A five-tool registration block is copy-paste shaped: a wrapper handed
         the wrong argument, or pointed at its neighbour's implementation, is
         invisible to tests that call `tools.py` directly."""
-        tools = _extract_tools(create_mcp_server(MCPConfig.from_db_path(hr_db_path)))
+        tools = extract_tools(create_mcp_server(MCPConfig.from_db_path(hr_db_path)))
 
         assert tools["list_sessions"](limit=1)[0]["session_id"] == "vo2-session"
         assert tools["get_session_report"]("session-1")["raw_capture_window"]["beats"] == 420
@@ -1116,7 +1140,7 @@ class TestServerRegistration:
         """The disambiguation argument is copy-paste shaped across four
         wrappers — one that dropped it would silently ask the caller a question
         they had already answered."""
-        tools = _extract_tools(create_mcp_server(MCPConfig.from_db_path(guided_db)))
+        tools = extract_tools(create_mcp_server(MCPConfig.from_db_path(guided_db)))
 
         for name, call in (
             ("get_session_report", lambda: tools["get_session_report"](
@@ -1135,7 +1159,7 @@ class TestServerRegistration:
     def test_starts_without_a_database(self, tmp_path, monkeypatch):
         """Creating the server must not require a capture to have happened."""
         monkeypatch.setenv("HR_DB_PATH", str(tmp_path / "hr.db"))
-        tools = _extract_tools(create_mcp_server())
+        tools = extract_tools(create_mcp_server())
         with pytest.raises(HrDataUnavailable):
             tools["list_sessions"]()
         assert not (tmp_path / "hr.db").exists()

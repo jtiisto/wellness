@@ -2,7 +2,7 @@ fastapi>=0.104.0
 uvicorn[standard]>=0.24.0
 pydantic>=2.0.0
 httpx>=0.27.0
-fastmcp>=2.0.0,<3.0.0  # the MCP tests read FastMCP 2.x internals (_tool_manager), gone in 3.x
+fastmcp>=4.0.0,<5.0.0  # a new major is adopted deliberately: the wire contract MCP clients see is re-checked on a major
 
 # HR analysis CLI (src/hr_analysis) — not imported by the server
 numpy>=1.26.0

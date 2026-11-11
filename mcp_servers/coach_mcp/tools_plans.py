@@ -37,14 +37,12 @@ class PlanTools:
     ) -> List[Dict[str, Any]]:
         """WHEN TO USE: When you need to see what workouts are scheduled.
 
-        Retrieves workout plans for the specified date range.
+        Result: list of the plans in the date range, each with its date and full
+        plan structure (blocks and exercises).
 
         Args:
             start_date: Start date (YYYY-MM-DD)
             end_date: End date (YYYY-MM-DD)
-
-        Returns:
-            List of plans with date and full plan structure including blocks and exercises
         """
         try:
             results = self.db_manager.execute_query("""
@@ -76,40 +74,24 @@ class PlanTools:
     ) -> Dict[str, Any]:
         """WHEN TO USE: When creating or updating a workout plan for a specific date.
 
-        Creates or replaces the workout plan for the given date. Plans must use
-        block-based format with warmup/strength/cardio blocks containing exercises.
+        Creates or replaces the plan for the date. Block-based format required:
+        warmup/strength/cardio blocks containing exercises.
+
+        Result: success confirmation with the saved plan.
 
         Args:
             date: Target date (YYYY-MM-DD)
-            plan: Plan object with ``blocks`` array. Can be raw LLM format
-                  (exercises without id/type) or pre-transformed format.
-
-                Block format:
-                {
-                    "day_name": "Upper Body Strength",
-                    "location": "Gym",
-                    "phase": "Building",
-                    "blocks": [
-                        {
-                            "block_type": "warmup",
-                            "title": "Warmup",
-                            "exercises": [
-                                {"name": "Arm Circles", "reps": 10}
-                            ]
-                        },
-                        {
-                            "block_type": "strength",
-                            "title": "Main Lifts",
-                            "rest_guidance": "Rest 2-3 min",
-                            "exercises": [
-                                {"name": "Bench Press", "sets": 4, "reps": "6-8"}
-                            ]
-                        }
-                    ]
-                }
-
-        Returns:
-            Success confirmation with the saved plan
+            plan: Plan object with a ``blocks`` array; raw LLM format (exercises
+                without id/type) or pre-transformed format. Block format:
+                {"day_name": "Upper Body Strength", "location": "Gym",
+                 "phase": "Building",
+                 "blocks": [
+                  {"block_type": "warmup", "title": "Warmup",
+                   "exercises": [{"name": "Arm Circles", "reps": 10}]},
+                  {"block_type": "strength", "title": "Main Lifts",
+                   "rest_guidance": "Rest 2-3 min",
+                   "exercises": [{"name": "Bench Press", "sets": 4, "reps": "6-8"}]}
+                 ]}
         """
         # Validate date format
         try:
@@ -168,15 +150,14 @@ class PlanTools:
     ) -> Dict[str, Any]:
         """WHEN TO USE: When loading a complete training program with multiple workout dates.
 
-        Bulk ingests multiple workout plans at once.
+        Bulk-ingests many workout plans at once.
+
+        Result: ingestion summary with success/failure counts.
 
         Args:
             plans: Dictionary mapping dates (YYYY-MM-DD) to plan objects with blocks.
-            transform_blocks: If True, transforms raw LLM block format.
-                            Set to False if plans are already transformed.
-
-        Returns:
-            Summary of ingestion results with success/failure counts
+            transform_blocks: True transforms raw LLM block format; False if the
+                plans are already transformed.
         """
         results = {"success": [], "failed": [], "total": len(plans)}
 
@@ -231,18 +212,16 @@ class PlanTools:
 
     def delete_workout_plan(self, date: str) -> Dict[str, Any]:
         """WHEN TO USE: When removing a workout plan entirely for a specific date.
-        Only future/unlogged plans can be deleted. Plans with workout logs
-        attached CANNOT be deleted — this is by design to preserve training
-        history integrity.
 
-        Deletes the entire workout plan for the specified date.
-        CASCADE handles cleanup of blocks, exercises, and checklist items.
+        Deletes the whole plan for the date; CASCADE cleans up its blocks,
+        exercises and checklist items.
+        Only future/unlogged plans: a plan with workout logs attached CANNOT be
+        deleted, by design, to preserve training history integrity.
+
+        Result: confirmation of deletion.
 
         Args:
             date: Date of the plan to delete (YYYY-MM-DD)
-
-        Returns:
-            Confirmation of deletion
         """
         try:
             # Validate date format
@@ -304,30 +283,30 @@ class PlanTools:
         to_date: str,
         swap: bool = False
     ) -> Dict[str, Any]:
-        """WHEN TO USE: When rescheduling a planned workout to a different day
-        (or exchanging two days' plans with swap=true). One atomic call — do
-        NOT choreograph this as get + set + delete, which creates a new plan
-        identity and loses the original session row.
+        """WHEN TO USE: When rescheduling a planned workout to a different day (or
+        exchanging two days' plans with swap=true).
 
-        The plan keeps its identity: the session row and all of its blocks,
-        exercises, and checklist items move untouched — only the date, sync
-        stamp, and tombstones change.
+        One atomic call. Do NOT choreograph it as get + set + delete: that creates
+        a new plan identity and loses the original session row.
+        The plan keeps its identity: the session row and all its blocks,
+        exercises and checklist items move untouched; only the date, sync stamp
+        and tombstones change.
 
-        Guards: the source plan must exist and must not have been worked
-        (a workout log tied to it). An off-plan log on either date — an extra
-        Zone 2 session — never blocks a move; those belong to the date, not
-        the plan. If the target date already has a plan, the move is refused
-        unless swap=true, which exchanges the two plans atomically (both must
-        then be unworked).
+        Guards (when a move is refused):
+        - the source plan must exist and must not have been worked (a workout log
+          tied to it)
+        - an off-plan log on either date (e.g. an extra Zone 2 session) never
+          blocks a move; it belongs to the date, not the plan
+        - target date already has a plan: refused unless swap=true, which
+          exchanges the two plans atomically (both must then be unworked)
+
+        Result: confirmation with the moved/swapped day names.
 
         Args:
             from_date: Date of the plan to move (YYYY-MM-DD)
             to_date: Destination date (YYYY-MM-DD)
-            swap: Exchange the two days' plans when the target is occupied
-                  (error if the target has no plan)
-
-        Returns:
-            Confirmation with the moved/swapped day names
+            swap: Exchange the two days' plans when the target is occupied (error
+                if the target has no plan)
         """
         try:
             for label, value in (("from_date", from_date), ("to_date", to_date)):
@@ -464,14 +443,12 @@ class PlanTools:
     ) -> Dict[str, Any]:
         """WHEN TO USE: When updating plan metadata without changing exercises.
 
-        Updates plan-level fields like day_name, location, phase.
+        Result: the updated plan metadata.
 
         Args:
             date: Date of the plan (YYYY-MM-DD)
-            updates: Fields to update: day_name, location, phase, total_duration_min
-
-        Returns:
-            Updated plan metadata
+            updates: Plan-level fields to update: day_name, location, phase,
+                total_duration_min
         """
         column_map = {
             "day_name": "day_name",

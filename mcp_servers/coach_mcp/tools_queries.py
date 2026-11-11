@@ -27,19 +27,18 @@ class QueryTools:
     ) -> List[Dict[str, Any]]:
         """WHEN TO USE: When analyzing workout history or performance trends.
 
-        Retrieves completed workout logs for the specified date range.
-        This is READ-ONLY - logs are created by the user through the PWA.
+        Completed workout logs for the date range. READ-ONLY: logs are created by
+        the user through the PWA.
+
+        Result: list of logs with date, exercise completion data and, when
+        available, pre/post workout stats (readiness metrics, recovery data,
+        etc.). "off_plan": true = recorded on a day with no workout plan (an
+        extra session, e.g. ad-hoc Zone 2); treat it as additional volume, not
+        plan adherence.
 
         Args:
             start_date: Start date (YYYY-MM-DD)
             end_date: End date (YYYY-MM-DD)
-
-        Returns:
-            List of logs with date, exercise completion data, and
-            pre/post workout stats (readiness metrics, recovery data, etc.)
-            when available. A log with "off_plan": true was recorded on a
-            day with no workout plan (an extra session, e.g. ad-hoc Zone 2)
-            — treat it as additional volume, not plan adherence.
         """
         try:
             results = self.db_manager.execute_query("""
@@ -72,16 +71,14 @@ class QueryTools:
     def get_workout_summary(self, days: int = 30) -> Dict[str, Any]:
         """WHEN TO USE: When you want a quick overview of workout activity.
 
-        Provides summary statistics about workout plans and completed logs.
+        Summary statistics of workout plans and completed logs.
+
+        Result: planned vs completed workouts, exercise counts and off-plan
+        activity (`extra_sessions` / `extra_session_dates`: sessions logged on
+        days with no plan; they never count toward the completion rates).
 
         Args:
             days: Number of recent days to analyze (max 365, default: 30)
-
-        Returns:
-            Summary including planned vs completed workouts, exercise counts,
-            and off-plan activity (`extra_sessions` / `extra_session_dates` —
-            sessions logged on days with no plan; they never count toward the
-            completion rates).
         """
         if days > 365:
             raise ValueError("Days cannot exceed 365")
@@ -98,14 +95,11 @@ class QueryTools:
     ) -> List[str]:
         """WHEN TO USE: When you need to see which dates have plans scheduled.
 
-        Returns a list of dates that have workout plans.
+        Result: list of dates (YYYY-MM-DD) that have workout plans.
 
         Args:
             start_date: Start date (YYYY-MM-DD), defaults to today
             end_date: End date (YYYY-MM-DD), defaults to 6 weeks from today
-
-        Returns:
-            List of dates (YYYY-MM-DD) that have plans
         """
         try:
             return coach_queries.list_scheduled_dates(

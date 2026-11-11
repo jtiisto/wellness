@@ -5,7 +5,7 @@
 - Python 3.11+ with `venv` and pip (on Ubuntu/Debian: `sudo apt install python3-venv`)
 - Node.js 18+ — the git hooks run the PWA's JS unit tests (`node --test test/js/*.test.js`); no npm packages are needed
 - Claude Code CLI (for the Analysis module)
-- FastMCP 2.x (in `requirements.txt`) for MCP servers
+- FastMCP 4.x (in `requirements.txt`) for MCP servers
 - NumPy (in `requirements.txt`) for the HR analysis CLI
 - matplotlib — **optional**, charts only (see below)
 
@@ -31,7 +31,7 @@ The hooks live in `githooks/` (tracked). `core.hooksPath` is per-clone local con
 pip install matplotlib
 ```
 
-`requirements.txt` states what the app needs; `constraints.txt` pins every package, transitive ones included, to the versions the full suite last passed with, so a fresh clone gets the same stack as the last green run. To upgrade, install without `-c`, run the full suite, and regenerate the pins from that venv:
+`requirements.txt` states what the app needs; `constraints.txt` pins every package, transitive ones included, to the versions the full suite last passed with, so a fresh clone gets the same stack as the last green run. To upgrade, install without `-c`, run the full suite, and regenerate the pins from that venv. To move a single package (a new FastMCP major, say), install into a fresh venv from a copy of `constraints.txt` with only the pins that conflict with the new range removed, so every other pin holds; then run the full suite and regenerate from that venv the same way:
 
 ```bash
 pip freeze --exclude-editable > constraints.txt
@@ -439,7 +439,7 @@ Chrome on Android identifies PWAs by scope on the same origin. If Wellness and S
 
 ### MCP server errors
 
-- Ensure FastMCP 2.x is installed: `pip install -r requirements.txt -c constraints.txt`
+- Ensure FastMCP 4.x is installed: `pip install -r requirements.txt -c constraints.txt`
 - Verify the database files exist in `data/` (they are created on first server start — except `hr.db`, which appears with the first captured heart-rate batch; the HR tools say so rather than failing)
 - Check that `cwd` in MCP config points to the `mcp_servers/` directory, not the individual server directory
 - Test a server directly: `cd mcp_servers && python3 -m journal_mcp`

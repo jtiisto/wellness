@@ -35,25 +35,24 @@ class ExerciseTools:
     ) -> Dict[str, Any]:
         """WHEN TO USE: When modifying a specific exercise within an existing plan.
 
-        Updates fields of a specific exercise without replacing the entire plan.
+        Updates fields of one exercise without replacing the entire plan.
+
+        Result: the updated exercise and a confirmation.
 
         Args:
             date: Date of the plan (YYYY-MM-DD)
             exercise_id: Exercise key (e.g., "ex_1", "warmup_0")
-            updates: Dictionary of fields to update. Can include:
-                     name, type, target_sets, target_reps, target_duration_min,
-                     guidance_note, items, hide_weight, show_time, tempo,
-                     target_rpe, target_load, exposure, segments
-                     (`exposure` is the identity key naming which recurring
-                     exposure of the movement this is; normalized to UPPER, and
-                     None/"" clears it. Already-logged rows are never rewritten —
-                     they keep the exposure they were logged with.)
-                     (`segments` is the cardio target-HR timeline — a flat
-                     ordered list of {duration_sec, hr_min?, hr_max?, label?};
-                     `duration`/`interval` exercises only, None/[] clears it.)
-
-        Returns:
-            Updated exercise and confirmation
+            updates: Fields to update, any of: name, type, target_sets,
+                target_reps, target_duration_min, guidance_note, items,
+                hide_weight, show_time, tempo, target_rpe, target_load, exposure,
+                segments.
+                `exposure`: identity key naming which recurring exposure of the
+                movement this is; normalized to UPPER; None/"" clears it.
+                Already-logged rows are never rewritten; they keep the exposure
+                they were logged with.
+                `segments`: the cardio target-HR timeline, a flat ordered list of
+                {duration_sec, hr_min?, hr_max?, label?}; `duration`/`interval`
+                exercises only; None/[] clears it.
         """
         # Map update keys to column names
         column_map = {
@@ -204,16 +203,15 @@ class ExerciseTools:
     ) -> Dict[str, Any]:
         """WHEN TO USE: When adding a new exercise to an existing workout plan.
 
-        Adds a new exercise to a specific block in the plan.
+        Adds the exercise to one block of the plan.
+
+        Result: confirmation with the updated exercise count.
 
         Args:
             date: Date of the plan (YYYY-MM-DD)
             exercise: Exercise object with required fields (id, name, type)
             block_position: Which block to add to (0-indexed). Default: 0.
             position: Index within the block (0 = beginning). None = append to end.
-
-        Returns:
-            Confirmation with updated exercise count
         """
         # Validate exercise
         required = ["id", "name", "type"]
@@ -353,15 +351,14 @@ class ExerciseTools:
     ) -> Dict[str, Any]:
         """WHEN TO USE: When removing an exercise from an existing workout plan.
 
-        Removes an exercise by ID from the specified plan. CASCADE handles
-        cleanup of associated checklist_items.
+        Removes the exercise by ID from the plan; CASCADE cleans up its
+        checklist_items.
+
+        Result: confirmation with the updated exercise count.
 
         Args:
             date: Date of the plan (YYYY-MM-DD)
             exercise_id: Exercise key to remove
-
-        Returns:
-            Confirmation with updated exercise count
         """
         try:
             with self.db_manager.transaction() as cursor:
@@ -424,17 +421,17 @@ class ExerciseTools:
     ) -> List[Dict[str, Any]]:
         """WHEN TO USE: When searching for exercises in the registry by name, equipment, or category.
 
-        Searches the canonical exercise registry by name (fuzzy), optionally
-        filtering by equipment or category. Returns matches with usage count.
+        Fuzzy name search over the canonical exercise registry, optionally
+        filtered by equipment or category.
+
+        Result: list of matches with slug, name, equipment, category and usage
+        count.
 
         Args:
             query: Search term for exercise name
             equipment: Filter by equipment (e.g., "kettlebell", "bodyweight", "dumbbell")
             category: Filter by category (e.g., "mobility", "cardio")
             limit: Max results to return (default 20)
-
-        Returns:
-            List of matching exercises with slug, name, equipment, category, and usage count
         """
         try:
             return coach_queries.search_exercises(
@@ -451,21 +448,20 @@ class ExerciseTools:
     ) -> Dict[str, Any]:
         """WHEN TO USE: When you want to see all logged sessions for a specific exercise across all dates.
 
-        Returns workout log history for a canonical exercise. Self-contained —
-        no plan join needed. Includes set details grouped by date.
+        Workout log history for one canonical exercise. Self-contained: no plan
+        join needed.
+
+        Result: exercise info and the list of logged sessions, with set details
+        grouped by date.
 
         Args:
             exercise_slug: Canonical exercise slug (e.g., "kb_goblet_squat")
             limit: Max sessions to return (default 30)
-            exposure: Optional exposure key (e.g., "HEAVY"). Several exposures
-                      of one movement share a canonical slug on purpose, so a
-                      filter returns only that exposure's chain. Input is
-                      normalized (`" heavy "` matches `"HEAVY"`). Omit it to get
-                      every entry, each carrying its own `exposure` — or none,
-                      for rows logged without one.
-
-        Returns:
-            Exercise info and list of logged sessions with set data
+            exposure: Optional exposure key (e.g., "HEAVY"). Several exposures of
+                one movement share a canonical slug on purpose, so a filter returns
+                only that exposure's chain. Input is normalized (`" heavy "`
+                matches `"HEAVY"`). Omit it to get every entry, each carrying its
+                own `exposure` (or none, for rows logged without one).
         """
         try:
             return coach_queries.exercise_history(

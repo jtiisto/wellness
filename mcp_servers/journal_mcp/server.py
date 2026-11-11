@@ -183,11 +183,11 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
     def explore_database_structure() -> Dict[str, Any]:
         """WHEN TO USE: When you need to understand what journal data is available.
 
-        This is your starting point for exploring journal data. Use this tool first
-        to see what tables are available before running specific queries.
+        Starting point for journal data: call first to see the available tables,
+        before running specific queries.
 
-        Returns:
-            Complete database structure with table descriptions and row counts
+        Result: the complete database structure, with table descriptions and row
+        counts.
         """
         try:
             tables_query = """
@@ -219,14 +219,13 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
     def get_table_details(table_name: str) -> Dict[str, Any]:
         """WHEN TO USE: When you need to see the structure and sample data of a specific table.
 
-        Use this after 'explore_database_structure' when you want to understand what columns
-        are available in a table and see examples of the actual data.
+        Use after explore_database_structure to see a table's columns and examples
+        of the actual data.
+
+        Result: the table's columns, data types and sample records.
 
         Args:
             table_name: Name of the table (e.g., 'trackers', 'entries')
-
-        Returns:
-            Table structure with columns, data types, and sample records
         """
         if not table_name or not table_name.strip():
             raise ValueError("Table name cannot be empty")
@@ -285,26 +284,23 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
     ) -> List[Dict[str, Any]]:
         """WHEN TO USE: When you need to get specific data using SQL queries.
 
-        This is the main tool for querying any data from the database. Use it to run SELECT queries
-        to analyze trackers, entries, or find patterns.
+        The main tool for querying any data: run SELECT queries to analyze
+        trackers, entries or find patterns.
+        ONLY SELECT and WITH queries are allowed, for security.
+        Unsure of column names? Call get_table_details(table_name); do not guess.
+        Trackers are soft-deleted (filter deleted = 0). tracker_id is a UUID, so
+        same-named re-created trackers are distinct rows.
 
-        IMPORTANT: Only SELECT and WITH queries are allowed for security.
+        Sample queries:
+        - All trackers: SELECT id, name, category, type FROM trackers WHERE deleted = 0
+        - Entries for a date: SELECT * FROM entries WHERE date = '2030-01-22'
+        - Join trackers and entries: SELECT t.name, e.date, e.value, e.completed FROM entries e JOIN trackers t ON e.tracker_id = t.id
 
-        If unsure of column names, call get_table_details(table_name); do not
-        guess. Trackers are soft-deleted (filter deleted = 0), and tracker_id is
-        a UUID — same-named re-created trackers are distinct rows.
+        Result: list of matching records as dicts.
 
         Args:
             query: SQL SELECT query
             params: Optional list of parameters for ? placeholders in query
-
-        Example queries:
-        - All trackers: "SELECT id, name, category, type FROM trackers WHERE deleted = 0"
-        - Entries for a date: "SELECT * FROM entries WHERE date = '2026-01-22'"
-        - Join trackers and entries: "SELECT t.name, e.date, e.value, e.completed FROM entries e JOIN trackers t ON e.tracker_id = t.id"
-
-        Returns:
-            List of matching records as dictionaries
         """
         if not query or not query.strip():
             raise ValueError("Query cannot be empty")
@@ -320,24 +316,22 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
     ) -> List[Dict[str, Any]]:
         """WHEN TO USE: When you want to see what trackers are available for journaling.
 
-        Lists trackers (habits, metrics, etc.) defined in the journal. Trackers can
-        be simple checkboxes or quantifiable values. Tracker IDs are UUIDs, so a
-        re-created tracker with the same display name as a deleted one is a
-        distinct row — set `include_deleted=True` to see both.
+        Lists the journal's trackers (habits, metrics, etc.): simple checkboxes or
+        quantifiable values. Tracker IDs are UUIDs, so a re-created tracker with a
+        deleted one's display name is a distinct row; include_deleted=True shows
+        both.
+
+        Result: list of trackers, each with `deleted` (bool) and `metadata` (dict
+        parsed from `meta_json`; may include `scheduleHistory`, the effective-dated
+        weekday schedule, and `polarity`; see the data guide). Entries of deleted
+        trackers stay queryable via get_entries or raw SQL: deletion is purely a
+        UI/sync-visibility flag.
 
         Args:
             category: Optional filter by category (e.g., 'Supplements', 'Habits')
-            include_deleted: When False (default), only active trackers. When True,
-                also returns soft-deleted trackers so historical entries can be
-                attributed to the right (possibly retired) tracker.
-
-        Returns:
-            List of trackers. Each item carries `deleted` as a bool and a
-            `metadata` dict parsed from `meta_json` — which may include
-            `scheduleHistory` (effective-dated weekday schedule) and `polarity`
-            (see the data guide). Entries belonging to deleted trackers are still
-            queryable via `get_entries` or raw SQL — the deletion is purely a
-            UI/sync-visibility flag.
+            include_deleted: False (default): only active trackers. True: also
+                soft-deleted trackers, so historical entries can be attributed to
+                the right (possibly retired) tracker.
         """
         try:
             query = """
@@ -402,22 +396,19 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
     ) -> List[Dict[str, Any]]:
         """WHEN TO USE: When you want to see journal entries for specific dates or trackers.
 
-        Retrieves journal entries with tracker information. Use this to see what was
-        tracked on specific days, analyze habits, or review progress. Entries
-        belonging to soft-deleted trackers are included — the `tracker_deleted`
-        field on each row flags them so analysis can distinguish "B12 (current)"
-        from "B12 (retired)" when the same name was reused with a different ID.
+        Journal entries with tracker information: what was tracked on given days,
+        habits, progress. Includes entries of soft-deleted trackers.
+
+        Result: list of entries with tracker name, date, value, completion status
+        and `tracker_deleted` (bool): true when the entry's tracker has since been
+        soft-deleted, so "B12 (current)" and "B12 (retired)" stay distinct when
+        the same name was reused with a different ID.
 
         Args:
             start_date: Start date in YYYY-MM-DD format (default: days ago from today)
             end_date: End date in YYYY-MM-DD format (default: today)
             tracker_name: Optional filter by tracker name (partial match supported)
             days: Number of days to look back if start_date not specified (default: 7)
-
-        Returns:
-            List of entries with tracker names, dates, values, completion status,
-            and a `tracker_deleted` boolean flagging entries whose tracker has
-            since been soft-deleted.
         """
         try:
             if not end_date:
@@ -458,17 +449,15 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
     def get_journal_summary(days: int = 30) -> Dict[str, Any]:
         """WHEN TO USE: When you want a quick overview of journal activity without writing SQL.
 
-        Provides summary statistics about journal entries and tracker usage over a period.
+        Summary statistics of journal entries and tracker usage over a period.
+
+        Result: total entries, completion rates, most used trackers, active days.
+        `completion_rate_percent` is entries-based: completed vs total *logged*
+        entries. It is NOT schedule adherence: it ignores a tracker's
+        `scheduleHistory` and does not count unlogged scheduled days as misses.
 
         Args:
             days: Number of recent days to analyze (max 365, default: 30)
-
-        Returns:
-            Summary including total entries, completion rates, most used trackers, and active days
-
-        Note: `completion_rate_percent` is entries-based — completed vs. total
-        *logged* entries. It is NOT schedule adherence and does not consider a
-        tracker's `scheduleHistory` or count unlogged scheduled days as misses.
         """
         if days > 365:
             raise ValueError("Days cannot exceed 365")
@@ -546,50 +535,51 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
         tracker_name: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """WHEN TO USE: to measure how well *scheduled* trackers were actually
-        followed over a period — the schedule-aware counterpart to
+        followed over a period; the schedule-aware counterpart to
         `get_journal_summary`'s entries-based completion rate.
 
-        For each day in the window this interprets the tracker's effective-dated
-        weekday schedule (`scheduleHistory`, stored in the canonical
-        `schedule_json` column) to decide whether the tracker was scheduled, and
-        whether it was logged/done, then rolls that up per tracker.
-        `get_journal_summary` is unchanged and stays entries-based — completion
-        and adherence are separate axes.
+        Per day in the window: reads the tracker's effective-dated weekday schedule
+        (`scheduleHistory`, stored in the canonical `schedule_json` column) to
+        decide whether it was scheduled, and whether it was logged/done; then rolls
+        up per tracker. `get_journal_summary` is unchanged and stays entries-based:
+        completion and adherence are separate axes.
 
-        Window: defaults to the last `days` calendar days ending today
-        (inclusive — e.g. days=7 ends today and starts 6 days ago, matching the
-        PWA's 7-day dot row); override with `start_date` / `end_date`
-        (YYYY-MM-DD). Per tracker the start is clamped to its first-ever entry
-        date, so a tracker never accrues misses for days before it was first
-        used; a tracker with no entries at all, or whose first activity is
-        after the window, is omitted (nothing to measure). A tracker whose
-        entries all PRECEDE the window is still reported — an abandoned but
-        still-scheduled habit showing 0% is exactly what this tool exists to
-        surface. Deleted trackers are excluded.
+        Window (dates YYYY-MM-DD):
+        - default: the last `days` calendar days ending today, inclusive (days=7
+          = today and the 6 days before, matching the PWA's 7-day dot row)
+        - override with `start_date` / `end_date`
+        - per tracker, the start is clamped to its first-ever entry date: no
+          misses for days before it was first used
+        - omitted: a tracker with no entries, or whose first activity is after
+          the window (nothing to measure); deleted trackers
+        - still reported: a tracker whose entries all PRECEDE the window; an
+          abandoned but still-scheduled habit showing 0% is exactly what this tool
+          exists to surface
 
-        Polarity picks the headline metric (`metric_kind`): `positive` →
-        `adherence_rate`; `negative` → `avoidance_rate`; `neutral`/unspecified
-        → `coverage_rate` only. `coverage_rate` (logged/scheduled) is always
-        included. WITHOUT a target: the positive numerator is `done_days`
-        (`completed == 1`) and the negative numerator is scheduled−logged.
-        WITH a `targetHistory`: a targeted day is "done" when its VALUE meets
-        the in-effect target, and the rate numerator is `blended_met_days` —
-        on days before the target took effect it falls back to the untargeted
-        criterion (positive/neutral → checkbox, negative → no-entry avoided);
-        the result then also carries `target`, `target_met_days`, and
-        `target_partial_days` (targeted-day-only counts).
-        Off-schedule entries are excluded from the denominator and surfaced as
-        `off_schedule_entries`. Every rate is null when `scheduled_days` is 0.
+        Rates (polarity picks the headline, `metric_kind`):
+        - `positive` → `adherence_rate`; `negative` → `avoidance_rate`;
+          `neutral`/unspecified → `coverage_rate` only
+        - `coverage_rate` (logged/scheduled) is always included
+        - WITHOUT a target: positive numerator = `done_days` (`completed == 1`);
+          negative numerator = scheduled − logged
+        - WITH a `targetHistory`: a targeted day is "done" when its VALUE meets
+          the in-effect target; the rate numerator is `blended_met_days`. Days
+          before the target took effect fall back to the untargeted criterion
+          (positive/neutral → checkbox, negative → no-entry avoided). The result
+          then also carries `target`, `target_met_days` and `target_partial_days`
+          (targeted-day-only counts).
+        - off-schedule entries are excluded from the denominator and surfaced as
+          `off_schedule_entries`
+        - every rate is null when `scheduled_days` is 0
+
+        Result: one dict per tracker with scheduled/logged/done/missed day counts,
+        `off_schedule_entries`, `metric_kind` and the applicable rate(s).
 
         Args:
             days: Window length in days when start_date is omitted (max 366, default 30)
             start_date: Window start (YYYY-MM-DD); defaults to `days` before end_date
             end_date: Window end (YYYY-MM-DD); defaults to today
             tracker_name: Optional partial-match filter on tracker name
-
-        Returns:
-            One dict per tracker with scheduled/logged/done/missed day counts,
-            `off_schedule_entries`, `metric_kind`, and the applicable rate(s).
         """
         if days > 366:
             raise ValueError("Days cannot exceed 366")

@@ -18,7 +18,7 @@ version = "0.1.0"
 description = "MCP servers for the wellness coach, journal, and HR data (editable install only)"
 requires-python = ">=3.10"
 dependencies = [
-    "fastmcp>=2.0.0,<4.0.0",   # same range as the root requirements.txt
+    "fastmcp>=2.0.0,<5.0.0",   # wide on purpose: only FastMCP(name), .tool(), .resource(), .run() are used, the same in 2.x-4.x; the hosting venv picks the version
     "fastapi>=0.104.0",        # modules.coach_* / modules.journal raise fastapi.HTTPException
     "pydantic>=2.0.0",
     "numpy>=1.26.0",           # hr_mcp imports src/hr_analysis

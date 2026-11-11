@@ -9,6 +9,7 @@ import pytest
 from journal_mcp.server import QueryValidator, create_mcp_server
 from journal_mcp.config import MCPConfig
 from modules.db import get_db
+from mcp_tools import extract_tools
 
 
 # ==================== Unit Tests ====================
@@ -108,10 +109,7 @@ class TestJournalMCPTools:
         config = MCPConfig(db_path=tmp_journal_db)
         mcp = create_mcp_server(config)
 
-        # Extract the registered tool functions from the MCP server
-        self.tools = {}
-        for tool in mcp._tool_manager._tools.values():
-            self.tools[tool.fn.__name__] = tool.fn
+        self.tools = extract_tools(mcp)
 
     def test_explore_database_structure(self):
         result = self.tools["explore_database_structure"]()

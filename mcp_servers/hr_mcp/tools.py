@@ -340,8 +340,8 @@ def _build_timeseries(
             # Lean row: the curve itself. The RR-quality detail is ~2/3 of
             # every row's bytes and pushed hour-long sessions past the tool
             # result limit. timestamp_ms/duration_s reconstruct from the
-            # envelope (start_ms + offset_s, resolution_s); `gap` appears only
-            # when true so an honest hole still shows.
+            # envelope (start_ms + 1000 * offset_s, resolution_s); `gap` appears
+            # only when true so an honest hole still shows.
             row: dict[str, Any] = {
                 "offset_s": round((start - t0) / 1000.0, 1),
                 "hr_mean": None if hr_weighted is None else round(hr_weighted, 1),

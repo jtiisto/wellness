@@ -46,8 +46,8 @@ class BlockTools:
         block_position: int,
         updates: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """WHEN TO USE: When changing a block's settings — its type, title, total
-        duration, rest guidance, or circuit/interval timing — without rebuilding
+        """WHEN TO USE: When changing a block's settings (its type, title, total
+        duration, rest guidance, or circuit/interval timing) without rebuilding
         the whole plan.
 
         Patches block-level fields of one block in an existing plan. Block-level
@@ -55,15 +55,14 @@ class BlockTools:
         for circuit and interval blocks edit it on the block, not on the
         individual exercises.
 
+        Result: the updated block, reassembled from the database.
+
         Args:
             date: Date of the plan (YYYY-MM-DD)
             block_position: 0-indexed position of the block within the plan
-            updates: Fields to change. Allowed: block_type, title, duration_min,
-                     rest_guidance, rounds, work_duration_sec, rest_duration_sec.
-                     Pass null to clear a nullable field.
-
-        Returns:
-            The updated block, reassembled from the database
+            updates: Fields to change, any of: block_type, title, duration_min,
+                rest_guidance, rounds, work_duration_sec, rest_duration_sec.
+                Pass null to clear a nullable field.
         """
         if not updates:
             raise ValueError("No updates provided")
@@ -135,27 +134,26 @@ class BlockTools:
         block: Dict[str, Any],
         position: Optional[int] = None
     ) -> Dict[str, Any]:
-        """WHEN TO USE: When inserting a new block into an existing plan — a
-        finisher, an extra accessory block, a cardio block — without rebuilding
+        """WHEN TO USE: When inserting a new block into an existing plan (a
+        finisher, an extra accessory block, a cardio block) without rebuilding
         the plan.
 
-        The block may carry inline ``exercises`` (raw LLM or transformed form)
-        or ``instructions`` (cardio text); they're normalized and stored the
-        same way set_workout_plan does. An empty block (no exercises) is
-        allowed — populate it later with add_exercise.
+        The block may carry inline ``exercises`` (raw LLM or transformed form) or
+        ``instructions`` (cardio text); both are normalized and stored the same
+        way set_workout_plan does. An empty block (no exercises) is allowed;
+        populate it later with add_exercise.
+
+        Result: confirmation with the inserted block's index, the new block count
+        and the reassembled block (shows the final exercise ids).
 
         Args:
             date: Date of the plan (YYYY-MM-DD)
             block: Block object. Requires ``block_type`` (warmup | strength |
-                   cardio | circuit | accessory | power). Optional: title,
-                   duration_min, rest_guidance, rounds, work_duration_sec,
-                   rest_duration_sec, and exercises | instructions.
+                cardio | circuit | accessory | power). Optional: title,
+                duration_min, rest_guidance, rounds, work_duration_sec,
+                rest_duration_sec, and exercises | instructions.
             position: 0-indexed insert position. None (default) appends to the
-                      end; otherwise blocks at >= position shift down by one.
-
-        Returns:
-            Confirmation with the inserted block's index, the new block count,
-            and the reassembled block (so you can see the final exercise ids)
+                end; otherwise blocks at >= position shift down by one.
         """
         if not isinstance(block, dict):
             raise ValueError("block must be a dictionary")
@@ -280,19 +278,19 @@ class BlockTools:
     ) -> Dict[str, Any]:
         """WHEN TO USE: When dropping a whole block from a plan.
 
-        Removes the block at ``block_position`` and re-packs the remaining
-        block positions. Refuses to remove a block that still has exercises
-        unless ``force=True`` — pass force to drop the block and its exercises
-        together. (As with remove_exercise, removing an exercise that has a
-        workout log leaves that log entry without a matching plan exercise.)
+        Removes the block at ``block_position`` and re-packs the remaining block
+        positions. Refuses a block that still has exercises unless
+        ``force=True``, which drops the block and its exercises together. As with
+        remove_exercise, removing an exercise that has a workout log leaves that
+        log entry without a matching plan exercise.
+
+        Result: confirmation with the removed exercise count and the remaining
+        block count.
 
         Args:
             date: Date of the plan (YYYY-MM-DD)
             block_position: 0-indexed position of the block to remove
             force: Required to remove a block that still contains exercises
-
-        Returns:
-            Confirmation with the removed exercise count and remaining block count
         """
         try:
             with self.db_manager.transaction() as cursor:
@@ -371,17 +369,16 @@ class BlockTools:
         date: str,
         order: List[int]
     ) -> Dict[str, Any]:
-        """WHEN TO USE: When changing the order of a plan's blocks — e.g. moving
-        a cardio block ahead of strength — without rebuilding the plan.
+        """WHEN TO USE: When changing the order of a plan's blocks (e.g. moving a
+        cardio block ahead of strength) without rebuilding the plan.
+
+        Result: confirmation with the block titles in their new order.
 
         Args:
             date: Date of the plan (YYYY-MM-DD)
-            order: The blocks' current 0-indexed positions in their new order — a
-                   permutation of 0..N-1. Example: [2, 0, 1] moves the block
-                   currently at position 2 to the front.
-
-        Returns:
-            Confirmation with the block titles in their new order
+            order: The blocks' current 0-indexed positions in their new order, a
+                permutation of 0..N-1. [2, 0, 1] moves the block currently at
+                position 2 to the front.
         """
         if not isinstance(order, list) or not all(isinstance(p, int) for p in order):
             raise ValueError("order must be a list of integers")
