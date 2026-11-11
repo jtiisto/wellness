@@ -26,6 +26,34 @@ from .config import MCPConfig
 # Default DB path: ../../data/journal.db relative to this file's directory
 _DEFAULT_DB_PATH = Path(__file__).resolve().parent.parent.parent / "data" / "journal.db"
 
+# Server instructions: sent in the initialize handshake and loaded by the
+# client at session start, before any tool description. Rules that hold for
+# every tool live here; the guard test holds them under the client's
+# 4,096-char cut.
+INSTRUCTIONS = """\
+Journal data: trackers (habits, supplements, metrics; a checkbox or a numeric
+value) and their daily entries, with each tracker's weekday schedule, polarity
+and value target. Use these tools for tracker entries, habit completion,
+schedule adherence and trends. Read-only.
+
+- Start with list_trackers, get_entries, get_journal_summary;
+  get_schedule_adherence for schedule-aware adherence; execute_sql_query
+  (SELECT/WITH only) for anything else. Unsure of columns: get_table_details,
+  never guess.
+- Dates are YYYY-MM-DD; weekdays 0=Sun..6=Sat.
+- Trackers are soft-deleted (deleted = 1): hidden from the UI, entries kept;
+  for history do not filter deleted = 0. Tracker ids are UUIDs, so a
+  re-created name is a distinct tracker.
+- Completion and adherence are separate axes: get_journal_summary's
+  completion rate is entries-based; schedule adherence (scheduled vs
+  logged/done days) comes from get_schedule_adherence.
+- An entry is present iff completed = 1 OR value IS NOT NULL; an emptied row
+  counts as no entry.
+- Schedules, polarity and targets have data epochs: read the guide's Data
+  epochs before comparing across them.
+- Full guide: resource file://journal_data_guide.
+"""
+
 
 class SQLiteConnection:
     """Secure SQLite connection context manager for read-only access."""
@@ -177,7 +205,7 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
 
     config.validate()
     db_manager = DatabaseManager(config)
-    mcp = FastMCP("Journal Data Explorer")
+    mcp = FastMCP("Journal Data Explorer", instructions=INSTRUCTIONS)
 
     @mcp.tool()
     def explore_database_structure() -> Dict[str, Any]:
@@ -539,10 +567,8 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
         `get_journal_summary`'s entries-based completion rate.
 
         Per day in the window: reads the tracker's effective-dated weekday schedule
-        (`scheduleHistory`, stored in the canonical `schedule_json` column) to
-        decide whether it was scheduled, and whether it was logged/done; then rolls
-        up per tracker. `get_journal_summary` is unchanged and stays entries-based:
-        completion and adherence are separate axes.
+        (`scheduleHistory`, canonical column `schedule_json`) to decide whether it
+        was scheduled and whether logged/done; then rolls up per tracker.
 
         Window (dates YYYY-MM-DD):
         - default: the last `days` calendar days ending today, inclusive (days=7
@@ -553,8 +579,8 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
         - omitted: a tracker with no entries, or whose first activity is after
           the window (nothing to measure); deleted trackers
         - still reported: a tracker whose entries all PRECEDE the window; an
-          abandoned but still-scheduled habit showing 0% is exactly what this tool
-          exists to surface
+          abandoned, still-scheduled habit at 0% is exactly what this tool
+          surfaces
 
         Rates (polarity picks the headline, `metric_kind`):
         - `positive` → `adherence_rate`; `negative` → `avoidance_rate`;

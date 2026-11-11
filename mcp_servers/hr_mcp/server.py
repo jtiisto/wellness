@@ -10,13 +10,16 @@ time window — the retrieval ruling `hr_analysis.db` records. Every per-session
 tool takes that id; `get_latest_session_report` is the one selector, and it
 picks the newest capture itself.
 
-The docstrings below are the analysis LLM's whole instruction manual for this
-surface, and each one is read on its own — a tool description is not a chapter
-of a document the reader has in front of them. So the standing rules (the
-two-case model, the prohibition on cross-checking watch times, and the
-needs_exercise_key response every per-session tool can return) are repeated in
-full on each of them rather than pointed at from one. The repetition is the
-point; a cross-reference would be a rule the caller never sees.
+The standing rules (the two-case model, the prohibition on cross-checking
+watch times, the needs_exercise_key response every per-session tool can
+return) live in full in `INSTRUCTIONS`, the server instructions. A client
+such as Claude Code loads those at session start, before any tool, while a
+tool description arrives only when that one tool is loaded, and is read on
+its own. So each tool still states every rule in a one-line form, next to
+what is specific to it (which field of its result tells the case, and what
+each case means for that result); the reason and the full wording are in the
+instructions, once. `test/test_mcp_tool_descriptions.py` pins both halves and
+the client's length limits.
 
 The server never writes: it reads through `hr_analysis`, whose connections are
 sqlite `mode=ro` (see `database.py`). The `hr` module's HTTP endpoints are the
@@ -43,6 +46,40 @@ from .config import MCPConfig
 from .database import DatabaseManager
 from . import tools
 
+# Server instructions: sent in the initialize handshake and loaded by the
+# client at session start, before any tool description (see the module
+# docstring). The guard test holds them under the client's 4,096-char cut.
+INSTRUCTIONS = """\
+Captured heart-rate sessions (strap beats, plus the cardio guide's recorded
+timeline for a guided ride): listing, per-session reports (HR, zones, RMSSD,
+DFA alpha1, work/rest bouts), aligned HR time series, interval plan vs actual
+(VO2). Read-only.
+
+- Start with list_sessions; every per-session tool takes its session_id.
+  get_latest_session_report alone picks the newest capture itself.
+- A capture is named by its session id, never by a clock: no tool accepts a
+  time window.
+- exercise_key: a capture can span two guided rides. Several and no key: a
+  per-session tool does NOT guess; it returns {needs_exercise_key: true,
+  guided_exercises: [...]} in place of an analysis result, and you call
+  again with one of those keys.
+
+THE TWO CASES. A ride is either owned end to end by this system (strap
+capture AND cardio guide, both keyed to one session id) or happened entirely
+on the watch, which this database knows nothing about. No third case.
+- `guided` on a listing row, `structure.guided` on every analysis result,
+  says which and decides how to analyse the session.
+- guided: the guide recorded the timeline actually ridden; that recording IS
+  the plan. Do not look for a plan elsewhere and do not supply one.
+- unguided: nothing recorded; the result covers the whole capture with no
+  RECORDED structure. A known interval plan is matched with get_vo2_summary.
+
+NEVER cross-check these captures or their times against a Garmin/watch
+activity. The watch typically starts on mounting the bike, START is pressed
+after clipping in, so the two differ by minutes as a matter of course.
+Normal, not a data problem, not worth mentioning in an answer.
+"""
+
 
 def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
     """Create and configure the read-only HR MCP server."""
@@ -51,7 +88,7 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
 
     config.validate()
     db = DatabaseManager(config)
-    mcp = FastMCP("HR Analysis")
+    mcp = FastMCP("HR Analysis", instructions=INSTRUCTIONS)
 
     @mcp.tool()
     def list_sessions(limit: int | None = None) -> list[dict[str, Any]]:
@@ -62,15 +99,12 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
         capture is identified by its id; nothing in this server accepts a clock
         reading.
 
-        THE TWO CASES. A ride is either owned end to end by this system (strap
-        capture AND cardio guide, both keyed to one session id) or happened
-        entirely on the watch, which this database knows nothing about.
-        `guided` on each row says which, and decides how to analyse the session.
+        THE TWO CASES: a ride is owned end to end here (strap capture AND cardio
+        guide, one session id) or happened on the watch, unknown here. `guided`
+        on each row says which, and decides how to analyse the session.
 
-        NEVER cross-check these captures against a Garmin/watch activity. The
-        watch typically starts on mounting the bike, START is pressed after
-        clipping in, so the two differ by minutes as a matter of course. Normal,
-        not a data problem, not worth mentioning in an answer.
+        NEVER cross-check these captures against a Garmin/watch activity: minutes
+        apart is normal, not a data problem, not worth mentioning.
 
         Result, newest first, per session: session_id, device_id, start/end epoch
         ms, duration_s, beat count, workout_date (the coach-side day it was
@@ -98,23 +132,19 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
     ) -> dict[str, Any]:
         """WHEN TO USE: Analyze one captured heart-rate session.
 
-        THE TWO CASES. A ride is either owned end to end by this system (strap
-        capture AND cardio guide, both keyed to this session id) or happened
-        entirely on the watch, which this database knows nothing about.
-        `structure` on every result says which:
+        THE TWO CASES: a ride is owned end to end here (strap capture AND cardio
+        guide, this session id) or happened on the watch, unknown here.
+        `structure` on every analysis result says which:
         - structure.guided = true: the guide recorded the timeline actually
           ridden; that recording IS the plan. Analysis window = the ride itself
-          ([anchor, anchor + total)); `structure.segments` has per-segment
-          metrics against each segment's OWN recorded band. Do not look for a
-          plan elsewhere and do not supply one.
+          ([anchor, anchor + total)). Do not look for a plan elsewhere and do
+          not supply one.
         - structure.guided = false: nothing recorded; the report is the whole
-          capture with no structure. Have the planned interval structure and
-          want it matched? Use get_vo2_summary.
+          capture with no structure. To match a known interval plan, use
+          get_vo2_summary.
 
-        NEVER cross-check these times against a Garmin/watch activity. The watch
-        typically starts on mounting the bike, START is pressed after clipping
-        in, so the two differ by minutes as a matter of course. Normal, not a
-        data problem, not worth mentioning in an answer.
+        NEVER cross-check these times against a Garmin/watch activity: minutes
+        apart is normal, not a data problem, not worth mentioning.
 
         Result: duration-weighted HR (and zones with hrmax), RMSSD, DFA alpha1,
         signal-detected work/rest `bouts`, set-completion markers (set_events,
@@ -122,23 +152,22 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
 
         For a guided session, `structure` also carries:
         - coverage: how much of the scheduled ride the beats reached. Early bail
-          = missing_tail_sec and complete=false; say so, do not report the ride
-          as if it ran to the end.
+          = missing_tail_sec, complete=false; say so, never report the ride as
+          run to the end.
         - segments: per segment, recorded bounds and role (warmup / work /
           cooldown; ABSENCE IN THE RECORD MEANS WORK, and the easy steps between
-          efforts are deliberately work), seconds in / below / above the band,
-          fraction_in_band, time_to_band_s, average and peak HR, RR quality.
-          These are the ride's bouts; the separate `bouts` array is the signal
-          detector's independent reading of the same beats. Where they disagree,
-          that is information.
-        - work: the same numbers aggregated over work-role segments only (the
-          ride as distinct from the preparation).
+          efforts are deliberately work), seconds in / below / above that
+          segment's OWN recorded band, fraction_in_band, time_to_band_s,
+          average and peak HR, RR quality.
+          These are the ride's bouts; `bouts` is the signal detector's
+          independent reading of the same beats. A disagreement is information.
+        - work: the same numbers over work-role segments only (the ride, not
+          the preparation).
 
-        Check quality first: rr_quality_insufficient = the RR signal never met the
-        trust rule, so the HRV numbers are not usable.
-        Averages are weighted by each beat's wall-clock duration, so they can
-        differ by a beat or two from the phone app's workout-log average, which
-        weights by beat.
+        Check quality first: rr_quality_insufficient = the RR signal never met
+        the trust rule; the HRV numbers are not usable.
+        Averages weight each beat by its wall-clock duration, so they can differ
+        by a beat or two from the phone app's workout-log average (per beat).
 
         Args:
             session_id: Session to analyze (from list_sessions)
@@ -169,9 +198,8 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
         The one tool with no session_id; it selects the newest capture itself.
         Everything else is as get_session_report.
 
-        THE TWO CASES. A ride is either owned end to end by this system (strap
-        capture AND cardio guide, both keyed to one session id) or happened
-        entirely on the watch, which this database knows nothing about.
+        THE TWO CASES: a ride is owned end to end here (strap capture AND cardio
+        guide, one session id) or happened on the watch, unknown here.
         `structure` on the result says which:
         - structure.guided = true: the guide recorded the timeline actually
           ridden; that recording IS the plan. Analysis window = the ride itself;
@@ -181,10 +209,8 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
         - structure.guided = false: nothing recorded; the report is the whole
           capture with no structure.
 
-        NEVER cross-check these times against a Garmin/watch activity. The watch
-        typically starts on mounting the bike, START is pressed after clipping
-        in, so the two differ by minutes as a matter of course. Normal, not a
-        data problem, not worth mentioning in an answer.
+        NEVER cross-check these times against a Garmin/watch activity: minutes
+        apart is normal, not a data problem, not worth mentioning.
 
         Result: the same report shape as get_session_report, including
         `structure`; or the needs_exercise_key shape (see exercise_key) when the
@@ -217,9 +243,8 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
         with the set-completion markers and the guide's own segment boundaries
         alongside.
 
-        THE TWO CASES. A ride is either owned end to end by this system (strap
-        capture AND cardio guide, both keyed to this session id) or happened
-        entirely on the watch, which this database knows nothing about.
+        THE TWO CASES: a ride is owned end to end here (strap capture AND cardio
+        guide, this session id) or happened on the watch, unknown here.
         `structure` on the result says which:
         - structure.guided = true: the guide recorded the timeline ridden. The
           buckets cover the ride itself; `structure.segments` gives each recorded
@@ -228,10 +253,8 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
         - structure.guided = false: nothing recorded; the buckets are the whole
           capture and there is no structure to draw.
 
-        NEVER cross-check these times against a Garmin/watch activity. The watch
-        typically starts on mounting the bike, START is pressed after clipping
-        in, so the two differ by minutes as a matter of course. Normal, not a
-        data problem, not worth mentioning in an answer.
+        NEVER cross-check these times against a Garmin/watch activity: minutes
+        apart is normal, not a data problem, not worth mentioning.
 
         Result: set_events (offset-aligned completion markers), `structure` (as
         above), and one row per non-empty bucket: offset_s, mean/max HR, and
@@ -271,9 +294,8 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
     ) -> dict[str, Any]:
         """WHEN TO USE: Match an interval plan you know to an UNGUIDED capture.
 
-        THE TWO CASES. A ride is either owned end to end by this system (strap
-        capture AND cardio guide, both keyed to this session id) or happened
-        entirely on the watch, which this database knows nothing about.
+        THE TWO CASES: a ride is owned end to end here (strap capture AND cardio
+        guide, this session id) or happened on the watch, unknown here.
         This tool serves only one case:
         - structure.guided = false: nothing recorded; you supply the structure.
           This tool's case: `vo2` matches your intent against the beats.
@@ -283,12 +305,10 @@ def create_mcp_server(config: Optional[MCPConfig] = None) -> FastMCP:
           ignored, announced as structure.supplied_intent_ignored rather than
           silently dropped.
 
-        Read `structure.guided` on the listing before reaching for this tool.
+        Read `guided` on the listing before reaching for this tool.
 
-        NEVER cross-check these times against a Garmin/watch activity. The watch
-        typically starts on mounting the bike, START is pressed after clipping
-        in, so the two differ by minutes as a matter of course. Normal, not a
-        data problem, not worth mentioning in an answer.
+        NEVER cross-check these times against a Garmin/watch activity: minutes
+        apart is normal, not a data problem, not worth mentioning.
 
         Result (unguided): `vo2` with expected vs detected work/rest bouts,
         per-bout peak HR and time at target, match-uncertainty flags. Expected

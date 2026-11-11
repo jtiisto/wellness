@@ -1,4 +1,5 @@
-"""Nothing in an MCP tool docstring may be hidden from the client.
+"""Nothing in an MCP tool docstring or server instructions may be hidden from
+the client.
 
 FastMCP (4.x, and the 3-series before it) builds a tool's client-visible
 `description` from the docstring text before its first structured section, and
@@ -8,8 +9,9 @@ sees it. A `Word ...:` line directly followed by an indented line is a pattern
 the parser can read as a section (it does once a recognised section such as
 `Args:` is present), so the contract forbids it outright. A parenthesised
 annotation after a parameter name (`limit (int, max 100): ...`) is dropped by
-the parser, so the contract forbids that too. The HR docstrings are the
-analysis model's whole manual, so a silent cut there is a real loss.
+the parser, so the contract forbids that too. The tool descriptions and the
+server instructions are the analysis model's whole manual, so a silent cut
+there is a real loss.
 
 The contract, checked per tool through the public API on whatever FastMCP is
 installed: the description is the whole docstring above a trailing `Args:`
@@ -18,6 +20,21 @@ description is its whole `Args:` entry text (whitespace-normalised). A failure
 names the tool: put the text back above `Args:` or into the entry, and never
 indent the line directly under a colon line. Flush-left `- ` bullets under it
 are safe, and so are their indented continuation lines.
+
+The client cuts, too. Claude Code (the client these servers are written for)
+loads tools through tool search: at session start the model gets only the tool
+names and each server's `instructions`, and a tool's description arrives only
+when that tool is loaded, one at a time. It cuts server instructions at 4,096
+characters and a description loaded through tool search at 16,384; before
+v2.1.295 it cut every description at 2,048. The model sees only the text before
+the cut. So every server sends non-empty instructions of at most 4,096
+characters (read through a real initialize handshake, as a client reads them),
+and every description is at most 2,048 characters, the stricter cut. A
+standing rule that holds for every tool on a server lives in full in its
+instructions; a fact about one tool stays on that tool. The HR rules are pinned
+both ways: the instructions carry the full two-case and never-cross-check
+rules, and each HR description still carries its one-line form of each, since
+a description is read on its own.
 """
 
 import inspect
@@ -31,7 +48,7 @@ from hr_mcp.config import MCPConfig as HrConfig
 from hr_mcp.server import create_mcp_server as create_hr_server
 from journal_mcp.config import MCPConfig as JournalConfig
 from journal_mcp.server import create_mcp_server as create_journal_server
-from mcp_tools import list_tools
+from mcp_tools import list_tools, server_instructions
 from modules import coach, hr, journal
 from modules.db import DbAccessor
 
@@ -55,26 +72,70 @@ EXPECTED_TOOLS = {
 }
 EXPECTED_COUNTS = {"journal": 7, "coach": 18, "hr": 5}
 
+# Claude Code's cuts (see the module docstring).
+MAX_INSTRUCTIONS_CHARS = 4096
+MAX_DESCRIPTION_CHARS = 2048
+
+# Short stable markers of the two HR standing rules. The instructions carry the
+# full rules; every HR description carries a one-line form of each. Both sides
+# are matched whitespace-normalised, so re-wrapping a line never trips them.
+HR_RULES_IN_INSTRUCTIONS = [
+    "THE TWO CASES",
+    "owned end to end by this system",
+    "happened entirely",
+    "on the watch",
+    "No third case",
+    "do not supply one",
+    "NEVER cross-check",
+    "Garmin/watch",
+    "mounting the bike",
+    "clipping in",
+    "differ by minutes",
+    "not worth mentioning",
+    "never by a clock",
+    "needs_exercise_key",
+]
+HR_RULES_ON_EACH_TOOL = [
+    "THE TWO CASES:",
+    "owned end to end",
+    "on the watch",
+    "NEVER cross-check",
+    "Garmin/watch",
+    "not worth mentioning",
+]
+
 _ARGS_HEADING = re.compile(r"^Args:$", re.MULTILINE)
 _ARGS_ENTRY = re.compile(r"^(\w+)(\s*\([^)]*\))?:(.*)$")
 
 
 @pytest.fixture(scope="module")
-def listed_tools(tmp_path_factory):
-    """`{server: {tool name: listed tool}}` for all three servers, each built on
-    an initialised, empty synthetic database."""
+def servers(tmp_path_factory):
+    """`{server: FastMCP server}` for all three servers, each built on an
+    initialised, empty synthetic database."""
     root = tmp_path_factory.mktemp("mcp_descriptions")
     paths = {}
     for name, module in (("journal", journal), ("coach", coach), ("hr", hr)):
         paths[name] = root / f"{name}.db"
         module.init_database(DbAccessor(paths[name]))
-    servers = {
+    return {
         "journal": create_journal_server(JournalConfig(db_path=paths["journal"])),
         "coach": create_coach_server(CoachConfig(db_path=paths["coach"])),
         "hr": create_hr_server(HrConfig.from_db_path(paths["hr"])),
     }
+
+
+@pytest.fixture(scope="module")
+def listed_tools(servers):
+    """`{server: {tool name: listed tool}}` for all three servers."""
     return {name: {tool.name: tool for tool in list_tools(server)}
             for name, server in servers.items()}
+
+
+@pytest.fixture(scope="module")
+def instructions(servers):
+    """`{server: instructions text}` as each server's initialize handshake
+    delivers it to a client."""
+    return {name: server_instructions(server) for name, server in servers.items()}
 
 
 def _split_docstring(doc):
@@ -180,3 +241,47 @@ class TestToolDescriptions:
             listed = _normalise(properties.get(param, {}).get("description") or "")
             assert listed == text, (
                 f"`{param}`: the client gets {listed!r}, the docstring says {text!r}")
+
+    @pytest.mark.parametrize(("server", "name"), _CASES)
+    def test_description_fits_the_client_cut(self, listed_tools, server, name):
+        """Claude Code cut every description at 2,048 characters before v2.1.295;
+        text past the cut never reaches the model."""
+        length = len(listed_tools[server][name].description)
+        assert length <= MAX_DESCRIPTION_CHARS, (
+            f"description is {length} characters, over the client's "
+            f"{MAX_DESCRIPTION_CHARS}-character cut: move a standing rule to the "
+            "server's instructions or tighten the wording")
+
+
+_HR_TOOLS = [pytest.param(tool, id=f"hr:{tool}") for tool in EXPECTED_TOOLS["hr"]]
+
+
+@pytest.mark.integration
+class TestServerInstructions:
+    @pytest.mark.parametrize("server", sorted(EXPECTED_COUNTS))
+    def test_instructions_reach_the_client(self, instructions, server):
+        """The model gets them at session start, before any tool description;
+        a server without them starts the session as bare tool names."""
+        text = instructions[server]
+        assert text and text.strip(), "the initialize handshake carries no instructions"
+
+    @pytest.mark.parametrize("server", sorted(EXPECTED_COUNTS))
+    def test_instructions_fit_the_client_cut(self, instructions, server):
+        length = len(instructions[server] or "")
+        assert length <= MAX_INSTRUCTIONS_CHARS, (
+            f"instructions are {length} characters, over the client's "
+            f"{MAX_INSTRUCTIONS_CHARS}-character cut")
+
+    @pytest.mark.parametrize("marker", HR_RULES_IN_INSTRUCTIONS)
+    def test_hr_instructions_carry_the_standing_rules(self, instructions, marker):
+        assert marker in _normalise(instructions["hr"] or ""), (
+            f"the HR instructions lost {marker!r}: they carry the full two-case "
+            "and never-cross-check rules")
+
+    @pytest.mark.parametrize("name", _HR_TOOLS)
+    def test_each_hr_description_states_the_rules(self, listed_tools, name):
+        """A description is read on its own, so each HR tool keeps a one-line
+        form of both standing rules, not merely a pointer to the instructions."""
+        description = _normalise(listed_tools["hr"][name].description)
+        missing = [m for m in HR_RULES_ON_EACH_TOOL if m not in description]
+        assert not missing, f"the one-line standing rules lost {missing}"
