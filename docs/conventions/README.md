@@ -28,8 +28,13 @@ repo's HEAD (a stale mirror; skipped in a clone without the sibling repo), when
 the Android palette's hex values disagree with the mirrored token table, and when
 the Android Kover gate settings drift from `android.md` (configuration cache off in
 `android/gradle.properties`, `--no-build-cache` on the pre-push gate line — via the
-conventions repo's `bin/check-android-gate.sh`, with an inline fallback). The
-pre-commit hook runs it whenever this directory or the palette is staged.
+conventions repo's `bin/check-android-gate.sh`, with an inline fallback). It also
+fails while the conventions repo's adoption ledger has a rule this project has not
+adopted yet (`bin/check-adoption.sh`; skipped in a clone without the sibling repo),
+so a shared rule that needs a change here cannot wait unnoticed: see "Rules that
+change project files" in `universal.md` for the order in which a rule is adopted.
+The pre-commit hook runs it whenever this directory or the palette is staged, and
+the pre-push hook on every push that runs any suite.
 
 What is specific to wellness stays in its own specs: the Android implementation of
 the design language is `android/specs/logbook-design-system.md`.

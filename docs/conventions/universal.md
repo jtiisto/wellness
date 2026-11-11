@@ -108,8 +108,26 @@ applies no settings. (The Kover configuration-cache rule was written from share 
 
 - Such a rule is recorded in `ADOPTION.md` here, one row per rule and project, with
   the date each project adopted it or `pending`. The commit that adds the rule adds
-  the rows; a session that starts work in a project reads its pending rows first and
-  flips them in the project commit that adopts the rule.
+  the rows.
+- **The check is routine, not remembered.** `bin/check-adoption.sh` reads the ledger
+  for the project it is run in, and it runs in two places:
+  - *At every session start* (a new, resumed or cleared session), through a Claude
+    Code `SessionStart` hook that `bin/install-session-hook.sh` adds once per
+    machine. It fetches this repo and reports a clone that is behind its upstream
+    or has diverged from it, the project's pending rows (read from the fetched
+    ledger when the clone is behind) and a stale mirror; also an origin it could
+    not reach and a ledger it could not parse. It prints nothing when there is
+    nothing to report; a project the ledger has no column for, with nothing else
+    to report, gets one line. The session fast-forwards a clone that is behind
+    and clean and runs the check again, reports everything else to the owner
+    before other work, and adopts when the owner says so.
+  - *In the project's gate*, through its guard test, wherever the sibling checkout
+    exists: a push fails while the project has a pending row. The gate reads the
+    local clone and never the network; fetching is the session hook's job.
+- **Adoption order.** The gate would reject the very commit that adopts a rule, so:
+  make the project change, flip the project's cell in this repo's working tree,
+  commit and push the project, then commit and push the ledger. If the project
+  push fails, revert the cell: nothing wrong was committed.
 - Where the rule reduces to a fact about a file, this repo ships the check as a
   script in `bin/` and the project's guard test runs it (with an inline fallback for
   a public clone that has no sibling checkout), so drift fails the gate instead of
